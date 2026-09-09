@@ -415,4 +415,4 @@ Open work is tracked in [`docs/BACKLOG.md`](./docs/BACKLOG.md).
 
 ## License
 
-[License]
+MIT — see [LICENSE](./LICENSE).
