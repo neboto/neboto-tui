@@ -1,0 +1,44 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+
+# AWS credentials (safety)
+.aws/
+aws-credentials*
+
+# Temporary files
+*.tmp
+*.temp
+
+# Editor backups
+*~
+.#*
+\#*#
+
+.claude
+/patches/
+
+# neboto export artifacts (X key)
+neboto-*.json
+neboto-*.csv
+neboto-*.md

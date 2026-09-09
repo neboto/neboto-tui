@@ -1,0 +1,104 @@
+# neboto configuration — copy to ~/.config/neboto/config.toml (or ~/.neboto.toml,
+# or point $NEBOTO_CONFIG at it). Every key is optional.
+#
+# A file that fails to parse is reported in the status bar at startup rather
+# than being silently ignored.
+
+# ── Startup ──────────────────────────────────────────────────────────────────
+
+# Service to load on startup, as an @-search prefix (with or without the @):
+# ec2, vpc, s3, rds, iam, cw, cfn, sh, gd, orgs, cost, ssm, … `S` in the TUI
+# lists all 65. Omit this to show the welcome screen and load nothing until you
+# pick a service — which makes startup instant.
+# default_service = "ec2"
+
+# Region to start in (any standard region code). `R` switches at runtime.
+# default_region = "us-west-2"
+
+# Named AWS profile to start with (from ~/.aws/config / ~/.aws/credentials).
+# `P` switches at runtime.
+# default_profile = "myprofile"
+
+# Show the ASCII banner at the top on startup (default: false).
+# show_banner = true
+
+# ── View defaults ────────────────────────────────────────────────────────────
+
+# Start in watch mode: auto-refresh the current view. `w` toggles it at
+# runtime, `+`/`-` step through the interval presets (5–300 seconds).
+# watch = true
+# watch_interval = 10
+
+# Start with the flat detail view — every section concatenated into one scroll
+# instead of one section at a time. `\` toggles it at runtime.
+# detail_flat = true
+
+# ── Theme ────────────────────────────────────────────────────────────────────
+
+# Preset: dark (default), light, solarized-dark, solarized-light, gruvbox-dark,
+# gruvbox-light, dracula, nord, catppuccin-mocha, catppuccin-latte.
+# Separators are optional; "mocha" and "latte" also resolve.
+# theme = "gruvbox-dark"
+
+# Per-color overrides by palette field name — #rrggbb or an ANSI color name.
+# An unknown key or an unparseable value warns at startup and is never fatal.
+# [theme_colors]
+# accent = "#ff8800"
+# warning = "yellow"
+
+# ── Caching ──────────────────────────────────────────────────────────────────
+
+# Base cache freshness in seconds (default 300). `r` invalidates and reloads
+# the current service regardless of TTL.
+# cache_ttl = 300
+
+# Per-service overrides, keyed by any @-search prefix (without the @).
+# Unknown prefixes are ignored. Cost has a built-in 6h default — see the note
+# at the bottom of this file.
+# [cache_ttls]
+# lambda = 60
+# ec2 = 120
+# iam = 3600
+
+# ── Multi-account ────────────────────────────────────────────────────────────
+
+# Role name(s) to assume when you press `s` on an Organizations account row.
+# Every assumed session is scoped with the AWS-managed ReadOnlyAccess session
+# policy, so it cannot mutate even if the role itself is an admin role.
+#
+# Use org_access_role for a single name (default:
+# OrganizationAccountAccessRole), or org_access_roles for several — a list
+# opens a picker with the last-used role preselected. Control Tower-managed
+# organizations typically want AWSControlTowerExecution.
+# org_access_role = "OrganizationAccountAccessRole"
+# org_access_roles = ["OrganizationAccountAccessRole", "AWSControlTowerExecution"]
+
+# ── Control Tower ────────────────────────────────────────────────────────────
+
+# The account holding the Control Tower Config aggregator — normally the audit
+# account, since a v4.0 landing zone delegates Config there while Control
+# Tower's own APIs answer only in the management account. Setting this makes
+# the Compliance tab work from the management account.
+#
+# QUOTE THE ACCOUNT ID. A bare 12-digit number is a TOML integer, and the whole
+# file then fails to parse.
+# controltower_audit_account = "123456789012"
+
+# Role to assume in that account (defaults to the member-switch role above).
+# controltower_audit_role = "AWSControlTowerExecution"
+
+# ── Local emulator ───────────────────────────────────────────────────────────
+
+# Custom AWS endpoint URL — point neboto at a local AWS emulator (floci or
+# LocalStack at http://localhost:4566) for development/testing without a real
+# account. When set, S3 uses path-style addressing and dummy credentials are
+# injected automatically, and the tab bar shows a `⚙ host:port` badge.
+# The AWS_ENDPOINT_URL environment variable overrides this value.
+# See scripts/seed-floci.sh to load bulk test data.
+# endpoint_url = "http://localhost:4566"
+
+# ── Note on Cost Explorer ────────────────────────────────────────────────────
+#
+# The cost service (@cost) uses AWS Cost Explorer, which bills ~$0.01 per API
+# request and lags ~24h. neboto caches it for 6h by default to keep that
+# negligible; press `r` to force a refresh.

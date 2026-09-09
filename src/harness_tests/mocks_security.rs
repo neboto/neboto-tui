@@ -1,0 +1,638 @@
+//! Mock resources for the layer-2 harness — see mod.rs.
+use super::Mock;
+use crate::aws::service::ServiceType;
+use crate::aws::services as svc;
+use std::collections::HashMap;
+
+pub(super) fn mocks() -> Vec<Mock> {
+    vec![
+        (
+            ServiceType::Waf,
+            "WafWebAcl",
+            Box::new(svc::waf::WafWebAcl {
+                id: "0123abcd-4567-89ef-0123-456789abcdef".to_string(),
+                name: "mock-web-acl".to_string(),
+                arn: "arn:aws:wafv2:us-east-1:123456789012:regional/webacl/mock-web-acl/0123abcd-4567-89ef-0123-456789abcdef".to_string(),
+                description: "mock web ACL".to_string(),
+                scope: "REGIONAL".to_string(),
+            }),
+        ),
+        (
+            ServiceType::Waf,
+            "WafIpSet",
+            Box::new(svc::waf::WafIpSet {
+                id: "0123abcd-4567-89ef-0123-456789abcdef".to_string(),
+                name: "mock-ip-set".to_string(),
+                arn: "arn:aws:wafv2:us-east-1:123456789012:regional/ipset/mock-ip-set/0123abcd-4567-89ef-0123-456789abcdef".to_string(),
+                description: "mock ip set".to_string(),
+                scope: "REGIONAL".to_string(),
+            }),
+        ),
+        (
+            ServiceType::Waf,
+            "WafRuleGroup",
+            Box::new(svc::waf::WafRuleGroup {
+                id: "0123abcd-4567-89ef-0123-456789abcdef".to_string(),
+                name: "mock-rule-group".to_string(),
+                arn: "arn:aws:wafv2:us-east-1:123456789012:regional/rulegroup/mock-rule-group/0123abcd-4567-89ef-0123-456789abcdef".to_string(),
+                description: "mock rule group".to_string(),
+                scope: "REGIONAL".to_string(),
+            }),
+        ),
+        (
+            ServiceType::NetworkFirewall,
+            "NfwFirewall",
+            Box::new(svc::network_firewall::NfwFirewall {
+                name: "mock-firewall".to_string(),
+                arn: "arn:aws:network-firewall:us-east-1:123456789012:firewall/mock-firewall".to_string(),
+                vpc_id: "vpc-0123456789abcdef0".to_string(),
+                policy_arn: "arn:aws:network-firewall:us-east-1:123456789012:firewall-policy/mock-policy".to_string(),
+                status: "READY".to_string(),
+                configuration_sync: "IN_SYNC".to_string(),
+                description: "mock firewall".to_string(),
+                subnet_mappings: vec!["subnet-0123456789abcdef0".to_string()],
+                delete_protection: false,
+                policy_change_protection: false,
+                subnet_change_protection: false,
+                sync_states: vec![],
+                tags: HashMap::new(),
+            }),
+        ),
+        (
+            ServiceType::NetworkFirewall,
+            "NfwPolicy",
+            Box::new(svc::network_firewall::NfwPolicy {
+                name: "mock-policy".to_string(),
+                arn: "arn:aws:network-firewall:us-east-1:123456789012:firewall-policy/mock-policy".to_string(),
+                description: "mock policy".to_string(),
+                status: "ACTIVE".to_string(),
+                stateless_default_actions: vec!["aws:forward_to_sfe".to_string()],
+                stateless_fragment_default_actions: vec!["aws:forward_to_sfe".to_string()],
+                stateful_default_actions: vec![],
+                stateful_rule_groups: vec![],
+                stateless_rule_groups: vec![],
+                tags: HashMap::new(),
+            }),
+        ),
+        (
+            ServiceType::NetworkFirewall,
+            "NfwRuleGroup",
+            Box::new(svc::network_firewall::NfwRuleGroup::from_summary(
+                "mock-rule-group",
+                "arn:aws:network-firewall:us-east-1:123456789012:stateful-rulegroup/mock-rule-group",
+            )),
+        ),
+        (
+            ServiceType::GuardDuty,
+            "GdDetector",
+            Box::new(svc::guardduty::GdDetector {
+                id: "0123456789abcdef0123456789abcdef".to_string(),
+                status: "ENABLED".to_string(),
+                finding_publishing_frequency: "SIX_HOURS".to_string(),
+                features: vec!["S3_DATA_EVENTS (ENABLED)".to_string()],
+                service_role: "arn:aws:iam::123456789012:role/aws-service-role/guardduty".to_string(),
+                created: Some("2024-01-01T00:00:00Z".to_string()),
+                coverage_rows: vec![("HEALTHY".to_string(), "3".to_string())],
+                org_rows: vec![("Auto-Enable Members".to_string(), "ALL".to_string())],
+                tags: HashMap::new(),
+            }),
+        ),
+        (
+            ServiceType::GuardDuty,
+            "GdOverview",
+            Box::new(svc::guardduty::GdOverview {
+                id: "gd-summary-0123456789abcdef0123456789abcdef".to_string(),
+                detector_id: "0123456789abcdef0123456789abcdef".to_string(),
+                total_findings: 12,
+                by_severity: vec![
+                    ("Critical".to_string(), 0),
+                    ("High".to_string(), 2),
+                    ("Medium".to_string(), 4),
+                    ("Low".to_string(), 6),
+                ],
+                top_types: vec![("Recon:EC2/PortProbeUnprotectedPort".to_string(), 5)],
+                top_resources: vec![(
+                    "i-0123456789abcdef0".to_string(),
+                    "Instance".to_string(),
+                    5,
+                )],
+                top_accounts: vec![("123456789012".to_string(), 12)],
+                coverage_rows: vec![("HEALTHY".to_string(), "3".to_string())],
+                free_trial: vec![],
+                errors: vec![],
+            }),
+        ),
+        (
+            ServiceType::GuardDuty,
+            "GdFilter",
+            Box::new(svc::guardduty::GdFilter {
+                name: "suppress-known-scanner".to_string(),
+                description: "mock suppression rule".to_string(),
+                action: "ARCHIVE".to_string(),
+                rank: 1,
+                criteria_rows: vec![(
+                    "service.action.networkConnectionAction.remoteIpDetails.ipAddressV4"
+                        .to_string(),
+                    "equals [203.0.113.1]".to_string(),
+                )],
+                tags: HashMap::new(),
+                search_blob: "suppress-known-scanner ARCHIVE filter".to_string(),
+            }),
+        ),
+        (
+            ServiceType::GuardDuty,
+            "GdList",
+            Box::new(svc::guardduty::GdList {
+                id: "0123456789abcdef0123456789abcdef".to_string(),
+                name: "corp-egress-ips".to_string(),
+                kind: "Trusted IP".to_string(),
+                format: "TXT".to_string(),
+                location: "https://s3.amazonaws.com/mock-bucket/trusted.txt".to_string(),
+                status: "ACTIVE".to_string(),
+                expected_bucket_owner: String::new(),
+                error_details: String::new(),
+                created: None,
+                updated: None,
+                tags: HashMap::new(),
+                search_blob: "corp-egress-ips Trusted IP ACTIVE".to_string(),
+            }),
+        ),
+        (
+            ServiceType::GuardDuty,
+            "GdMember",
+            Box::new(svc::guardduty::GdMember {
+                account_id: "210987654321".to_string(),
+                email: "member@example.com".to_string(),
+                relationship_status: "Enabled".to_string(),
+                detector_id: "fedcba9876543210fedcba9876543210".to_string(),
+                invited_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+                feature_rows: vec![("S3_DATA_EVENTS".to_string(), "ENABLED".to_string())],
+                disabled_features: 0,
+                search_blob: "210987654321 member@example.com Enabled member account".to_string(),
+            }),
+        ),
+        (
+            ServiceType::GuardDuty,
+            "GdMalwareScan",
+            Box::new(svc::guardduty::GdMalwareScan {
+                scan_id: "abcd1234abcd1234abcd1234abcd1234".to_string(),
+                name: "i-0123456789abcdef0".to_string(),
+                account_id: "123456789012".to_string(),
+                status: "COMPLETED".to_string(),
+                result: "CLEAN".to_string(),
+                scan_type: "GUARDDUTY_INITIATED".to_string(),
+                failure_reason: String::new(),
+                started: Some("2024-01-01T00:00:00Z".to_string()),
+                ended: Some("2024-01-01T00:10:00Z".to_string()),
+                trigger_finding_id: "0a1b2c3d4e5f6789abcdef0123456789".to_string(),
+                trigger_type: "GUARDDUTY".to_string(),
+                trigger_description: "mock trigger".to_string(),
+                instance_arn: "arn:aws:ec2:us-east-1:123456789012:instance/i-0123456789abcdef0"
+                    .to_string(),
+                total_bytes: 1024,
+                file_count: 42,
+                volume_rows: vec![],
+                search_blob: "i-0123456789abcdef0 COMPLETED CLEAN malware scan".to_string(),
+            }),
+        ),
+        (
+            ServiceType::GuardDuty,
+            "GdMalwarePlan",
+            Box::new(svc::guardduty::GdMalwarePlan {
+                id: "plan-0123".to_string(),
+                arn: "arn:aws:guardduty:us-east-1:123456789012:malware-protection-plan/plan-0123"
+                    .to_string(),
+                role: "arn:aws:iam::123456789012:role/mock-mp-role".to_string(),
+                bucket: "mock-protected-bucket".to_string(),
+                object_prefixes: vec![],
+                tagging: "ENABLED".to_string(),
+                status: "ACTIVE".to_string(),
+                status_reasons: vec![],
+                created: Some("2024-01-01T00:00:00Z".to_string()),
+                tags: HashMap::new(),
+                search_blob: "mock-protected-bucket ACTIVE malware protection plan".to_string(),
+            }),
+        ),
+        (
+            ServiceType::GuardDuty,
+            "GdCoverage",
+            Box::new(svc::guardduty::GdCoverage {
+                id: "i-0123456789abcdef0".to_string(),
+                account_id: "123456789012".to_string(),
+                kind: "EC2".to_string(),
+                name: "i-0123456789abcdef0".to_string(),
+                status: "UNHEALTHY".to_string(),
+                issue: "SSM agent is not installed".to_string(),
+                management_type: "AUTO_MANAGED".to_string(),
+                agent_version: "1.2.0".to_string(),
+                covered: None,
+                compatible: None,
+                extra_rows: vec![],
+                updated_at: Some("2024-01-01T00:00:00Z".to_string()),
+                search_blob: "i-0123456789abcdef0 EC2 UNHEALTHY coverage".to_string(),
+            }),
+        ),
+        (
+            ServiceType::GuardDuty,
+            "GdFinding",
+            Box::new(svc::guardduty::GdFinding {
+                id: "0a1b2c3d4e5f6789abcdef0123456789".to_string(),
+                arn: "arn:aws:guardduty:us-east-1:123456789012:detector/mock/finding/mock-finding".to_string(),
+                detector_id: "0123456789abcdef0123456789abcdef".to_string(),
+                title: "Mock finding".to_string(),
+                finding_type: "Recon:EC2/PortProbeUnprotectedPort".to_string(),
+                severity_score: 5.0,
+                severity_label: "MEDIUM".to_string(),
+                region: "us-east-1".to_string(),
+                account_id: "123456789012".to_string(),
+                resource_type: "Instance".to_string(),
+                resource_summary: "i-0123456789abcdef0".to_string(),
+                resource_rows: vec![],
+                actor_label: String::new(),
+                actor_rows: vec![],
+                count: 1,
+                first_seen: Some("2024-01-01T00:00:00Z".to_string()),
+                last_seen: Some("2024-01-01T00:00:00Z".to_string()),
+                description: "mock description".to_string(),
+                archived: false,
+                resource_role: "TARGET".to_string(),
+                feature_name: "RuntimeMonitoring".to_string(),
+                user_feedback: String::new(),
+                additional_info: vec![],
+                threat_intel: vec![],
+                runtime_rows: vec![],
+                sequence_rows: vec![],
+                updated_at: Some("2024-01-01T00:00:00Z".to_string()),
+                search_blob: "Mock finding Recon:EC2/PortProbeUnprotectedPort".to_string(),
+                raw_json: "{}".to_string(),
+            }),
+        ),
+        (
+            ServiceType::Kms,
+            "KmsKey",
+            Box::new(svc::kms::KmsKey::from_metadata(
+                &aws_sdk_kms::types::KeyMetadata::builder()
+                    .key_id("0123abcd-4567-89ef-0123-456789abcdef")
+                    .arn("arn:aws:kms:us-east-1:123456789012:key/0123abcd-4567-89ef-0123-456789abcdef")
+                    .build()
+                    .unwrap(),
+                vec!["alias/mock-key".to_string()],
+            )),
+        ),
+        (
+            ServiceType::Secrets,
+            "SecretEntry",
+            Box::new(svc::config::SecretEntry::from_sdk(
+                &aws_sdk_secretsmanager::types::SecretListEntry::builder()
+                    .name("mock-secret")
+                    .arn("arn:aws:secretsmanager:us-east-1:123456789012:secret:mock-secret-abc123")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Acm,
+            "AcmCertificate",
+            Box::new(svc::acm::AcmCertificate::from_summary(
+                &aws_sdk_acm::types::CertificateSummary::builder()
+                    .certificate_arn("arn:aws:acm:us-east-1:123456789012:certificate/0123abcd-4567-89ef-0123-456789abcdef")
+                    .domain_name("example.com")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Fms,
+            "FmsPolicy",
+            Box::new(svc::fms::FmsPolicy::from_summary(
+                &aws_sdk_fms::types::PolicySummary::builder()
+                    .policy_id("mock-policy-id")
+                    .policy_arn("arn:aws:fms:us-east-1:123456789012:policy/mock-policy-id")
+                    .policy_name("mock-fms-policy")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Fms,
+            "FmsResourceSet",
+            Box::new(svc::fms::FmsResourceSet::from_summary(
+                &aws_sdk_fms::types::ResourceSetSummary::builder()
+                    .id("mock-resource-set-id")
+                    .name("mock-resource-set")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Config,
+            "ConfigRule",
+            Box::new(svc::awsconfig::ConfigRule {
+                name: "mock-config-rule".to_string(),
+                arn: "arn:aws:config:us-east-1:123456789012:config-rule/config-rule-mock01".to_string(),
+                rule_id: "config-rule-mock01".to_string(),
+                source: "AWS".to_string(),
+                identifier: "S3_BUCKET_PUBLIC_READ_PROHIBITED".to_string(),
+                trigger: "ConfigurationItemChangeNotification".to_string(),
+                compliance: "NON_COMPLIANT".to_string(),
+                non_compliant_count: 1,
+                description: "mock config rule".to_string(),
+                parameters: vec![],
+            }),
+        ),
+        (
+            ServiceType::DirectConnect,
+            "DxConnection",
+            Box::new(svc::direct_connect::DxConnection::from_sdk(
+                &aws_sdk_directconnect::types::Connection::builder()
+                    .connection_id("dxcon-mock0001")
+                    .connection_name("mock-connection")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::DirectConnect,
+            "DxVirtualInterface",
+            Box::new(svc::direct_connect::DxVirtualInterface::from_sdk(
+                &aws_sdk_directconnect::types::VirtualInterface::builder()
+                    .virtual_interface_id("dxvif-mock0001")
+                    .virtual_interface_name("mock-vif")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::DirectConnect,
+            "DxGateway",
+            Box::new(svc::direct_connect::DxGateway::from_sdk(
+                &aws_sdk_directconnect::types::DirectConnectGateway::builder()
+                    .direct_connect_gateway_id("mock-dxgw-id")
+                    .direct_connect_gateway_name("mock-dx-gateway")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::DirectConnect,
+            "DxLag",
+            Box::new(svc::direct_connect::DxLag::from_sdk(
+                &aws_sdk_directconnect::types::Lag::builder()
+                    .lag_id("dxlag-mock0001")
+                    .lag_name("mock-lag")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Inspector,
+            "InspFinding",
+            Box::new(svc::inspector::InspFinding {
+                arn: "arn:aws:inspector2:us-east-1:123456789012:finding/0123456789abcdef0123456789abcdef".to_string(),
+                title: "Mock finding".to_string(),
+                description: "mock description".to_string(),
+                finding_type: "PACKAGE_VULNERABILITY".to_string(),
+                severity_label: "HIGH".to_string(),
+                status: "ACTIVE".to_string(),
+                inspector_score: 7.5,
+                resource_type: "AWS_EC2_INSTANCE".to_string(),
+                resource_id: "i-0123456789abcdef0".to_string(),
+                repository: String::new(),
+                image_tags: vec![],
+                cve: "CVE-2024-0001".to_string(),
+                package_summary: "mock-package@1.0.0 -> fixed 1.0.1".to_string(),
+                fix_available: "YES".to_string(),
+                exploit_available: "NO".to_string(),
+                vuln_rows: vec![],
+                remediation_text: "Update the package".to_string(),
+                remediation_url: String::new(),
+                first_observed: Some("2024-01-01T00:00:00Z".to_string()),
+                last_observed: Some("2024-01-01T00:00:00Z".to_string()),
+                raw_json: "{}".to_string(),
+            }),
+        ),
+        (
+            ServiceType::SecurityHub,
+            "ShFinding",
+            Box::new(svc::security_hub::ShFinding {
+                id: "arn:aws:securityhub:us-east-1:123456789012:subscription/mock/finding/mock".to_string(),
+                product: "Security Hub".to_string(),
+                generator_id: "mock-generator".to_string(),
+                title: "Mock finding".to_string(),
+                description: "mock description".to_string(),
+                severity_label: "HIGH".to_string(),
+                workflow_status: "NEW".to_string(),
+                record_state: "ACTIVE".to_string(),
+                compliance_status: "FAILED".to_string(),
+                security_control_id: "S3.1".to_string(),
+                related_requirements: vec![],
+                account_id: "123456789012".to_string(),
+                region: "us-east-1".to_string(),
+                resources: vec![],
+                remediation_text: "Fix the thing".to_string(),
+                remediation_url: String::new(),
+                first_observed: Some("2024-01-01T00:00:00Z".to_string()),
+                updated: Some("2024-01-01T00:00:00Z".to_string()),
+                product_arn: "arn:aws:securityhub:us-east-1::product/aws/securityhub".to_string(),
+                company: "AWS".to_string(),
+                severity_normalized: Some(70),
+                severity_original: "HIGH".to_string(),
+                criticality: Some(50),
+                confidence: None,
+                status_reasons: vec![(
+                    "S3_BUCKET_PUBLIC".to_string(),
+                    "The bucket allows public read".to_string(),
+                )],
+                associated_standards: vec![
+                    "standards/aws-foundational-security-best-practices/v/1.0.0".to_string(),
+                ],
+                control_parameters: vec![],
+                types: vec!["Software and Configuration Checks/Industry and Regulatory Standards"
+                    .to_string()],
+                account_name: "mock-account".to_string(),
+                sample: false,
+                source_url: String::new(),
+                resource_rows: vec![("  Region".to_string(), "us-east-1".to_string())],
+                vuln_rows: vec![],
+                context_rows: vec![],
+                note_text: String::new(),
+                note_updated_by: String::new(),
+                note_updated_at: String::new(),
+                product_fields: vec![],
+                user_defined_fields: vec![],
+                related_findings: vec![],
+                last_observed: Some("2024-01-01T00:00:00Z".to_string()),
+                created: Some("2024-01-01T00:00:00Z".to_string()),
+                processed_at: None,
+                search_blob: "mock finding S3.1".to_string(),
+                raw_json: "{}".to_string(),
+            }),
+        ),
+        (
+            ServiceType::SecurityHub,
+            "ShControl",
+            Box::new(svc::security_hub::ShControl {
+                id: "S3.1".to_string(),
+                arn: "arn:aws:securityhub:us-east-1::security-control/S3.1".to_string(),
+                title: "S3 general purpose buckets should have block public access enabled"
+                    .to_string(),
+                description: "mock control description".to_string(),
+                remediation_url: "https://docs.aws.amazon.com/console/securityhub/S3.1/remediation"
+                    .to_string(),
+                severity: "HIGH".to_string(),
+                control_status: "ENABLED".to_string(),
+                update_status: "READY".to_string(),
+                last_update_reason: String::new(),
+                region_availability: "AVAILABLE".to_string(),
+                parameters: vec![("maxCredentialUsageAge".to_string(), "90".to_string())],
+                customizable: vec!["Parameters".to_string()],
+                standards: vec!["aws-foundational-security-best-practices".to_string()],
+                failed_resources: 3,
+                compliance: svc::security_hub::FAILED.to_string(),
+                tags: std::collections::HashMap::new(),
+            }),
+        ),
+        (
+            ServiceType::SecurityHub,
+            "ShAutomationRule",
+            Box::new(svc::security_hub::ShAutomationRule {
+                arn: "arn:aws:securityhub:us-east-1:123456789012:automation-rule/mock".to_string(),
+                name: "Suppress dev-account informational".to_string(),
+                description: "mock rule description".to_string(),
+                status: "ENABLED".to_string(),
+                order: 1,
+                is_terminal: false,
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-01T00:00:00Z".to_string(),
+                created_by: "arn:aws:iam::123456789012:role/admin".to_string(),
+                criteria_rows: vec![("Severity".to_string(), "EQUALS INFORMATIONAL".to_string())],
+                action_rows: vec![("Workflow Status".to_string(), "SUPPRESSED".to_string())],
+                sets_workflow: "SUPPRESSED".to_string(),
+                tags: std::collections::HashMap::new(),
+            }),
+        ),
+        (
+            ServiceType::SecurityHub,
+            "ShActionTarget",
+            Box::new(svc::security_hub::ShActionTarget {
+                arn: "arn:aws:securityhub:us-east-1:123456789012:action/custom/mock".to_string(),
+                name: "Send to Jira".to_string(),
+                description: "mock custom action".to_string(),
+                tags: std::collections::HashMap::new(),
+            }),
+        ),
+        (
+            ServiceType::SecurityHub,
+            "ShProduct",
+            Box::new(svc::security_hub::ShProduct {
+                arn: "arn:aws:securityhub:us-east-1::product/aws/guardduty".to_string(),
+                name: "GuardDuty".to_string(),
+                company: "AWS".to_string(),
+                description: "mock integration description".to_string(),
+                categories: vec!["Threat Detection and Response".to_string()],
+                integration_types: vec!["SEND_FINDINGS_TO_SECURITY_HUB".to_string()],
+                marketplace_url: String::new(),
+                activation_url: String::new(),
+                enabled: true,
+                tags: std::collections::HashMap::new(),
+            }),
+        ),
+        (
+            ServiceType::SecurityHub,
+            "ShSettings",
+            Box::new(svc::security_hub::ShSettings {
+                hub_arn: "arn:aws:securityhub:us-east-1:123456789012:hub/default".to_string(),
+                subscribed_at: "2024-01-01T00:00:00Z".to_string(),
+                auto_enable_controls: Some(true),
+                control_finding_generator: "SECURITY_CONTROL".to_string(),
+                aggregation_configured: true,
+                aggregation_region: "us-east-1".to_string(),
+                region_linking_mode: "ALL_REGIONS".to_string(),
+                linked_regions: vec!["eu-west-1".to_string()],
+                org_readable: true,
+                auto_enable_members: Some(true),
+                member_limit_reached: Some(false),
+                auto_enable_standards: "DEFAULT".to_string(),
+                org_config_type: "CENTRAL".to_string(),
+                org_config_status: "ENABLED".to_string(),
+                org_config_status_message: String::new(),
+                delegated_admins: vec!["123456789012 (ENABLED)".to_string()],
+                administrator_account: String::new(),
+                administrator_status: String::new(),
+                errors: vec![],
+                tags: std::collections::HashMap::new(),
+            }),
+        ),
+        (
+            ServiceType::SecurityHub,
+            "ShConfigPolicy",
+            Box::new(svc::security_hub::ShConfigPolicy {
+                id: "11111111-2222-3333-4444-555555555555".to_string(),
+                arn: "arn:aws:securityhub:us-east-1:123456789012:configuration-policy/mock"
+                    .to_string(),
+                name: "Baseline".to_string(),
+                description: "mock configuration policy".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-01T00:00:00Z".to_string(),
+                service_enabled: true,
+                enabled_standards: vec![
+                    "standards/aws-foundational-security-best-practices/v/1.0.0".to_string(),
+                ],
+                enabled_controls: vec![],
+                disabled_controls: vec!["S3.1".to_string()],
+                custom_parameters: vec![],
+                targets: vec![svc::security_hub::ShPolicyTarget {
+                    target_id: "ou-abcd-11111111".to_string(),
+                    target_type: "ORGANIZATIONAL_UNIT".to_string(),
+                    association_type: "APPLIED".to_string(),
+                    status: "SUCCESS".to_string(),
+                    status_message: String::new(),
+                    updated_at: "2024-01-01T00:00:00Z".to_string(),
+                }],
+                detail_error: String::new(),
+                tags: std::collections::HashMap::new(),
+            }),
+        ),
+        (
+            ServiceType::SecurityHub,
+            "ShMember",
+            Box::new(svc::security_hub::ShMember {
+                account_id: "210987654321".to_string(),
+                email: "member@example.com".to_string(),
+                status: "Enabled".to_string(),
+                administrator_id: "123456789012".to_string(),
+                invited_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-01T00:00:00Z".to_string(),
+                tags: std::collections::HashMap::new(),
+            }),
+        ),
+        (
+            ServiceType::SecurityHub,
+            "ShInsight",
+            Box::new(svc::security_hub::ShInsight {
+                name: "Resources with the most failed checks".to_string(),
+                arn: "arn:aws:securityhub:::insight/securityhub/default/1".to_string(),
+                group_by: "ResourceId".to_string(),
+                filter_rows: vec![("Severity".to_string(), "EQUALS HIGH".to_string())],
+                managed: true,
+                tags: std::collections::HashMap::new(),
+            }),
+        ),
+        (
+            ServiceType::SecurityHub,
+            "ShOverview",
+            Box::new(svc::security_hub::ShOverview {
+                standards: vec![svc::security_hub::ShStandardScore {
+                    name: "aws-foundational-security-best-practices".to_string(),
+                    controls_passed: 80,
+                    controls_enabled: 100,
+                }],
+                critical_count: 1,
+                high_count: 2,
+                medium_count: 3,
+                low_count: 4,
+                informational_count: 0,
+                total_findings: 10,
+                controls_failed: 20,
+                controls_total: 100,
+                suppressed_count: 2,
+                severity_scope: "High+".to_string(),
+                findings_capped: false,
+                scan_complete: true,
+            }),
+        ),
+    ]
+}
