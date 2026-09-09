@@ -1,11 +1,9 @@
 # BACKLOG.md
 
-Open work only. Consolidated **2026-07-30** from `ROADMAP.md`,
-`COMPREHENSIVE-REVIEW.md`, `docs/service-gap-analysis.md`, `ideas.md` and
-`docs/service-plans/` — all deleted in the same commit, because everything in
-them that was still true was either **shipped** (and therefore documented in
-`CLAUDE.md`, which is the reference) or **carried forward here**. Git history
-has the originals if you want the archaeology.
+Open work only. Consolidated **2026-07-30** from a set of earlier roadmap,
+review and per-service planning docs, since retired: everything in them that
+was still true was either **shipped** (and therefore documented in
+`CLAUDE.md`, which is the reference) or **carried forward here**.
 
 Items were verified against the tree at the time of consolidation, so an entry
 being here means it was genuinely not built — not merely unmarked in an old
