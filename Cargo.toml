@@ -62,6 +62,8 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # For number formatting
 thousands = "0.2"
+# Display-width padding for the detail pane key column (CJK / emoji / glyphs)
+unicode-width = "0.1"
 aws-sdk-cloudwatch = "1.17"
 aws-sdk-cloudwatchlogs = "1.17"
 aws-sdk-sts = "1.17"
