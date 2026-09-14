@@ -1426,6 +1426,7 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
     let scroll_offset = cursor.saturating_sub(visible_height.saturating_sub(1));
     app.record_detail_body_geometry(content_area, scroll_offset);
     let q_lower = app.detail_search_query.to_lowercase();
+    let key_widths = key_col_widths(&rows, content_area.width);
 
     let lines: Vec<Line> = rows
         .iter()
@@ -1438,7 +1439,7 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
                 .as_ref()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .unwrap_or((key.as_str(), value.as_str()));
-            let line = style_detail_row(key, value, state.as_ref());
+            let line = style_detail_row(key, value, state.as_ref(), key_widths[idx]);
             let jump = jump_indicator(app, key, value);
             if Some(idx) == selected {
                 let sel = theme::selection_style(true);
@@ -1555,14 +1556,115 @@ fn spin_loading_row(key: &str, value: &str, tick: u64, focused: bool) -> Option<
 }
 
 /// Style one key/value row from `App::get_detail_lines`.
+/// Narrowest key column a detail body ever uses — short-key sections
+/// (Overview-style panes) all line up at the same place across services.
+pub(crate) const KEY_COL_MIN: usize = 24;
+/// Widest the key column may grow, however long the section's keys are.
+pub(crate) const KEY_COL_MAX: usize = 48;
+/// Columns kept for the value when the pane is narrow: the cap is
+/// `content_width − KEY_COL_VALUE_RESERVE`, clamped to `[MIN, MAX]`.
+const KEY_COL_VALUE_RESERVE: usize = 20;
+
+/// Is this row a `key: value` pair (the only shape that gets a padded key)?
+/// Everything else — blank spacers, group headers, plain content lines,
+/// flat-view section headers, empty-key notes — renders without a colon.
+fn is_key_value_row(key: &str, value: &str) -> bool {
+    !key.is_empty() && !value.is_empty() && !key.starts_with("━━ ")
+}
+
+/// Key-column width for every row of a detail body, one entry per row.
+///
+/// The column is **adaptive per section**: the widest key in the section
+/// (by display width, so `⚠`/CJK keys don't drift), clamped to
+/// `[KEY_COL_MIN, cap]` where the cap shrinks with the pane so a value
+/// always keeps `KEY_COL_VALUE_RESERVE` columns. In the tabbed view the body
+/// *is* one section; in the flat view the `━━ Name ━━` headers split the
+/// body so a long tag key in Tags doesn't push every Overview value right.
+/// Keys wider than the cap are ellipsised by `style_detail_row`, so the `:`
+/// lands at the same column for every pair by construction.
+fn key_col_widths(rows: &[(String, String)], content_width: u16) -> Vec<usize> {
+    use unicode_width::UnicodeWidthStr;
+    let cap = (content_width as usize)
+        .saturating_sub(KEY_COL_VALUE_RESERVE)
+        .clamp(KEY_COL_MIN, KEY_COL_MAX);
+    let mut widths = vec![KEY_COL_MIN; rows.len()];
+    let fill = |widths: &mut Vec<usize>, start: usize, end: usize| {
+        let w = rows[start..end]
+            .iter()
+            .filter(|(k, v)| is_key_value_row(k, v))
+            .map(|(k, _)| k.width())
+            .max()
+            .unwrap_or(0)
+            .clamp(KEY_COL_MIN, cap);
+        widths[start..end].iter_mut().for_each(|x| *x = w);
+    };
+    let mut start = 0;
+    for (i, (k, v)) in rows.iter().enumerate() {
+        if v.is_empty() && k.starts_with("━━ ") && i > start {
+            fill(&mut widths, start, i);
+            start = i;
+        }
+    }
+    if start < rows.len() {
+        fill(&mut widths, start, rows.len());
+    }
+    widths
+}
+
+/// Pad `key` to exactly `width` display columns, ellipsising a key that
+/// doesn't fit (the full text stays in the row tuple for `y`/export).
+fn pad_key_to_width(key: &str, width: usize) -> String {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    let kw = key.width();
+    if kw <= width {
+        return format!("{}{}", key, " ".repeat(width - kw));
+    }
+    // Keep `width - 1` columns of the key, then `…`.
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in key.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if used + cw > width.saturating_sub(1) {
+            break;
+        }
+        out.push(ch);
+        used += cw;
+    }
+    out.push('…');
+    used += 1;
+    out.push_str(&" ".repeat(width.saturating_sub(used)));
+    out
+}
+
 fn style_detail_row(
     key: &str,
     value: &str,
     state: Option<&crate::aws::resource::ResourceState>,
+    key_w: usize,
 ) -> Line<'static> {
     // Blank spacer row
     if key.is_empty() && value.is_empty() {
         return Line::raw("");
+    }
+
+    // Empty-key note ("" / "No tags", "" / "Loading…"): a value with nothing
+    // to pair it with. Render it as an indented content line — the same
+    // shape as `("  No tags", "")` — instead of a lone `:` floating at the
+    // key column, so both conventions look identical on screen.
+    if key.is_empty() {
+        let trimmed = value.trim_start();
+        let style = if trimmed.starts_with('⚠') {
+            Style::default().fg(theme::warning())
+        } else if trimmed.starts_with('✗') {
+            Style::default().fg(theme::error())
+        } else if trimmed.starts_with('✓') {
+            Style::default().fg(theme::success())
+        } else if trimmed.starts_with("· ") {
+            Style::default().fg(crate::ui::theme::text_muted())
+        } else {
+            Style::default().fg(crate::ui::theme::text_primary())
+        };
+        return Line::styled(format!("  {}", trimmed), style);
     }
 
     // Plain content line: indented key with no paired value (template preview, CIDR lists, etc.)
@@ -1644,9 +1746,9 @@ fn style_detail_row(
         Style::default().fg(crate::ui::theme::text_primary())
     };
 
-    // Align value column: pad key to KEY_COL_W so the ":" is always at the same position
-    const KEY_COL_W: usize = 24;
-    let padded_key = format!("{:<KEY_COL_W$}", key);
+    // Align the value column: pad the key to the body's key-column width
+    // (`key_col_widths`) by display width so the ":" lands in one place.
+    let padded_key = pad_key_to_width(key, key_w);
     Line::from(vec![
         Span::styled(format!("{}: ", padded_key), Style::default().fg(theme::accent())),
         Span::styled(value.to_string(), value_style),
@@ -3734,6 +3836,7 @@ fn render_ec2_section_body(app: &App, area: Rect, frame: &mut Frame) {
     let cursor = app.details_selected_index.unwrap_or(0);
     let scroll_offset = cursor.saturating_sub(visible_height.saturating_sub(1));
     app.record_detail_body_geometry(content_area, scroll_offset);
+    let key_widths = key_col_widths(&all_rows, content_area.width);
     let q_lower = app.detail_search_query.to_lowercase();
 
     let lines: Vec<Line> = all_rows
@@ -3750,7 +3853,7 @@ fn render_ec2_section_body(app: &App, area: Rect, frame: &mut Frame) {
             let jump = jump_indicator(app, key, value);
             let is_selected = focused && app.detail_line_in_selection(idx);
             let is_cursor = focused && Some(idx) == app.details_selected_index;
-            let mut line = style_detail_row(key, value, None);
+            let mut line = style_detail_row(key, value, None, key_widths[idx]);
 
             if is_selected {
                 let sel = theme::selection_style(true);
@@ -4141,6 +4244,7 @@ fn render_split_section_body(app: &App, area: Rect, frame: &mut Frame) {
     let cursor = app.details_selected_index.unwrap_or(0);
     let scroll_offset = cursor.saturating_sub(visible_height.saturating_sub(1));
     app.record_detail_body_geometry(content_area, scroll_offset);
+    let key_widths = key_col_widths(&all_rows, content_area.width);
 
     let q_lower = app.detail_search_query.to_lowercase();
 
@@ -4155,7 +4259,7 @@ fn render_split_section_body(app: &App, area: Rect, frame: &mut Frame) {
                 .as_ref()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .unwrap_or((key.as_str(), value.as_str()));
-            let line = style_detail_row(key, value, None);
+            let line = style_detail_row(key, value, None, key_widths[idx]);
             let jump = jump_indicator(app, key, value);
             if focused && app.detail_line_in_selection(idx) {
                 let sel = theme::selection_style(true);
@@ -42037,5 +42141,104 @@ fn agentcore_tags_lines(
             }
             rows
         }
+    }
+}
+
+#[cfg(test)]
+mod key_col_tests {
+    use super::*;
+
+    fn rows(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    fn colon_col(line: &Line<'_>) -> Option<usize> {
+        use unicode_width::UnicodeWidthStr;
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        text.find(": ").map(|i| text[..i].width())
+    }
+
+    #[test]
+    fn short_keys_pad_to_the_floor() {
+        let r = rows(&[("Name", "a"), ("State", "b")]);
+        assert_eq!(key_col_widths(&r, 120), vec![KEY_COL_MIN, KEY_COL_MIN]);
+    }
+
+    #[test]
+    fn a_long_key_widens_the_whole_section() {
+        // A tag key past 24 chars used to push only its own colon out.
+        let r = rows(&[("Name", "web"), ("aws:cloudformation:logical-id", "AppServer")]);
+        let w = key_col_widths(&r, 120);
+        assert_eq!(w, vec![29, 29]);
+        let l1 = style_detail_row("Name", "web", None, w[0]);
+        let l2 = style_detail_row("aws:cloudformation:logical-id", "AppServer", None, w[1]);
+        assert_eq!(colon_col(&l1), colon_col(&l2));
+    }
+
+    #[test]
+    fn cap_shrinks_with_pane_width_and_never_exceeds_max() {
+        let key = "x".repeat(60);
+        let r = rows(&[(&key, "v")]);
+        assert_eq!(key_col_widths(&r, 200), vec![KEY_COL_MAX]);
+        // 50 columns − reserve 20 = 30.
+        assert_eq!(key_col_widths(&r, 50), vec![30]);
+        // Too narrow: the floor still wins.
+        assert_eq!(key_col_widths(&r, 10), vec![KEY_COL_MIN]);
+    }
+
+    #[test]
+    fn oversize_key_is_ellipsised_to_the_column() {
+        use unicode_width::UnicodeWidthStr;
+        let padded = pad_key_to_width("kubernetes.io/cluster/eks-prod-cluster-name", 30);
+        assert_eq!(padded.width(), 30);
+        assert!(padded.ends_with('…'));
+        assert!(padded.starts_with("kubernetes.io/cluster/eks-pro"));
+    }
+
+    #[test]
+    fn padding_uses_display_width_not_char_count() {
+        // `⚠` and a CJK key both occupy more or fewer cells than chars.
+        let l1 = style_detail_row("⚠ Drift", "yes", None, KEY_COL_MIN);
+        let l2 = style_detail_row("名前", "v", None, KEY_COL_MIN);
+        let l3 = style_detail_row("Name", "v", None, KEY_COL_MIN);
+        assert_eq!(colon_col(&l1), Some(KEY_COL_MIN));
+        assert_eq!(colon_col(&l2), Some(KEY_COL_MIN));
+        assert_eq!(colon_col(&l3), Some(KEY_COL_MIN));
+    }
+
+    #[test]
+    fn flat_view_sections_align_independently() {
+        let r = rows(&[
+            ("━━ Overview ━━━━", ""),
+            ("Name", "web"),
+            ("━━ Tags ━━━━", ""),
+            ("aws:cloudformation:stack-name", "s"),
+        ]);
+        let w = key_col_widths(&r, 120);
+        assert_eq!(w[1], KEY_COL_MIN);
+        assert_eq!(w[3], 29);
+    }
+
+    #[test]
+    fn non_pair_rows_do_not_widen_the_column() {
+        // Group headers, content lines and empty-key notes carry no colon,
+        // so a long "  No Compute Optimizer recommendation…" line must not
+        // move the pairs around it.
+        let r = rows(&[
+            ("Finding", "Optimized"),
+            ("A very long group header that has no value at all", ""),
+            ("  a very long plain content line that also has no value", ""),
+            ("", "a very long empty-key note that renders as content"),
+        ]);
+        assert_eq!(key_col_widths(&r, 120), vec![KEY_COL_MIN; 4]);
+    }
+
+    #[test]
+    fn empty_key_note_renders_as_indented_content_without_a_colon() {
+        let l = style_detail_row("", "No tags", None, KEY_COL_MIN);
+        let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "  No tags");
+        let w = style_detail_row("", "⚠ not enrolled", None, KEY_COL_MIN);
+        assert_eq!(w.style.fg, Some(theme::warning()));
     }
 }

@@ -218,8 +218,16 @@ cache).
 
 **`style_detail_row` conventions** (the `(key, value)` tuples
 `*_section_lines` return):
-- **Key-value row**: key padded to `KEY_COL_W = 24`; key `ACCENT` orange, value
-  conditional colour (state / ✓ / ✗ / ⚠ / white).
+- **Key-value row**: key padded to the body's **adaptive key column**
+  (`key_col_widths`: the widest key in the section by display width, clamped
+  to `[KEY_COL_MIN=24, KEY_COL_MAX=48]` and to what the pane can spare; keys
+  past the cap are ellipsised, never left to push the `:` out — the flat
+  view's `━━` headers split the body so sections align independently); key
+  `ACCENT` orange, value conditional colour (state / ✓ / ✗ / ⚠ / white).
+  Never pad keys yourself in a `*_section_lines` fn.
+- **Empty-key note**: empty key, non-empty value (`("", "No tags")`) →
+  rendered exactly like a plain content line (`"  No tags"`, no colon); the
+  two shapes are interchangeable.
 - **Group header**: non-empty key, empty value, *not* leading-space → Magenta
   bold subsection label. (No `=== X ===` markers.)
 - **Plain content line**: leading-space key, empty value → `Line::raw`, no

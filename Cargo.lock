@@ -4636,6 +4636,7 @@ dependencies = [
  "thousands",
  "tokio",
  "toml",
+ "unicode-width",
  "ureq",
  "zip",
 ]
