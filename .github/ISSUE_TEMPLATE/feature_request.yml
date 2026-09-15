@@ -1,0 +1,25 @@
+name: Feature or service request
+description: A new service, sub-tab, section, lens, or keybinding
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options: [New AWS service, New tab/section on an existing service, Cross-service jump or lens, Keybinding / UX, Other]
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes:
+      label: What you want to see
+      description: For a service, the console pages it should replace and the fields that matter to you.
+    validations: { required: true }
+  - type: textarea
+    id: calls
+    attributes:
+      label: AWS API calls involved
+      description: neboto is read-only. List the Describe/List/Get calls you'd expect — if the feature needs a mutating call it can't be added.
+  - type: textarea
+    id: why
+    attributes:
+      label: Why the console or CLI isn't enough for this

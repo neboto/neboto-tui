@@ -1,0 +1,19 @@
+# Groups the auto-generated release notes (gh release --generate-notes) by PR
+# label. Unlabelled PRs land under "Other changes".
+changelog:
+  exclude:
+    labels: [skip-changelog]
+    authors: [dependabot]
+  categories:
+    - title: New services and views
+      labels: [service, enhancement]
+    - title: Fixes
+      labels: [bug]
+    - title: Security
+      labels: [security]
+    - title: Documentation
+      labels: [documentation]
+    - title: Build and release
+      labels: [build, ci]
+    - title: Other changes
+      labels: ["*"]

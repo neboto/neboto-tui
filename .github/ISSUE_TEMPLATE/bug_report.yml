@@ -1,0 +1,48 @@
+name: Bug report
+description: Something renders wrong, panics, or a service fails to load
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: neboto version
+      description: "`neboto --version`, or the commit if built from source"
+    validations: { required: true }
+  - type: input
+    id: platform
+    attributes:
+      label: OS / terminal
+      placeholder: "macOS 15, iTerm2 / Ubuntu 24.04, kitty"
+    validations: { required: true }
+  - type: input
+    id: service
+    attributes:
+      label: Service and view
+      placeholder: "@ecs → Tasks tab → detail pane, Logs section"
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Include the exact status-bar error if there was one (`M` shows message history; `y` copies).
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. …  2. …"
+  - type: dropdown
+    id: env
+    attributes:
+      label: Against
+      options: [Real AWS account, floci / LocalStack emulator, Not applicable]
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I've removed account ids, ARNs, and anything else identifying from the report
+          required: true

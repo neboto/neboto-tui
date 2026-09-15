@@ -31,6 +31,7 @@ cargo build            # debug   (cargo build --release for release)
 cargo run              # run
 cargo test             # all tests; `cargo test <module>` for one
 cargo clippy           # lint    (cargo check for a fast type-check)
+python3 scripts/check-readonly.py   # read-only guard: every SDK op + IAM action must be read-only (CI runs it)
 ```
 
 ## Architecture

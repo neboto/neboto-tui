@@ -16,6 +16,13 @@
 # uploads; archives land as workflow artifacts) so a new target or toolchain
 # can be checked without burning a tag.
 #
+# Repository variables (Settings → Secrets and variables → Actions):
+#   RELEASE_ON_CI=false  every job stands down on a tag push; cut the release
+#                        from a workstation with scripts/release-local.sh
+#                        (zero Actions minutes — the private-repo default).
+#   BUILD_MACOS=false    Linux legs run here, macOS legs come from a Mac via
+#                        the same script.
+#
 # See docs/RELEASING.md for the runbook.
 name: Release
 
@@ -35,10 +42,10 @@ env:
 jobs:
   create-release:
     name: create draft release
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && vars.RELEASE_ON_CI != 'false'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Check the tag matches Cargo.toml
         run: |
@@ -64,8 +71,9 @@ jobs:
     name: build ${{ matrix.target }}
     needs: [create-release]
     # Run after the draft exists, or standalone on a workflow_dispatch dry run
-    # (where create-release is skipped).
-    if: ${{ !cancelled() && needs.create-release.result != 'failure' }}
+    # (where create-release is skipped). Stand down entirely on a tag push when
+    # releases are cut locally.
+    if: ${{ !cancelled() && needs.create-release.result != 'failure' && (github.event_name == 'workflow_dispatch' || vars.RELEASE_ON_CI != 'false') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -81,7 +89,7 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-15              # cross-compiled from Apple Silicon; Intel runners are retired
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch, 2026-09-03
         with:
@@ -98,11 +106,17 @@ jobs:
           tool: cross
 
       # Builds `neboto` in release mode for the target, packs it (with the
-      # listed files) into neboto-<target>.tar.gz next to a .sha256 sidecar,
-      # and uploads both to the draft release. The archive name is what
-      # install.sh and cargo-binstall expect — change all three together.
+      # listed files) into neboto-<target>.tar.gz, writes neboto-<target>.sha256
+      # (sha256sum format, one line per asset), and uploads both to the draft
+      # release. The names are what install.sh and cargo-binstall expect —
+      # change all three together.
+      #
+      # macOS minutes bill at 10x on a private repo; set the repository
+      # variable BUILD_MACOS=false to skip the two macOS legs here and build
+      # them locally with scripts/release-local.sh instead (docs/RELEASING.md).
       - name: Build and upload
         id: build
+        if: ${{ !startsWith(matrix.os, 'macos') || vars.BUILD_MACOS != 'false' }}
         uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
         with:
           bin: neboto
@@ -117,18 +131,20 @@ jobs:
           dry-run-intended: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Keep the archive as a workflow artifact (dry run only)
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Keep the archive + checksum as a workflow artifact (dry run only)
+        if: github.event_name == 'workflow_dispatch' && steps.build.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: neboto-${{ matrix.target }}
-          path: ${{ steps.build.outputs.tar }}*
+          path: |
+            neboto-${{ matrix.target }}.tar.gz
+            neboto-${{ matrix.target }}.sha256
           if-no-files-found: error
 
   publish:
     name: publish release
     needs: [create-release, build]
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && vars.RELEASE_ON_CI != 'false'
     runs-on: ubuntu-latest
     steps:
       - name: Flip the draft live

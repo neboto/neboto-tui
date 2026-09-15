@@ -2,7 +2,8 @@
 # pinned to a full commit SHA with the version as a trailing comment;
 # Dependabot bumps both together, so a review of the PR is a review of the
 # exact code that will run. Rust crates are pinned by Cargo.lock (builds run
-# with --locked) and are bumped by hand.
+# with --locked); Dependabot refreshes the lock monthly in one grouped PR, and
+# security alerts (enabled on the repo) open their own PRs as advisories land.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -11,4 +12,11 @@ updates:
       interval: weekly
     groups:
       actions:
+        patterns: ["*"]
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      crates:
         patterns: ["*"]

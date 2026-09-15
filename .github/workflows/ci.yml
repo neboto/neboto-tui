@@ -32,7 +32,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch, 2026-09-03
         with:
@@ -46,3 +46,9 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --locked --all-targets
+
+      # neboto's core promise: every SDK operation the code calls has a
+      # read-only verb (or a written exception), and so does every IAM action
+      # in PERMISSIONS.md. See CONTRIBUTING.md.
+      - name: Read-only guard
+        run: python3 scripts/check-readonly.py

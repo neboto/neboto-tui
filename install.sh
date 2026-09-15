@@ -47,26 +47,26 @@ if command -v curl >/dev/null 2>&1; then
     _url="$1"; shift
     _args=""
     for h in "$@"; do _args="$_args -H '$h'"; done
-    eval curl -fsSL --retry 3 $_args "'$_url'"
+    eval curl -fsSL --proto '=https' --tlsv1.2 --retry 3 $_args "'$_url'"
   }
   http_save() { # url outfile [header...]
     _url="$1"; _out="$2"; shift 2
     _args=""
     for h in "$@"; do _args="$_args -H '$h'"; done
-    eval curl -fsSL --retry 3 $_args -o "'$_out'" "'$_url'"
+    eval curl -fsSL --proto '=https' --tlsv1.2 --retry 3 $_args -o "'$_out'" "'$_url'"
   }
 elif command -v wget >/dev/null 2>&1; then
   http_get() {
     _url="$1"; shift
     _args=""
     for h in "$@"; do _args="$_args --header='$h'"; done
-    eval wget -qO- $_args "'$_url'"
+    eval wget -qO- --https-only $_args "'$_url'"
   }
   http_save() {
     _url="$1"; _out="$2"; shift 2
     _args=""
     for h in "$@"; do _args="$_args --header='$h'"; done
-    eval wget -qO "'$_out'" $_args "'$_url'"
+    eval wget -qO "'$_out'" --https-only $_args "'$_url'"
   }
 else
   die "need curl or wget"
@@ -90,8 +90,16 @@ if [ -z "$VERSION" ]; then
   [ -n "$VERSION" ] || die "could not determine the latest release (private repo? set GITHUB_TOKEN)"
 fi
 case "$VERSION" in v*) ;; *) VERSION="v$VERSION" ;; esac
+# The tag is spliced into URLs and shell strings below — accept only tag-shaped input.
+case "$VERSION" in
+  *[!A-Za-z0-9.+-]*) die "refusing suspicious version string: $VERSION" ;;
+esac
+case "$INSTALL_DIR" in
+  *"'"*) die "install dir may not contain a single quote" ;;
+esac
 
 archive="${BIN}-${target}.tar.gz"
+sums="${BIN}-${target}.sha256"   # sha256sum-format lines for every asset of this target
 say "Installing $BIN $VERSION for $target"
 
 tmp="$(mktemp -d)"
@@ -109,22 +117,23 @@ if [ -n "$auth" ]; then
       | sed 's/^"id": *\([0-9]*\).*/\1/'
   }
   id="$(asset_id "$archive")";           [ -n "$id" ] || die "no asset $archive in $VERSION"
-  sum_id="$(asset_id "$archive.sha256")"; [ -n "$sum_id" ] || die "no checksum for $archive in $VERSION"
+  sum_id="$(asset_id "$sums")";          [ -n "$sum_id" ] || die "no checksum file $sums in $VERSION"
+  case "$id$sum_id" in *[!0-9]*) die "unexpected asset id from API" ;; esac
   http_save "$api/releases/assets/$id"     "$tmp/$archive"        "Accept: application/octet-stream" "$auth"
-  http_save "$api/releases/assets/$sum_id" "$tmp/$archive.sha256" "Accept: application/octet-stream" "$auth"
+  http_save "$api/releases/assets/$sum_id" "$tmp/$sums"    "Accept: application/octet-stream" "$auth"
 else
   base="https://github.com/$REPO/releases/download/$VERSION"
   http_save "$base/$archive"        "$tmp/$archive"        || die "download failed: $base/$archive"
-  http_save "$base/$archive.sha256" "$tmp/$archive.sha256" || die "download failed: $base/$archive.sha256"
+  http_save "$base/$sums"    "$tmp/$sums"    || die "download failed: $base/$sums"
 fi
 
 # ---- verify -----------------------------------------------------------------
 (
   cd "$tmp"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum -c --quiet "$archive.sha256"
+    grep " $archive\$" "$sums" | sha256sum -c --quiet -
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 -c --quiet "$archive.sha256"
+    grep " $archive\$" "$sums" | shasum -a 256 -c --quiet -
   else
     say "warning: no sha256sum/shasum found; skipping checksum verification"
   fi

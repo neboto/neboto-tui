@@ -164,5 +164,12 @@ aws-sdk-oam = "1.111.0"
 [profile.dev]
 debug = "line-tables-only"
 
+# Release binaries: the symbol table alone is ~120 MB on top of ~135 MB of
+# code (80 SDK crates), so strip it — measured 256 MB → 139 MB on
+# aarch64-apple-darwin with no runtime change. LTO / opt-level tweaks would
+# shave more but cost CI minutes; see docs/RELEASING.md before changing.
+[profile.release]
+strip = true
+
 [profile.dev.package."*"]
 debug = false

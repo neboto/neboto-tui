@@ -401,7 +401,11 @@ cargo build          # debug
 cargo test           # unit tests + the offline wiring harness
 cargo clippy         # lint
 cargo check          # fast type-check
+python3 scripts/check-readonly.py   # the read-only guard CI runs
 ```
+
+Contributions are welcome — [`CONTRIBUTING.md`](./CONTRIBUTING.md) has the
+house rules, and [`SECURITY.md`](./SECURITY.md) how to report a vulnerability.
 
 `cargo test` runs without AWS credentials or network. Alongside the unit tests,
 an offline harness builds the app against a dead endpoint and injects mock
