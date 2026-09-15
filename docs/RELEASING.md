@@ -227,9 +227,31 @@ be acted on yet. The day the repo flips public, in this order:
    releases go back to the workflow.
 6. Merge settings: squash only, delete branches on merge —
    `gh repo edit --enable-squash-merge --enable-merge-commit=false --enable-rebase-merge=false --delete-branch-on-merge`
-7. Keep Actions' "require approval for first-time contributors" (or tighten
-   to all outside collaborators); never `pull_request_target`, never a
-   self-hosted runner on the public repo.
+7. Require approval for workflows from **all** outside contributors (one
+   merged typo fix shouldn't grant free workflow runs forever):
+   `gh api -X PUT repos/neboto/neboto-tui/actions/permissions/fork-pr-contributor-approval --input - <<< '{"approval_policy":"all_external_contributors"}'`
+   Never `pull_request_target`, never a self-hosted runner on the public repo.
+8. Immutable releases — once published, a release's assets and tag can't be
+   changed, which is what `install.sh` and binstall implicitly trust:
+   `gh api -X PUT repos/neboto/neboto-tui/immutable-releases`
+9. Protect the release tags too (the branch ruleset says nothing about tags):
+   `gh api -X POST repos/neboto/neboto-tui/rulesets --input .github/rulesets/protect-release-tags.json`
+10. Dependabot **security** updates (alerts alone just sit there; this opens
+    a targeted PR the day a CVE lands, instead of waiting for the monthly group):
+    `gh api -X PUT repos/neboto/neboto-tui/automated-security-fixes`
+11. CodeQL default setup (free on public repos; analyzes Rust, the Python
+    guard script and the workflow files):
+    `gh api -X PATCH repos/neboto/neboto-tui/code-scanning/default-setup --input - <<< '{"state":"configured","query_suite":"default"}'`
+
+All eleven were applied on 2026-09-15. Still on the account side, not the
+API's: two-factor on the `sneboto` login and the org-wide 2FA requirement —
+everything above is bypassable by whoever holds that login.
+
+**Consequence of the branch ruleset**: the required status check applies to
+direct pushes too, so a fresh commit pushed straight to `main` is rejected
+until CI has passed on it. The working shape is branch → PR → CI → squash
+merge (the merge settings in step 6 match). Not done yet: build provenance
+attestations on the release job (`actions/attest-build-provenance`).
 
 ## How users install (once public)
 
