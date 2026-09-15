@@ -42,3 +42,6 @@ aws-credentials*
 neboto-*.json
 neboto-*.csv
 neboto-*.md
+
+# demo recordings: keep the GIF (README embeds it), drop the heavier MP4
+demo/*.mp4

@@ -136,7 +136,7 @@ impl AwsService for Route53Service {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadWarning {
                         service: service_type,
-                        warning: format!("health checks: {}", e),
+                        warning: format!("health checks: {}", crate::error::sdk_error_message(&e)),
                     });
                     break;
                 }

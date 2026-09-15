@@ -486,7 +486,7 @@ impl AwsService for Ec2Service {
                     Err(e) => {
                         let _ = event_tx.send(Event::ResourceLoadWarning {
                             service: service_type,
-                            warning: format!("AMIs: {}", e),
+                            warning: format!("AMIs: {}", crate::error::sdk_error_message(&e)),
                         });
                         break;
                     }
@@ -531,7 +531,7 @@ impl AwsService for Ec2Service {
                     Err(e) => {
                         let _ = event_tx.send(Event::ResourceLoadWarning {
                             service: service_type,
-                            warning: format!("Snapshots: {}", e),
+                            warning: format!("Snapshots: {}", crate::error::sdk_error_message(&e)),
                         });
                         break;
                     }
@@ -575,7 +575,7 @@ impl AwsService for Ec2Service {
                     Err(e) => {
                         let _ = event_tx.send(Event::ResourceLoadWarning {
                             service: service_type,
-                            warning: format!("Launch templates: {}", e),
+                            warning: format!("Launch templates: {}", crate::error::sdk_error_message(&e)),
                         });
                         break;
                     }
@@ -606,7 +606,7 @@ impl AwsService for Ec2Service {
             Err(e) => {
                 let _ = event_tx.send(Event::ResourceLoadWarning {
                     service: service_type,
-                    warning: format!("Elastic IPs: {}", e),
+                    warning: format!("Elastic IPs: {}", crate::error::sdk_error_message(&e)),
                 });
             }
         }

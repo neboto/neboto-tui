@@ -106,7 +106,7 @@ impl AwsService for DirectConnectService {
             Err(e) => {
                 let _ = event_tx.send(Event::ResourceLoadWarning {
                     service: service_type,
-                    warning: format!("virtual interfaces: {}", e),
+                    warning: format!("virtual interfaces: {}", crate::error::sdk_error_message(&e)),
                 });
             }
         }
@@ -135,7 +135,7 @@ impl AwsService for DirectConnectService {
             Err(e) => {
                 let _ = event_tx.send(Event::ResourceLoadWarning {
                     service: service_type,
-                    warning: format!("LAGs: {}", e),
+                    warning: format!("LAGs: {}", crate::error::sdk_error_message(&e)),
                 });
             }
         }
@@ -174,7 +174,7 @@ impl AwsService for DirectConnectService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadWarning {
                         service: service_type,
-                        warning: format!("DX gateways: {}", e),
+                        warning: format!("DX gateways: {}", crate::error::sdk_error_message(&e)),
                     });
                     break;
                 }

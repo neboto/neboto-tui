@@ -144,7 +144,7 @@ impl AwsService for RdsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadWarning {
                         service: service_type,
-                        warning: format!("DB snapshots: {}", e),
+                        warning: format!("DB snapshots: {}", crate::error::sdk_error_message(&e)),
                     });
                     break;
                 }
@@ -178,7 +178,7 @@ impl AwsService for RdsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadWarning {
                         service: service_type,
-                        warning: format!("DB cluster snapshots: {}", e),
+                        warning: format!("DB cluster snapshots: {}", crate::error::sdk_error_message(&e)),
                     });
                     break;
                 }
@@ -213,7 +213,7 @@ impl AwsService for RdsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadWarning {
                         service: service_type,
-                        warning: format!("DB parameter groups: {}", e),
+                        warning: format!("DB parameter groups: {}", crate::error::sdk_error_message(&e)),
                     });
                     break;
                 }
@@ -250,7 +250,7 @@ impl AwsService for RdsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadWarning {
                         service: service_type,
-                        warning: format!("Cluster parameter groups: {}", e),
+                        warning: format!("Cluster parameter groups: {}", crate::error::sdk_error_message(&e)),
                     });
                     break;
                 }
@@ -283,7 +283,7 @@ impl AwsService for RdsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadWarning {
                         service: service_type,
-                        warning: format!("Option groups: {}", e),
+                        warning: format!("Option groups: {}", crate::error::sdk_error_message(&e)),
                     });
                     break;
                 }
@@ -316,7 +316,7 @@ impl AwsService for RdsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadWarning {
                         service: service_type,
-                        warning: format!("DB subnet groups: {}", e),
+                        warning: format!("DB subnet groups: {}", crate::error::sdk_error_message(&e)),
                     });
                     break;
                 }

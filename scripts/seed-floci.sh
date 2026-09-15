@@ -7,7 +7,7 @@
 #   floci start                         # or: docker compose up -d
 #   ./scripts/seed-floci.sh             # defaults: 25 of each, http://localhost:4566
 #   COUNT=200 ./scripts/seed-floci.sh   # crank up the volume
-#   ENDPOINT=http://localhost:4566 SEED_EKS=1 SEED_LAMBDA=1 ./scripts/seed-floci.sh
+#   ENDPOINT=http://localhost:4566 SEED_EKS=1 ./scripts/seed-floci.sh   # EKS is heavy, see below
 #
 # Then point neboto at the same endpoint:
 #   AWS_ENDPOINT_URL=http://localhost:4566 cargo run
@@ -27,7 +27,7 @@
 # After switching modes the old in-memory data is already gone — re-run this once.
 #
 # ── COST WARNING ──────────────────────────────────────────────────────────────
-# SEED_EKS=1 / SEED_LAMBDA=1 spin up REAL Docker/k8s containers per resource and
+# SEED_EKS=1 spins up a REAL Kubernetes container per cluster and
 # can pin your machine. Leave them off unless you specifically need them; the
 # other services are in-process and cheap.
 #
@@ -129,6 +129,13 @@ VPC=$(a ec2 create-vpc --cidr-block 10.0.0.0/16 --query 'Vpc.VpcId' 2>/dev/null)
 SUBNET=$(a ec2 create-subnet --vpc-id "$VPC" --cidr-block 10.0.1.0/24 --query 'Subnet.SubnetId' 2>/dev/null)
 SG=$(a ec2 create-security-group --group-name neboto-seed --description "neboto seed" \
   --vpc-id "$VPC" --query 'GroupId' 2>/dev/null)
+# A few ingress rules so the SG's Inbound section (and the instance → SG jump
+# in the README demo) has rows; 443 from anywhere renders in the warning colour.
+a ec2 authorize-security-group-ingress --group-id "$SG" --ip-permissions \
+  'IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=10.0.0.0/8,Description=bastion}]' \
+  'IpProtocol=tcp,FromPort=80,ToPort=80,IpRanges=[{CidrIp=10.0.0.0/16,Description=alb}]' \
+  'IpProtocol=tcp,FromPort=443,ToPort=443,IpRanges=[{CidrIp=0.0.0.0/0,Description=public}]' \
+  >/dev/null 2>&1
 AZ="${REGION}a"
 for i in $(seq 1 "$COUNT"); do
   a ec2 run-instances --image-id ami-0abcdef1234567890 --instance-type t3.micro \
@@ -142,6 +149,11 @@ done
 done_ "$COUNT"
 
 # ── EKS clusters (optional — heavier; gated behind SEED_EKS=1) ─────────────────
+# Every cluster is a REAL Kubernetes container inside floci: ~1 min and a core
+# each, and COUNT of them will pin the machine (load 80+ on a 12-thread laptop
+# is what un-gating this cost once). Prefer scripts/seed-floci-eks.sh (one
+# cluster) for the EKS pane.
+if [ "${SEED_EKS:-0}" = "1" ]; then
 section "EKS clusters"
 ROLE_ARN="arn:aws:iam::000000000000:role/neboto-seed-001"
 for i in $(seq 1 "$COUNT"); do
@@ -150,6 +162,9 @@ for i in $(seq 1 "$COUNT"); do
     --resources-vpc-config "subnetIds=$SUBNET" >/dev/null 2>&1 && tick
 done
 done_ "$COUNT"
+else
+  echo "EKS clusters: skipped (set SEED_EKS=1, or run scripts/seed-floci-eks.sh for one cluster)"
+fi
 
 echo
 echo "Done. Launch neboto against the emulator:"

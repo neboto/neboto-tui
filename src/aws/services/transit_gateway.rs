@@ -120,7 +120,7 @@ impl AwsService for TransitGatewayService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadWarning {
                         service: service_type,
-                        warning: format!("TGW attachments: {}", e),
+                        warning: format!("TGW attachments: {}", crate::error::sdk_error_message(&e)),
                     });
                     break;
                 }
@@ -159,7 +159,7 @@ impl AwsService for TransitGatewayService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadWarning {
                         service: service_type,
-                        warning: format!("TGW route tables: {}", e),
+                        warning: format!("TGW route tables: {}", crate::error::sdk_error_message(&e)),
                     });
                     break;
                 }

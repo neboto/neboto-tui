@@ -857,6 +857,49 @@ pub enum MessageLevel {
     Success,
     Error}
 
+/// A load-phase failure that means "the endpoint doesn't implement this
+/// operation" rather than "something is wrong with the account". Only
+/// consulted while a custom endpoint (floci / LocalStack) is active — real
+/// AWS never returns these for a read call neboto is entitled to make.
+pub(crate) fn is_emulator_unsupported_warning(warning: &str) -> bool {
+    let w = warning.to_ascii_lowercase();
+    [
+        "unsupportedoperation",
+        "notimplemented",
+        "not implemented",
+        "unknownoperation",
+        "invalidaction",
+        "not supported",
+        "unsupported",
+        "501",
+    ]
+    .iter()
+    .any(|needle| w.contains(needle))
+}
+
+#[cfg(test)]
+mod emulator_warning_tests {
+    use super::is_emulator_unsupported_warning;
+
+    #[test]
+    fn unsupported_operation_from_an_emulator_is_recognised() {
+        assert!(is_emulator_unsupported_warning(
+            "snapshots: UnsupportedOperation: DescribeSnapshots is not supported"
+        ));
+        assert!(is_emulator_unsupported_warning("images: NotImplemented"));
+        assert!(is_emulator_unsupported_warning("addresses: HTTP 501"));
+    }
+
+    #[test]
+    fn real_failures_are_not_swallowed() {
+        assert!(!is_emulator_unsupported_warning(
+            "snapshots: UnauthorizedOperation: You are not authorized to perform this operation"
+        ));
+        assert!(!is_emulator_unsupported_warning("volumes: RequestLimitExceeded"));
+        assert!(!is_emulator_unsupported_warning("images: timed out"));
+    }
+}
+
 /// One entry in the reviewable message history (`M`). Time is kept as an
 /// `Instant` and rendered relatively ("3m ago") — no wall-clock dependency.
 #[derive(Debug, Clone)]
@@ -7967,7 +8010,21 @@ impl App {
             Event::ResourceLoadWarning { service, warning }
                 if Some(service) == self.current_service =>
             {
-                self.load_warnings.push(warning);
+                if self.aws_clients.current_endpoint().is_some()
+                    && is_emulator_unsupported_warning(&warning)
+                {
+                    // An emulator that doesn't implement an operation is the
+                    // "expected for a whole class of environment" case
+                    // (CLAUDE.md, warn vs. stay silent): keep it reviewable
+                    // in `M`, but off the status bar.
+                    self.message_history.push_front(MessageEntry {
+                        level: MessageLevel::Error,
+                        text: format!("Emulator (not surfaced) — {warning}"),
+                        at: Instant::now()});
+                    self.message_history.truncate(MESSAGE_HISTORY_MAX);
+                } else {
+                    self.load_warnings.push(warning);
+                }
             }
             // Another service's warning, or a nested wrapper the forwarder
             // can't build: ignore.

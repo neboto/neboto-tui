@@ -262,7 +262,7 @@ impl AwsService for VpcService {
             Err(e) => {
                 let _ = event_tx.send(Event::ResourceLoadWarning {
                     service: service_type,
-                    warning: format!("Customer gateways: {}", e),
+                    warning: format!("Customer gateways: {}", crate::error::sdk_error_message(&e)),
                 });
             }
         }
@@ -288,7 +288,7 @@ impl AwsService for VpcService {
             Err(e) => {
                 let _ = event_tx.send(Event::ResourceLoadWarning {
                     service: service_type,
-                    warning: format!("VPN connections: {}", e),
+                    warning: format!("VPN connections: {}", crate::error::sdk_error_message(&e)),
                 });
             }
         }
@@ -349,7 +349,7 @@ impl AwsService for VpcService {
             Err(e) => {
                 let _ = event_tx.send(Event::ResourceLoadWarning {
                     service: service_type,
-                    warning: format!("VPN gateways: {}", e),
+                    warning: format!("VPN gateways: {}", crate::error::sdk_error_message(&e)),
                 });
             }
         }

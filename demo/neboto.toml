@@ -1,0 +1,12 @@
+# neboto config used by the demo recordings (demo/*.tape). Pointed at via
+# NEBOTO_CONFIG so the machine's real ~/.neboto.toml never leaks into a take.
+#
+# Floci: scripts/seed-floci.sh seeds us-east-1 by default, and the app would
+# otherwise follow AWS_DEFAULT_REGION from the shell — pin it here.
+default_service = "ec2"
+default_region = "us-east-1"
+show_banner = false
+theme = "catppuccin-mocha"
+ownership_ribbon = true
+# For a take against the sandbox AWS account (no floci), name its profile:
+# default_profile = "neboto-demo"

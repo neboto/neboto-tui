@@ -818,7 +818,11 @@ and the approaches you rejected are the part nobody can recover from your code.
   `ListMembers` and its entity-set APIs, CloudTrail's
   `InsightNotEnabledException`, Malware Protection). That is the line between
   the two conventions; pick deliberately, don't copy whichever neighbour you
-  read first.
+  read first. **Emulators are handled centrally**: while a custom endpoint is
+  active, a warning whose text says the operation is unsupported
+  (`is_emulator_unsupported_warning`) goes to the `M` history only, never the
+  `Partial load —` status line — floci's missing `DescribeSnapshots` is not
+  news. Don't add per-service emulator special-casing.
 - **`is_noise()` is only safe when the non-noise subset is normally
   non-empty.** `a` is a global session toggle, so marking a category noise
   blanks that tab for accounts where everything is in it — Security Hub's

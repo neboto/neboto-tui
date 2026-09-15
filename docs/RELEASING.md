@@ -243,6 +243,42 @@ be acted on yet. The day the repo flips public, in this order:
 `install.sh` honours `NEBOTO_VERSION` (pin a tag), `NEBOTO_INSTALL_DIR`
 (default `~/.local/bin`) and `GITHUB_TOKEN`.
 
+## Demo media
+
+Everything under `demo/` is recorded against the local floci emulator
+(`scripts/seed-floci.sh`), so nothing on screen is a real account and nothing
+needs blurring. The `⚙ localhost:4566` badge in the tab bar is the honest
+signal that it is an emulator — leave it in.
+
+- **`demo/neboto.gif`** — the loop embedded at the top of `README.md`.
+  Committed; ~1.5 MB. Re-record with `vhs demo/neboto.tape` (vhs **v0.11.0**,
+  see the tape header — v0.12.0 silently writes nothing). Release builds only:
+  the tape runs `./target/release/neboto`, so rebuild before recording or the
+  GIF shows stale behaviour.
+- **`demo/neboto.mp4`** — the same take, for the README video and social
+  posts. **Not committed** (`.gitignore`); it duplicates the GIF and would grow
+  history by ~1 MB per re-record.
+- **Embedding the video in the README.** GitHub renders an inline player only
+  for videos uploaded through its web UI, never for a file path in the repo:
+  1. Open any issue, PR or release description on GitHub and drag
+     `demo/neboto.mp4` into the comment box (no need to submit the comment).
+  2. It expands to a `https://github.com/user-attachments/assets/<uuid>` URL —
+     copy it.
+  3. Paste that URL on a line of its own in `README.md` where the
+     `<!-- Full walkthrough video … -->` comment sits. A bare URL line is
+     what GitHub turns into a player; a Markdown link is not.
+  Limits: 10 MB per video, mp4/mov/webm. The asset inherits the repo's
+  visibility, so upload it while private and it stays viewable after going
+  public.
+- **More GIFs** (one feature each — log tail, metrics, the `W` timeline) go in
+  `demo/<feature>.gif` from a `demo/<feature>.tape` that shares
+  `demo/neboto.toml`, and are referenced from the matching README bullet
+  rather than stacked at the top: the first screen should stay one loop.
+- **Recording tips**: `Hide` the boot spinner, keep scenes ≥ 1.5 s so a
+  reader can parse each screen, `Set Framerate 12` keeps the GIF small, and
+  check a few frames (`ffmpeg -ss <t> -i demo/neboto.mp4 -frames:v 1 f.png`)
+  before committing — the status bar is where stray warnings show up.
+
 ## Not done yet (in rough priority order)
 
 - **Homebrew tap** (`brew install neboto/tap/neboto`): needs a public

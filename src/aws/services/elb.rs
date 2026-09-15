@@ -147,7 +147,7 @@ impl AwsService for ElbService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadWarning {
                         service: service_type,
-                        warning: format!("target groups: {}", e),
+                        warning: format!("target groups: {}", crate::error::sdk_error_message(&e)),
                     });
                     break;
                 }

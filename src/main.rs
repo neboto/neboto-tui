@@ -595,8 +595,34 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
     // render_details_pane), not as full-screen overlays.
 }
 
+/// Trim a `theme::hint_line` to `max_width` cells on a `  ·  ` boundary, so
+/// a narrow terminal drops whole trailing hints instead of clipping one
+/// mid-word against the region label ("EscUS East" at 120 columns).
+fn fit_hint_line(mut line: Line<'static>, max_width: usize) -> Line<'static> {
+    if line.width() <= max_width {
+        return line;
+    }
+    let mut width = 0usize;
+    let mut keep = 0usize;
+    for (i, span) in line.spans.iter().enumerate() {
+        if span.content == "  ·  " {
+            if width <= max_width {
+                keep = i;
+            } else {
+                break;
+            }
+        }
+        width += span.width();
+    }
+    if keep > 0 {
+        line.spans.truncate(keep);
+    }
+    line
+}
+
 fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui::Frame) {
     // Left segment: transient message (error/success/loading) or contextual key hints
+    let mut left_is_hints = false;
     let left: Line = if let Some(error) = &app.error_message {
         Line::from(vec![
             Span::styled(
@@ -668,6 +694,7 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
             Style::default().fg(theme::warning()),
         ))
     } else {
+        left_is_hints = true;
         let mut line = if app.search_active {
             theme::hint_line(&[("⏎", "confirm"), ("Esc", "cancel"), ("@service", "switch")])
         } else if app.details_focused {
@@ -800,6 +827,13 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
         .constraints([Constraint::Min(0), Constraint::Length(right_width)])
         .split(area);
 
+    // Hints yield to the always-visible right segment, one column of air
+    // between them; messages keep clipping (they are `y`-copyable in full).
+    let left = if left_is_hints {
+        fit_hint_line(left, chunks[0].width.saturating_sub(1) as usize)
+    } else {
+        left
+    };
     frame.render_widget(Paragraph::new(left), chunks[0]);
     frame.render_widget(Paragraph::new(right).alignment(Alignment::Right), chunks[1]);
 }

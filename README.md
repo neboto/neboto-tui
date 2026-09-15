@@ -6,6 +6,13 @@ cross-service link-following — all without leaving the terminal.
 
 Built in Rust with [Ratatui](https://ratatui.rs/).
 
+<p align="center">
+  <img src="demo/neboto.gif" width="100%"
+       alt="neboto demo: filter EC2 instances, open the detail pane, jump to the subnet, its VPC, the security group and back to an instance">
+</p>
+
+https://github.com/user-attachments/assets/2d635750-fd68-4396-ab4d-51406bcbe7e8
+
 **neboto is read-only.** It issues only `describe`/`list`/`get` calls. Nothing
 it does can change your account, which is the point: it is safe to run against
 production, and the IAM policy in [`PERMISSIONS.md`](./PERMISSIONS.md) is
