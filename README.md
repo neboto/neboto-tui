@@ -11,7 +11,7 @@ Built in Rust with [Ratatui](https://ratatui.rs/).
        alt="neboto demo: filter EC2 instances, open the detail pane, jump to the subnet, its VPC, the security group and back to an instance">
 </p>
 
-https://github.com/user-attachments/assets/2d635750-fd68-4396-ab4d-51406bcbe7e8
+https://github.com/user-attachments/assets/f7a4dee9-d38d-4624-b883-4df75489636d
 
 **neboto is read-only.** It issues only `describe`/`list`/`get` calls. Nothing
 it does can change your account, which is the point: it is safe to run against
