@@ -6,6 +6,16 @@ license = "MIT"
 description = "A fast, keyboard-driven, read-only terminal UI for browsing AWS"
 repository = "https://github.com/neboto/neboto-tui"
 readme = "README.md"
+keywords = ["aws", "tui", "terminal", "ratatui", "cloud"]
+categories = ["command-line-utilities"]
+
+# `cargo binstall neboto` pulls the prebuilt tarball the Release workflow
+# attaches to each tag. The archive name must match what
+# .github/workflows/release.yml produces and install.sh downloads.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
 
 [dependencies]
 # TUI
@@ -36,7 +46,6 @@ aws-smithy-runtime-api = "1"
 aws-smithy-types = "1"
 
 # Fuzzy search
-skim = "0.10"
 fuzzy-matcher = "0.3"
 
 # Error handling

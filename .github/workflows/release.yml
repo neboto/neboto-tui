@@ -1,0 +1,139 @@
+# Release: build prebuilt binaries for every supported target and attach them
+# to a GitHub Release.
+#
+# Trigger by pushing a version tag that matches Cargo.toml:
+#
+#   cargo set-version 0.2.0      # or edit Cargo.toml by hand
+#   git commit -am "Release v0.2.0"
+#   git tag v0.2.0 && git push origin main v0.2.0
+#
+# The release is created as a DRAFT, every target uploads into it, and the
+# final `publish` job flips it live only when all builds succeeded — so a
+# half-built release is never visible. While the repo is private, releases are
+# visible only to collaborators; nothing else changes when it goes public.
+#
+# `workflow_dispatch` runs the whole build matrix as a DRY RUN (no release, no
+# uploads; archives land as workflow artifacts) so a new target or toolchain
+# can be checked without burning a tag.
+#
+# See docs/RELEASING.md for the runbook.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  create-release:
+    name: create draft release
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Check the tag matches Cargo.toml
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::tag v$tag does not match Cargo.toml version $crate"
+            exit 1
+          fi
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --draft --verify-tag --generate-notes $prerelease
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: [create-release]
+    # Run after the draft exists, or standalone on a workflow_dispatch dry run
+    # (where create-release is skipped).
+    if: ${{ !cancelled() && needs.create-release.result != 'failure' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04          # oldest glibc GitHub still hosts → widest compatibility
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+            build-tool: cross         # docker-based cross toolchain (needs a C compiler for aws-lc-sys / ring)
+          - target: aarch64-apple-darwin
+            os: macos-15
+          - target: x86_64-apple-darwin
+            os: macos-15              # cross-compiled from Apple Silicon; Intel runners are retired
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch, 2026-09-03
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.target }}
+
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        if: matrix.build-tool == 'cross'
+        with:
+          tool: cross
+
+      # Builds `neboto` in release mode for the target, packs it (with the
+      # listed files) into neboto-<target>.tar.gz next to a .sha256 sidecar,
+      # and uploads both to the draft release. The archive name is what
+      # install.sh and cargo-binstall expect — change all three together.
+      - name: Build and upload
+        id: build
+        uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
+        with:
+          bin: neboto
+          target: ${{ matrix.target }}
+          build-tool: ${{ matrix.build-tool || 'cargo' }}
+          locked: true
+          tar: unix
+          zip: none
+          include: README.md,LICENSE,PERMISSIONS.md,config.example.toml
+          checksum: sha256
+          dry-run: ${{ github.event_name == 'workflow_dispatch' }}
+          dry-run-intended: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Keep the archive as a workflow artifact (dry run only)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: neboto-${{ matrix.target }}
+          path: ${{ steps.build.outputs.tar }}*
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: [create-release, build]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Flip the draft live
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"

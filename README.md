@@ -41,20 +41,33 @@ auditably read-only. See [Why read-only](#why-read-only).
 
 ## Install
 
-Requires a recent stable Rust toolchain (edition 2021) and configured AWS
-credentials.
+Prebuilt binaries for Linux (x86_64, aarch64) and macOS (Intel, Apple
+Silicon) are attached to every [GitHub release](https://github.com/neboto/neboto-tui/releases).
 
 ```bash
-git clone https://github.com/neboto/neboto-tui.git
-cd neboto-tui
-cargo build --release
-./target/release/neboto
+# installer: picks the right binary, verifies its SHA-256, puts it in ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/install.sh | sh
+
+# or with cargo-binstall
+cargo binstall --git https://github.com/neboto/neboto-tui neboto
 ```
 
-Or run in place with `cargo run --release`.
+`NEBOTO_VERSION=v0.1.0` pins a version and `NEBOTO_INSTALL_DIR` changes the
+destination. Or grab the tarball for your platform from the releases page and
+put `neboto` anywhere on your `PATH`.
 
-Optional companions: the `aws` CLI + `session-manager-plugin` for SSM sessions
-(`s`), and a `$EDITOR` for `e`.
+**From source** — needs a recent stable Rust toolchain:
+
+```bash
+cargo install --git https://github.com/neboto/neboto-tui
+# or
+git clone https://github.com/neboto/neboto-tui.git && cd neboto-tui
+cargo build --release && ./target/release/neboto
+```
+
+Either way you need configured AWS credentials. Optional companions: the
+`aws` CLI + `session-manager-plugin` for SSM sessions (`s`), and a `$EDITOR`
+for `e`. How releases are cut is in [`docs/RELEASING.md`](./docs/RELEASING.md).
 
 ### Command line
 

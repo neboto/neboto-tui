@@ -18,6 +18,7 @@ the AWS SDK for Rust).
 | The project's own vocabulary (Lazy, LazyStore, epoch, deep export…) | [`CONTEXT.md`](CONTEXT.md) |
 | Why a design is the way it is | [`docs/adr/`](docs/adr) |
 | What's still unbuilt | [`docs/BACKLOG.md`](docs/BACKLOG.md) |
+| How a release is cut / how users install | [`docs/RELEASING.md`](docs/RELEASING.md) — the workflow, `install.sh` and the binstall table share the archive name |
 
 A note on counts: descriptive numbers ("~60 types do X") rot silently here —
 three of them had drifted 25–170% before anyone noticed. Prefer a grep the
