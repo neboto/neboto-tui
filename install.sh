@@ -1,14 +1,27 @@
 #!/bin/sh
 # neboto installer — fetches the prebuilt binary for this machine from GitHub
-# Releases, verifies its SHA-256, and drops it on your PATH.
+# Releases, verifies its SHA-256 and (when the GitHub CLI is available) its
+# signed build provenance, and drops it on your PATH.
 #
 #   curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/install.sh | sh
+#
+# Prefer to read it before running it:
+#   curl -fsSLO https://raw.githubusercontent.com/neboto/neboto-tui/main/install.sh
+#   less install.sh && sh install.sh
 #
 # Environment:
 #   NEBOTO_VERSION      release tag to install (default: latest), e.g. v0.1.0
 #   NEBOTO_INSTALL_DIR  where to put the binary (default: ~/.local/bin)
-#   GITHUB_TOKEN        needed while the repo is private (any token with read
-#                       access); also lifts the anonymous API rate limit
+#   NEBOTO_NO_ATTEST=1  skip the provenance check even when `gh` is present
+#   GITHUB_TOKEN        lifts the anonymous API rate limit; needed if the repo
+#                       is ever private (any token with read access)
+#
+# Provenance: every release archive from v0.2.0 on carries a build provenance
+# attestation (see docs/RELEASING.md). With `gh` installed and logged in, the
+# archive is verified against it and a mismatch aborts the install — a swapped
+# asset can't pass, even if its .sha256 was swapped with it. Without `gh` the
+# SHA-256 check still runs; `gh attestation verify <archive> --repo neboto/neboto-tui`
+# does the same check by hand.
 #
 # Supported: Linux (x86_64, aarch64), macOS (Intel, Apple Silicon).
 set -eu
@@ -18,6 +31,9 @@ BIN="neboto"
 INSTALL_DIR="${NEBOTO_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${NEBOTO_VERSION:-}"
 TOKEN="${GITHUB_TOKEN:-}"
+# Releases cut before the workflow attested its archives. Verification is
+# skipped (with a note) for these instead of failing on "no attestation found".
+UNATTESTED_VERSIONS="v0.1.0"
 
 say() { printf '%s\n' "$*" >&2; }
 die() { say "error: $*"; exit 1; }
@@ -138,6 +154,31 @@ fi
     say "warning: no sha256sum/shasum found; skipping checksum verification"
   fi
 ) || die "checksum mismatch for $archive"
+
+# ---- verify provenance (GitHub CLI, when available) ------------------------
+# The .sha256 file is uploaded by the same token as the archive, so it can't
+# catch a swapped asset; the attestation is signed with an identity only the
+# release workflow can hold.
+attest_status="skipped"
+if [ "${NEBOTO_NO_ATTEST:-}" = "1" ]; then
+  attest_status="skipped (NEBOTO_NO_ATTEST=1)"
+elif ! command -v gh >/dev/null 2>&1; then
+  attest_status="skipped (install the GitHub CLI to verify build provenance)"
+elif ! gh auth token >/dev/null 2>&1; then
+  attest_status="skipped (gh is not logged in; run 'gh auth login' to verify build provenance)"
+else
+  unattested=0
+  for v in $UNATTESTED_VERSIONS; do [ "$v" = "$VERSION" ] && unattested=1; done
+  if [ "$unattested" = 1 ]; then
+    attest_status="skipped ($VERSION predates attested releases)"
+  elif gh attestation verify "$tmp/$archive" --repo "$REPO" >/dev/null 2>"$tmp/attest.err"; then
+    attest_status="verified (signed by the release workflow of $REPO)"
+  else
+    say "$(cat "$tmp/attest.err")"
+    die "build provenance verification FAILED for $archive — not installing"
+  fi
+fi
+say "Provenance: $attest_status"
 
 # ---- install ----------------------------------------------------------------
 tar -xzf "$tmp/$archive" -C "$tmp"
