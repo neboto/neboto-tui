@@ -75,6 +75,10 @@ jobs:
     # releases are cut locally.
     if: ${{ !cancelled() && needs.create-release.result != 'failure' && (github.event_name == 'workflow_dispatch' || vars.RELEASE_ON_CI != 'false') }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write       # upload assets to the draft release
+      id-token: write       # OIDC identity for Sigstore keyless signing
+      attestations: write   # store the provenance attestation on GitHub
     strategy:
       fail-fast: false
       matrix:
@@ -130,6 +134,22 @@ jobs:
           dry-run: ${{ github.event_name == 'workflow_dispatch' }}
           dry-run-intended: true
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Signed statement that this exact archive was built by this workflow,
+      # from this commit, on a GitHub-hosted runner (Sigstore keyless signing,
+      # recorded in the public transparency log, stored on GitHub). A swapped
+      # archive fails verification even if its .sha256 was swapped with it —
+      # both are uploaded by the same token, so the checksum alone can't tell.
+      # Verify a download with:
+      #   gh attestation verify neboto-<target>.tar.gz --repo neboto/neboto-tui
+      # Runs on dry runs too so a workflow_dispatch exercises the plumbing;
+      # those attestations name artifacts that were never published, which is
+      # harmless.
+      - name: Attest build provenance
+        if: steps.build.outcome == 'success'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.build.outputs.tar }}
 
       - name: Keep the archive + checksum as a workflow artifact (dry run only)
         if: github.event_name == 'workflow_dispatch' && steps.build.outcome == 'success'

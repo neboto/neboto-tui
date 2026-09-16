@@ -63,6 +63,17 @@ cargo binstall --git https://github.com/neboto/neboto-tui neboto
 destination. Or grab the tarball for your platform from the releases page and
 put `neboto` anywhere on your `PATH`.
 
+**Verify a download.** Every release archive carries a signed [build
+provenance attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
+naming the commit and workflow that built it. With the GitHub CLI:
+
+```bash
+gh attestation verify neboto-aarch64-apple-darwin.tar.gz --repo neboto/neboto-tui
+```
+
+A tampered or substituted archive fails this check even if its `.sha256`
+was replaced alongside it.
+
 **From source** — needs a recent stable Rust toolchain:
 
 ```bash

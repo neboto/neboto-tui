@@ -41,6 +41,19 @@ derive it from `<bin>-<target>.tar.gz`. Change all three together.
   (`toolchain: stable`, `tool: cross`) so the action code stays pinned while
   the toolchain / tool selection still works.
 - Builds run `--locked`, so Rust dependencies come from `Cargo.lock` exactly.
+- Every archive gets a **build provenance attestation**
+  (`actions/attest-build-provenance`, right after the build step): a
+  Sigstore-signed statement that this exact file was built by this
+  workflow, from this commit, on a GitHub-hosted runner, recorded in the
+  public transparency log and stored on GitHub. The build job carries
+  `id-token: write` + `attestations: write` for it. Verify with
+  `gh attestation verify <archive> --repo neboto/neboto-tui` (add
+  `--format json` for the full provenance: commit, workflow path, trigger,
+  runner). It covers a swapped asset
+  (the `.sha256` is uploaded by the same token, so a checksum alone can't),
+  not a compromised build step — the SHA pins are what cover that — and it is
+  not macOS code signing. Dry runs attest too, so a `workflow_dispatch`
+  exercises the plumbing before a real tag relies on it.
 - Still unpinned, by design or for now: the `cross` docker image (pulled by
   tag; pin it by digest in a `Cross.toml` if this matters), the Rust
   `stable` toolchain itself, and the GitHub-hosted runner images.
@@ -250,8 +263,8 @@ everything above is bypassable by whoever holds that login.
 **Consequence of the branch ruleset**: the required status check applies to
 direct pushes too, so a fresh commit pushed straight to `main` is rejected
 until CI has passed on it. The working shape is branch → PR → CI → squash
-merge (the merge settings in step 6 match). Not done yet: build provenance
-attestations on the release job (`actions/attest-build-provenance`).
+merge (the merge settings in step 6 match). Build provenance attestations
+are on the release job since 2026-09-16 (see the supply-chain rules above).
 
 ## How users install (once public)
 
