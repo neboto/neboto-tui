@@ -53,7 +53,10 @@ derive it from `<bin>-<target>.tar.gz`. Change all three together.
   (the `.sha256` is uploaded by the same token, so a checksum alone can't),
   not a compromised build step — the SHA pins are what cover that — and it is
   not macOS code signing. Dry runs attest too, so a `workflow_dispatch`
-  exercises the plumbing before a real tag relies on it.
+  exercises the plumbing before a real tag relies on it. `install.sh` runs
+  the same verification when the GitHub CLI is present and logged in, and
+  refuses to install on a failure; its `UNATTESTED_VERSIONS` list names the
+  releases cut before attestations existed (`v0.1.0`) and must never grow.
 - Still unpinned, by design or for now: the `cross` docker image (pulled by
   tag; pin it by digest in a `Cross.toml` if this matters), the Rust
   `stable` toolchain itself, and the GitHub-hosted runner images.

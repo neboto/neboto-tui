@@ -51,11 +51,18 @@ auditably read-only. See [Why read-only](#why-read-only).
 Prebuilt binaries for Linux (x86_64, aarch64) and macOS (Intel, Apple
 Silicon) are attached to every [GitHub release](https://github.com/neboto/neboto-tui/releases).
 
-**Installer** — picks the right binary, verifies its SHA-256, puts it in
+**Installer** — picks the right binary, verifies its SHA-256 and, when the
+GitHub CLI is installed, its signed build provenance, and puts it in
 `~/.local/bin`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/install.sh | sh
+```
+
+Prefer to read a script before running it? Download it first:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/neboto/neboto-tui/main/install.sh && less install.sh && sh install.sh
 ```
 
 **Or with [cargo-binstall](https://github.com/cargo-bins/cargo-binstall)**:
