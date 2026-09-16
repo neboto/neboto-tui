@@ -47,8 +47,9 @@ derive it from `<bin>-<target>.tar.gz`. Change all three together.
   workflow, from this commit, on a GitHub-hosted runner, recorded in the
   public transparency log and stored on GitHub. The build job carries
   `id-token: write` + `attestations: write` for it. Verify with
-  `gh attestation verify <archive> --repo neboto/neboto-tui`; list with
-  `gh attestation list --repo neboto/neboto-tui`. It covers a swapped asset
+  `gh attestation verify <archive> --repo neboto/neboto-tui` (add
+  `--format json` for the full provenance: commit, workflow path, trigger,
+  runner). It covers a swapped asset
   (the `.sha256` is uploaded by the same token, so a checksum alone can't),
   not a compromised build step — the SHA pins are what cover that — and it is
   not macOS code signing. Dry runs attest too, so a `workflow_dispatch`
