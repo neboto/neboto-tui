@@ -4,7 +4,8 @@ A fast, keyboard-driven terminal UI for browsing AWS. **65 services**, rich
 console-style detail panes, live log tailing, CloudWatch charts, and
 cross-service link-following — all without leaving the terminal.
 
-Built in Rust with [Ratatui](https://ratatui.rs/).
+Built in Rust with [Ratatui](https://ratatui.rs/). Website and guide:
+**[neboto.dev](https://neboto.dev)**.
 
 <p align="center">
   <img src="demo/neboto.gif" width="100%"
@@ -101,7 +102,8 @@ cargo build --release && ./target/release/neboto
 
 Either way you need configured AWS credentials. Optional companions: the
 `aws` CLI + `session-manager-plugin` for SSM sessions (`s`), and a `$EDITOR`
-for `e`. How releases are cut is in [`docs/RELEASING.md`](./docs/RELEASING.md).
+for `e`. The user guide lives at [neboto.dev/guide](https://neboto.dev/guide/);
+how releases are cut is in [`docs/RELEASING.md`](./docs/RELEASING.md).
 
 ### Command line
 

@@ -5,6 +5,7 @@ edition = "2021"
 license = "MIT"
 description = "A fast, keyboard-driven, read-only terminal UI for browsing AWS"
 repository = "https://github.com/neboto/neboto-tui"
+homepage = "https://neboto.dev"
 readme = "README.md"
 keywords = ["aws", "tui", "terminal", "ratatui", "cloud"]
 categories = ["command-line-utilities"]
