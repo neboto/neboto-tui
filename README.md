@@ -51,11 +51,16 @@ auditably read-only. See [Why read-only](#why-read-only).
 Prebuilt binaries for Linux (x86_64, aarch64) and macOS (Intel, Apple
 Silicon) are attached to every [GitHub release](https://github.com/neboto/neboto-tui/releases).
 
-```bash
-# installer: picks the right binary, verifies its SHA-256, puts it in ~/.local/bin
-curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/install.sh | sh
+**Installer** — picks the right binary, verifies its SHA-256, puts it in
+`~/.local/bin`:
 
-# or with cargo-binstall
+```bash
+curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/install.sh | sh
+```
+
+**Or with [cargo-binstall](https://github.com/cargo-bins/cargo-binstall)**:
+
+```bash
 cargo binstall --git https://github.com/neboto/neboto-tui neboto
 ```
 
@@ -78,7 +83,11 @@ was replaced alongside it.
 
 ```bash
 cargo install --git https://github.com/neboto/neboto-tui
-# or
+```
+
+Or clone and build:
+
+```bash
 git clone https://github.com/neboto/neboto-tui.git && cd neboto-tui
 cargo build --release && ./target/release/neboto
 ```
