@@ -309,6 +309,13 @@ signal that it is an emulator — leave it in.
   `demo/<feature>.gif` from a `demo/<feature>.tape` that shares
   `demo/neboto.toml`, and are referenced from the matching README bullet
   rather than stacked at the top: the first screen should stay one loop.
+- **`demo/brand/`** — the org avatar (`neboto-avatar.png`, 1024², GitHub
+  crops it round; `-rounded` for places that don't mask) and the social
+  preview / README hero (`neboto-social.png`, 1280×640), rendered from the
+  in-app banner art by `demo/brand/make.sh` (ImageMagick 7 + a Nerd Font).
+  Both are uploaded through the web UI — org avatar under the org's profile
+  settings, social preview under the repo's General settings — there is no
+  API for either, so re-upload after regenerating.
 - **Recording tips**: `Hide` the boot spinner, keep scenes ≥ 1.5 s so a
   reader can parse each screen, `Set Framerate 12` keeps the GIF small, and
   check a few frames (`ffmpeg -ss <t> -i demo/neboto.mp4 -frames:v 1 f.png`)
