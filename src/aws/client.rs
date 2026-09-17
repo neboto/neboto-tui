@@ -89,6 +89,19 @@ impl AwsClients {
         }
         let mut config = loader.load().await;
 
+        // An explicitly chosen profile must supply the credentials. The SDK's
+        // default chain (what `loader.profile_name` feeds) tries the
+        // `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` environment pair
+        // *before* the named profile, so with keys exported in the shell a
+        // `P` switch announced the new profile while every call kept signing
+        // with the old account's keys — the top bar showed the new name over
+        // the old account id. Pin the profile-file provider directly instead,
+        // which is what `aws --profile` does: the explicit choice wins over
+        // the environment. (The emulator branch keeps its mock creds.)
+        if let (Some(name), None) = (profile.as_deref(), endpoint.as_deref()) {
+            config = with_profile_credentials(config, name);
+        }
+
         // Layer the assumed role on top of the base credentials. The provider
         // re-runs AssumeRole when the session expires (the SDK's identity
         // cache holds the temporary credentials until then), so a long-lived
@@ -786,6 +799,26 @@ pub fn cloudwatch_client_for(config: &SdkConfig, region: &str) -> aws_sdk_cloudw
     aws_sdk_cloudwatch::Client::from_conf(cfg)
 }
 
+/// Replace `config`'s credentials provider with the profile-file provider for
+/// `name` (static keys, `source_profile` + `role_arn` chains, SSO,
+/// `credential_process` — everything the shared config supports), bypassing
+/// the default chain's environment-first lookup. The region is carried over
+/// so an in-profile role chain has an STS endpoint to talk to.
+fn with_profile_credentials(config: SdkConfig, name: &str) -> SdkConfig {
+    let provider_config = aws_config::provider_config::ProviderConfig::without_region()
+        .with_region(config.region().cloned());
+    let provider = aws_config::profile::ProfileFileCredentialsProvider::builder()
+        .profile_name(name)
+        .configure(&provider_config)
+        .build();
+    config
+        .into_builder()
+        .credentials_provider(
+            aws_credential_types::provider::SharedCredentialsProvider::new(provider),
+        )
+        .build()
+}
+
 /// Enumerate the named profiles configured locally, reading `~/.aws/config`
 /// (`[default]` / `[profile NAME]`) and `~/.aws/credentials` (`[NAME]`), honoring
 /// the `AWS_CONFIG_FILE` / `AWS_SHARED_CREDENTIALS_FILE` overrides. `default` is
@@ -862,4 +895,63 @@ fn resolve_endpoint(explicit: Option<String>) -> Option<String> {
 /// endpoint is configured.
 fn mock_credentials() -> aws_sdk_ec2::config::Credentials {
     aws_sdk_ec2::config::Credentials::new("test", "test", None, None, "floci")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_credential_types::provider::ProvideCredentials;
+    use std::io::Write;
+
+    /// An explicit profile must beat `AWS_ACCESS_KEY_ID` in the environment.
+    /// The SDK's default chain tries the environment first, which made a `P`
+    /// profile switch a no-op whenever keys were exported in the shell: the
+    /// bar showed the new profile name over the old account id. Mutates the
+    /// process environment — the other tests build via `new_for_test`, which
+    /// pins region + mock credentials and so never reads these variables.
+    #[tokio::test]
+    async fn explicit_profile_wins_over_environment_keys() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let creds_path = dir.path().join("credentials");
+        let config_path = dir.path().join("config");
+        let mut creds = std::fs::File::create(&creds_path).expect("credentials file");
+        writeln!(
+            creds,
+            "[keyprofile]\naws_access_key_id = AKIAFROMPROFILE\naws_secret_access_key = profilesecret"
+        )
+        .expect("write credentials");
+        std::fs::File::create(&config_path).expect("config file");
+
+        std::env::set_var("AWS_SHARED_CREDENTIALS_FILE", &creds_path);
+        std::env::set_var("AWS_CONFIG_FILE", &config_path);
+        std::env::set_var("AWS_ACCESS_KEY_ID", "AKIAFROMENV");
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", "envsecret");
+
+        let built = AwsClients::build(
+            Some("keyprofile".to_string()),
+            Some(Region::UsEast1),
+            None,
+            None,
+        )
+        .await;
+        let creds = match &built {
+            Ok(clients) => {
+                clients
+                    .config
+                    .credentials_provider()
+                    .expect("credentials provider")
+                    .provide_credentials()
+                    .await
+            }
+            Err(_) => unreachable!("offline build never fails"),
+        };
+
+        std::env::remove_var("AWS_SHARED_CREDENTIALS_FILE");
+        std::env::remove_var("AWS_CONFIG_FILE");
+        std::env::remove_var("AWS_ACCESS_KEY_ID");
+        std::env::remove_var("AWS_SECRET_ACCESS_KEY");
+
+        let creds = creds.expect("profile credentials resolve");
+        assert_eq!(creds.access_key_id(), "AKIAFROMPROFILE");
+    }
 }
