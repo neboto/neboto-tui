@@ -255,9 +255,15 @@ be acted on yet. The day the repo flips public, in this order:
 10. Dependabot **security** updates (alerts alone just sit there; this opens
     a targeted PR the day a CVE lands, instead of waiting for the monthly group):
     `gh api -X PUT repos/neboto/neboto-tui/automated-security-fixes`
-11. CodeQL default setup (free on public repos; analyzes Rust, the Python
-    guard script and the workflow files):
-    `gh api -X PATCH repos/neboto/neboto-tui/code-scanning/default-setup --input - <<< '{"state":"configured","query_suite":"default"}'`
+11. CodeQL (free on public repos; analyzes Rust, the Python guard script and
+    the workflow files). Since 2026-09-17 it runs from
+    `.github/workflows/codeql.yml` (advanced setup) rather than GitHub's
+    default setup, so the triggers fit the cost: actions + python on every
+    PR and push to main, Rust **weekly only** — its analysis walks the whole
+    dependency tree (~20 min) and the default setup ran it on the PR and
+    again on the identical merge commit. Default setup must stay **off**
+    (`state: not-configured`) or the workflow's uploads are rejected:
+    `gh api -X PATCH repos/neboto/neboto-tui/code-scanning/default-setup --input - <<< '{"state":"not-configured"}'`
 
 All eleven were applied on 2026-09-15. Still on the account side, not the
 API's: two-factor on the `sneboto` login and the org-wide 2FA requirement —

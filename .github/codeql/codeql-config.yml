@@ -1,0 +1,10 @@
+# Shared CodeQL configuration for .github/workflows/codeql.yml.
+#
+# The offline wiring harness is excluded: its assertions print mock account
+# ids and rendered detail snapshots into failure messages, which the
+# `rust/cleartext-logging` query reads as writing secrets to a log. Nothing
+# in there ships. (Inline `#[cfg(test)]` modules can't be excluded by path —
+# dismiss those as "used in tests" in the Security tab if they recur.)
+name: neboto
+paths-ignore:
+  - src/harness_tests
