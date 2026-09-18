@@ -24649,10 +24649,22 @@ impl App {
                 .as_any()
                 .downcast_ref::<crate::aws::services::route53resolver::ResolverEndpoint>()
             {
+                // Rules section: the sibling rule rows that route through this
+                // endpoint — already loaded, no fetch (VPC-pane pattern).
+                let rules: Vec<&crate::aws::services::route53resolver::ResolverRule> = self
+                    .resources
+                    .iter()
+                    .filter_map(|r| {
+                        r.as_any()
+                            .downcast_ref::<crate::aws::services::route53resolver::ResolverRule>()
+                    })
+                    .filter(|r| r.resolver_endpoint_id.as_deref() == Some(ep.id.as_str()))
+                    .collect();
                 return crate::ui::widgets::details_pane::resolver_endpoint_section_lines(
                     ep,
                     crate::aws::services::route53resolver::ResolverEndpointDetailSection::from_index(self.detail_section_idx),
                     self.lazy.resolver_endpoint_details.get(&ep.id),
+                    &rules,
                 );
             }
             if let Some(rule) = resource
