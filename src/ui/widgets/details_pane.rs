@@ -29959,18 +29959,36 @@ fn resolver_tag_rows(tags: &[(String, String)]) -> Vec<(String, String)> {
     tags.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
+/// `rules` are the sibling `ResolverRule` rows already in the list that
+/// route through this endpoint (`resolver_endpoint_id == e.id`) — no fetch,
+/// the VPC-pane pattern.
 pub fn resolver_endpoint_section_lines(
     e: &crate::aws::services::route53resolver::ResolverEndpoint,
     section: crate::aws::services::route53resolver::ResolverEndpointDetailSection,
     state: Option<&crate::lazy::Lazy<Box<crate::aws::services::route53resolver::ResolverEndpointDetail>>>,
+    rules: &[&crate::aws::services::route53resolver::ResolverRule],
 ) -> Vec<(String, String)> {
     use crate::aws::services::route53resolver::ResolverEndpointDetailSection as S;
+    let flag = |b: Option<bool>| match b {
+        Some(true) => "✓ enabled",
+        Some(false) => "✗ disabled",
+        None => "—",
+    };
     match section {
         S::Details => {
             let mut rows = vec![
                 ("Name".to_string(), e.name.clone()),
                 ("ID".to_string(), e.id.clone()),
                 ("Direction".to_string(), e.direction.clone()),
+                ("Type".to_string(), e.endpoint_type.clone()),
+                (
+                    "Protocols".to_string(),
+                    if e.protocols.is_empty() {
+                        "Do53 (default)".to_string()
+                    } else {
+                        e.protocols.join(", ")
+                    },
+                ),
                 ("Status".to_string(), e.status.clone()),
             ];
             if !e.status_message.is_empty() {
@@ -29982,6 +30000,27 @@ pub fn resolver_endpoint_section_lines(
             ));
             // host VPC id carries the raw vpc- token so Enter jumps to the VPC.
             rows.push(("Host VPC".to_string(), e.host_vpc_id.clone()));
+            if !e.outpost_arn.is_empty() {
+                rows.push(("Outpost".to_string(), e.outpost_arn.clone()));
+                rows.push(("Instance Type".to_string(), e.preferred_instance_type.clone()));
+            }
+            // Feature flags: shown only when the API reported them, so an
+            // endpoint from before these existed doesn't read as "disabled".
+            let flags = [
+                ("DNS64", e.dns64_enabled),
+                ("IPv6 Internet Access", e.ipv6_internet_access_enabled),
+                ("RNI Enhanced Metrics", e.rni_enhanced_metrics_enabled),
+                ("Target Name Server Metrics", e.target_name_server_metrics_enabled),
+            ];
+            if flags.iter().any(|(_, v)| v.is_some()) {
+                rows.push(("".to_string(), "".to_string()));
+                rows.push(("Features".to_string(), "".to_string()));
+                for (label, v) in flags {
+                    if v.is_some() {
+                        rows.push((label.to_string(), flag(v).to_string()));
+                    }
+                }
+            }
             if !e.security_group_ids.is_empty() {
                 rows.push(("".to_string(), "".to_string()));
                 rows.push(("Security Groups".to_string(), "".to_string()));
@@ -29990,9 +30029,39 @@ pub fn resolver_endpoint_section_lines(
                     rows.push(("Security Group".to_string(), sg.clone()));
                 }
             }
-            if let Some(ct) = &e.creation_time {
+            if e.creation_time.is_some() || e.modification_time.is_some() {
                 rows.push(("".to_string(), "".to_string()));
+            }
+            if let Some(ct) = &e.creation_time {
                 rows.push(("Created".to_string(), ct.clone()));
+            }
+            if let Some(mt) = &e.modification_time {
+                rows.push(("Modified".to_string(), mt.clone()));
+            }
+            rows
+        }
+        S::Rules => {
+            let mut rows = vec![("".to_string(), "".to_string())];
+            if !e.is_outbound() {
+                rows.push((
+                    "  — (only outbound endpoints carry rules)".to_string(),
+                    "".to_string(),
+                ));
+                return rows;
+            }
+            if rules.is_empty() {
+                rows.push((
+                    "  (no loaded rules use this endpoint)".to_string(),
+                    "".to_string(),
+                ));
+                return rows;
+            }
+            rows.push((format!("Rules ({})", rules.len()), "".to_string()));
+            rows.push(("".to_string(), "".to_string()));
+            for r in rules {
+                // rule id carries the raw rslvr-rr- token (jumpable to the
+                // Rules sub-tab via resource_jump_target's rslvr-rr- arm).
+                rows.push((format!("{} {}", r.rule_type, r.domain_name), r.id.clone()));
             }
             rows
         }
@@ -30024,6 +30093,9 @@ pub fn resolver_endpoint_section_lines(
                         // subnet id carries the raw subnet- token (jumpable).
                         rows.push(("Subnet".to_string(), ip.subnet_id.clone()));
                         rows.push(("Status".to_string(), ip.status.clone()));
+                        if !ip.status_message.is_empty() {
+                            rows.push(("Status Message".to_string(), ip.status_message.clone()));
+                        }
                         rows.push(("".to_string(), "".to_string()));
                     }
                 }
@@ -30044,7 +30116,6 @@ pub fn resolver_rule_section_lines(
     state: Option<&crate::lazy::Lazy<Box<crate::aws::services::route53resolver::ResolverRuleDetail>>>,
 ) -> Vec<(String, String)> {
     use crate::aws::services::route53resolver::ResolverRuleDetailSection as S;
-    let is_forward = r.rule_type == "FORWARD";
     match section {
         S::Details => {
             let mut rows = vec![
@@ -30057,12 +30128,18 @@ pub fn resolver_rule_section_lines(
             if !r.status_message.is_empty() {
                 rows.push(("Status Message".to_string(), r.status_message.clone()));
             }
-            if is_forward {
-                // resolver_endpoint_id carries the raw rslvr- token (jumpable to
-                // the Endpoints sub-tab via resource_jump_target's rslvr- arm).
+            // FORWARD and DELEGATE rules both route through an outbound
+            // endpoint. resolver_endpoint_id carries the raw rslvr- token
+            // (jumpable to the Endpoints sub-tab via resource_jump_target's
+            // rslvr- arm). Keying this on FORWARD alone once hid the endpoint
+            // of every DELEGATE rule.
+            if r.uses_endpoint() {
                 if let Some(ep) = &r.resolver_endpoint_id {
                     rows.push(("Resolver Endpoint".to_string(), ep.clone()));
                 }
+            }
+            if let Some(dr) = &r.delegation_record {
+                rows.push(("Delegation Record".to_string(), dr.clone()));
             }
             if !r.share_status.is_empty() {
                 rows.push(("Share Status".to_string(), r.share_status.clone()));
@@ -30070,24 +30147,45 @@ pub fn resolver_rule_section_lines(
             if !r.owner_id.is_empty() {
                 rows.push(("Owner".to_string(), r.owner_id.clone()));
             }
+            if r.creation_time.is_some() || r.modification_time.is_some() {
+                rows.push(("".to_string(), "".to_string()));
+            }
+            if let Some(ct) = &r.creation_time {
+                rows.push(("Created".to_string(), ct.clone()));
+            }
+            if let Some(mt) = &r.modification_time {
+                rows.push(("Modified".to_string(), mt.clone()));
+            }
             rows
         }
         S::Targets => {
             let mut rows = vec![("".to_string(), "".to_string())];
-            if !is_forward {
-                rows.push((
-                    "  — (system rule, no targets)".to_string(),
-                    "".to_string(),
-                ));
-                return rows;
+            // Match on the raw string so an unknown future rule type still
+            // renders (as "no targets") instead of being mislabelled.
+            match r.rule_type.as_str() {
+                "DELEGATE" => {
+                    rows.push((
+                        "  — (delegation rule, no targets — see Delegation Record)".to_string(),
+                        "".to_string(),
+                    ));
+                    return rows;
+                }
+                "SYSTEM" | "RECURSIVE" => {
+                    rows.push((
+                        format!("  — ({} rule, no targets)", r.rule_type.to_lowercase()),
+                        "".to_string(),
+                    ));
+                    return rows;
+                }
+                _ => {}
             }
-            if r.target_ips.is_empty() {
+            if r.targets.is_empty() {
                 rows.push(("  (no targets)".to_string(), "".to_string()));
                 return rows;
             }
-            rows.push((format!("Targets ({})", r.target_ips.len()), "".to_string()));
+            rows.push((format!("Targets ({})", r.targets.len()), "".to_string()));
             rows.push(("".to_string(), "".to_string()));
-            for t in &r.target_ips {
+            for t in &r.targets {
                 rows.push((format!("  {}", t), "".to_string()));
             }
             rows

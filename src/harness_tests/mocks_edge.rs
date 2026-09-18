@@ -125,6 +125,36 @@ pub(super) fn mocks() -> Vec<Mock> {
                     .build(),
             )),
         ),
+        // Delegation (2025-06): a third endpoint direction and a fourth rule
+        // type. The DELEGATE rule has an endpoint but no targets — the arm
+        // that once rendered it as a SYSTEM rule.
+        (
+            ServiceType::Route53Resolver,
+            "ResolverEndpoint(InboundDelegation)",
+            Box::new(svc::route53resolver::ResolverEndpoint::from_sdk(
+                &aws_sdk_route53resolver::types::ResolverEndpoint::builder()
+                    .id("rslvr-in-0fedcba9876543210")
+                    .name("mock-delegation-endpoint")
+                    .direction(aws_sdk_route53resolver::types::ResolverEndpointDirection::InboundDelegation)
+                    .resolver_endpoint_type(aws_sdk_route53resolver::types::ResolverEndpointType::Dualstack)
+                    .protocols(aws_sdk_route53resolver::types::Protocol::Do53)
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Route53Resolver,
+            "ResolverRule(Delegate)",
+            Box::new(svc::route53resolver::ResolverRule::from_sdk(
+                &aws_sdk_route53resolver::types::ResolverRule::builder()
+                    .id("rslvr-rr-0fedcba9876543210")
+                    .name("mock-delegate-rule")
+                    .domain_name("sub.example.internal.")
+                    .rule_type(aws_sdk_route53resolver::types::RuleTypeOption::Delegate)
+                    .resolver_endpoint_id("rslvr-out-0123456789abcdef0")
+                    .delegation_record("ns1.example.internal")
+                    .build(),
+            )),
+        ),
         (
             ServiceType::Route53Profiles,
             "Route53Profile",

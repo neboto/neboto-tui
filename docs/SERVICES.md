@@ -758,6 +758,17 @@ the service you're touching.
   routing is checked longest-prefix-first: `rslvr-rr-` (rule ids) → the Rules
   sub-tab, else the bare `rslvr-` (`in-`/`out-` endpoint ids) fallback → the
   Endpoints sub-tab — checking the bare prefix first would misroute rule ids.
+  **Delegation (2025-06)**: a DELEGATE rule has an outbound
+  `resolver_endpoint_id` but **no** `target_ips` (the API rejects them) — its
+  payload is `delegation_record`, so don't key "has an endpoint" on
+  `rule_type == FORWARD` (that hid every DELEGATE rule's endpoint once); use
+  `ResolverRule::uses_endpoint`. `INBOUND_DELEGATION` is a third endpoint
+  direction, Do53-only, sharing the console's inbound-endpoints route.
+  `TargetAddress` carries *either* `ip` or `ipv6` — an IPv6 target has an
+  empty `ip`, which is why targets are kept as `ResolverTarget` structs and
+  formatted by `Display` (pre-formatting `ip:port` rendered them as `:53`).
+  The endpoint pane's Rules section is zero-API: it filters the sibling rule
+  rows by `resolver_endpoint_id` (only outbound endpoints carry rules).
 - **Route53 Profiles** (`@profiles`, `route53profiles.rs`) — standalone
   regional single-list service (same regional rationale as Resolver: a
   Profile bundles DNS config for VPCs in one region). `ListProfiles` returns

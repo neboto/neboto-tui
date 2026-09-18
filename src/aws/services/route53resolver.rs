@@ -10,9 +10,12 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 /// Route 53 Resolver — a standalone *regional* service with two resource types
-/// over one heterogeneous list: resolver endpoints (INBOUND / OUTBOUND) and
-/// resolver rules (FORWARD / SYSTEM / RECURSIVE). Endpoint IP addresses, rule
-/// associations, and tags are fetched lazily (see the `fetch_*` helpers).
+/// over one heterogeneous list: resolver endpoints (INBOUND / OUTBOUND /
+/// INBOUND_DELEGATION) and resolver rules (FORWARD / DELEGATE / SYSTEM /
+/// RECURSIVE). A DELEGATE rule has no target IPs: it carries a delegation
+/// record and reaches the delegated name servers through an outbound
+/// endpoint. Endpoint IP addresses, rule associations, and tags are fetched
+/// lazily (see the `fetch_*` helpers).
 pub struct Route53ResolverService {
     client: ResolverClient,
 }
@@ -170,13 +173,29 @@ pub struct ResolverEndpoint {
     pub ip_address_count: i32,
     pub host_vpc_id: String,
     pub security_group_ids: Vec<String>,
+    /// IP type: `IPV4` / `IPV6` / `DUALSTACK` (raw enum string, so a future
+    /// variant still renders).
+    pub endpoint_type: String,
+    /// `Do53` / `DoH` / `DoH-FIPS`; empty means the API default, Do53.
+    pub protocols: Vec<String>,
     pub creation_time: Option<String>,
+    pub modification_time: Option<String>,
+    pub outpost_arn: String,
+    pub preferred_instance_type: String,
+    pub dns64_enabled: Option<bool>,
+    pub ipv6_internet_access_enabled: Option<bool>,
+    pub rni_enhanced_metrics_enabled: Option<bool>,
+    pub target_name_server_metrics_enabled: Option<bool>,
     /// Empty — Resolver tags are shown lazily in the Tags section; this backs
     /// the `Resource::tags()` fallback only.
     pub tags: HashMap<String, String>,
 }
 
 impl ResolverEndpoint {
+    pub fn is_outbound(&self) -> bool {
+        self.direction == "OUTBOUND"
+    }
+
     pub fn from_sdk(e: &aws_sdk_route53resolver::types::ResolverEndpoint) -> Self {
         Self {
             id: e.id().unwrap_or_default().to_string(),
@@ -194,17 +213,36 @@ impl ResolverEndpoint {
             ip_address_count: e.ip_address_count().unwrap_or_default(),
             host_vpc_id: e.host_vpc_id().unwrap_or_default().to_string(),
             security_group_ids: e.security_group_ids().to_vec(),
+            endpoint_type: e
+                .resolver_endpoint_type()
+                .map(|t| t.as_str().to_string())
+                .unwrap_or_default(),
+            protocols: e
+                .protocols()
+                .iter()
+                .map(|p| p.as_str().to_string())
+                .collect(),
             creation_time: e.creation_time().map(|s| s.to_string()),
+            modification_time: e.modification_time().map(|s| s.to_string()),
+            outpost_arn: e.outpost_arn().unwrap_or_default().to_string(),
+            preferred_instance_type: e.preferred_instance_type().unwrap_or_default().to_string(),
+            dns64_enabled: e.dns64_enabled(),
+            ipv6_internet_access_enabled: e.ipv6_internet_access_enabled(),
+            rni_enhanced_metrics_enabled: e.rni_enhanced_metrics_enabled(),
+            target_name_server_metrics_enabled: e.target_name_server_metrics_enabled(),
             tags: HashMap::new(),
         }
     }
 }
 
+// The Rules section has no on-enter hook: it filters the rules already in the
+// list (`resolver_endpoint_id == this id`), the VPC-pane sibling pattern.
 crate::sections! {
     pub enum ResolverEndpointDetailSection,
     pub static RESOLVER_ENDPOINT_SECTIONS = [
         Details "Details" => crate::app::App::trigger_resolver_endpoint_load,
         IpAddresses "IP Addresses" => crate::app::App::trigger_resolver_endpoint_load,
+        Rules "Rules",
         Tags "Tags" => crate::app::App::trigger_resolver_endpoint_load,
     ]
 }
@@ -242,8 +280,13 @@ impl Resource for ResolverEndpoint {
     }
     fn search_text(&self) -> String {
         format!(
-            "{} {} {} {}",
-            self.id, self.name, self.direction, self.host_vpc_id
+            "{} {} {} {} {} {}",
+            self.id,
+            self.name,
+            self.direction,
+            self.endpoint_type,
+            self.protocols.join(" "),
+            self.host_vpc_id
         )
     }
     fn details(&self) -> Vec<(String, String)> {
@@ -251,6 +294,8 @@ impl Resource for ResolverEndpoint {
             ("ID".to_string(), self.id.clone()),
             ("Name".to_string(), self.name.clone()),
             ("Direction".to_string(), self.direction.clone()),
+            ("Type".to_string(), self.endpoint_type.clone()),
+            ("Protocols".to_string(), self.protocols.join(", ")),
             ("Status".to_string(), self.status.clone()),
             (
                 "IP Address Count".to_string(),
@@ -270,11 +315,21 @@ impl Resource for ResolverEndpoint {
         if let Some(ct) = &self.creation_time {
             d.push(("Created".to_string(), ct.clone()));
         }
+        if let Some(mt) = &self.modification_time {
+            d.push(("Modified".to_string(), mt.clone()));
+        }
         d
     }
     fn console_url(&self, region: &str) -> Option<String> {
+        // The console keeps inbound and inbound-delegation endpoints on one
+        // route; only outbound endpoints live elsewhere.
+        let route = if self.is_outbound() {
+            "outbound-endpoints"
+        } else {
+            "inbound-endpoints"
+        };
         Some(format!(
-            "https://{region}.console.aws.amazon.com/route53resolver/home?region={region}#/inbound-endpoints/{}",
+            "https://{region}.console.aws.amazon.com/route53resolver/home?region={region}#/{route}/{}",
             self.id
         ))
     }
@@ -294,9 +349,75 @@ pub struct ResolverEndpointIp {
     pub ipv6: String,
     pub subnet_id: String,
     pub status: String,
+    /// Where an `ACTION_NEEDED` / `FAILED_*` address explains itself.
+    pub status_message: String,
 }
 
 // ── ResolverRule ──────────────────────────────────────────────────────────────
+
+/// One forward target. `TargetAddress` carries *either* `ip` or `ipv6` (an
+/// IPv6 target has an empty `ip`), so both are kept and `Display` picks the
+/// populated one — formatting `ip:port` up front rendered IPv6 targets as
+/// `:53`.
+#[derive(Debug, Clone, Default)]
+pub struct ResolverTarget {
+    pub ip: String,
+    pub ipv6: String,
+    pub port: Option<i32>,
+    /// `Do53` / `DoH`; empty means the API default, Do53.
+    pub protocol: String,
+    /// Server name indication for DoH targets.
+    pub sni: String,
+}
+
+impl ResolverTarget {
+    pub fn from_sdk(t: &aws_sdk_route53resolver::types::TargetAddress) -> Self {
+        Self {
+            ip: t.ip().unwrap_or_default().to_string(),
+            ipv6: t.ipv6().unwrap_or_default().to_string(),
+            port: t.port(),
+            protocol: t
+                .protocol()
+                .map(|p| p.as_str().to_string())
+                .unwrap_or_default(),
+            sni: t.server_name_indication().unwrap_or_default().to_string(),
+        }
+    }
+
+    /// The bare address, whichever family is populated.
+    pub fn address(&self) -> &str {
+        if self.ip.is_empty() {
+            &self.ipv6
+        } else {
+            &self.ip
+        }
+    }
+}
+
+impl std::fmt::Display for ResolverTarget {
+    /// `10.0.0.2:53`, `[2001:db8::2]:53`, `10.0.0.2:443 (DoH, SNI dns.example)`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.ip.is_empty() {
+            f.write_str(&self.ip)?;
+        } else if !self.ipv6.is_empty() {
+            write!(f, "[{}]", self.ipv6)?;
+        }
+        if let Some(p) = self.port {
+            write!(f, ":{}", p)?;
+        }
+        let mut extras: Vec<String> = Vec::new();
+        if !self.protocol.is_empty() {
+            extras.push(self.protocol.clone());
+        }
+        if !self.sni.is_empty() {
+            extras.push(format!("SNI {}", self.sni));
+        }
+        if !extras.is_empty() {
+            write!(f, " ({})", extras.join(", "))?;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ResolverRule {
@@ -304,29 +425,36 @@ pub struct ResolverRule {
     pub arn: String,
     pub name: String,
     pub domain_name: String,
+    /// `FORWARD` / `DELEGATE` / `SYSTEM` / `RECURSIVE` (raw enum string).
     pub rule_type: String,
     pub status: String,
     pub status_message: String,
+    /// The outbound endpoint a FORWARD **or DELEGATE** rule routes through.
     pub resolver_endpoint_id: Option<String>,
-    pub target_ips: Vec<String>,
+    /// FORWARD rules only — a DELEGATE rule has none by API contract.
+    pub targets: Vec<ResolverTarget>,
+    /// DELEGATE rules: the name server the domain is delegated to.
+    pub delegation_record: Option<String>,
     pub share_status: String,
     pub owner_id: String,
+    pub creation_time: Option<String>,
+    pub modification_time: Option<String>,
     /// Empty — tags shown lazily; backs the `Resource::tags()` fallback only.
     pub tags: HashMap<String, String>,
 }
 
 impl ResolverRule {
+    /// Rules that route through an outbound endpoint — the only kinds with a
+    /// meaningful `resolver_endpoint_id`.
+    pub fn uses_endpoint(&self) -> bool {
+        matches!(self.rule_type.as_str(), "FORWARD" | "DELEGATE")
+    }
+
     pub fn from_sdk(r: &aws_sdk_route53resolver::types::ResolverRule) -> Self {
-        let target_ips = r
+        let targets = r
             .target_ips()
             .iter()
-            .map(|t| {
-                let ip = t.ip().unwrap_or_default();
-                match t.port() {
-                    Some(p) => format!("{}:{}", ip, p),
-                    None => ip.to_string(),
-                }
-            })
+            .map(ResolverTarget::from_sdk)
             .collect();
         Self {
             id: r.id().unwrap_or_default().to_string(),
@@ -346,12 +474,18 @@ impl ResolverRule {
                 .resolver_endpoint_id()
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string()),
-            target_ips,
+            targets,
+            delegation_record: r
+                .delegation_record()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
             share_status: r
                 .share_status()
                 .map(|s| s.as_str().to_string())
                 .unwrap_or_default(),
             owner_id: r.owner_id().unwrap_or_default().to_string(),
+            creation_time: r.creation_time().map(|s| s.to_string()),
+            modification_time: r.modification_time().map(|s| s.to_string()),
             tags: HashMap::new(),
         }
     }
@@ -395,13 +529,15 @@ impl Resource for ResolverRule {
         &self.tags
     }
     fn search_text(&self) -> String {
+        let targets: Vec<&str> = self.targets.iter().map(|t| t.address()).collect();
         format!(
-            "{} {} {} {} {}",
+            "{} {} {} {} {} {}",
             self.id,
             self.name,
             self.domain_name,
             self.rule_type,
-            self.target_ips.join(" ")
+            targets.join(" "),
+            self.delegation_record.as_deref().unwrap_or_default()
         )
     }
     fn details(&self) -> Vec<(String, String)> {
@@ -418,14 +554,24 @@ impl Resource for ResolverRule {
         if let Some(ep) = &self.resolver_endpoint_id {
             d.push(("Resolver Endpoint".to_string(), ep.clone()));
         }
-        if !self.target_ips.is_empty() {
-            d.push(("Targets".to_string(), self.target_ips.join(", ")));
+        if let Some(dr) = &self.delegation_record {
+            d.push(("Delegation Record".to_string(), dr.clone()));
+        }
+        if !self.targets.is_empty() {
+            let targets: Vec<String> = self.targets.iter().map(|t| t.to_string()).collect();
+            d.push(("Targets".to_string(), targets.join(", ")));
         }
         if !self.share_status.is_empty() {
             d.push(("Share Status".to_string(), self.share_status.clone()));
         }
         if !self.owner_id.is_empty() {
             d.push(("Owner".to_string(), self.owner_id.clone()));
+        }
+        if let Some(ct) = &self.creation_time {
+            d.push(("Created".to_string(), ct.clone()));
+        }
+        if let Some(mt) = &self.modification_time {
+            d.push(("Modified".to_string(), mt.clone()));
         }
         d
     }
@@ -489,6 +635,7 @@ pub async fn fetch_resolver_endpoint_detail(
                     .status()
                     .map(|s| s.as_str().to_string())
                     .unwrap_or_default(),
+                status_message: ip.status_message().unwrap_or_default().to_string(),
             });
         }
         next = crate::aws::pagination::next_page_token(resp.next_token(), &next);
@@ -635,4 +782,96 @@ pub async fn fetch_resolver_ep_metrics(
         outbound_queries: parse_metric_datapoints(outbound, start),
         x_max: time_range.duration_secs() as f64,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_sdk_route53resolver::types::{
+        Protocol, ResolverEndpointDirection, ResolverEndpointType, RuleTypeOption, TargetAddress,
+    };
+
+    #[test]
+    fn ipv6_only_target_renders_the_ipv6_address() {
+        let t = ResolverTarget::from_sdk(
+            &TargetAddress::builder()
+                .ipv6("2001:db8::2")
+                .port(53)
+                .build(),
+        );
+        assert_eq!(t.to_string(), "[2001:db8::2]:53");
+        assert_eq!(t.address(), "2001:db8::2");
+    }
+
+    #[test]
+    fn doh_target_shows_protocol_and_sni() {
+        let t = ResolverTarget::from_sdk(
+            &TargetAddress::builder()
+                .ip("10.0.0.2")
+                .port(443)
+                .protocol(Protocol::Doh)
+                .server_name_indication("dns.example")
+                .build(),
+        );
+        assert_eq!(t.to_string(), "10.0.0.2:443 (DoH, SNI dns.example)");
+    }
+
+    #[test]
+    fn delegate_rule_keeps_endpoint_and_delegation_record() {
+        let r = ResolverRule::from_sdk(
+            &aws_sdk_route53resolver::types::ResolverRule::builder()
+                .id("rslvr-rr-1")
+                .domain_name("sub.corp.example.")
+                .rule_type(RuleTypeOption::Delegate)
+                .resolver_endpoint_id("rslvr-out-1")
+                .delegation_record("ns1.corp.example")
+                .build(),
+        );
+        assert!(r.uses_endpoint());
+        assert!(r.targets.is_empty());
+        assert_eq!(r.delegation_record.as_deref(), Some("ns1.corp.example"));
+        assert!(r.search_text().contains("ns1.corp.example"));
+        let flat = r.details();
+        assert!(flat
+            .iter()
+            .any(|(k, v)| k == "Resolver Endpoint" && v == "rslvr-out-1"));
+        assert!(flat
+            .iter()
+            .any(|(k, v)| k == "Delegation Record" && v == "ns1.corp.example"));
+    }
+
+    #[test]
+    fn console_url_follows_direction() {
+        let mk = |d: ResolverEndpointDirection| {
+            ResolverEndpoint::from_sdk(
+                &aws_sdk_route53resolver::types::ResolverEndpoint::builder()
+                    .id("rslvr-x")
+                    .direction(d)
+                    .build(),
+            )
+        };
+        let url = |e: ResolverEndpoint| e.console_url("us-east-1").unwrap();
+        assert!(
+            url(mk(ResolverEndpointDirection::Outbound)).contains("#/outbound-endpoints/rslvr-x")
+        );
+        assert!(url(mk(ResolverEndpointDirection::Inbound)).contains("#/inbound-endpoints/rslvr-x"));
+        assert!(url(mk(ResolverEndpointDirection::InboundDelegation))
+            .contains("#/inbound-endpoints/rslvr-x"));
+    }
+
+    #[test]
+    fn endpoint_type_and_protocols_are_searchable() {
+        let e = ResolverEndpoint::from_sdk(
+            &aws_sdk_route53resolver::types::ResolverEndpoint::builder()
+                .id("rslvr-in-1")
+                .direction(ResolverEndpointDirection::InboundDelegation)
+                .resolver_endpoint_type(ResolverEndpointType::Dualstack)
+                .protocols(Protocol::Do53)
+                .build(),
+        );
+        assert_eq!(e.endpoint_type, "DUALSTACK");
+        assert_eq!(e.protocols, vec!["Do53".to_string()]);
+        let s = e.search_text();
+        assert!(s.contains("INBOUND_DELEGATION") && s.contains("DUALSTACK") && s.contains("Do53"));
+    }
 }
