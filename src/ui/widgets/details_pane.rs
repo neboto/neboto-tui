@@ -6957,12 +6957,19 @@ fn r53_records_lines(records_state: Option<&crate::lazy::Lazy<Vec<crate::aws::se
             if records.is_empty() {
                 rows.push(("  No records found".to_string(), "".to_string()));
             } else {
-                // Column header
+                // Key-value rows, laid out for the adaptive key column
+                // (`key_col_widths`): the key is `TYPE name` — type first so
+                // that when a long name overruns the column cap the ellipsis
+                // eats the name's tail, never the type — and the value is
+                // `first-value · ttl`, TTL last so a narrow pane clips the
+                // least important column. The old `name|type|ttl` 70-column
+                // key put the type past KEY_COL_MAX, so it was clipped in
+                // every pane width (#17). Values stay in the value slot so
+                // an S3-website alias remains ⏎-jumpable.
                 rows.push((
-                    format!("  {:<48} {:<8} {:<10}", "NAME", "TYPE", "TTL"),
-                    "VALUE".to_string(),
+                    format!("  {:<6} {}", "TYPE", "NAME"),
+                    "VALUE  ·  TTL".to_string(),
                 ));
-                rows.push(("  ".to_string() + &"─".repeat(78), "".to_string()));
 
                 for record in records {
                     let ttl = record.ttl
@@ -6976,29 +6983,19 @@ fn r53_records_lines(records_state: Option<&crate::lazy::Lazy<Vec<crate::aws::se
                         record.values.iter().map(|s| s.as_str()).collect()
                     };
 
-                    let first = all_values.first().copied().unwrap_or("—");
-                    let display_first = if first.len() > 40 {
-                        format!("{}…", &first[..39])
-                    } else {
-                        first.to_string()
-                    };
-
+                    // Char-based truncation: a byte slice panics on a
+                    // multi-byte character at the boundary (TXT records).
+                    let first = cost_trunc(all_values.first().copied().unwrap_or("—"), 40);
                     rows.push((
-                        format!("  {:<48} {:<8} {:<10}", record.name, record.record_type, ttl),
-                        display_first,
+                        format!("  {:<6} {}", record.record_type, record.name),
+                        format!("{first}  ·  {ttl}"),
                     ));
 
-                    // Continuation rows for multi-value records (NS, MX, TXT, etc.)
+                    // Continuation rows for multi-value records (NS, MX, TXT, …):
+                    // a blank (non-empty) key keeps the key-value shape so the
+                    // value aligns under the first row's.
                     for val in all_values.iter().skip(1) {
-                        let display_val = if val.len() > 40 {
-                            format!("{}…", &val[..39])
-                        } else {
-                            val.to_string()
-                        };
-                        rows.push((
-                            format!("  {:<48} {:<8} {:<10}", "", "", ""),
-                            display_val,
-                        ));
+                        rows.push(("        ".to_string(), cost_trunc(val, 40)));
                     }
 
                     // Without these, every record in a weighted/latency/failover
