@@ -20373,6 +20373,50 @@ impl App {
     /// ids are bare UUIDs with no recognizable prefix, so the row is keyed by
     /// its `"Health Check"` label (see `r53_records_lines`, which emits it as a
     /// labelled row rather than a `↳` annotation for exactly this reason).
+    /// See `r53_row_jump_target`: the Records-section row → `JumpTarget`
+    /// resolution, split out so the match arm stays one line.
+    fn r53_zone_record_row_target(&self, key: &str, value: &str) -> Option<JumpTarget> {
+        let zone = self
+            .get_selected_resource()?
+            .as_any()
+            .downcast_ref::<crate::aws::services::route53::R53HostedZone>()?;
+        let records = match self.lazy.r53_zone_records.get(&zone.id) {
+            Some(crate::lazy::Lazy::Loaded(records)) => records,
+            _ => return None,
+        };
+        let (rtype, relname) = key.split_once(' ')?;
+        let relname = relname.trim();
+        let mut candidates = records
+            .iter()
+            .filter(|r| r.record_type == rtype && r.relative_name() == relname)
+            .peekable();
+        let first = candidates.peek().copied()?;
+        let row_value = value.trim();
+        let record = candidates
+            .find(|r| {
+                let ttl = r
+                    .ttl
+                    .map(|t| t.to_string())
+                    .unwrap_or_else(|| "alias".to_string());
+                let head = r
+                    .alias_target
+                    .as_deref()
+                    .or_else(|| r.values.first().map(String::as_str))
+                    .unwrap_or("—");
+                row_value.ends_with(&format!(" · {ttl}"))
+                    && row_value.starts_with(
+                        crate::ui::widgets::details_pane::cost_trunc(head, 40)
+                            .trim_end_matches('…'),
+                    )
+            })
+            .unwrap_or(first);
+        Some(JumpTarget {
+            service: ServiceType::Route53,
+            view: JumpView::R53(R53View::Records),
+            id: record.id.clone(),
+        })
+    }
+
     pub fn r53_row_jump_target(&self, key: &str, value: &str) -> Option<JumpTarget> {
         use crate::aws::services::route53::{DnsTarget, R53Record};
         if value.is_empty() || self.current_service != Some(ServiceType::Route53) {
@@ -20420,7 +20464,13 @@ impl App {
                     }),
                 }
             }
-            _ => None,
+            // A zone pane's Records section row (`  TYPE relname`): open the
+            // record's own pane on the Records tab, where every value sits on
+            // its own untruncated line. Resolved against the zone's loaded
+            // records, so an unrelated `  X y` row can't match; members of a
+            // weighted/latency set share the key, so the value (`first · ttl`)
+            // picks between them and the first member is the fallback.
+            k => self.r53_zone_record_row_target(k, value),
         }
     }
 
@@ -20604,6 +20654,12 @@ impl App {
             }
         } else {
             self.apply_jump_view(&target.view);
+            // The Records tab's rows come from the lazy map, not the list
+            // load — a zone-pane record row jumping here needs them synced
+            // (and the other zones' fetch started) exactly as key `2` does.
+            if matches!(target.view, JumpView::R53(R53View::Records)) {
+                self.enter_r53_records_tab(event_tx);
+            }
             self.search_query = target.id.clone();
             // Route through the pending-jump machinery (instead of selecting
             // fuzzy match #0) so an exact id match is guaranteed — and lands
