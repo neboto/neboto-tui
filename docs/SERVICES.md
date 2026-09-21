@@ -1518,7 +1518,7 @@ the service you're touching.
     `GetManagedPrefixListEntries` paginated, `lazy.pl_entries` keyed by pl id) /
     Tags. `pl-` ids (route destinations, SG rules) jump to the Routing tab.
 - **Compute Optimizer lens** (B7) — a lazy **Optimizer** section on five panes:
-  EC2 instance (key 6), EBS volume (5), Lambda (6), ASG (5), ECS service (7).
+  EC2 instance (key 8), EBS volume (5), Lambda (6), ASG (5), ECS service (7).
   Not a `ServiceType`: `aws/services/computeoptimizer.rs` flattens the per-ARN
   `Get*Recommendations` into one `OptimizerRec`; `details_pane::optimizer_lines`
   is the shared row-builder. `App.optimizer_recs` is keyed by ARN (region+account
@@ -1528,6 +1528,23 @@ the service you're touching.
   built from region + `account_id`; `AsgGroup.arn` is captured from the SDK
   (contains a UUID). "No recommendation" (`Loaded(None)`) is a normal state, not
   an error.
+- **EC2 instance Console section** (key 6, `GetConsoleOutput`) — the system
+  log the console shows under *Get system log*; lazy `lazy.ec2_instance_console`
+  keyed by instance id, same shape as User Data. The buffer comes back
+  **base64** and is decoded + sanitised (`sanitize_console_line`: ANSI
+  escapes, C0 bytes and `\r` stripped, tabs expanded) so a raw kernel line
+  can't break the pane. The call asks for `latest=true` (most recent 64 KiB,
+  documented as Nitro-only) and **retries without it** on
+  `UnsupportedOperation` / `InvalidParameter*` rather than failing the
+  section; without `latest` AWS returns the buffer posted after the last
+  state transition, which is what the console shows. `Loaded(None)` (no
+  `output` field) is normal for minutes after a launch/reboot — the section
+  says so instead of erroring. Free, control-plane, never touches the guest,
+  hence a default on-enter hook. `e` on the Console section opens the raw
+  log (`.log`, one `#` header line) and on User Data the raw script (`.sh` /
+  `.yaml` / `.txt` sniffed from line 1, no header — `#!` and `#cloud-config`
+  must stay first) via `editor_override_content`, not the snapshot JSON.
+  `GetConsoleScreenshot` (a JPEG) is deliberately not offered.
 - **EBS / AMIs / Snapshots / Launch Templates** — EC2 sub-tabs (keys 3, 5–7),
   **self-owned only**. Cross-jumps: `snap-`→Snapshots, `vol-`→EBS, `i-`→instance.
 - **ENIs** — EC2 sub-tab (`Ec2View::NetworkInterfaces`, key 4): paginated

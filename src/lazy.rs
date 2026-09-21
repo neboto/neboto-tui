@@ -496,6 +496,9 @@ pub struct LazyStore {
     /// An instance's launch user data, base64-decoded, keyed by instance id.
     /// `Loaded(None)` = no user data configured (the common case).
     pub ec2_instance_user_data: LazyMap<Option<String>>,
+    /// An instance's system console output (`GetConsoleOutput`), keyed by
+    /// instance id. `Loaded(None)` = AWS has posted nothing for it yet.
+    pub ec2_instance_console: LazyMap<Option<crate::aws::services::ec2::ConsoleOutput>>,
     /// The ENIs a security group is attached to (the Used-By section), keyed
     /// by group id. Shared by the EC2 and VPC security-group panes.
     pub sg_network_interfaces: LazyMap<Vec<crate::aws::services::ec2::SgEni>>,

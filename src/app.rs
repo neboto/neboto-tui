@@ -20680,6 +20680,39 @@ impl App {
         );
     }
 
+    /// Lazy `GetConsoleOutput` for the instance pane's Console section —
+    /// free, control-plane, never touches the instance, so it's a plain
+    /// on-enter hook (idempotent via LazyMap's contains-guard).
+    pub(crate) fn trigger_ec2_instance_console_load(
+        &mut self,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
+        if crate::aws::services::ec2::Ec2InstanceDetailSection::from_index(self.detail_section_idx)
+            != Ec2InstanceDetailSection::Console
+        {
+            return;
+        }
+        let instance_id = match self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::ec2::Ec2Instance>()
+        }) {
+            Some(inst) => inst.instance_id.clone(),
+            None => return,
+        };
+
+        let client = self.aws_clients.ec2_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.ec2_instance_console,
+            instance_id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::ec2::fetch_instance_console_output(client, instance_id)
+                    .await
+                    .map_err(|e| format!("Console output unavailable: {}", e))
+            },
+        );
+    }
+
     /// Fetch SSM Session Manager connectability for every managed instance in
     /// the region (once per EC2 load), keyed by instance id. Idempotent —
     /// guarded by `ssm_info_loading`/`ssm_info_fetched`.
@@ -23041,12 +23074,14 @@ impl App {
                 });
                 let ssm_status = self.ssm_instance_status.get(&instance.instance_id).copied();
                 let user_data = self.lazy.ec2_instance_user_data.get(&instance.instance_id);
+                let console = self.lazy.ec2_instance_console.get(&instance.instance_id);
                 return crate::ui::widgets::details_pane::ec2_section_lines(
                     instance,
                     crate::aws::services::ec2::Ec2InstanceDetailSection::from_index(self.detail_section_idx),
                     profile_roles,
                     ssm_status,
                     user_data,
+                    console,
                     self.selected_optimizer_state(),
                     self.co_enrollment.as_ref(),
                 );
@@ -25715,7 +25750,7 @@ impl App {
     /// `None` means "nothing special here": the caller falls back to the
     /// detail-snapshot JSON, which itself carries any loading/error state the
     /// pane shows — so no branch needs its own error message.
-    fn editor_override_content(&self) -> Option<(String, &'static str)> {
+    pub(crate) fn editor_override_content(&self) -> Option<(String, &'static str)> {
         let resource = self.get_selected_resource()?;
         let any = resource.as_any();
 
@@ -25725,6 +25760,48 @@ impl App {
                 ".json"
             } else {
                 ".yaml"
+            }
+        }
+
+        // EC2 instance: the two text-valued sections open as the text itself
+        // rather than escaped strings inside the snapshot JSON. Console gets
+        // a one-line header (instance + capture time) so a saved copy says
+        // where it came from; user data gets none — `#!` and `#cloud-config`
+        // must stay on line 1. Both fall through while loading/errored.
+        if let Some(inst) = any.downcast_ref::<crate::aws::services::ec2::Ec2Instance>() {
+            use crate::aws::services::ec2::Ec2InstanceDetailSection as S;
+            match S::from_index(self.detail_section_idx) {
+                S::Console => {
+                    if let Some(crate::lazy::Lazy::Loaded(Some(out))) =
+                        self.lazy.ec2_instance_console.get(&inst.instance_id)
+                    {
+                        let mut text = format!(
+                            "# {} · console output captured {}\n",
+                            inst.instance_id,
+                            out.captured_at.as_deref().unwrap_or("at an unknown time")
+                        );
+                        for line in &out.lines {
+                            text.push_str(line);
+                            text.push('\n');
+                        }
+                        return Some((text, ".log"));
+                    }
+                }
+                S::UserData => {
+                    if let Some(crate::lazy::Lazy::Loaded(Some(script))) =
+                        self.lazy.ec2_instance_user_data.get(&inst.instance_id)
+                    {
+                        let suffix = if script.starts_with("#cloud-config") {
+                            ".yaml"
+                        } else if script.starts_with("#!") {
+                            ".sh"
+                        } else {
+                            ".txt"
+                        };
+                        return Some((script.clone(), suffix));
+                    }
+                }
+                _ => {}
             }
         }
 

@@ -597,7 +597,7 @@ Tasks sub-tab has an `f` status filter (All/Running/Stopped).
   async-stashed `pending_editor_content` (IAM policy docs, ECS task logs, WAF
   sampled requests, secrets, S3 objects…); ② a contextual override
   (`editor_override_content` — CFN template/events, KMS / VPC-endpoint /
-  OpenSearch policies **section-gated**, REST-API / S3 bucket policies, SSM doc
+  OpenSearch policies **section-gated**, EC2 console log / user data (raw text, section-gated), REST-API / S3 bucket policies, SSM doc
   body, CW dashboard JSON, buildspec, launch-template data, SFN definition) —
   overrides **fall through** when they have nothing, never error; ③
   `Resource::raw_content()` — **raw AWS JSON only** (CloudTrail events,

@@ -3942,13 +3942,15 @@ fn render_ec2_section_body(app: &App, area: Rect, frame: &mut Frame) {
 
 /// Returns the scrollable rows for the active EC2 instance detail section.
 /// Called by `App::get_detail_lines` so navigation, scroll, and copy all see
-/// the same rows.
+/// the same rows. One `Option<&Lazy<_>>` per lazy section, hence the count.
+#[allow(clippy::too_many_arguments)]
 pub fn ec2_section_lines(
     instance: &Ec2Instance,
     section: Ec2InstanceDetailSection,
     profile_roles: Option<&crate::lazy::Lazy<Vec<crate::aws::services::ec2::InstanceProfileRole>>>,
     ssm_status: Option<crate::aws::services::ec2::SsmInstanceStatus>,
     user_data: Option<&crate::lazy::Lazy<Option<String>>>,
+    console: Option<&crate::lazy::Lazy<Option<crate::aws::services::ec2::ConsoleOutput>>>,
     optimizer: Option<&Lazy<Option<crate::aws::services::computeoptimizer::OptimizerRec>>>,
     enrollment: Option<&crate::aws::services::computeoptimizer::CoEnrollment>,
 ) -> Vec<(String, String)> {
@@ -3958,6 +3960,7 @@ pub fn ec2_section_lines(
         Ec2InstanceDetailSection::Networking => ec2_networking_lines(instance),
         Ec2InstanceDetailSection::Storage => ec2_storage_lines(instance),
         Ec2InstanceDetailSection::UserData => ec2_user_data_lines(user_data),
+        Ec2InstanceDetailSection::Console => ec2_console_lines(console),
         Ec2InstanceDetailSection::Tags => ec2_tags_lines(instance),
         Ec2InstanceDetailSection::Optimizer => optimizer_lines(optimizer, enrollment),
     }
@@ -3986,6 +3989,62 @@ fn ec2_user_data_lines(
         }
     }
     rows
+}
+
+/// System console output (`GetConsoleOutput`, base64-decoded) — a captured-at
+/// row, then one plain content line per log line so `e` opens the whole
+/// buffer in `$EDITOR` via the snapshot path.
+fn ec2_console_lines(
+    console: Option<&crate::lazy::Lazy<Option<crate::aws::services::ec2::ConsoleOutput>>>,
+) -> Vec<(String, String)> {
+    let mut rows: Vec<(String, String)> = Vec::new();
+    match console {
+        None | Some(crate::lazy::Lazy::Loading) => {
+            rows.push(("Loading…".to_string(), String::new()));
+        }
+        Some(crate::lazy::Lazy::Error(e)) => rows.extend(error_rows(e)),
+        Some(crate::lazy::Lazy::Loaded(None)) => {
+            rows.push(("No console output available yet".to_string(), String::new()));
+            rows.push((
+                "".to_string(),
+                "· AWS posts the buffer a few minutes after a start, stop or reboot — r to refetch"
+                    .to_string(),
+            ));
+        }
+        Some(crate::lazy::Lazy::Loaded(Some(out))) => {
+            let captured = match (&out.captured_at, out.captured_secs) {
+                (Some(at), Some(secs)) => format!("{at} ({})", console_age(secs)),
+                (Some(at), None) => at.clone(),
+                _ => "unknown".to_string(),
+            };
+            rows.push(("Captured".to_string(), captured));
+            rows.push(("Lines".to_string(), out.lines.len().to_string()));
+            rows.push((String::new(), String::new()));
+            for line in &out.lines {
+                // Leading-space key + empty value → plain content line (no colon).
+                rows.push((format!(" {}", line), String::new()));
+            }
+        }
+    }
+    rows
+}
+
+/// Age of a console capture relative to now: "2m ago", "3h ago", "5d ago".
+fn console_age(captured_secs: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(captured_secs);
+    let secs = (now - captured_secs).max(0);
+    if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86_400)
+    }
 }
 
 fn ec2_details_lines(
