@@ -20,10 +20,16 @@ fn record(name: &str, rtype: RrType, ttl: i64, values: &[&str]) -> R53Record {
     R53Record::from_sdk(&b.build().unwrap(), ZONE_ID, "example.com.")
 }
 
-/// Render the zone's Records section at `width` columns and return the
-/// screen as one string per terminal row.
-async fn render_records(width: u16, details_only: bool) -> Vec<String> {
-    let (mut app, tx, _rx) = test_app().await;
+/// An app focused on the mock zone's Records section with three records
+/// delivered the way the apply-closure would.
+async fn app_with_records(
+    details_only: bool,
+) -> (
+    App,
+    mpsc::UnboundedSender<Event>,
+    mpsc::UnboundedReceiver<Event>,
+) {
+    let (mut app, tx, rx) = test_app().await;
     let zone = R53HostedZone::from_sdk(
         &HostedZone::builder()
             .id(ZONE_ID)
@@ -57,6 +63,15 @@ async fn render_records(width: u16, details_only: bool) -> Vec<String> {
         ]),
     );
 
+    // The receiver travels with the app: dropped, every send (the jump's
+    // trigger, the tab entry) would error.
+    (app, tx, rx)
+}
+
+/// Render the zone's Records section at `width` columns and return the
+/// screen as one string per terminal row.
+async fn render_records(width: u16, details_only: bool) -> Vec<String> {
+    let (app, _tx, _rx) = app_with_records(details_only).await;
     let backend = TestBackend::new(width, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| crate::render_app(&app, f)).unwrap();
@@ -75,17 +90,14 @@ async fn records_show_type_before_name_in_a_split_pane_at_80_columns() {
     let screen = render_records(80, false).await;
     let joined = screen.join("\n");
     assert!(
-        joined.contains("A      example.com"),
+        joined.contains("A      @"),
         "A record type + name missing:\n{joined}"
     );
     assert!(
-        joined.contains("CNAME  www.example.com"),
+        joined.contains("CNAME  www"),
         "CNAME record type + name missing:\n{joined}"
     );
-    assert!(
-        joined.contains("TXT    example.com"),
-        "TXT type missing:\n{joined}"
-    );
+    assert!(joined.contains("TXT    @"), "TXT type missing:\n{joined}");
     // Every value starts on the same column as the header's, and no row
     // overflows into a wrapped line: the pane clips at its right edge, so a
     // row is never wider than the terminal.
@@ -96,7 +108,7 @@ async fn records_show_type_before_name_in_a_split_pane_at_80_columns() {
 async fn records_show_value_and_ttl_in_a_full_width_pane() {
     let screen = render_records(120, true).await;
     let joined = screen.join("\n");
-    for needle in ["185.0.0.1  ·  300", "example.com  ·  60", "·  3600"] {
+    for needle in ["185.0.0.1 · 300", "example.com · 60", "· 3600"] {
         assert!(joined.contains(needle), "{needle:?} missing:\n{joined}");
     }
     // The multi-byte TXT value crosses the 40-char cut and must truncate by
@@ -104,5 +116,58 @@ async fn records_show_value_and_ttl_in_a_full_width_pane() {
     assert!(
         joined.contains("ünïcödé"),
         "truncated TXT continuation row missing:\n{joined}"
+    );
+}
+
+/// Names are zone-relative in the section (`@`, `www`), so a long name
+/// can't drag the key column to its cap and squeeze every value.
+#[tokio::test]
+async fn record_names_are_zone_relative() {
+    let screen = render_records(120, true).await.join("\n");
+    assert!(
+        !screen.contains("www.example.com"),
+        "FQDN should not appear in the section:\n{screen}"
+    );
+    assert!(
+        screen.contains("CNAME  www"),
+        "relative name missing:\n{screen}"
+    );
+}
+
+/// ⏎ on a record row opens that record's own pane on the Records tab —
+/// the untruncated view for anything the section still clips.
+#[tokio::test]
+async fn enter_on_a_record_row_opens_the_record_on_the_records_tab() {
+    let (mut app, tx, _rx) = app_with_records(false).await;
+    let rows = app.get_detail_lines();
+    let cname_row = rows
+        .iter()
+        .position(|(k, _)| k.starts_with("  CNAME"))
+        .expect("CNAME row");
+    let header_row = rows
+        .iter()
+        .position(|(k, _)| k.starts_with("  TYPE"))
+        .expect("header row");
+
+    // The header row is not a jump; the record row is.
+    app.details_selected_index = Some(header_row);
+    assert!(!app.trigger_jump(true, &tx), "header row must not jump");
+    app.details_selected_index = Some(cname_row);
+    assert!(app.trigger_jump(true, &tx), "record row must jump");
+
+    assert_eq!(app.r53_view, crate::app::R53View::Records);
+    let selected = app
+        .get_selected_resource()
+        .and_then(|r| r.as_any().downcast_ref::<R53Record>())
+        .expect("a record is selected after the jump");
+    assert_eq!(selected.record_type, "CNAME");
+    assert_eq!(selected.name, "www.example.com");
+    assert!(
+        app.details_focused,
+        "follow-link jumps land in the detail pane"
+    );
+    assert!(
+        app.pending_jump.is_none(),
+        "the jump must resolve immediately from the zone's loaded records"
     );
 }

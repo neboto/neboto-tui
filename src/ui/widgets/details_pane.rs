@@ -7023,11 +7023,16 @@ fn r53_records_lines(records_state: Option<&crate::lazy::Lazy<Vec<crate::aws::se
                 // `first-value · ttl`, TTL last so a narrow pane clips the
                 // least important column. The old `name|type|ttl` 70-column
                 // key put the type past KEY_COL_MAX, so it was clipped in
-                // every pane width (#17). Values stay in the value slot so
-                // an S3-website alias remains ⏎-jumpable.
+                // every pane width (#17). The name is **zone-relative**
+                // (`@`, `www`): the FQDN repeated the zone on every row and
+                // one long name dragged the key column to its cap, leaving
+                // the values ~18 columns in a split pane. Values stay in the
+                // value slot so an S3-website alias remains ⏎-jumpable, and
+                // ⏎ on any row opens the record's own pane on the Records
+                // tab (`r53_row_jump_target`), where nothing is truncated.
                 rows.push((
                     format!("  {:<6} {}", "TYPE", "NAME"),
-                    "VALUE  ·  TTL".to_string(),
+                    "VALUE · TTL".to_string(),
                 ));
 
                 for record in records {
@@ -7046,8 +7051,8 @@ fn r53_records_lines(records_state: Option<&crate::lazy::Lazy<Vec<crate::aws::se
                     // multi-byte character at the boundary (TXT records).
                     let first = cost_trunc(all_values.first().copied().unwrap_or("—"), 40);
                     rows.push((
-                        format!("  {:<6} {}", record.record_type, record.name),
-                        format!("{first}  ·  {ttl}"),
+                        format!("  {:<6} {}", record.record_type, record.relative_name()),
+                        format!("{first} · {ttl}"),
                     ));
 
                     // Continuation rows for multi-value records (NS, MX, TXT, …):
@@ -34269,7 +34274,7 @@ pub fn cost_section_lines(
 }
 
 /// Truncate to `n` chars, appending an ellipsis when clipped.
-fn cost_trunc(s: &str, n: usize) -> String {
+pub(crate) fn cost_trunc(s: &str, n: usize) -> String {
     if s.chars().count() > n {
         let t: String = s.chars().take(n.saturating_sub(1)).collect();
         format!("{}…", t)

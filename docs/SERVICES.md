@@ -753,6 +753,18 @@ the service you're touching.
   markers restart at the top of the set and the loop never advances. It also
   carries `start_record_identifier` (the response's `next_record_identifier`),
   with a non-advancing-marker guard breaking the loop if all three repeat.
+- **Route 53 zone pane, Records section** — rows are `TYPE relname : value ·
+  ttl` with the name **zone-relative** (`R53Record::relative_name`: `@` apex,
+  `www`, `*.dev`). The FQDN repeated the zone on every row and one long name
+  dragged the adaptive key column to `KEY_COL_MAX`, leaving values ~18
+  columns in a split pane (#17 follow-up). `⏎` on any record row opens the
+  record's own pane on the Records tab (`r53_zone_record_row_target`,
+  resolved against the zone's loaded records — members of a weighted/latency
+  set share the key, so the row value picks between them); the same-service
+  jump path calls `enter_r53_records_tab` because the tab's rows come from
+  the lazy map, not the list load, and `R53Record::search_text` leads with
+  the compound id so the pending jump survives the fuzzy filter. Values
+  longer than the pane still clip — wrapping is #23.
 - **Route 53 Resolver** (`@resolver`) — rule detail fetch **must** pass the
   `ResolverRuleId` filter to `ListResolverRuleAssociations`. `rslvr-` id jump
   routing is checked longest-prefix-first: `rslvr-rr-` (rule ids) → the Rules

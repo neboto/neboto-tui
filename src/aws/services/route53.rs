@@ -625,6 +625,28 @@ impl R53Record {
         self.zone_id.trim_start_matches("/hostedzone/")
     }
 
+    /// The name relative to its zone, the way a zone file spells it: `@` for
+    /// the apex, `www` for `www.example.com`, `*.dev` for a wildcard. What
+    /// the zone pane's Records section shows in its key column — the FQDN
+    /// repeated the zone name on every row and pushed the key column to its
+    /// cap, clipping the values (#17 follow-up). A name outside the zone
+    /// (never in practice) stays fully qualified.
+    pub fn relative_name(&self) -> String {
+        if self.name.eq_ignore_ascii_case(&self.zone_name) {
+            return "@".to_string();
+        }
+        let suffix_len = self.zone_name.len() + 1;
+        if self.name.len() > suffix_len
+            && self.name[self.name.len() - suffix_len..]
+                .strip_prefix('.')
+                .is_some_and(|z| z.eq_ignore_ascii_case(&self.zone_name))
+        {
+            self.name[..self.name.len() - suffix_len].to_string()
+        } else {
+            self.name.clone()
+        }
+    }
+
     /// What the record answers with, in one cell: the alias target, or the
     /// first value plus a `(+N)` count when there are more.
     pub fn value_summary(&self) -> String {
@@ -737,7 +759,11 @@ impl Resource for R53Record {
     }
 
     fn search_text(&self) -> String {
+        // The compound id first: a zone-pane record row jumping to the
+        // Records tab sets the search query to it, and the pending jump only
+        // resolves inside the fuzzy-filtered list.
         let mut parts = vec![
+            self.id.clone(),
             self.name.clone(),
             self.record_type.clone(),
             self.zone_name.clone(),
@@ -1411,5 +1437,50 @@ mod tests {
         assert_eq!(rec.zone_name, "example.com");
         assert_eq!(rec.value_summary(), "10.0.0.1");
         assert!(rec.references().iter().any(|(l, v)| l == "Hosted Zone" && v == "/hostedzone/Z123"));
+    }
+}
+
+#[cfg(test)]
+mod relative_name_tests {
+    use super::R53Record;
+    use aws_sdk_route53::types::{ResourceRecordSet, RrType};
+
+    fn rec(name: &str, zone: &str) -> R53Record {
+        let set = ResourceRecordSet::builder()
+            .name(name)
+            .r#type(RrType::A)
+            .build()
+            .unwrap();
+        R53Record::from_sdk(&set, "/hostedzone/Z1", zone)
+    }
+
+    #[test]
+    fn apex_is_at_and_subdomains_lose_the_zone_suffix() {
+        assert_eq!(rec("example.com.", "example.com.").relative_name(), "@");
+        assert_eq!(
+            rec("www.example.com.", "example.com.").relative_name(),
+            "www"
+        );
+        assert_eq!(
+            rec("_acme-challenge.api.example.com.", "example.com.").relative_name(),
+            "_acme-challenge.api"
+        );
+        assert_eq!(
+            rec("*.dev.example.com.", "example.com.").relative_name(),
+            "*.dev"
+        );
+    }
+
+    #[test]
+    fn suffix_match_is_on_a_label_boundary_and_case_insensitive() {
+        // `notexample.com` is not inside `example.com`.
+        assert_eq!(
+            rec("notexample.com.", "example.com.").relative_name(),
+            "notexample.com"
+        );
+        assert_eq!(
+            rec("WWW.Example.COM.", "example.com.").relative_name(),
+            "WWW"
+        );
     }
 }
