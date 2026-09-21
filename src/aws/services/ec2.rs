@@ -75,6 +75,117 @@ pub async fn fetch_instance_user_data(
     }))
 }
 
+/// An instance's system console output (`GetConsoleOutput`) — the kernel /
+/// boot log the console shows under *Get system log*.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConsoleOutput {
+    /// When AWS captured the buffer, formatted (`2026-09-21T10:15:00Z`).
+    pub captured_at: Option<String>,
+    /// The same instant as epoch seconds, for the relative-age row.
+    pub captured_secs: Option<i64>,
+    /// Decoded, sanitised output, one entry per line.
+    pub lines: Vec<String>,
+}
+
+/// Fetch an instance's system console output. `latest = true` asks for the
+/// most recent 64 KiB rather than the buffer posted after the last state
+/// transition; AWS documents it as Nitro-only, so a rejection retries the
+/// plain call rather than failing the section. `Ok(None)` means AWS has no
+/// output for the instance yet (it appears minutes after a start/reboot).
+pub async fn fetch_instance_console_output(
+    client: aws_sdk_ec2::Client,
+    instance_id: String,
+) -> Result<Option<ConsoleOutput>> {
+    use aws_sdk_ec2::error::ProvideErrorMetadata;
+
+    let latest = client
+        .get_console_output()
+        .instance_id(&instance_id)
+        .latest(true)
+        .send()
+        .await;
+    let resp = match latest {
+        Ok(resp) => resp,
+        Err(e)
+            if matches!(
+                e.code(),
+                Some("UnsupportedOperation")
+                    | Some("InvalidParameterCombination")
+                    | Some("InvalidParameterValue")
+            ) =>
+        {
+            client
+                .get_console_output()
+                .instance_id(&instance_id)
+                .send()
+                .await
+                .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?
+        }
+        Err(e) => {
+            return Err(crate::error::Error::AwsSdk(
+                crate::error::sdk_error_message(&e),
+            ));
+        }
+    };
+
+    let Some(raw) = resp.output().filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let captured_at = resp.timestamp().and_then(|t| {
+        t.fmt(aws_sdk_ec2::primitives::DateTimeFormat::DateTime)
+            .ok()
+    });
+    Ok(Some(ConsoleOutput {
+        captured_at,
+        captured_secs: resp.timestamp().map(|t| t.secs()),
+        lines: decode_console_output(raw),
+    }))
+}
+
+/// Base64-decode a console buffer into display lines. Falls back to the raw
+/// text when it isn't base64 (emulators hand it back plain). Each line is
+/// run through [`sanitize_console_line`] so a raw kernel line can't break
+/// the pane.
+pub fn decode_console_output(raw: &str) -> Vec<String> {
+    let text = aws_smithy_types::base64::decode(raw.trim())
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_else(|_| raw.to_string());
+    text.lines().map(sanitize_console_line).collect()
+}
+
+/// Strip what a terminal would otherwise interpret: a trailing `\r`, ANSI
+/// escape sequences (`ESC [ … m` colour codes, `ESC ( B` charset selects)
+/// and other C0 control bytes. Tabs become four spaces so columns line up
+/// with the pane's own indentation.
+pub fn sanitize_console_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => match chars.next() {
+                // CSI: ESC [ params… final byte in 0x40..=0x7E.
+                Some('[') => {
+                    for n in chars.by_ref() {
+                        if ('\u{40}'..='\u{7e}').contains(&n) {
+                            break;
+                        }
+                    }
+                }
+                // Charset selects (ESC ( B, ESC ) 0) carry one more byte.
+                Some('(') | Some(')') => {
+                    chars.next();
+                }
+                // Single-byte escapes (ESC =, ESC >, ESC c): already consumed.
+                _ => {}
+            },
+            '\t' => out.push_str("    "),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// SSM Session Manager connectability for an EC2 instance, derived from
 /// `ssm:DescribeInstanceInformation`. Only instances with the SSM agent
 /// registered appear in that call at all; an instance absent from the map
@@ -853,6 +964,7 @@ crate::sections! {
         Networking "Networking",
         Storage "Storage",
         UserData "User Data" => crate::app::App::trigger_ec2_instance_user_data_load,
+        Console "Console" => crate::app::App::trigger_ec2_instance_console_load,
         Tags "Tags",
         Optimizer "Optimizer" => crate::app::App::trigger_optimizer_load,
     ]
@@ -3022,4 +3134,38 @@ pub async fn fetch_launch_template_versions(
     }
     out.sort_by(|a, b| b.version_number.cmp(&a.version_number));
     Ok(out)
+}
+
+#[cfg(test)]
+mod console_output_tests {
+    use super::*;
+
+    #[test]
+    fn decodes_base64_and_splits_lines() {
+        let raw = aws_smithy_types::base64::encode(
+            "[    0.000000] Linux version 6.1\r\n[    0.001] done\n",
+        );
+        assert_eq!(
+            decode_console_output(&raw),
+            vec!["[    0.000000] Linux version 6.1", "[    0.001] done"]
+        );
+    }
+
+    #[test]
+    fn plain_text_passes_through_when_not_base64() {
+        assert_eq!(
+            decode_console_output("not base64 at all!"),
+            vec!["not base64 at all!"]
+        );
+    }
+
+    #[test]
+    fn sanitize_strips_ansi_and_control_bytes() {
+        assert_eq!(
+            sanitize_console_line("\u{1b}[0;32m  OK  \u{1b}[0m Started\u{7}\r"),
+            "  OK   Started"
+        );
+        assert_eq!(sanitize_console_line("a\tb"), "a    b");
+        assert_eq!(sanitize_console_line("\u{1b}(Bplain"), "plain");
+    }
 }

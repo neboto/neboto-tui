@@ -20680,6 +20680,39 @@ impl App {
         );
     }
 
+    /// Lazy `GetConsoleOutput` for the instance pane's Console section —
+    /// free, control-plane, never touches the instance, so it's a plain
+    /// on-enter hook (idempotent via LazyMap's contains-guard).
+    pub(crate) fn trigger_ec2_instance_console_load(
+        &mut self,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
+        if crate::aws::services::ec2::Ec2InstanceDetailSection::from_index(self.detail_section_idx)
+            != Ec2InstanceDetailSection::Console
+        {
+            return;
+        }
+        let instance_id = match self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::ec2::Ec2Instance>()
+        }) {
+            Some(inst) => inst.instance_id.clone(),
+            None => return,
+        };
+
+        let client = self.aws_clients.ec2_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.ec2_instance_console,
+            instance_id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::ec2::fetch_instance_console_output(client, instance_id)
+                    .await
+                    .map_err(|e| format!("Console output unavailable: {}", e))
+            },
+        );
+    }
+
     /// Fetch SSM Session Manager connectability for every managed instance in
     /// the region (once per EC2 load), keyed by instance id. Idempotent —
     /// guarded by `ssm_info_loading`/`ssm_info_fetched`.
@@ -23041,12 +23074,14 @@ impl App {
                 });
                 let ssm_status = self.ssm_instance_status.get(&instance.instance_id).copied();
                 let user_data = self.lazy.ec2_instance_user_data.get(&instance.instance_id);
+                let console = self.lazy.ec2_instance_console.get(&instance.instance_id);
                 return crate::ui::widgets::details_pane::ec2_section_lines(
                     instance,
                     crate::aws::services::ec2::Ec2InstanceDetailSection::from_index(self.detail_section_idx),
                     profile_roles,
                     ssm_status,
                     user_data,
+                    console,
                     self.selected_optimizer_state(),
                     self.co_enrollment.as_ref(),
                 );
