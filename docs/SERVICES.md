@@ -1540,8 +1540,11 @@ the service you're touching.
   state transition, which is what the console shows. `Loaded(None)` (no
   `output` field) is normal for minutes after a launch/reboot — the section
   says so instead of erroring. Free, control-plane, never touches the guest,
-  hence a default on-enter hook. `GetConsoleScreenshot` (a JPEG) is
-  deliberately not offered.
+  hence a default on-enter hook. `e` on the Console section opens the raw
+  log (`.log`, one `#` header line) and on User Data the raw script (`.sh` /
+  `.yaml` / `.txt` sniffed from line 1, no header — `#!` and `#cloud-config`
+  must stay first) via `editor_override_content`, not the snapshot JSON.
+  `GetConsoleScreenshot` (a JPEG) is deliberately not offered.
 - **EBS / AMIs / Snapshots / Launch Templates** — EC2 sub-tabs (keys 3, 5–7),
   **self-owned only**. Cross-jumps: `snap-`→Snapshots, `vol-`→EBS, `i-`→instance.
 - **ENIs** — EC2 sub-tab (`Ec2View::NetworkInterfaces`, key 4): paginated

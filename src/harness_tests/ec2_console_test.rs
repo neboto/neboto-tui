@@ -9,9 +9,9 @@ use crate::lazy::Lazy;
 
 const INSTANCE_ID: &str = "i-0123456789abcdef0";
 
-/// Focus an instance on its Console section, deliver `result` the way the
-/// apply-closure would, and return the 140x30 screen as one string.
-async fn render_console(result: std::result::Result<Option<ConsoleOutput>, String>) -> String {
+/// An app focused on a mock instance's Console section with `result`
+/// delivered the way the apply-closure would.
+async fn app_with_console(result: std::result::Result<Option<ConsoleOutput>, String>) -> App {
     let (mut app, tx, _rx) = test_app().await;
     let instance = Ec2Instance::from_sdk(
         &aws_sdk_ec2::types::Instance::builder()
@@ -36,7 +36,12 @@ async fn render_console(result: std::result::Result<Option<ConsoleOutput>, Strin
     app.lazy
         .ec2_instance_console
         .apply(INSTANCE_ID.to_string(), result);
+    app
+}
 
+/// Render the Console section and return the 140x30 screen as one string.
+async fn render_console(result: std::result::Result<Option<ConsoleOutput>, String>) -> String {
+    let app = app_with_console(result).await;
     let backend = TestBackend::new(140, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| crate::render_app(&app, f)).unwrap();
@@ -109,4 +114,61 @@ async fn console_section_shows_fetch_errors_inline() {
         screen.contains("⚠ Console output unavailable: UnauthorizedOperation"),
         "error row missing:\n{screen}"
     );
+}
+
+fn sample_output() -> ConsoleOutput {
+    ConsoleOutput {
+        captured_at: Some("2026-09-21T10:15:00Z".to_string()),
+        captured_secs: None,
+        lines: vec![
+            "[    0.000000] Linux version 6.1.0".to_string(),
+            "[    1.000000] Kernel panic - not syncing".to_string(),
+        ],
+    }
+}
+
+#[tokio::test]
+async fn e_on_the_console_section_opens_the_raw_log_not_the_snapshot_json() {
+    let app = app_with_console(Ok(Some(sample_output()))).await;
+    let (text, suffix) = app
+        .editor_override_content()
+        .expect("loaded console output must override the snapshot");
+    assert_eq!(suffix, ".log");
+    assert_eq!(
+        text,
+        "# i-0123456789abcdef0 · console output captured 2026-09-21T10:15:00Z\n\
+         [    0.000000] Linux version 6.1.0\n\
+         [    1.000000] Kernel panic - not syncing\n"
+    );
+}
+
+#[tokio::test]
+async fn e_falls_through_to_the_snapshot_while_console_is_empty_or_on_other_sections() {
+    let app = app_with_console(Ok(None)).await;
+    assert!(app.editor_override_content().is_none());
+
+    let mut app = app_with_console(Ok(Some(sample_output()))).await;
+    app.detail_section_idx = Ec2InstanceDetailSection::Details as usize;
+    assert!(app.editor_override_content().is_none());
+}
+
+#[tokio::test]
+async fn e_on_the_user_data_section_opens_the_script_with_a_sniffed_suffix() {
+    let mut app = app_with_console(Ok(None)).await;
+    app.detail_section_idx = Ec2InstanceDetailSection::UserData as usize;
+    for (script, suffix) in [
+        ("#!/bin/bash\napt-get update\n", ".sh"),
+        ("#cloud-config\npackages:\n  - nginx\n", ".yaml"),
+        ("Content-Type: multipart/mixed; boundary=\"x\"\n", ".txt"),
+    ] {
+        app.lazy
+            .ec2_instance_user_data
+            .apply(INSTANCE_ID.to_string(), Ok(Some(script.to_string())));
+        assert_eq!(
+            app.editor_override_content(),
+            Some((script.to_string(), suffix)),
+            "suffix for {script:?}"
+        );
+        app.lazy.ec2_instance_user_data = Default::default();
+    }
 }
