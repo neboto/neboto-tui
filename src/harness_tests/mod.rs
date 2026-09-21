@@ -27,6 +27,7 @@ use ratatui::Terminal;
 mod deep_export_test;
 mod load_stream_test;
 mod macros_test;
+mod r53_records_test;
 mod state_filter_test;
 mod mocks_compute;
 mod mocks_containers;
