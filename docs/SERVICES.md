@@ -651,6 +651,14 @@ the service you're touching.
 - **Route 53** (`@r53`) — sub-tabs Zones / **Records** / Health Checks.
   Zones stream first, then health checks stream as a second batch
   (`ListHealthChecks`, tags batched 10-at-a-time via `ListTagsForResources`).
+  **Zone tags are batched the same way at list time** — `ListHostedZones`
+  returns none, and without the eager fill `Resource::tags()` is empty for
+  the ribbon / `tag:` filters / `U` / exports. **The tag APIs take the bare
+  `Z…` id**, not the `/hostedzone/Z…` path `ListHostedZones` hands out:
+  `GetHostedZone` and friends tolerate the path, `ListTagsForResource(s)`
+  reject it, and the lazy bundle used to swallow that rejection into "No
+  tags" (#26). `resolve_zone_tags` / `fetch_zone_tags` strip it; the bundle
+  now carries `tags_error` and the Tags section renders it via `error_rows`.
   **Records is a real cross-zone list**, not a second view of the zones (it
   used to be: same type filter, the only difference was firing the selected
   zone's records fetch, which `Enter` on the zone already did). Each

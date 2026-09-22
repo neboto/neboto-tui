@@ -7200,6 +7200,11 @@ fn r53_tags_lines(
             rows.push(("  Loading…".to_string(), "".to_string()));
         }
         Some(crate::lazy::Lazy::Error(err)) => rows.extend(error_rows(err)),
+        // The bundle is best-effort on tags: a failed `ListTagsForResource`
+        // must not read as "No tags" (#26).
+        Some(crate::lazy::Lazy::Loaded(d)) if d.tags_error.is_some() => {
+            rows.extend(error_rows(d.tags_error.as_deref().unwrap_or_default()));
+        }
         Some(crate::lazy::Lazy::Loaded(d)) if d.tags.is_empty() => {
             rows.push(("  No tags".to_string(), "".to_string()));
         }
