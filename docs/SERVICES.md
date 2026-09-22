@@ -2320,6 +2320,22 @@ the service you're touching.
     pre-versioning objects report the literal version id `"null"` — display
     it, don't special-case it. Object-meta cache keys gain an `@version`
     suffix so a version's HEAD never shadows the current object's.
+  - **Terraform state viewer** (`t` in the object browser on a `.tfstate` /
+    `.tfstate.backup` key; `src/terraform.rs`): one `GetObject`, parsed with
+    serde into `TfState` (version, serial, terraform_version, resource
+    blocks → instances, outputs), then `App.terraform_state` is set, the
+    browser closes and the detail pane renders `render_tf_state_pane`.
+    `tf_state_detail_lines` feeds `get_detail_lines` directly (it takes
+    priority over the selected resource while set), so `Enter` reaches the
+    generic `resource_jump_target` on the `(address, ARN-or-id)` rows for
+    free — no tfstate-specific jump code, and any new id prefix the
+    classifier learns works here too. The identifier prefers the `arn`
+    attribute over `id` for exactly that reason (an `id` like `app` is
+    ambiguous; the ARN classifies). Instances with no identifier render as
+    plain lines. Off the LazyStore deliberately: it isn't keyed to a
+    resource selection and `Esc` drops it; the flat view, snapshot walk and
+    export never see it. Providers are summarised as counts rather than
+    repeated per row — the per-row `provider:` noise was the first draft.
 - **S3 Files** (`@s3files`, `s3files.rs`) — the 2026 S3 shared-file-system
   feature (EFS-based NFS file systems linked to a bucket or prefix, two-way
   sync). Single-list (file systems, `ListFileSystems`, cap 200, single-phase

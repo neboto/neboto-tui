@@ -218,8 +218,8 @@ Each takes over the keymap while open; `Esc` closes, `Z` goes full-width.
 | `t` | Live log tail — `[` / `]` widen the lookback, `s` flips to search |
 | `f` | Log search (server-side filter pattern) · CloudTrail event filter · ECS/execution status filter |
 | `W` | CloudTrail lens — who changed this resource; `[` / `]` widen to 90d, `a` includes reads |
-| `o` | S3 object browser |
-| `i` | DynamoDB item browser (Scan / Query) |
+| `o` | S3 object browser — folders, `/` filter, `V` version history incl. delete markers, `i` metadata, `v`/`e` preview, `d` download, `p` presigned URL; `t` on a `.tfstate` opens the Terraform state viewer (one row per instance, `Enter` jumps to the live resource) |
+| `i` | DynamoDB item browser (Scan / Query, filters, GSI/LSI) · AgentCore memory session browser |
 | `s` | SSM Session Manager · ECS Exec · assume an org member-account role |
 | `x` / `Y` | Reveal / copy a secret or SSM parameter value (never cached) |
 | `O` | Open this resource in the AWS Console |
