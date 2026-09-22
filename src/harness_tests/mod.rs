@@ -29,6 +29,7 @@ mod load_stream_test;
 mod macros_test;
 mod ec2_console_test;
 mod r53_records_test;
+mod r53_zone_tags_test;
 mod state_filter_test;
 mod mocks_compute;
 mod mocks_containers;
