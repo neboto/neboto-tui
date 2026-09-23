@@ -64,7 +64,7 @@ const RIGHT_SECTIONS: &[Section] = &[
         entries: &[
             ("O", "open in AWS Console"),
             ("y", "copy ARN / id"),
-            ("C", "copy AWS CLI command"),
+            ("C", "copy a CLI command (read · connect · change)"),
             ("e", "open in $EDITOR"),
             ("m", "metrics charts"),
             ("t", "live log tail ([/] window)"),

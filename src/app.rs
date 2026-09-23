@@ -1740,6 +1740,8 @@ pub struct App {
     pub macro_player: Option<crate::macros::MacroPlayer>,
     pub macro_picker_visible: bool,
     pub macro_picker_selected: usize,
+    /// The `C` command picker (`aws::cli_actions`) — `Some` while open.
+    pub cli_picker: Option<crate::aws::cli_actions::CliPickerState>,
     /// `Some` while naming a just-stopped recording (the picker becomes a
     /// text prompt).
     pub macro_name_input: Option<String>,
@@ -2624,6 +2626,7 @@ impl App {
             macro_player: None,
             macro_picker_visible: false,
             macro_picker_selected: 0,
+            cli_picker: None,
             macro_name_input: None,
             message_history: std::collections::VecDeque::new(),
             message_history_visible: false,
@@ -3723,6 +3726,13 @@ impl App {
                 }
                 _ => {}
             }
+            return Ok(());
+        }
+
+        // `C` command picker intercepts keys while open: ↑↓ move, ⏎ copy,
+        // 1–9 copy that row directly.
+        if self.cli_picker.is_some() {
+            self.handle_cli_picker_key(key);
             return Ok(());
         }
 
@@ -5361,6 +5371,11 @@ impl App {
                 // Message history works from the detail pane too.
                 KeyCode::Char('M') => {
                     self.toggle_message_history();
+                }
+                // CLI command picker works from the detail pane too (the
+                // global arm is unreachable here — this block returns first).
+                KeyCode::Char('C') => {
+                    self.copy_cli_command();
                 }
                 // `@` jumps straight to the global search bar seeded with `@`,
                 // so `@cw blah` switches service + searches without stepping
@@ -19811,6 +19826,7 @@ impl App {
             || self.bookmarks_visible
             || self.message_history_visible
             || self.macro_picker_visible
+            || self.cli_picker.is_some()
             || self.help_visible
     }
 
@@ -25789,35 +25805,167 @@ impl App {
         }
     }
 
-    /// `C`: copy the AWS CLI command that fetches the selected resource — the
-    /// per-type read command (`Resource::cli_command`, read-only by
-    /// construction) plus `--region`/`--profile` from the current context.
+    /// `C`: copy an AWS CLI command for the selection (issue #34). Builds
+    /// the rows — the read command (`Resource::cli_command`) first, then the
+    /// type's `cli_actions` — with `--region`/`--profile`/`--endpoint-url`
+    /// from the current context. One row copies straight away (the old `C`);
+    /// more open the picker. A list visual selection of several rows offers
+    /// the batchable commands they all share, ids merged. Nothing is run.
     pub fn copy_cli_command(&mut self) {
-        let Some(resource) = self.get_selected_resource() else {
-            self.error_message = Some("No resource selected".to_string());
-            return;
+        use crate::aws::cli_actions::{batch_actions, picker_rows, single_actions, CliPickerState};
+
+        let ctx = self.cli_context();
+        let selection: Vec<&dyn Resource> = match self.list_visual_range() {
+            Some((a, b)) if b > a && !self.details_focused => self.filtered_resources[a..=b]
+                .iter()
+                .filter_map(|&i| self.resources.get(i))
+                .map(|r| r.as_ref())
+                .collect(),
+            _ => Vec::new(),
         };
-        let Some(mut cmd) = resource.cli_command() else {
-            self.error_message =
-                Some("No CLI command mapping for this resource type".to_string());
-            return;
+
+        let (subject, actions, batch) = if selection.len() > 1 {
+            (
+                format!("{} selected", selection.len()),
+                batch_actions(&selection),
+                true,
+            )
+        } else {
+            let Some(resource) = self.get_selected_resource() else {
+                self.error_message = Some("No resource selected".to_string());
+                return;
+            };
+            let subject = if resource.name().is_empty() || resource.name() == resource.id() {
+                resource.id().to_string()
+            } else {
+                format!("{} ({})", resource.id(), resource.name())
+            };
+            (subject, single_actions(resource.as_ref()), false)
         };
-        cmd.push_str(&format!(" --region {}", self.current_region.as_str()));
-        // A profile flag only reproduces the *base* credentials — while an org
-        // role is assumed the CLI session can't be replicated with a flag, so
-        // leave it off rather than copy a command that hits the wrong account.
-        if self.aws_clients.current_assumed_role().is_none() {
-            if let Some(profile) = self.aws_clients.current_profile() {
-                cmd.push_str(&format!(
-                    " --profile {}",
-                    crate::aws::resource::shell_quote(profile)
-                ));
-            }
+
+        if actions.is_empty() {
+            self.error_message = Some(if batch {
+                "No command covers the whole selection — Esc the selection to copy one row's"
+                    .to_string()
+            } else {
+                "No CLI command mapping for this resource type".to_string()
+            });
+            return;
+        }
+        let rows = picker_rows(actions, &ctx);
+        if rows.len() == 1 && !batch {
+            // Only the read command: copy it straight away, as `C` always has.
+            let row = rows.into_iter().next().expect("one row");
+            self.copy_cli_row(&row);
+            return;
+        }
+        self.cli_picker = Some(CliPickerState {
+            subject,
+            rows,
+            selected: 0,
+        });
+    }
+
+    /// Where copied commands point. A profile flag only reproduces the *base*
+    /// credentials — while an org role is assumed no flag can replicate the
+    /// session, so it's left off (and the picker gates Change rows).
+    fn cli_context(&self) -> crate::aws::cli_actions::CliContext {
+        let assumed_role = self.aws_clients.current_assumed_role().is_some();
+        crate::aws::cli_actions::CliContext {
+            region: self.current_region.as_str().to_string(),
+            profile: if assumed_role {
+                None
+            } else {
+                self.aws_clients.current_profile().map(str::to_string)
+            },
+            endpoint_url: self.aws_clients.current_endpoint().map(str::to_string),
+            assumed_role,
+        }
+    }
+
+    fn copy_cli_row(&mut self, row: &crate::aws::cli_actions::CliPickerRow) {
+        if let Some(reason) = &row.disabled {
+            self.error_message = Some(format!("Not copied: {}", reason));
+            return;
         }
         // Label = the `aws <service> <operation>` head, so the toast says what
         // was copied without echoing the whole command.
-        let label: String = cmd.split_whitespace().take(3).collect::<Vec<_>>().join(" ");
-        self.copy_to_clipboard(&cmd, &format!("`{}…`", label));
+        let head: String = row
+            .command
+            .split_whitespace()
+            .take(3)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let label = if row.tier == crate::aws::cli_actions::CliTier::Change {
+            format!("mutating command `{}…` (not run)", head)
+        } else {
+            format!("`{}…`", head)
+        };
+        let command = row.command.clone();
+        self.copy_to_clipboard(&command, &label);
+    }
+
+    fn handle_cli_picker_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(picker) = self.cli_picker.as_mut() else {
+            return;
+        };
+        let pick = match key.code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                picker.next();
+                None
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                picker.prev();
+                None
+            }
+            KeyCode::Char('n') if ctrl => {
+                picker.next();
+                None
+            }
+            KeyCode::Char('p') if ctrl => {
+                picker.prev();
+                None
+            }
+            KeyCode::Char('g') | KeyCode::Home => {
+                picker.selected = 0;
+                None
+            }
+            KeyCode::Char('G') | KeyCode::End => {
+                picker.selected = picker.rows.len().saturating_sub(1);
+                None
+            }
+            KeyCode::Enter | KeyCode::Char('y') => Some(picker.selected),
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = (c as usize) - ('1' as usize);
+                if idx < picker.rows.len() {
+                    picker.selected = idx;
+                    Some(idx)
+                } else {
+                    None
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('C') => {
+                self.cli_picker = None;
+                return;
+            }
+            _ => None,
+        };
+        if let Some(idx) = pick {
+            let Some(row) = self.cli_picker.as_ref().and_then(|p| p.rows.get(idx)).cloned() else {
+                return;
+            };
+            if row.disabled.is_some() {
+                // Stay open so the reason (shown in the preview) can be read.
+                self.error_message = Some(format!(
+                    "Not copied: {}",
+                    row.disabled.as_deref().unwrap_or_default()
+                ));
+                return;
+            }
+            self.cli_picker = None;
+            self.copy_cli_row(&row);
+        }
     }
 
     pub fn open_in_console(&mut self) {

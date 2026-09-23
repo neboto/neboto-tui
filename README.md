@@ -190,7 +190,7 @@ full-width; `\` flattens all sections into one scroll.
 | `F` | Cycle a filter over the states present in this view |
 | `V`, `J` / `K` | Visual row selection; `Ctrl-A` selects all |
 | `y` | Copy the id/ARN — or the selection as a Markdown table |
-| `C` | Copy the equivalent read-only AWS CLI command |
+| `C` | Copy an AWS CLI command for the resource — the read command, plus start/stop, force-deploy, scale and connect commands where they apply (copied, never run) |
 | `X` / `Ctrl-X` | Export |
 
 ### Detail pane
@@ -376,8 +376,15 @@ stays that way:
    mutate. One gated write action changes that conversation permanently.
 
 Where a mutation is genuinely what you want, **`C`** copies the ready-to-run AWS
-CLI command for the selected resource, with the region and ids filled in. You
-never reconstruct an ARN by hand, and neboto never holds the ability to run it.
+CLI command for the selected resource, with the region, profile and ids filled
+in: stop an instance, force an ECS redeployment, set an Auto Scaling group's
+capacity, open an SSM session, write a kubeconfig. A picker groups the commands
+as Inspect / Connect / Change and previews the exact text before copying.
+Change commands are flagged, anything destructive (terminate, delete) is left
+out, commands that take a value are prefilled with the current one, and a
+visual selection of several instances becomes one `--instance-ids a b c`
+command. You never reconstruct an ARN by hand, and neboto never holds the
+ability to run it.
 
 ---
 

@@ -33,6 +33,7 @@ pub mod idc_tabs;
 pub mod insp_tabs;
 pub mod jump_list;
 pub mod log_tail;
+pub mod cli_picker;
 pub mod macro_picker;
 pub mod message_log;
 pub mod messaging_tabs;
