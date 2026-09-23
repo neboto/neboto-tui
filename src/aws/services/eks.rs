@@ -325,6 +325,25 @@ impl Resource for EksCluster {
         ))
     }
 
+    fn cli_actions(&self) -> Vec<crate::aws::cli_actions::CliAction> {
+        use crate::aws::cli_actions::{CliAction, CliTier};
+        use crate::aws::resource::shell_quote;
+        let name = shell_quote(&self.name);
+        vec![
+            CliAction::new(
+                CliTier::Inspect,
+                "list-nodegroups",
+                format!("aws eks list-nodegroups --cluster-name {}", name),
+            ),
+            CliAction::new(
+                CliTier::Connect,
+                "update-kubeconfig",
+                format!("aws eks update-kubeconfig --name {} --alias {}", name, name),
+            )
+            .with_note("writes a context to ~/.kube/config — nothing changes in AWS"),
+        ]
+    }
+
     fn id(&self) -> &str {
         &self.name
     }

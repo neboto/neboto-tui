@@ -37,7 +37,7 @@ use ui::widgets::{
     details_pane,
     dx_tabs,
     ec2_tabs,
-    athena_tabs, ecs_tabs, elb_tabs, eventbridge_tabs, fms_tabs, fsx_tabs, gd_tabs, glue_tabs, help_overlay, iam_tabs, idc_tabs, insp_tabs, jump_list, kinesis_tabs, macro_picker, messaging_tabs, s3tables_tabs, sfn_tabs,
+    athena_tabs, cli_picker, ecs_tabs, elb_tabs, eventbridge_tabs, fms_tabs, fsx_tabs, gd_tabs, glue_tabs, help_overlay, iam_tabs, idc_tabs, insp_tabs, jump_list, kinesis_tabs, macro_picker, messaging_tabs, s3tables_tabs, sfn_tabs,
     message_log,
     network_firewall_tabs,
     ram_tabs,
@@ -588,6 +588,11 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
     // Render the macro picker (or the name prompt) if visible
     if app.macro_picker_visible {
         macro_picker::render_macro_picker(app, frame);
+    }
+
+    // Render the `C` command picker if open
+    if app.cli_picker.is_some() {
+        cli_picker::render_cli_picker(app, frame);
     }
 
     // Metric charts, the S3 object browser, and the DynamoDB item

@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod cli_actions;
 pub mod client;
 pub mod document;
 pub mod pagination;

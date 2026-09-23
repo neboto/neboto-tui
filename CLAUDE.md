@@ -880,13 +880,26 @@ and the approaches you rejected are the part nobody can recover from your code.
   unconditional `loading = false` on the mismatch paths.
 - **Clipboard**: `App.clipboard` is kept alive for the process — dropping the
   handle clears the selection on Linux. Reuse it via `copy_to_clipboard`.
-- **CLI command copy** (`C`, either pane): `Resource::cli_command()` returns
-  the per-type **read** command (`aws ec2 describe-instances --instance-ids …`);
-  `App::copy_cli_command` appends `--region` + `--profile` (profile
-  omitted while an org role is assumed — a flag can't reproduce that session)
-  and copies it. Rules: read-only commands only, never one that reveals a
-  secret (Secrets Manager → `describe-secret`, SSM parameter → `get-parameter`
-  without `--with-decryption`); quote values with `aws::resource::shell_quote`.
+- **CLI command copy** (`C`, either pane; `src/aws/cli_actions.rs`, picker
+  `cli_picker.rs`): `Resource::cli_command()` returns the per-type **read**
+  command (`aws ec2 describe-instances --instance-ids …`) — always the first
+  row — and `Resource::cli_actions()` adds operational commands in three
+  tiers: Inspect, Connect (`ssm start-session`, `eks update-kubeconfig`,
+  `ecs execute-command`) and Change (start/stop, force deploy, scale).
+  neboto **never runs them** — `C` only copies, so the read-only guarantee
+  and `PERMISSIONS.md` are untouched. `App::copy_cli_command` appends
+  `--region` + `--profile` + `--endpoint-url` (an emulator session must say
+  so, or a pasted change hits the real account); the profile is omitted
+  while an org role is assumed (a flag can't reproduce that session), and
+  **Change rows are disabled then**. One row copies straight away (the
+  original `C`); more open the picker. A list visual selection offers the
+  `CliAction::batchable` commands every selected row shares, ids merged
+  into one list. Rules: **nothing destructive** (no terminate / delete /
+  purge / deregister), never a command that reveals a secret (Secrets
+  Manager → `describe-secret`, SSM parameter → `get-parameter` without
+  `--with-decryption`), value-taking commands prefilled with the **current**
+  value so a blind paste is a no-op; quote values with
+  `aws::resource::shell_quote`.
 - **Secrets**: the Secrets service surfaces metadata only; values are fetched
   only on `x` (reveal) / `Y` (copy) and are **never** stored in `App` or echoed
   into a message/log/row. Two extensions of the same line: where an API hands
@@ -902,7 +915,7 @@ and the approaches you rejected are the part nobody can recover from your code.
   to sub-tab), `/` (search), `@` (search seeded with `@`, for a fast
   `@service …` switch — works from either pane, via `start_service_search`),
   `y` (copy id/ARN; with a visual selection active, copy the rows as a
-  Markdown table), `C` (copy AWS CLI command), `V`/`J`/`K`/`Ctrl-A` (visual
+  Markdown table), `C` (copy an AWS CLI command — picker), `V`/`J`/`K`/`Ctrl-A` (visual
   row selection — see below), `a` (hide-noise filter, gated by
   `is_noise()`; **noise shows by default** — `a` opts in to hiding; the arm
   must check for **no modifier**, or it eats `Ctrl-A` select-all on every

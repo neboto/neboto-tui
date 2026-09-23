@@ -241,6 +241,47 @@ impl Resource for AsgGroup {
         ))
     }
 
+    fn cli_actions(&self) -> Vec<crate::aws::cli_actions::CliAction> {
+        use crate::aws::cli_actions::{CliAction, CliTier};
+        use crate::aws::resource::shell_quote;
+        let name = shell_quote(&self.name);
+        vec![
+            CliAction::batchable(
+                CliTier::Inspect,
+                "describe-auto-scaling-groups",
+                "aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names",
+                &self.name,
+                "",
+            ),
+            CliAction::new(
+                CliTier::Inspect,
+                "describe-scaling-activities",
+                format!(
+                    "aws autoscaling describe-scaling-activities --auto-scaling-group-name {} --max-items 20",
+                    name
+                ),
+            ),
+            CliAction::new(
+                CliTier::Change,
+                "set-desired-capacity",
+                format!(
+                    "aws autoscaling set-desired-capacity --auto-scaling-group-name {} --desired-capacity {}",
+                    name, self.desired_capacity
+                ),
+            )
+            .with_note(format!(
+                "prefilled with the current capacity ({}; min {}, max {}) — edit before running",
+                self.desired_capacity, self.min_size, self.max_size
+            )),
+            CliAction::new(
+                CliTier::Change,
+                "start-instance-refresh",
+                format!("aws autoscaling start-instance-refresh --auto-scaling-group-name {}", name),
+            )
+            .with_note("rolls every instance onto the current launch template"),
+        ]
+    }
+
     fn id(&self) -> &str {
         &self.name
     }
