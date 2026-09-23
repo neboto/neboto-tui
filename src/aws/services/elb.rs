@@ -542,6 +542,215 @@ pub async fn fetch_target_health(
     Ok(entries)
 }
 
+// ── Instance → target groups (lazy-loaded for the EC2 instance pane) ──────────
+
+/// Most target groups probed with `DescribeTargetHealth` for one instance.
+/// There is no reverse "which groups hold this target" API, so the lookup is
+/// one call per candidate group; the cap keeps a large account's section from
+/// becoming hundreds of calls. ASG-attached groups sort first, so they are
+/// always inside the cap.
+pub const MAX_INSTANCE_LB_CANDIDATES: usize = 100;
+
+/// One target group the instance is registered in.
+#[derive(Debug, Clone)]
+pub struct InstanceLbMembership {
+    pub target_group_arn: String,
+    pub target_group_name: String,
+    pub protocol: String,
+    /// The target group's own port (the listener-facing default).
+    pub group_port: Option<i32>,
+    /// The port the instance is registered on (may differ per target).
+    pub target_port: Option<i32>,
+    pub availability_zone: Option<String>,
+    pub state: String,
+    pub reason: Option<String>,
+    pub description: Option<String>,
+    pub load_balancer_arns: Vec<String>,
+    /// `Some(ip)` when matched in an `ip`-type group by a private IP.
+    pub matched_ip: Option<String>,
+    /// The group is attached to the instance's Auto Scaling group.
+    pub via_asg: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct InstanceLbInfo {
+    pub memberships: Vec<InstanceLbMembership>,
+    /// Candidate groups (same VPC, `instance`/`ip` type) before the cap.
+    pub candidates: usize,
+    /// Groups actually probed.
+    pub checked: usize,
+    pub asg_name: Option<String>,
+    /// Target groups the ASG attaches (0 when no ASG / lookup failed).
+    pub asg_target_groups: usize,
+    /// Non-fatal failures (ASG lookup, individual health calls).
+    pub warnings: Vec<String>,
+}
+
+/// Which target groups `instance_id` is registered in, with its health in
+/// each. `instance`-type groups match on the instance id, `ip`-type groups on
+/// any of `private_ips`; only groups in the instance's VPC can hold it.
+pub async fn fetch_instance_lb_membership(
+    client: ElbClient,
+    asg_client: aws_sdk_autoscaling::Client,
+    instance_id: String,
+    vpc_id: Option<String>,
+    private_ips: Vec<String>,
+    asg_name: Option<String>,
+) -> Result<InstanceLbInfo> {
+    use futures::stream::{self, StreamExt};
+
+    let mut info = InstanceLbInfo {
+        asg_name: asg_name.clone(),
+        ..Default::default()
+    };
+
+    // The ASG's attached groups are a free first answer and set the probe order.
+    let mut asg_arns: Vec<String> = Vec::new();
+    if let Some(name) = &asg_name {
+        match asg_client
+            .describe_auto_scaling_groups()
+            .auto_scaling_group_names(name)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                for g in resp.auto_scaling_groups() {
+                    asg_arns.extend(g.target_group_arns().iter().cloned());
+                    for ts in g.traffic_sources() {
+                        if ts.r#type() == Some("elbv2") {
+                            if let Some(id) = ts.identifier() {
+                                asg_arns.push(id.to_string());
+                            }
+                        }
+                    }
+                }
+                asg_arns.sort();
+                asg_arns.dedup();
+                info.asg_target_groups = asg_arns.len();
+            }
+            Err(e) => info.warnings.push(format!(
+                "Auto Scaling group lookup failed: {}",
+                crate::error::sdk_error_message(&e)
+            )),
+        }
+    }
+
+    let mut groups: Vec<TargetGroup> = Vec::new();
+    let mut pages = client.describe_target_groups().into_paginator().send();
+    while let Some(page) = pages.next().await {
+        let page = page
+            .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+        groups.extend(page.target_groups().iter().map(TargetGroup::from_sdk));
+    }
+
+    let mut candidates: Vec<TargetGroup> = groups
+        .into_iter()
+        .filter(|tg| {
+            let type_ok = match tg.target_type.as_str() {
+                "instance" => true,
+                "ip" => !private_ips.is_empty(),
+                _ => false,
+            };
+            let vpc_ok = match (&vpc_id, &tg.vpc_id) {
+                (Some(a), Some(b)) => a == b,
+                _ => true,
+            };
+            type_ok && vpc_ok
+        })
+        .collect();
+    candidates.sort_by(|a, b| {
+        let a_asg = asg_arns.contains(&a.arn);
+        let b_asg = asg_arns.contains(&b.arn);
+        b_asg.cmp(&a_asg).then_with(|| a.name.cmp(&b.name))
+    });
+    info.candidates = candidates.len();
+    candidates.truncate(MAX_INSTANCE_LB_CANDIDATES);
+    info.checked = candidates.len();
+
+    let results: Vec<(TargetGroup, Result<Vec<TargetHealthEntry>>)> = stream::iter(candidates)
+        .map(|tg| {
+            let client = client.clone();
+            async move {
+                let health = fetch_target_health(client, tg.arn.clone()).await;
+                (tg, health)
+            }
+        })
+        .buffer_unordered(8)
+        .collect()
+        .await;
+
+    let mut failed = 0usize;
+    for (tg, health) in results {
+        let entries = match health {
+            Ok(e) => e,
+            Err(_) => {
+                failed += 1;
+                continue;
+            }
+        };
+        for e in entries {
+            let matched_ip = match tg.target_type.as_str() {
+                "instance" if e.target_id == instance_id => None,
+                "ip" if private_ips.contains(&e.target_id) => Some(e.target_id.clone()),
+                _ => continue,
+            };
+            info.memberships.push(InstanceLbMembership {
+                target_group_arn: tg.arn.clone(),
+                target_group_name: tg.name.clone(),
+                protocol: tg.protocol.clone(),
+                group_port: tg.port,
+                target_port: e.port,
+                availability_zone: e.availability_zone,
+                state: e.state,
+                reason: e.reason,
+                description: e.description,
+                load_balancer_arns: tg.load_balancer_arns.clone(),
+                matched_ip,
+                via_asg: asg_arns.contains(&tg.arn),
+            });
+        }
+    }
+    if failed > 0 {
+        info.warnings.push(format!(
+            "Target health unavailable for {} of {} target group{}",
+            failed,
+            info.checked,
+            if info.checked == 1 { "" } else { "s" }
+        ));
+    }
+    info.memberships.sort_by(|a, b| {
+        a.target_group_name
+            .cmp(&b.target_group_name)
+            .then_with(|| a.target_port.cmp(&b.target_port))
+    });
+    Ok(info)
+}
+
+/// Short type label from a load-balancer ARN
+/// (`…:loadbalancer/app|net|gwy/NAME/id`) — `(ALB, NAME)`.
+pub fn lb_kind_and_name(arn: &str) -> Option<(&'static str, &str)> {
+    let rest = arn.split(":loadbalancer/").nth(1)?;
+    let mut segs = rest.split('/');
+    let kind = match segs.next()? {
+        "app" => "ALB",
+        "net" => "NLB",
+        "gwy" => "GWLB",
+        _ => "CLB",
+    };
+    let name = segs.next().filter(|s| !s.is_empty())?;
+    Some((kind, name))
+}
+
+/// Short type label for a load balancer's `Type` field.
+pub fn lb_type_short(lb_type: &str) -> &'static str {
+    match lb_type {
+        "application" => "ALB",
+        "network" => "NLB",
+        "gateway" => "GWLB",
+        _ => "LB",
+    }
+}
+
 // ── Listeners + attributes (lazy-loaded for the LoadBalancer split pane) ──────
 
 #[derive(Debug, Clone)]

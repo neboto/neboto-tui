@@ -1538,7 +1538,7 @@ the service you're touching.
     `GetManagedPrefixListEntries` paginated, `lazy.pl_entries` keyed by pl id) /
     Tags. `pl-` ids (route destinations, SG rules) jump to the Routing tab.
 - **Compute Optimizer lens** (B7) — a lazy **Optimizer** section on five panes:
-  EC2 instance (key 8), EBS volume (5), Lambda (6), ASG (5), ECS service (7).
+  EC2 instance (key 9), EBS volume (5), Lambda (6), ASG (5), ECS service (7).
   Not a `ServiceType`: `aws/services/computeoptimizer.rs` flattens the per-ARN
   `Get*Recommendations` into one `OptimizerRec`; `details_pane::optimizer_lines`
   is the shared row-builder. `App.optimizer_recs` is keyed by ARN (region+account
@@ -1548,7 +1548,7 @@ the service you're touching.
   built from region + `account_id`; `AsgGroup.arn` is captured from the SDK
   (contains a UUID). "No recommendation" (`Loaded(None)`) is a normal state, not
   an error.
-- **EC2 instance Console section** (key 6, `GetConsoleOutput`) — the system
+- **EC2 instance Console section** (key 7, `GetConsoleOutput`) — the system
   log the console shows under *Get system log*; lazy `lazy.ec2_instance_console`
   keyed by instance id, same shape as User Data. The buffer comes back
   **base64** and is decoded + sanitised (`sanitize_console_line`: ANSI
@@ -1565,6 +1565,26 @@ the service you're touching.
   `.yaml` / `.txt` sniffed from line 1, no header — `#!` and `#cloud-config`
   must stay first) via `editor_override_content`, not the snapshot JSON.
   `GetConsoleScreenshot` (a JPEG) is deliberately not offered.
+- **EC2 instance Load Balancing section** (key 4,
+  `elb::fetch_instance_lb_membership`) — "is this instance behind a load
+  balancer?". **There is no reverse API** (nothing answers "which target
+  groups hold target X"), so the lazy fetch lists every target group, keeps
+  the ones that could hold the instance (same VPC; `instance`-type matched on
+  the instance id, `ip`-type on its private IPs — `lambda`/`alb`-type groups
+  can't hold it), and probes each with `DescribeTargetHealth`, 8 at a time.
+  Capped at `MAX_INSTANCE_LB_CANDIDATES` (a large account would otherwise
+  make hundreds of calls from a `Tab` press); when the instance carries an
+  `aws:autoscaling:groupName` tag, one `DescribeAutoScalingGroups` supplies
+  the ASG's attached groups (`TargetGroupARNs` + `elbv2` traffic sources) and
+  they **sort first**, so they're always inside the cap. The ASG lookup and
+  individual health calls fail soft (a `⚠` row); only `DescribeTargetGroups`
+  failing errors the section. Load-balancer names come from the ARN
+  (`lb_kind_and_name`), no `DescribeLoadBalancers`. The `Target Group` /
+  `Load Balancer` rows carry ARNs so the generic ARN classifier jumps them.
+  Rejected: loading every group's targets at ELB list time (N+1 calls on
+  every ELB load and watch tick, for a question asked from the instance).
+  Only the primary private IP of each ENI is known (`EmbeddedNic`), so an
+  `ip`-type registration on a secondary IP isn't matched.
 - **EBS / AMIs / Snapshots / Launch Templates** — EC2 sub-tabs (keys 3, 5–7),
   **self-owned only**. Cross-jumps: `snap-`→Snapshots, `vol-`→EBS, `i-`→instance.
 - **ENIs** — EC2 sub-tab (`Ec2View::NetworkInterfaces`, key 4): paginated

@@ -962,6 +962,7 @@ crate::sections! {
         Details "Details",
         Security "Security" => crate::app::App::trigger_ec2_instance_profile_roles_load,
         Networking "Networking",
+        LoadBalancing "Load Balancing" => crate::app::App::trigger_ec2_instance_lb_load,
         Storage "Storage",
         UserData "User Data" => crate::app::App::trigger_ec2_instance_user_data_load,
         Console "Console" => crate::app::App::trigger_ec2_instance_console_load,
