@@ -524,7 +524,9 @@ in `any_pane_overlay_active` (which gates the mouse).
   refetches all). `merge_rules` collapses identical `(direction, protocol,
   ports, source)` rules and lists the contributing groups; sorted inbound
   first then by port. `t` cycles inbound → outbound → both (sticky across
-  opens), open-to-world sources render in the warning colour, `⏎` jumps to
+  opens), open-to-world sources render in the warning colour, a source that
+  is a load balancer's own SG is labelled `⇠ ALB name` (warm ELB cache only,
+  `cached_lb_security_groups`; a cold cache says so in the header), `⏎` jumps to
   the row's group (a referenced `sg-` source wins over the contributor),
   `e` opens the whole table, `y` copies a row.
   Both lenses share the `W` plumbing: a `handle_*_key` early in

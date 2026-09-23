@@ -17283,6 +17283,7 @@ impl App {
             .unwrap_or_default();
         let mut st =
             crate::ui::widgets::access_lens::AccessLensState::open(title, ids, direction);
+        (st.lb_by_sg, st.elb_loaded) = self.cached_lb_security_groups();
         st.add_groups(self.cached_security_groups(&st.sg_ids));
         let missing = st.missing();
         self.details_focused = true;
@@ -17336,6 +17337,41 @@ impl App {
             }
         }
         found
+    }
+
+    /// Security group id → the load balancers carrying it (`"ALB my-alb"`),
+    /// from the warm ELB cache (or the on-screen ELB list); the bool says
+    /// whether any ELB data was available at all.
+    fn cached_lb_security_groups(
+        &self,
+    ) -> (std::collections::HashMap<String, Vec<String>>, bool) {
+        use crate::aws::services::elb::{lb_type_short, LoadBalancer};
+        let mut map: std::collections::HashMap<String, Vec<String>> = Default::default();
+        let mut loaded = false;
+        let mut take = |res: &dyn Resource| {
+            if let Some(lb) = res.as_any().downcast_ref::<LoadBalancer>() {
+                let label = format!("{} {}", lb_type_short(&lb.lb_type), lb.name);
+                for sg in &lb.security_groups {
+                    let e = map.entry(sg.clone()).or_default();
+                    if !e.contains(&label) {
+                        e.push(label.clone());
+                    }
+                }
+            }
+        };
+        if let Some(list) = self.cache.get_ref(&ServiceType::Elb, &self.current_region, None) {
+            loaded = true;
+            for r in list {
+                take(r.as_ref());
+            }
+        }
+        if !self.all_search_mode && self.current_service == Some(ServiceType::Elb) {
+            loaded = true;
+            for r in &self.resources {
+                take(r.as_ref());
+            }
+        }
+        (map, loaded)
     }
 
     /// One `DescribeSecurityGroups` for the ids no cache had.
@@ -17437,7 +17473,9 @@ impl App {
             }
             // Refetch every group (rules may have changed since the cache).
             KeyCode::Char('r') => {
+                let lbs = self.cached_lb_security_groups();
                 let ids = self.access_in_pane.as_mut().map(|st| {
+                    (st.lb_by_sg, st.elb_loaded) = lbs;
                     st.groups.clear();
                     st.all_rows.clear();
                     st.rebuild();
@@ -20769,6 +20807,57 @@ impl App {
         );
     }
 
+    /// Lazy target-group membership for the instance pane's Load Balancing
+    /// section. No API answers "which groups hold this target", so the fetch
+    /// probes same-VPC groups with `DescribeTargetHealth` (capped, ASG-attached
+    /// groups first) — see `elb::fetch_instance_lb_membership`.
+    pub(crate) fn trigger_ec2_instance_lb_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if crate::aws::services::ec2::Ec2InstanceDetailSection::from_index(self.detail_section_idx)
+            != Ec2InstanceDetailSection::LoadBalancing
+        {
+            return;
+        }
+        let Some(inst) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::ec2::Ec2Instance>()
+        }) else {
+            return;
+        };
+        let instance_id = inst.instance_id.clone();
+        let vpc_id = inst.vpc_id.clone();
+        let mut private_ips: Vec<String> = Vec::new();
+        for ip in inst
+            .private_ip
+            .iter()
+            .chain(inst.network_interfaces.iter().filter_map(|n| n.private_ip.as_ref()))
+        {
+            if !private_ips.contains(ip) {
+                private_ips.push(ip.clone());
+            }
+        }
+        let asg_name = inst.tags.get("aws:autoscaling:groupName").cloned();
+
+        let client = self.aws_clients.elb_client();
+        let asg_client = self.aws_clients.asg_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.ec2_instance_lb,
+            instance_id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::elb::fetch_instance_lb_membership(
+                    client,
+                    asg_client,
+                    instance_id,
+                    vpc_id,
+                    private_ips,
+                    asg_name,
+                )
+                .await
+                .map_err(|e| format!("Target groups unavailable: {}", e))
+            },
+        );
+    }
+
     /// Fetch SSM Session Manager connectability for every managed instance in
     /// the region (once per EC2 load), keyed by instance id. Idempotent —
     /// guarded by `ssm_info_loading`/`ssm_info_fetched`.
@@ -23131,6 +23220,7 @@ impl App {
                 let ssm_status = self.ssm_instance_status.get(&instance.instance_id).copied();
                 let user_data = self.lazy.ec2_instance_user_data.get(&instance.instance_id);
                 let console = self.lazy.ec2_instance_console.get(&instance.instance_id);
+                let lb = self.lazy.ec2_instance_lb.get(&instance.instance_id);
                 return crate::ui::widgets::details_pane::ec2_section_lines(
                     instance,
                     crate::aws::services::ec2::Ec2InstanceDetailSection::from_index(self.detail_section_idx),
@@ -23138,6 +23228,7 @@ impl App {
                     ssm_status,
                     user_data,
                     console,
+                    lb,
                     self.selected_optimizer_state(),
                     self.co_enrollment.as_ref(),
                 );

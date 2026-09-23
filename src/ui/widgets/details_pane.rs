@@ -3951,6 +3951,7 @@ pub fn ec2_section_lines(
     ssm_status: Option<crate::aws::services::ec2::SsmInstanceStatus>,
     user_data: Option<&crate::lazy::Lazy<Option<String>>>,
     console: Option<&crate::lazy::Lazy<Option<crate::aws::services::ec2::ConsoleOutput>>>,
+    lb: Option<&Lazy<crate::aws::services::elb::InstanceLbInfo>>,
     optimizer: Option<&Lazy<Option<crate::aws::services::computeoptimizer::OptimizerRec>>>,
     enrollment: Option<&crate::aws::services::computeoptimizer::CoEnrollment>,
 ) -> Vec<(String, String)> {
@@ -3958,6 +3959,7 @@ pub fn ec2_section_lines(
         Ec2InstanceDetailSection::Details => ec2_details_lines(instance, ssm_status),
         Ec2InstanceDetailSection::Security => ec2_security_lines(instance, profile_roles),
         Ec2InstanceDetailSection::Networking => ec2_networking_lines(instance),
+        Ec2InstanceDetailSection::LoadBalancing => ec2_load_balancing_lines(lb),
         Ec2InstanceDetailSection::Storage => ec2_storage_lines(instance),
         Ec2InstanceDetailSection::UserData => ec2_user_data_lines(user_data),
         Ec2InstanceDetailSection::Console => ec2_console_lines(console),
@@ -3994,6 +3996,139 @@ fn ec2_user_data_lines(
 /// System console output (`GetConsoleOutput`, base64-decoded) — a captured-at
 /// row, then one plain content line per log line so `e` opens the whole
 /// buffer in `$EDITOR` via the snapshot path.
+/// Target-group membership (lazy `DescribeTargetHealth` probe). One group
+/// header per target group; the `Target Group` / `Load Balancer` ARN rows
+/// jump via the generic ARN classifier.
+fn ec2_load_balancing_lines(
+    lb: Option<&Lazy<crate::aws::services::elb::InstanceLbInfo>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::elb::{lb_kind_and_name, MAX_INSTANCE_LB_CANDIDATES};
+    let mut rows: Vec<(String, String)> = Vec::new();
+    let info = match lb {
+        None | Some(Lazy::Loading) => {
+            rows.push(("Loading…".to_string(), String::new()));
+            return rows;
+        }
+        Some(Lazy::Error(e)) => {
+            rows.extend(error_rows(e));
+            return rows;
+        }
+        Some(Lazy::Loaded(info)) => info,
+    };
+
+    let groups: std::collections::BTreeSet<&str> = info
+        .memberships
+        .iter()
+        .map(|m| m.target_group_arn.as_str())
+        .collect();
+    let healthy = info.memberships.iter().filter(|m| m.state == "healthy").count();
+    if info.memberships.is_empty() {
+        rows.push(("Behind a load balancer".to_string(), "✗ No".to_string()));
+    } else {
+        let mut lbs: Vec<String> = info
+            .memberships
+            .iter()
+            .flat_map(|m| m.load_balancer_arns.iter())
+            .filter_map(|arn| lb_kind_and_name(arn).map(|(k, n)| format!("{} {}", k, n)))
+            .collect();
+        lbs.sort();
+        lbs.dedup();
+        rows.push((
+            "Behind a load balancer".to_string(),
+            if lbs.is_empty() {
+                "⚠ Registered, but no group is attached to a load balancer".to_string()
+            } else {
+                format!("✓ {}", lbs.join(", "))
+            },
+        ));
+        rows.push((
+            "Target groups".to_string(),
+            format!(
+                "{} · {}/{} target{} healthy",
+                groups.len(),
+                healthy,
+                info.memberships.len(),
+                if info.memberships.len() == 1 { "" } else { "s" }
+            ),
+        ));
+    }
+    if let Some(asg) = &info.asg_name {
+        rows.push((
+            "Auto Scaling group".to_string(),
+            format!(
+                "{} ({} target group{} attached)",
+                asg,
+                info.asg_target_groups,
+                if info.asg_target_groups == 1 { "" } else { "s" }
+            ),
+        ));
+    }
+    let checked = if info.candidates > info.checked {
+        format!(
+            "{} of {} same-VPC target groups (capped at {})",
+            info.checked, info.candidates, MAX_INSTANCE_LB_CANDIDATES
+        )
+    } else {
+        format!(
+            "{} same-VPC target group{}",
+            info.checked,
+            if info.checked == 1 { "" } else { "s" }
+        )
+    };
+    rows.push(("Checked".to_string(), checked));
+    for w in &info.warnings {
+        rows.push((format!(" ⚠ {}", w), String::new()));
+    }
+    if info.memberships.is_empty() {
+        rows.push((String::new(), String::new()));
+        rows.push((
+            String::new(),
+            "· instance- and ip-type groups in this VPC were checked by instance id and private IP"
+                .to_string(),
+        ));
+        return rows;
+    }
+
+    for m in &info.memberships {
+        rows.push((String::new(), String::new()));
+        rows.push((m.target_group_name.clone(), String::new()));
+        let health = match (&m.reason, m.state.as_str()) {
+            (Some(r), s) if s != "healthy" => format!("{} — {}", s, r),
+            (_, s) => s.to_string(),
+        };
+        rows.push(("Health".to_string(), health));
+        if m.state != "healthy" {
+            if let Some(d) = &m.description {
+                rows.push(("Reason".to_string(), d.clone()));
+            }
+        }
+        let port = match (m.group_port, m.target_port) {
+            (Some(g), Some(t)) if g != t => format!("{}:{} → instance :{}", m.protocol, g, t),
+            (_, Some(t)) => format!("{}:{}", m.protocol, t),
+            (Some(g), None) => format!("{}:{}", m.protocol, g),
+            (None, None) => m.protocol.clone(),
+        };
+        rows.push(("Port".to_string(), port));
+        if let Some(ip) = &m.matched_ip {
+            rows.push(("Registered as".to_string(), format!("IP {}", ip)));
+        }
+        if let Some(az) = &m.availability_zone {
+            rows.push(("Zone".to_string(), az.clone()));
+        }
+        if m.via_asg {
+            rows.push(("Registered by".to_string(), "Auto Scaling group".to_string()));
+        }
+        rows.push(("Target Group".to_string(), m.target_group_arn.clone()));
+        if m.load_balancer_arns.is_empty() {
+            rows.push(("Load Balancer".to_string(), "⚠ none — group not attached".to_string()));
+        }
+        for arn in &m.load_balancer_arns {
+            rows.push(("Load Balancer".to_string(), arn.clone()));
+        }
+    }
+    rows
+}
+
 fn ec2_console_lines(
     console: Option<&crate::lazy::Lazy<Option<crate::aws::services::ec2::ConsoleOutput>>>,
 ) -> Vec<(String, String)> {

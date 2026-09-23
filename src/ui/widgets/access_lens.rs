@@ -15,6 +15,11 @@
 //! (`0.0.0.0/0`, `::/0`) render in the warning colour; `⏎` jumps to the
 //! row's group (a referenced `sg-…` source wins over the contributing
 //! group); `e` opens the whole table in `$EDITOR`.
+//!
+//! A source that is a load balancer's own security group is labelled
+//! `⇠ ALB my-alb` (from the warm ELB cache — zero API): on an instance that
+//! separates "traffic the LB forwards" from ports opened some other way. A
+//! cold ELB cache says so in the header rather than guessing.
 
 use crate::aws::services::ec2::SecurityGroup;
 use crate::theme;
@@ -64,14 +69,21 @@ pub struct AccessRow {
     pub descriptions: Vec<String>,
     /// Open to the world (`0.0.0.0/0` / `::/0`).
     pub world: bool,
+    /// The source group belongs to these load balancers (`"ALB my-alb"`).
+    pub lb_sources: Vec<String>,
 }
 
 impl AccessRow {
     pub fn source_display(&self) -> String {
-        match &self.source_label {
+        let mut s = match &self.source_label {
             Some(n) if !n.is_empty() => format!("{} ({})", self.source, n),
             _ => self.source.clone(),
+        };
+        if !self.lb_sources.is_empty() {
+            s.push_str(" ⇠ ");
+            s.push_str(&self.lb_sources.join(", "));
         }
+        s
     }
 
     pub fn groups_display(&self) -> String {
@@ -150,6 +162,7 @@ pub fn merge_rules(groups: &[SecurityGroup]) -> Vec<AccessRow> {
                         from: vec![(g.group_id.clone(), g.group_name.clone())],
                         descriptions: r.description.iter().cloned().collect(),
                         world: r.source == "0.0.0.0/0" || r.source == "::/0",
+                        lb_sources: Vec::new(),
                     }),
                 }
             }
@@ -197,6 +210,12 @@ pub struct AccessLensState {
     pub selected: usize,
     pub scroll: usize,
     pub message: Option<String>,
+    /// Security group id → the load balancers using it (`"ALB my-alb"`),
+    /// from the warm ELB cache at open time.
+    pub lb_by_sg: std::collections::HashMap<String, Vec<String>>,
+    /// Whether the ELB cache was warm when the lens opened — a cold cache
+    /// means an unlabelled `sg-` source may still be a load balancer's.
+    pub elb_loaded: bool,
 }
 
 impl AccessLensState {
@@ -234,6 +253,12 @@ impl AccessLensState {
                 .unwrap_or(usize::MAX)
         });
         self.all_rows = merge_rules(&self.groups);
+        for row in &mut self.all_rows {
+            let sg = row.source.split(['/', ' ']).next().unwrap_or("");
+            if let Some(lbs) = self.lb_by_sg.get(sg) {
+                row.lb_sources = lbs.clone();
+            }
+        }
         self.rebuild();
     }
 
@@ -367,6 +392,18 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
             Style::default().fg(theme::warning()),
         ));
     }
+    let from_lb = st.rows.iter().filter(|r| !r.lb_sources.is_empty()).count();
+    if from_lb > 0 {
+        header.push(Span::styled(
+            format!("  · {} from load balancer{}", from_lb, if from_lb == 1 { "" } else { "s" }),
+            Style::default().fg(theme::success()),
+        ));
+    } else if !st.elb_loaded && st.rows.iter().any(|r| r.source.starts_with("sg-")) {
+        header.push(Span::styled(
+            "  · ELB not loaded — LB sources unlabelled",
+            Style::default().fg(theme::text_dim()),
+        ));
+    }
     if st.loading {
         header.push(Span::styled(
             format!("  {} describing groups…", theme::spinner(app.tick_count)),
@@ -459,6 +496,8 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
             };
             let source_style = if row.world {
                 base.fg(theme::warning())
+            } else if !row.lb_sources.is_empty() {
+                base.fg(theme::success())
             } else if row.source.starts_with("sg-") {
                 base.fg(theme::accent())
             } else {
@@ -618,5 +657,31 @@ mod tests {
         let rows = merge_rules(&[g]);
         assert_eq!(rows[0].jump_group().as_deref(), Some("sg-a"));
         assert_eq!(rows[1].jump_group().as_deref(), Some("sg-db"));
+    }
+
+    #[test]
+    fn load_balancer_group_sources_are_labelled() {
+        let mut st = AccessLensState::open(
+            "i-1".to_string(),
+            vec!["sg-a".to_string()],
+            AccessDirection::Inbound,
+        );
+        st.lb_by_sg
+            .insert("sg-alb".to_string(), vec!["ALB web".to_string()]);
+        st.add_groups(vec![group(
+            "sg-a",
+            "app",
+            vec![
+                rule("TCP", "80", "sg-alb", None),
+                rule("TCP", "22", "0.0.0.0/0", None),
+            ],
+            vec![],
+        )]);
+        let lb_row = st.rows.iter().find(|r| r.ports == "80").unwrap();
+        assert_eq!(lb_row.lb_sources, vec!["ALB web".to_string()]);
+        assert!(lb_row.source_display().ends_with("⇠ ALB web"));
+        let ssh = st.rows.iter().find(|r| r.ports == "22").unwrap();
+        assert!(ssh.lb_sources.is_empty());
+        assert!(ssh.world);
     }
 }
