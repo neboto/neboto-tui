@@ -48,6 +48,18 @@ pub struct Config {
     /// `w` toggles it at runtime either way; the toggle is sticky for the
     /// session. Default false (clip).
     pub log_wrap: Option<bool>,
+    /// Which files `X` / `Ctrl-X` / the deep export write: any of `"json"`,
+    /// `"csv"`, `"md"` (`"markdown"` also works). Default all three. Unknown
+    /// values warn at startup and are ignored.
+    ///
+    /// ```toml
+    /// export_formats = ["json"]
+    /// ```
+    pub export_formats: Option<Vec<String>>,
+    /// Directory exports are written to (`~/` expanded, created on first
+    /// export). Default: the working directory. The `NEBOTO_EXPORT_DIR`
+    /// environment variable overrides it.
+    pub export_dir: Option<String>,
     /// IAM role name assumed when switching into a member account from the
     /// Organizations accounts list (`s`). Default:
     /// `OrganizationAccountAccessRole`; Control Tower shops typically want
@@ -253,6 +265,22 @@ nosuchservice = 5
         );
         // The unknown prefix parses but resolves to nothing.
         assert_eq!(overrides.len(), 2);
+    }
+
+    #[test]
+    fn parses_export_keys() {
+        let config: Config = toml::from_str(
+            r#"
+export_formats = ["json", "md"]
+export_dir = "~/neboto-exports"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.export_formats,
+            Some(vec!["json".to_string(), "md".to_string()])
+        );
+        assert_eq!(config.export_dir.as_deref(), Some("~/neboto-exports"));
     }
 
     #[test]

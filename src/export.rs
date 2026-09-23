@@ -422,29 +422,150 @@ pub fn list_markdown(resources: &[&dyn Resource], label: &str) -> String {
     md
 }
 
-/// The directory export files land in: the working directory normally;
-/// `NEBOTO_EXPORT_DIR` redirects (the test harness points it at a temp dir so
-/// test runs never litter the repo).
-fn export_dir() -> PathBuf {
-    std::env::var_os("NEBOTO_EXPORT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_default()
+/// Which files an export writes (config `export_formats`, default all
+/// three). Applies to `X`, `Ctrl-X` and the deep export alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportFormats {
+    pub json: bool,
+    pub csv: bool,
+    pub md: bool,
 }
 
-/// Export a homogeneous list to `<slug>-<ts>.json` + `.csv` + `.md`. Returns the
-/// written paths.
-pub fn export_list(resources: &[&dyn Resource], label: &str) -> Result<Vec<PathBuf>> {
+impl Default for ExportFormats {
+    fn default() -> Self {
+        ExportFormats {
+            json: true,
+            csv: true,
+            md: true,
+        }
+    }
+}
+
+impl ExportFormats {
+    /// Parse config `export_formats`. Case-insensitive; `markdown` aliases
+    /// `md`. Unknown values warn and are ignored, and a list left empty
+    /// falls back to all three with a warning — a bad value is never fatal
+    /// (the `[theme_colors]` precedent).
+    pub fn from_config(list: Option<&[String]>) -> (Self, Vec<String>) {
+        let Some(list) = list else {
+            return (Self::default(), Vec::new());
+        };
+        let mut f = ExportFormats {
+            json: false,
+            csv: false,
+            md: false,
+        };
+        let mut warnings = Vec::new();
+        for v in list {
+            match v.trim().to_ascii_lowercase().as_str() {
+                "json" => f.json = true,
+                "csv" => f.csv = true,
+                "md" | "markdown" => f.md = true,
+                other => warnings.push(format!(
+                    "export_formats: unknown format {other:?} (use json, csv, md)"
+                )),
+            }
+        }
+        if !(f.json || f.csv || f.md) {
+            warnings.push("export_formats: no valid format — writing all three".to_string());
+            f = Self::default();
+        }
+        (f, warnings)
+    }
+}
+
+/// Where and what an export writes — resolved once from config at startup.
+#[derive(Debug, Clone, Default)]
+pub struct ExportOptions {
+    pub formats: ExportFormats,
+    /// Config `export_dir` (`~` expanded). `NEBOTO_EXPORT_DIR` still wins.
+    pub dir: Option<PathBuf>,
+}
+
+impl ExportOptions {
+    /// The directory export files land in: `NEBOTO_EXPORT_DIR` if set (the
+    /// test harness points it at a temp dir so test runs never litter the
+    /// repo), else config `export_dir` (created if missing), else the
+    /// working directory.
+    fn dir(&self) -> Result<PathBuf> {
+        if let Some(env) = std::env::var_os("NEBOTO_EXPORT_DIR") {
+            return Ok(PathBuf::from(env));
+        }
+        match &self.dir {
+            Some(d) => {
+                fs::create_dir_all(d)?;
+                Ok(d.clone())
+            }
+            None => Ok(PathBuf::new()),
+        }
+    }
+}
+
+/// Expand a leading `~/` in a configured path.
+pub fn expand_home(path: &str) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join(rest))
+            .unwrap_or_else(|| PathBuf::from(path)),
+        None => PathBuf::from(path),
+    }
+}
+
+/// Write the enabled formats, each built lazily so a skipped format costs
+/// nothing. Returns the written paths in json/csv/md order.
+fn write_formats(
+    base: &std::path::Path,
+    formats: ExportFormats,
+    json: impl FnOnce() -> Result<String>,
+    csv: impl FnOnce() -> String,
+    md: impl FnOnce() -> String,
+) -> Result<Vec<PathBuf>> {
+    let mut written = Vec::new();
+    if formats.json {
+        let path = base.with_extension("json");
+        fs::write(&path, json()?)?;
+        written.push(path);
+    }
+    if formats.csv {
+        let path = base.with_extension("csv");
+        fs::write(&path, csv())?;
+        written.push(path);
+    }
+    if formats.md {
+        let path = base.with_extension("md");
+        fs::write(&path, md())?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
+/// Export a homogeneous list to `<slug>-<ts>.json` + `.csv` + `.md` (the
+/// formats `opts` enables). Returns the written paths.
+pub fn export_list(
+    resources: &[&dyn Resource],
+    label: &str,
+    opts: &ExportOptions,
+) -> Result<Vec<PathBuf>> {
     let ts = timestamp();
-    let base = export_dir().join(format!("neboto-{}-{}", slug(label), ts));
-    let json_path = base.with_extension("json");
-    let csv_path = base.with_extension("csv");
-    let md_path = base.with_extension("md");
+    let base = opts.dir()?.join(format!("neboto-{}-{}", slug(label), ts));
+    write_formats(
+        &base,
+        opts.formats,
+        // JSON: array of resource objects.
+        || {
+            let arr: Vec<Value> = resources.iter().map(|r| resource_object(*r)).collect();
+            Ok(serde_json::to_string_pretty(&Value::Array(arr))?)
+        },
+        || list_csv(resources),
+        // Markdown: a concise, readable summary table (core columns only —
+        // the full per-field data is in the .csv / .json).
+        || list_markdown(resources, label),
+    )
+}
 
-    // JSON: array of resource objects.
-    let arr: Vec<Value> = resources.iter().map(|r| resource_object(*r)).collect();
-    fs::write(&json_path, serde_json::to_string_pretty(&Value::Array(arr))?)?;
-
-    // CSV: core columns + union of detail keys (first-seen order) + Tags.
+/// The list export's CSV: core columns + union of detail keys (first-seen
+/// order) + Tags.
+fn list_csv(resources: &[&dyn Resource]) -> String {
     let mut columns: Vec<String> = vec![
         "Type".into(),
         "ID".into(),
@@ -482,32 +603,33 @@ pub fn export_list(resources: &[&dyn Resource], label: &str) -> Result<Vec<PathB
         out.push_str(&row.join(","));
         out.push('\n');
     }
-    fs::write(&csv_path, out)?;
-
-    // Markdown: a concise, readable summary table (core columns only — the full
-    // per-field data is in the .csv / .json above).
-    fs::write(&md_path, list_markdown(resources, label))?;
-
-    Ok(vec![json_path, csv_path, md_path])
+    out
 }
 
 /// Export one resource to `<slug>-<ts>.json` (object) + `.csv` (Key,Value) +
-/// `.md` (a document mirroring the detail pane). `sections` is the per-section
-/// `(name, lines)` captured from `get_detail_lines`; for a flat resource it's a
-/// single "Details" section.
+/// `.md` (a document mirroring the detail pane) — the formats `opts`
+/// enables. `sections` is the per-section `(name, lines)` captured from
+/// `get_detail_lines`; for a flat resource it's a single "Details" section.
 pub fn export_detail(
     resource: &dyn Resource,
     sections: &[(String, Vec<(String, String)>)],
     label: &str,
+    opts: &ExportOptions,
 ) -> Result<Vec<PathBuf>> {
     let ts = timestamp();
-    let base = export_dir().join(format!("neboto-{}-{}", slug(label), ts));
-    let json_path = base.with_extension("json");
-    let csv_path = base.with_extension("csv");
-    let md_path = base.with_extension("md");
+    let base = opts.dir()?.join(format!("neboto-{}-{}", slug(label), ts));
+    write_formats(
+        &base,
+        opts.formats,
+        || Ok(serde_json::to_string_pretty(&resource_object(resource))?),
+        || detail_csv(resource),
+        // Markdown: the detail pane mirrored as a document.
+        || detail_markdown(resource, sections),
+    )
+}
 
-    fs::write(&json_path, serde_json::to_string_pretty(&resource_object(resource))?)?;
-
+/// The single-resource export's CSV: `Key,Value` rows.
+fn detail_csv(resource: &dyn Resource) -> String {
     let mut out = String::from("Key,Value\n");
     let core = [
         ("Type", resource.resource_type().to_string()),
@@ -524,12 +646,7 @@ pub fn export_detail(
     for (k, v) in tags_sorted(resource) {
         out.push_str(&format!("{},{}\n", csv_escape(&format!("tag:{}", k)), csv_escape(&v)));
     }
-    fs::write(&csv_path, out)?;
-
-    // Markdown: the detail pane mirrored as a document.
-    fs::write(&md_path, detail_markdown(resource, sections))?;
-
-    Ok(vec![json_path, csv_path, md_path])
+    out
 }
 
 /// Captured detail-pane sections for one resource: `(section name, rows)` as
@@ -548,29 +665,30 @@ pub type DetailSections = Vec<(String, Vec<(String, String)>)>;
 pub fn export_detail_multi(
     items: &[(&dyn Resource, DetailSections)],
     label: &str,
+    opts: &ExportOptions,
 ) -> Result<Vec<PathBuf>> {
     let ts = timestamp();
-    let base = export_dir().join(format!("neboto-{}-deep-{}", slug(label), ts));
-    let json_path = base.with_extension("json");
-    let csv_path = base.with_extension("csv");
-    let md_path = base.with_extension("md");
-
-    let arr: Vec<Value> = items
-        .iter()
-        .map(|(r, sections)| detail_value(*r, sections))
-        .collect();
-    fs::write(&json_path, serde_json::to_string_pretty(&Value::Array(arr))?)?;
-
-    fs::write(&csv_path, multi_detail_csv(items))?;
-
-    let mut md = format!("# {} ({})\n\n", label, items.len());
-    for (r, sections) in items {
-        md.push_str(&detail_markdown_at(*r, sections, 2));
-        md.push('\n');
-    }
-    fs::write(&md_path, md)?;
-
-    Ok(vec![json_path, csv_path, md_path])
+    let base = opts.dir()?.join(format!("neboto-{}-deep-{}", slug(label), ts));
+    write_formats(
+        &base,
+        opts.formats,
+        || {
+            let arr: Vec<Value> = items
+                .iter()
+                .map(|(r, sections)| detail_value(*r, sections))
+                .collect();
+            Ok(serde_json::to_string_pretty(&Value::Array(arr))?)
+        },
+        || multi_detail_csv(items),
+        || {
+            let mut md = format!("# {} ({})\n\n", label, items.len());
+            for (r, sections) in items {
+                md.push_str(&detail_markdown_at(*r, sections, 2));
+                md.push('\n');
+            }
+            md
+        },
+    )
 }
 
 /// The multi-resource deep export's CSV: long format (`ID, Section, Key,
@@ -817,5 +935,78 @@ mod tests {
         assert_eq!(lines[2], "mock-1,Overview,,fixed-width row");
         // The unloaded section contributed nothing.
         assert_eq!(lines.len(), 3);
+    }
+
+    fn strings(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn export_formats_default_is_all_three() {
+        let (f, w) = ExportFormats::from_config(None);
+        assert_eq!(f, ExportFormats::default());
+        assert!(f.json && f.csv && f.md);
+        assert!(w.is_empty());
+    }
+
+    #[test]
+    fn export_formats_parse_alias_case_and_unknowns() {
+        let (f, w) = ExportFormats::from_config(Some(&strings(&["JSON", "Markdown", "xlsx"])));
+        assert_eq!(
+            f,
+            ExportFormats {
+                json: true,
+                csv: false,
+                md: true
+            }
+        );
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("xlsx"), "{w:?}");
+    }
+
+    #[test]
+    fn export_formats_empty_or_all_invalid_falls_back_to_all() {
+        for list in [strings(&[]), strings(&["pdf"])] {
+            let (f, w) = ExportFormats::from_config(Some(&list));
+            assert_eq!(f, ExportFormats::default());
+            assert!(w.iter().any(|m| m.contains("writing all three")), "{w:?}");
+        }
+    }
+
+    #[test]
+    fn exports_write_only_the_configured_formats() {
+        let r = MockResource {
+            tags: Default::default(),
+        };
+        let only = |json, csv, md| ExportOptions {
+            formats: ExportFormats { json, csv, md },
+            dir: Some(std::env::temp_dir().join("neboto-test-exports")),
+        };
+        let exts = |paths: &[PathBuf]| -> Vec<String> {
+            paths
+                .iter()
+                .inspect(|p| assert!(p.exists(), "{} not written", p.display()))
+                .map(|p| p.extension().unwrap().to_string_lossy().into_owned())
+                .collect()
+        };
+
+        let paths = export_list(&[&r], "FmtList", &only(true, false, false)).unwrap();
+        assert_eq!(exts(&paths), ["json"]);
+
+        let sections = vec![("Details".to_string(), vec![("K".to_string(), "v".to_string())])];
+        let paths = export_detail(&r, &sections, "FmtDetail", &only(false, true, true)).unwrap();
+        assert_eq!(exts(&paths), ["csv", "md"]);
+
+        let items: Vec<(&dyn Resource, DetailSections)> = vec![(&r, sections)];
+        let paths = export_detail_multi(&items, "FmtMulti", &only(false, false, true)).unwrap();
+        assert_eq!(exts(&paths), ["md"]);
+    }
+
+    #[test]
+    fn expand_home_only_touches_a_leading_tilde() {
+        assert_eq!(expand_home("/tmp/x"), PathBuf::from("/tmp/x"));
+        if let Some(home) = std::env::var_os("HOME") {
+            assert_eq!(expand_home("~/exports"), PathBuf::from(home).join("exports"));
+        }
     }
 }
