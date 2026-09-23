@@ -1027,10 +1027,11 @@ and the approaches you rejected are the part nobody can recover from your code.
   `*_tabs.rs` (one per multi-resource service); the `*_selector.rs` modals
   (`S`/`R`/`P`/`c` pickers); `splash.rs` (welcome screen).
 - **`src/export.rs`**: `X` export (detail) / `Ctrl-X` (list) → JSON + CSV +
-  Markdown, via `detail_sections_snapshot()`; also `detail_json()` — the
-  sections-as-JSON serializer behind the default `e` editor view. Files land
-  in the working directory unless `NEBOTO_EXPORT_DIR` redirects (the test
-  harness sets it to a temp dir). The detail Markdown synthesizes
+  Markdown (the formats config `export_formats` enables), via
+  `detail_sections_snapshot()`; also `detail_json()` — the sections-as-JSON
+  serializer behind the default `e` editor view. Files land in the working
+  directory, or config `export_dir`; `NEBOTO_EXPORT_DIR` overrides both (the
+  test harness sets it to a temp dir). The detail Markdown synthesizes
   a `## Tags` section when no captured section is named "Tags" (exact
   case-insensitive match — `contains` would hit "Stages").
 - **`src/config.rs`**: TOML `Config` (`$NEBOTO_CONFIG` → XDG → `~/.neboto.toml`):
@@ -1038,6 +1039,9 @@ and the approaches you rejected are the part nobody can recover from your code.
   `endpoint_url`, `watch`/`watch_interval` (start in watch mode / its cadence),
   `detail_flat` (start in the flat all-section detail view),
   `log_wrap` (start log tail/search panes with long lines wrapped),
+  `export_formats` (which of `json`/`csv`/`md` exports write, default all
+  three — `export::ExportFormats`; bad values warn at startup, never fatal) +
+  `export_dir` (`~/` expanded, created on demand; `NEBOTO_EXPORT_DIR` wins),
   `theme` (presets: `dark` default, `light`, `solarized-dark/-light`,
   `gruvbox-dark/-light`, `dracula`, `nord`, `catppuccin-mocha/-latte` —
   `theme::PRESET_NAMES`; separators optional, `mocha`/`latte` also resolve) +
