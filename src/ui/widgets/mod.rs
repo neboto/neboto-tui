@@ -48,6 +48,7 @@ pub mod profile_selector;
 pub mod r53_tabs;
 pub mod rds_tabs;
 pub mod redshift_tabs;
+pub mod dms_tabs;
 pub mod quota_service_selector;
 pub mod region_selector;
 pub mod resource_list;

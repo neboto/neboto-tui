@@ -958,6 +958,53 @@ the service you're touching.
   (`{AWS/Kafka,"Cluster Name","Broker ID"}`) restricts the search to broker-level
   series so per-topic series don't double-count. `ListNodes` (per-broker ENI/IP
   enumeration) is deferred — the section list doesn't need it.
+- **DMS** (`@dms`, `dms.rs`, **aws-sdk-databasemigration**) — browse-only,
+  four sub-tabs **Tasks / Replication Instances / Endpoints / Serverless**.
+  **SDK pin**: added at `1.120.0`, the newest release whose `aws-smithy-types`
+  requirement (^1.6.2) fits the locked set — 1.123+ want 1.6.3+/1.8 and drag
+  the lock into the unbuildable smithy refresh (see RELEASING.md). Bump it
+  with the rest of the SDK, not on its own.
+  **Load**: instances + endpoints + `DescribeConnections` first (their names
+  label task rows, joined by ARN at load time), then tasks, then serverless
+  `DescribeReplicationConfigs` joined to `DescribeReplications` by config ARN
+  (a config never started has no replication → state "not started"), then
+  **one batched `ListTagsForResource`** over every ARN (`ResourceArnList`,
+  chunks of 50 — tags are not on the Describe responses). Everything is sent
+  in one batch once tags land; DMS accounts are small. A total failure of
+  tasks + instances + endpoints is a `ResourceLoadError`; any one failing is a
+  warning. **ids are ARNs** (`id()` = ARN, `name()` = identifier): the
+  user-facing identifier isn't unique across types and the metrics/log keys
+  need the ARN's resource id anyway. `arn_jump_target` routes `dms` ARNs
+  (`task:` / `rep:` / `endpoint:` / `replication-config:`) with
+  `JumpView::None`; the `align!` arm switches the sub-tab on landing.
+  **Status**: DMS leaves a task that died at `stopped` and says why only in
+  `StopReason` (`… FATAL_ERROR …`), so `stopped_on_error()` reads the reason
+  and paints the row red as **"stopped (error)"**; an endpoint with a failed
+  connection test reads **"connection failed"**. Rows needing attention sort
+  first. **Sections**: task Overview (stop reason, last failure, progress,
+  source/target/instance with jumpable ARN rows, CDC positions, logging) /
+  **Tables** (lazy `DescribeTableStatistics`, capped 1000, errored tables
+  first and `✗`-marked) / **Assessments** (lazy premigration runs, newest
+  first, result counts + the S3 report location) / Settings (table mappings +
+  task settings pretty-printed) / Tags. Instance: Overview / Network / Tasks
+  (**sibling-filtered**, no fetch) / Tags. Endpoint: Overview / Connections /
+  Used by (sibling tasks + serverless) / Tags. Serverless: Overview / Capacity
+  (DCU range, provisioned now) / Tables (lazy
+  `DescribeReplicationTableStatistics`) / Settings / Tags.
+  **Credentials**: some engine settings blocks carry `password` — never read;
+  only `secrets_manager_secret_id` is kept, shown as a reference.
+  **`m`**: `AWS/DMS`. A task is dimensioned by `ReplicationInstanceIdentifier`
+  (the instance **name**) **+** `ReplicationTaskIdentifier` — the task's
+  opaque **resource id** (ARN suffix), not its identifier; CDC latency
+  source/target, incoming changes, full-load rows/s. An instance takes the
+  first dim only: CPU, freeable memory, free storage, swap. A task whose
+  instance wasn't listed has no metrics (the dim is unknown).
+  **`t`**: a task with `Logging.EnableLogging` writes to log group
+  `dms-tasks-<instance id>` stream `dms-task-<task resource id>`; derived, no
+  lookup. Serverless replications have no tail yet.
+  **`C`**: tasks/serverless offer `start … resume-processing` and `stop`
+  (Change); endpoints offer `test-connection` per instance they've been
+  tested from. Never `reload-target`, never a delete.
 - **Redshift** (`@redshift`, `redshift.rs`, two clients: `redshift` +
   `redshiftserverless`) — sub-tabs **Clusters / Serverless / Snapshots**,
   streamed as three error-tolerant batches. **Clusters**: one paginated
