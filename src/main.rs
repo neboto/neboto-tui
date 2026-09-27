@@ -3,6 +3,7 @@ mod aws;
 mod bookmarks;
 mod cli;
 mod config;
+mod demo;
 mod editor;
 mod error;
 mod export;

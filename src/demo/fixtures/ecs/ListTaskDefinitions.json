@@ -1,0 +1,1 @@
+{"taskDefinitionArns": ["arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:14", "arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:15", "arn:aws:ecs:{{region}}:{{account}}:task-definition/storefront-web:42"]}

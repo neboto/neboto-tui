@@ -1,0 +1,10 @@
+<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <GetCallerIdentityResult>
+    <Arn>arn:aws:sts::{{account}}:assumed-role/ReadOnly/demo</Arn>
+    <UserId>AROADEMO000000000000:demo</UserId>
+    <Account>{{account}}</Account>
+  </GetCallerIdentityResult>
+  <ResponseMetadata>
+    <RequestId>neboto-demo</RequestId>
+  </ResponseMetadata>
+</GetCallerIdentityResponse>

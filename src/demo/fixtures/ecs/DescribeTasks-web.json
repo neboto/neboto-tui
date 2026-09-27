@@ -1,0 +1,43 @@
+{"tasks": [
+  {
+    "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/0f1e2d3c4b5a69788796a5b4c3d2e1f0", "clusterArn": "arn:aws:ecs:{{region}}:{{account}}:cluster/acme-prod", "taskDefinitionArn": "arn:aws:ecs:{{region}}:{{account}}:task-definition/storefront-web:42",
+    "group": "service:storefront-web", "lastStatus": "RUNNING", "desiredStatus": "RUNNING", "launchType": "FARGATE",
+    "platformVersion": "1.4.0", "cpu": "512", "memory": "1024", "availabilityZone": "{{region}}a",
+    "connectivity": "CONNECTED", "healthStatus": "HEALTHY",
+    "createdAt": {{epoch:now-3d}}, "startedAt": {{epoch:now-3d}},
+    "containers": [{
+      "containerArn": "arn:aws:ecs:{{region}}:{{account}}:container/acme-prod/0f1e2d3c4b5a69788796a5b4c3d2e1f0/c0", "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "name": "web", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/storefront-web:latest", "lastStatus": "RUNNING",
+      "networkInterfaces": [{"attachmentId": "a-0f1e2d3c4b5a69788796a5b4c3d2e1f0", "privateIpv4Address": "10.20.11.34"}]
+    }],
+    "tags": []
+  }
+,
+  {
+    "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/1a2b3c4d5e6f70819283a4b5c6d7e8f9", "clusterArn": "arn:aws:ecs:{{region}}:{{account}}:cluster/acme-prod", "taskDefinitionArn": "arn:aws:ecs:{{region}}:{{account}}:task-definition/storefront-web:42",
+    "group": "service:storefront-web", "lastStatus": "RUNNING", "desiredStatus": "RUNNING", "launchType": "FARGATE",
+    "platformVersion": "1.4.0", "cpu": "512", "memory": "1024", "availabilityZone": "{{region}}b",
+    "connectivity": "CONNECTED", "healthStatus": "HEALTHY",
+    "createdAt": {{epoch:now-3d}}, "startedAt": {{epoch:now-3d}},
+    "containers": [{
+      "containerArn": "arn:aws:ecs:{{region}}:{{account}}:container/acme-prod/1a2b3c4d5e6f70819283a4b5c6d7e8f9/c0", "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/1a2b3c4d5e6f70819283a4b5c6d7e8f9",
+      "name": "web", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/storefront-web:latest", "lastStatus": "RUNNING",
+      "networkInterfaces": [{"attachmentId": "a-1a2b3c4d5e6f70819283a4b5c6d7e8f9", "privateIpv4Address": "10.20.12.41"}]
+    }],
+    "tags": []
+  }
+,
+  {
+    "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/2b3c4d5e6f7081929384b5c6d7e8f9a0", "clusterArn": "arn:aws:ecs:{{region}}:{{account}}:cluster/acme-prod", "taskDefinitionArn": "arn:aws:ecs:{{region}}:{{account}}:task-definition/storefront-web:42",
+    "group": "service:storefront-web", "lastStatus": "RUNNING", "desiredStatus": "RUNNING", "launchType": "FARGATE",
+    "platformVersion": "1.4.0", "cpu": "512", "memory": "1024", "availabilityZone": "{{region}}a",
+    "connectivity": "CONNECTED", "healthStatus": "HEALTHY",
+    "createdAt": {{epoch:now-3d}}, "startedAt": {{epoch:now-3d}},
+    "containers": [{
+      "containerArn": "arn:aws:ecs:{{region}}:{{account}}:container/acme-prod/2b3c4d5e6f7081929384b5c6d7e8f9a0/c0", "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/2b3c4d5e6f7081929384b5c6d7e8f9a0",
+      "name": "web", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/storefront-web:latest", "lastStatus": "RUNNING",
+      "networkInterfaces": [{"attachmentId": "a-2b3c4d5e6f7081929384b5c6d7e8f9a0", "privateIpv4Address": "10.20.11.48"}]
+    }],
+    "tags": []
+  }
+], "failures": []}

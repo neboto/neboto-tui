@@ -45,6 +45,11 @@ pub struct Cli {
     #[arg(short = 'm', long = "macro", value_name = "NAME")]
     pub macro_name: Option<String>,
 
+    /// Try neboto without an AWS account: browse a made-up account from
+    /// canned responses, fully offline. Ignores profiles and endpoints.
+    #[arg(long)]
+    pub demo: bool,
+
     /// Color theme preset: dark (default), light, solarized-dark,
     /// solarized-light, gruvbox-dark, gruvbox-light, dracula, nord,
     /// catppuccin-mocha, catppuccin-latte.
@@ -92,6 +97,16 @@ impl Cli {
         if self.theme.is_some() {
             config.theme = self.theme.clone();
         }
+        // Demo mode never touches real credentials or a configured emulator,
+        // and opens on a service with data rather than the splash.
+        if self.demo {
+            config.endpoint_url = None;
+            config.default_profile = None;
+            config.default_region = Some(crate::demo::REGION.to_string());
+            if self.service.is_none() {
+                config.default_service = Some("ecs".to_string());
+            }
+        }
     }
 }
 
@@ -110,6 +125,7 @@ mod tests {
             watch: false,
             macro_name: None,
             theme: None,
+            demo: false,
         }
     }
 

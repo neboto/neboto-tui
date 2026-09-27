@@ -82,7 +82,15 @@ impl AwsClients {
         if let Some(ref name) = profile {
             loader = loader.profile_name(name.clone());
         }
-        if let Some(ref ep) = endpoint {
+        // Demo mode (`--demo`): every request is answered from embedded
+        // fixtures by the replay HTTP client — no network, no credentials.
+        // A profile or role switch rebuilds through here and stays in demo.
+        let demo = crate::demo::enabled();
+        if demo {
+            loader = loader
+                .http_client(crate::demo::http_client())
+                .credentials_provider(mock_credentials());
+        } else if let Some(ref ep) = endpoint {
             loader = loader
                 .endpoint_url(ep.clone())
                 .credentials_provider(mock_credentials());
@@ -98,7 +106,7 @@ impl AwsClients {
         // the old account id. Pin the profile-file provider directly instead,
         // which is what `aws --profile` does: the explicit choice wins over
         // the environment. (The emulator branch keeps its mock creds.)
-        if let (Some(name), None) = (profile.as_deref(), endpoint.as_deref()) {
+        if let (Some(name), None, false) = (profile.as_deref(), endpoint.as_deref(), demo) {
             config = with_profile_credentials(config, name);
         }
 
@@ -106,7 +114,7 @@ impl AwsClients {
         // re-runs AssumeRole when the session expires (the SDK's identity
         // cache holds the temporary credentials until then), so a long-lived
         // browse session keeps working past the 1h default.
-        if let Some(ref role) = assumed_role {
+        if let (Some(role), false) = (&assumed_role, demo) {
             let role_arn = format!(
                 "arn:aws:iam::{}:role/{}",
                 role.account_id, role.role_name

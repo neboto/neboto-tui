@@ -1,0 +1,12 @@
+{"taskDefinition": {
+  "taskDefinitionArn": "arn:aws:ecs:{{region}}:{{account}}:task-definition/storefront-web:42", "family": "storefront-web", "revision": 42, "status": "ACTIVE",
+  "networkMode": "awsvpc", "requiresCompatibilities": ["FARGATE"], "cpu": "512", "memory": "1024",
+  "taskRoleArn": "arn:aws:iam::{{account}}:role/storefront-web-task", "executionRoleArn": "arn:aws:iam::{{account}}:role/ecs-task-execution",
+  "registeredAt": {{epoch:now-3d}},
+  "containerDefinitions": [{
+    "name": "web", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/storefront-web:v2.31.0", "essential": true,
+    "cpu": 512, "memory": 1024, "portMappings": [{"containerPort": 8080, "protocol": "tcp"}],
+    "environment": [{"name": "PORT", "value": "8080"}],
+    "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "/ecs/storefront-web", "awslogs-region": "{{region}}", "awslogs-stream-prefix": "ecs"}}
+  }]
+}, "tags": []}

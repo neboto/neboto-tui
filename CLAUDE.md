@@ -1089,6 +1089,32 @@ forces path-style, and the tab bar shows a `⚙ host:port` badge. Seed bulk data
 with `COUNT=200 ./scripts/seed-floci.sh`, then
 `AWS_ENDPOINT_URL=http://localhost:4566 cargo run`.
 
+### Demo mode (`--demo`, `src/demo/`)
+
+An offline, made-up account (`acme-prod`, #47). `demo::enable()` runs before
+the clients are built. `AwsClients::build` then installs `demo::http_client()`
+on the `SdkConfig`, which answers every request from embedded fixtures, and
+skips the profile and assumed-role credentials. Nothing above the HTTP layer
+changes: lists, lazy sections and jumps all make real SDK calls. **Covering a
+new service or section means adding fixtures, never demo branches in app
+code.**
+
+Fixtures live in `src/demo/fixtures/<service>/` and are registered in
+`fixtures.rs`:
+- **Lookup key:** the service (endpoint host label) and the operation (the
+  `X-Amz-Target` suffix, or the `Action` form field). An entry can also list
+  `when` substrings the request body must all contain; the first match wins.
+- **Wire format:** bodies are raw wire format (EC2 query XML, awsQuery XML,
+  awsJson).
+- **Placeholders:** `{{account}}`, `{{region}}`, `{{iso:now-15m}}` and
+  `{{epoch:now-2h}}`. Times are always relative to now.
+- **No fixture:** an unmatched operation returns a protocol-correct *empty*
+  success, so the service lists empty and `resource_list.rs` says "Not in the
+  demo dataset yet".
+
+The fixture tests in `src/demo/tests.rs` drive real SDK clients, so a fixture
+that doesn't deserialize fails `cargo test`.
+
 ## Testing
 
 Unit tests live next to the code (query parser, fuzzy matcher, Cost date math).

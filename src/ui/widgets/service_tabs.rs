@@ -31,7 +31,10 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
     app.clear_click_regions();
 
     // ── Right side: badge parts in priority order ─────────────────────────
+    // Demo mode takes the endpoint slot (the two never co-occur): it must be
+    // unmistakable that nothing on screen is a real account.
     let endpoint_text = match app.aws_clients.current_endpoint() {
+        _ if crate::demo::enabled() => " ▶ DEMO ".to_string(),
         Some(ep) => {
             // Strip the scheme for a compact `⚙ localhost:4566` badge.
             let host = ep
