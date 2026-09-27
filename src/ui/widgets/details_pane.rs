@@ -3063,10 +3063,17 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
             .strip_prefix("file-system/")
             .and_then(|id| mk(ServiceType::S3Files, JumpView::None, id)),
         // S3 Tables: resource = "bucket/<name>[/table/<uuid>]". Both types use
-        // the full ARN as their id, so jump with the whole ARN; the sub-tab
-        // aligns to the resolved resource's type.
+        // the full ARN as their id, so jump with the whole ARN. The view has
+        // to travel with it: a same-service jump (a table's Bucket row) keeps
+        // the current sub-tab otherwise, whose type filter hides the target.
         "s3tables" if resource.starts_with("bucket/") => {
-            mk(ServiceType::S3Tables, JumpView::None, arn)
+            use crate::app::S3TablesView;
+            let view = if resource.contains("/table/") {
+                S3TablesView::Tables
+            } else {
+                S3TablesView::Buckets
+            };
+            mk(ServiceType::S3Tables, JumpView::S3Tables(view), arn)
         }
         "organizations" => {
             // resource = "ou/o-…/ou-…", "account/o-…/<12 digits>" or
