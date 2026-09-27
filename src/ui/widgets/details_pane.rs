@@ -2970,13 +2970,19 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
     let last_seg = || resource.rsplit(['/', ':']).next().unwrap_or(resource);
 
     match service {
-        // DMS rows are keyed by ARN (`id()`), and the resolver aligns the
-        // sub-tab to the landed row's type, so the ARN itself is the target.
-        "dms" if ["task:", "rep:", "endpoint:", "replication-config:"]
-            .iter()
-            .any(|p| resource.starts_with(p)) =>
-        {
-            mk(ServiceType::Dms, JumpView::None, arn)
+        // DMS rows are keyed by ARN (`id()`), so the ARN itself is the
+        // target. The view has to travel with it: a same-service jump keeps
+        // the current sub-tab otherwise, and its type filter hides the row.
+        "dms" => {
+            use crate::app::DmsView;
+            let view = match resource.split(':').next()? {
+                "task" => DmsView::Tasks,
+                "rep" => DmsView::Instances,
+                "endpoint" => DmsView::Endpoints,
+                "replication-config" => DmsView::Serverless,
+                _ => return None,
+            };
+            mk(ServiceType::Dms, JumpView::Dms(view), arn)
         }
         "route53" => {
             // resource = "hostedzone/Z123…". R53HostedZone::id() stores the

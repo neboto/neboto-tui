@@ -152,7 +152,7 @@ async fn instance_tasks_section_lists_sibling_tasks_and_task_arn_jumps_to_endpoi
     assert!(lines.iter().any(|(k, _)| k == "orders-cdc"), "{lines:?}");
     assert!(lines.iter().any(|(_, v)| v == TASK_ARN));
 
-    // The task ARN row is a jump into DMS (sub-tab aligned on landing).
+    // The task ARN row is a jump into DMS, carrying the Tasks sub-tab.
     let target = crate::ui::widgets::details_pane::resource_jump_target(
         "  Task ARN",
         TASK_ARN,
@@ -185,5 +185,36 @@ async fn sub_tabs_filter_by_type() {
             .map(|&i| app.resources[i].resource_type())
             .collect();
         assert_eq!(types, [want], "tab {key}");
+    }
+}
+
+/// Enter on a task's instance / endpoint ARN row must land on the row in
+/// its own sub-tab. `JumpView::None` left the view on Tasks, whose type
+/// filter hides instances — the jump fell back to the first task.
+#[tokio::test]
+async fn enter_on_a_task_arn_row_lands_on_the_target_sub_tab() {
+    let (mut app, tx, _rx) = test_app().await;
+    for (label, want_view, want_id) in [
+        ("  Instance ARN", crate::app::DmsView::Instances, INST_ARN),
+        ("  Endpoint ARN", crate::app::DmsView::Endpoints, SRC_ARN),
+    ] {
+        select_mock(&mut app, ServiceType::Dms, Box::new(task(None)));
+        app.resources = vec![Box::new(task(None)), Box::new(instance()), Box::new(endpoint())];
+        app.dms_view = crate::app::DmsView::Tasks;
+        app.update_search();
+        app.selected_index = Some(0);
+        app.details_focused = true;
+        app.reset_detail_section_to_default(&tx);
+        let rows = app.get_detail_lines_filtered();
+        let row = rows
+            .iter()
+            .position(|(k, v)| k == label && v == want_id)
+            .unwrap_or_else(|| panic!("{label} row in {rows:?}"));
+        app.details_selected_index = Some(row);
+        app.handle_event(Event::Key(key(KeyCode::Enter)), &tx).await.unwrap();
+
+        assert_eq!(app.dms_view, want_view, "{label}");
+        assert_eq!(app.get_selected_resource().map(|r| r.id().to_string()).as_deref(), Some(want_id));
+        assert!(app.details_focused, "lands in the target's detail pane");
     }
 }

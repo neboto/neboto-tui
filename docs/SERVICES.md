@@ -975,8 +975,11 @@ the service you're touching.
   warning. **ids are ARNs** (`id()` = ARN, `name()` = identifier): the
   user-facing identifier isn't unique across types and the metrics/log keys
   need the ARN's resource id anyway. `arn_jump_target` routes `dms` ARNs
-  (`task:` / `rep:` / `endpoint:` / `replication-config:`) with
-  `JumpView::None`; the `align!` arm switches the sub-tab on landing.
+  (`task:` / `rep:` / `endpoint:` / `replication-config:`) to
+  `JumpView::Dms(view)` — the view must travel with the target, because a
+  same-service jump keeps the current sub-tab and its type filter hides the
+  row (`align!` only runs for `@all` / refs-lens jumps). The jump searches
+  by ARN, so every DMS `search_text()` includes the ARN.
   **Status**: DMS leaves a task that died at `stopped` and says why only in
   `StopReason` (`… FATAL_ERROR …`), so `stopped_on_error()` reads the reason
   and paints the row red as **"stopped (error)"**; an endpoint with a failed

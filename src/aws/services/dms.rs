@@ -563,8 +563,9 @@ impl Resource for DmsTask {
 
     fn search_text(&self) -> String {
         format!(
-            "{} {} {} {} {} {} dms task",
+            "{} {} {} {} {} {} {} dms task",
             self.identifier,
+            self.arn,
             self.status,
             self.migration_type,
             self.source_endpoint.as_ref().map(|e| e.0.as_str()).unwrap_or(""),
@@ -786,8 +787,9 @@ impl Resource for DmsInstance {
 
     fn search_text(&self) -> String {
         format!(
-            "{} {} {} {} dms replication instance",
+            "{} {} {} {} {} dms replication instance",
             self.identifier,
+            self.arn,
             self.class,
             self.status,
             self.vpc_id.as_deref().unwrap_or("")
@@ -1015,8 +1017,9 @@ impl Resource for DmsEndpoint {
 
     fn search_text(&self) -> String {
         format!(
-            "{} {} {} {} {} dms endpoint",
+            "{} {} {} {} {} {} dms endpoint",
             self.identifier,
+            self.arn,
             self.endpoint_type,
             self.engine,
             self.server.as_deref().unwrap_or(""),
@@ -1271,8 +1274,9 @@ impl Resource for DmsServerless {
 
     fn search_text(&self) -> String {
         format!(
-            "{} {} {} dms serverless replication",
+            "{} {} {} {} dms serverless replication",
             self.identifier,
+            self.arn,
             self.replication_type,
             self.status.as_deref().unwrap_or("")
         )

@@ -626,7 +626,7 @@ impl RedshiftView {
 pub use crate::aws::services::redshift::{RedshiftMetricsState, RedshiftSlMetricsState};
 
 /// Sub-tab view for DMS (Tasks / Instances / Endpoints / Serverless).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum DmsView {
     Tasks,
     Instances,
@@ -842,6 +842,7 @@ pub enum JumpView {
     Sfn(SfnView),
     Sh(SecurityHubView),
     AgentCore(AgentCoreView),
+    Dms(DmsView),
     /// WAF carries both the sub-tab and the scope (CLOUDFRONT vs REGIONAL) — a
     /// CloudFront distribution's Web ACL is always CLOUDFRONT scope, which lives
     /// in a separate (us-east-1) variant of the WAF list.
@@ -19116,6 +19117,7 @@ impl App {
             JumpView::Sfn(v) => self.sfn_view = *v,
             JumpView::Sh(v) => self.securityhub_view = *v,
             JumpView::AgentCore(v) => self.agentcore_view = *v,
+            JumpView::Dms(v) => self.dms_view = *v,
             JumpView::Waf(v, scope) => {
                 self.waf_view = *v;
                 // CloudFront Web ACLs live in the CLOUDFRONT-scope variant; if we
@@ -19633,6 +19635,7 @@ impl App {
             Some(ServiceType::Route53Resolver) => JumpView::Resolver(self.resolver_view),
             Some(ServiceType::Inspector) => JumpView::Inspector(self.inspector_view),
             Some(ServiceType::Waf) => JumpView::Waf(self.waf_view, self.waf_scope),
+            Some(ServiceType::Dms) => JumpView::Dms(self.dms_view),
             // AWS Config has sub-tabs (config_view) but no JumpView variant, so a
             // back-jump returns to the service with its default sub-tab.
             _ => JumpView::None}
