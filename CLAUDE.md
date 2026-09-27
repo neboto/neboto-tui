@@ -428,8 +428,8 @@ in `any_pane_overlay_active` (which gates the mouse).
   gates the status-bar hint.
 - **Live log tail** (`t`, on a log group, Lambda, RDS, ECS task, Network
   Firewall, WAF web ACL, CloudTrail trail, Route 53 hosted zone (query
-  logs), Step Functions state machine or execution, CodeBuild, or a
-  CodePipeline run): `log_tail.rs` /
+  logs), Step Functions state machine or execution, CodeBuild, a
+  CodePipeline run, or a Batch job): `log_tail.rs` /
   `LogTailState`. **Adding a tail source takes two changes**: the downcast
   branch in `open_log_tail` AND its `is_selected_*` in `supports_log_tail()` —
   the latter gates the `t` key itself (and the status-bar hint), so a branch

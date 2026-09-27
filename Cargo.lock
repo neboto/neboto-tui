@@ -409,6 +409,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-batch"
+version = "1.125.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49af13271849be19ab1dd231d56a5dbf17a9f475c9782f8b2c6384f8e7995c90"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.64.0",
+ "aws-smithy-json 0.63.0",
+ "aws-smithy-observability 0.3.0",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema 0.2.0",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-bedrock"
 version = "1.147.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3919,7 +3945,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.1",
  "tokio",
  "tower-service",
  "tracing",
@@ -4257,6 +4283,7 @@ dependencies = [
  "aws-sdk-athena",
  "aws-sdk-autoscaling",
  "aws-sdk-backup",
+ "aws-sdk-batch",
  "aws-sdk-bedrock",
  "aws-sdk-bedrockagent",
  "aws-sdk-bedrockagentcore",

@@ -593,6 +593,10 @@ impl AwsClients {
         aws_sdk_kafka::Client::new(&self.config)
     }
 
+    pub fn batch_client(&self) -> aws_sdk_batch::Client {
+        aws_sdk_batch::Client::new(&self.config)
+    }
+
     pub fn fms_client(&self) -> aws_sdk_fms::Client {
         aws_sdk_fms::Client::new(&self.config)
     }

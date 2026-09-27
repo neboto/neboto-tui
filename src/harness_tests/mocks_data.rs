@@ -29,6 +29,44 @@ pub(super) fn mocks() -> Vec<Mock> {
             )),
         ),
         (
+            ServiceType::Batch,
+            "BatchJobQueue",
+            Box::new(svc::batch::BatchJobQueue::from_sdk(
+                &aws_sdk_batch::types::JobQueueDetail::builder()
+                    .job_queue_name("mock-queue")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Batch,
+            "BatchComputeEnv",
+            Box::new(svc::batch::BatchComputeEnv::from_sdk(
+                &aws_sdk_batch::types::ComputeEnvironmentDetail::builder()
+                    .compute_environment_name("mock-ce")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Batch,
+            "BatchJob",
+            Box::new(svc::batch::BatchJob::from_sdk(
+                &aws_sdk_batch::types::JobDetail::builder()
+                    .job_id("mock-job-id")
+                    .job_name("mock-job")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Batch,
+            "BatchJobDefinition",
+            Box::new(svc::batch::BatchJobDefinition::from_sdk(
+                &aws_sdk_batch::types::JobDefinition::builder()
+                    .job_definition_name("mock-def")
+                    .revision(1)
+                    .build(),
+            )),
+        ),
+        (
             ServiceType::Redshift,
             "RedshiftCluster",
             Box::new(svc::redshift::RedshiftCluster::from_sdk(

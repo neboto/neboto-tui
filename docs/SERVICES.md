@@ -1704,6 +1704,48 @@ the service you're touching.
   (`service_tabs::visible_window`, same algorithm as `subtab_bar`). A config
   file that fails to parse no longer silently defaults everything —
   `Config.load_warning` surfaces it in the status bar at startup.
+- **Batch** (`@batch`, `batch.rs`, **aws-sdk-batch**) — browse-only,
+  sub-tabs **Job Queues / Compute Environments / Jobs / Job Definitions**.
+  **SDK pin**: added at `1.125.0`, the newest release whose smithy
+  requirements (`aws-smithy-types` ^1.6.2, `aws-smithy-runtime-api` ^1.15)
+  fit the locked set; 1.126+ needs `aws-smithy-types` 1.6.3. **Rows are
+  keyed by name** (queue, compute environment), `name:revision` (job
+  definition) and job id — the tail of each ARN — so the `"batch"` arm in
+  `arn_jump_target` maps `job-queue/`, `compute-environment/`, `job/` and
+  `job-definition/` ARNs to `JumpView::Batch(view)`. It carries the view
+  because a same-service jump to another sub-tab needs it: `JumpView::None`
+  leaves you on the current tab, whose type filter hides the target.
+  **Jobs**: `ListJobs` returns **RUNNING only** without a status, so the
+  load queries every (queue, status) pair (7 statuses, 6 in flight), caps
+  each at `MAX_JOBS_PER_STATUS` (200, warns when hit — SUCCEEDED can be
+  huge), then `DescribeJobs` in chunks of 100 and sorts newest-first. All
+  jobs load eagerly into one Jobs tab rather than the per-queue drill the
+  issue sketched: the queue pane's **Jobs** section lists that queue's jobs
+  (status counts + job ARNs that `⏎` into the Jobs tab), which covers the
+  drill without a second list mode. `f` on the Jobs tab cycles status
+  *groups* (all / active / failed / succeeded — `BatchJobStatusFilter`, the
+  ECS-task precedent); `F` still narrows to one exact status. **The
+  stuck-queue verdict** is computed at render time from the loaded rows (no
+  extra calls): a compute environment's `blocker()` is disabled / INVALID /
+  managed-with-desired-vCPU-0, and the CE pane counts RUNNABLE jobs on the
+  queues that list it. Desired 0 with RUNNABLE jobs is normal for a few
+  minutes while Batch scales, so it's a ⚠ that says "if it stays at 0" plus
+  the usual causes, not a ✗. The queue pane flags RUNNABLE jobs when none of
+  its CEs can take work, and a job RUNNABLE for >10m points at the queue.
+  **Containers**: a classic job's `container` and a multi-container job's
+  `ecsProperties.taskProperties[].containers` fold into one
+  `BatchContainer` list; vCPU/memory come from `resourceRequirements`,
+  falling back to the deprecated top-level fields older jobs still set.
+  **Log tail**: `t` on a job tails the first container's awslogs group
+  (`awslogs-group` option, else `/aws/batch/job`) filtered to its stream.
+  No stream (not started yet), a non-awslogs driver, and EKS jobs (logs
+  live in the cluster) each get their own status message rather than
+  tailing the whole group. **Empty states**: finished jobs age out after a
+  while, so an empty Jobs tab says so. Deliberately v2: `m` metrics
+  (Batch publishes almost nothing without Container Insights), fair-share
+  scheduling policy detail (`DescribeSchedulingPolicies` — the queue shows
+  the policy ARN), array-child listing (`ListJobs --array-job-id`, offered
+  as a `C` command), multi-node per-node detail, and EKS pod detail.
 - **CloudTrail** (`@cloudtrail`) — sub-tabs **Events / Trails / Insights**.
   Events: JSON parsed **eagerly** (no extra API calls); `is_noise()` returns
   `read_only` so `a` hides reads (noise is **shown by default** app-wide). `f`
