@@ -1704,6 +1704,48 @@ the service you're touching.
   (`service_tabs::visible_window`, same algorithm as `subtab_bar`). A config
   file that fails to parse no longer silently defaults everything —
   `Config.load_warning` surfaces it in the status bar at startup.
+- **X-Ray** (`@xray`, `xray.rs`, **aws-sdk-xray**) — browse-only, sub-tabs
+  **Service Map / Traces / Groups & Sampling** (the third is a pipe-grouped
+  filter of `X-Ray Group|X-Ray Sampling Rule`, both flat `details()`).
+  **SDK pin**: added at `1.109.0` — the newest release whose
+  `aws-smithy-types` (^1.6.2) / `aws-smithy-runtime` (^1.14) requirements fit
+  the locked set; newer ones drag the lock into the unbuildable smithy
+  refresh (RELEASING.md). **Time window**: every list is scoped to
+  `App.xray_window` (5m / 15m / 1h / 6h; `[`/`]` in the list pane, chips on
+  the tab bar are clickable halves). The service struct carries the window
+  and the cache is variant-keyed by its label — the WAF-scope rebuild
+  pattern (`apply_xray_window`, re-seeded in `recreate_services`). **6h is
+  the ceiling**: `GetServiceGraph` rejects longer spans. **Service map**:
+  one `XRayNode` per graph node, keyed `type::name` (the graph's
+  `ReferenceId` is not stable across queries); edges are resolved against
+  the same response (Downstream) and **inverted** at load time (Upstream);
+  p50/p90/p99 come from `ResponseTimeHistogram`. Nodes sort worst-first
+  (faults, errors, volume); `state_label()` is the fault/error % so the list
+  column reads the health. A node whose X-Ray name *is* a neboto resource
+  name (Lambda function, DynamoDB table, S3 bucket, state machine, SNS topic,
+  EKS cluster) gets a **"Jump To"** row valued `@prefix name` — a generic
+  classifier arm (0a in `resource_jump_target`) switches service and
+  resolves by id/name; other node types (API GW stages, ECS, clients,
+  remote) don't map 1:1 and have no row. **Traces**: `GetTraceSummaries`,
+  capped at 500 per load (the first pages returned, re-sorted newest-first;
+  hitting the cap warns and says to narrow the window). No custom filter
+  key: `state_label()` returns `fault` / `error` / `throttled` / `ok`, so the
+  generic **`F`** state filter *is* the faults filter. Trace pane: Overview
+  (outcome, HTTP method/URL/status, client, entry point, services, resource
+  ARNs) / Root Cause (fault + error root causes with the entity path and the
+  first exception; response-time root causes with their coverage %) /
+  **Segments** (lazy `BatchGetTraces`; segment documents parsed and flattened
+  depth-first with the subsegments indented, offsets relative to the first
+  segment, `✗`/`⚠` on fault/error; `e` opens the raw trace JSON, an
+  `editor_override_content` arm gated on the section). **Empty states**: an
+  empty map/traces tab is almost always "tracing off / too little sampled in
+  this window", so `resource_list.rs` says that (with `]` and the sampling
+  tab as the next steps) rather than blaming permissions. Sampling rules
+  sort by priority (evaluation order); a rule with rate 0 and reservoir 0
+  reads **"samples nothing"**. Deliberately v2: a timing-bar segment tree,
+  insights (`GetInsightSummaries`), per-group service maps, and CloudWatch
+  Application Signals / Transaction Search (spans sent there instead of
+  X-Ray don't appear here).
 - **CloudTrail** (`@cloudtrail`) — sub-tabs **Events / Trails / Insights**.
   Events: JSON parsed **eagerly** (no extra API calls); `is_noise()` returns
   `read_only` so `a` hides reads (noise is **shown by default** app-wide). `f`

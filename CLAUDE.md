@@ -148,7 +148,8 @@ Variations on the pattern:
 - **Toggle rows** (rebuild + variant-cache the service, not resource filters):
   Cost (`cost_group_by` keys 1–4 + `cost_period` keys 5–7, `t` cycles), WAF
   (`waf_scope`), RAM (`ram_owner` SELF/OTHER via `t`), Service Quotas
-  (`quota_service_code`, `c` picker), CloudTrail (`ct_query`, `f` filter
+  (`quota_service_code`, `c` picker), X-Ray (`xray_window`, `[`/`]` in
+  the list pane), CloudTrail (`ct_query`, `f` filter
   modal). **Cost specifics**: the drill-down (Breakdown/Regions/Forecast) is
   fetched over the **active period's window** and the `cost_drilldown` map is
   keyed by `App::cost_drilldown_key` (period + row key) — never the bare row
