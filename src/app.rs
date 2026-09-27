@@ -1663,6 +1663,9 @@ pub struct App {
     /// Session-sticky wrap preference for the log tail/search pane — seeds
     /// each newly-opened pane; `w` inside the pane toggles both.
     pub log_wrap: bool,
+    /// Which formats and where `X` / `Ctrl-X` / the deep export write
+    /// (config `export_formats` / `export_dir`).
+    pub export_options: crate::export::ExportOptions,
     /// The concatenated all-section body when flat view is active, rebuilt
     /// each frame by `flat_detail_tick`. `get_detail_lines` returns this when
     /// `flat_cache_key` matches the current selection, so scroll / copy /
@@ -2381,14 +2384,22 @@ impl App {
 
         // Install the color palette before anything draws (the theme accessors
         // fall back to dark if read first, and OnceLock only sets once). Theme
-        // problems are warnings, surfaced with any config-parse warning.
+        // and export_formats problems are warnings, surfaced with any
+        // config-parse warning.
         let (palette, theme_warnings) = crate::ui::theme::Palette::from_config(
             config.theme.as_deref(),
             config.theme_colors.as_ref(),
         );
         crate::ui::theme::init_palette(palette);
+        let (_, export_warnings) =
+            crate::export::ExportFormats::from_config(config.export_formats.as_deref());
+        let mut startup_warnings = Vec::new();
         if !theme_warnings.is_empty() {
-            let msg = format!("theme: {}", theme_warnings.join("; "));
+            startup_warnings.push(format!("theme: {}", theme_warnings.join("; ")));
+        }
+        startup_warnings.extend(export_warnings);
+        if !startup_warnings.is_empty() {
+            let msg = startup_warnings.join("; ");
             config.load_warning = Some(match config.load_warning.take() {
                 Some(existing) => format!("{existing}; {msg}"),
                 None => msg});
@@ -2597,6 +2608,10 @@ impl App {
             detail_search_query: String::new(),
             detail_flat_mode: config.detail_flat.unwrap_or(false),
             log_wrap: config.log_wrap.unwrap_or(false),
+            export_options: crate::export::ExportOptions {
+                formats: crate::export::ExportFormats::from_config(config.export_formats.as_deref()).0,
+                dir: config.export_dir.as_deref().map(crate::export::expand_home),
+            },
             flat_detail_cache: Vec::new(),
             flat_section_offsets: Vec::new(),
             flat_cache_key: None,
@@ -28997,7 +29012,7 @@ impl App {
         let sections = self.detail_sections_snapshot();
         let result = self
             .get_selected_resource()
-            .map(|r| crate::export::export_detail(r.as_ref(), &sections, &label));
+            .map(|r| crate::export::export_detail(r.as_ref(), &sections, &label, &self.export_options));
         match result {
             Some(Ok(paths)) => {
                 self.error_message = None;
@@ -29033,7 +29048,7 @@ impl App {
             .map(|r| r.resource_type().to_string())
             .unwrap_or_else(|| "export".to_string());
         let count = resources.len();
-        let result = crate::export::export_list(&resources, &label);
+        let result = crate::export::export_list(&resources, &label, &self.export_options);
         drop(resources);
         self.report_export_result(count, &label, result);
     }
@@ -29073,7 +29088,7 @@ impl App {
         }
         let label = resources[0].resource_type().to_string();
         let count = resources.len();
-        let result = crate::export::export_list(&resources, &label);
+        let result = crate::export::export_list(&resources, &label, &self.export_options);
         drop(resources);
         self.clear_list_visual();
         self.report_export_result(count, &label, result);
@@ -29248,7 +29263,7 @@ impl App {
             self.error_message = Some("Nothing selected to export".to_string());
             return;
         };
-        let result = crate::export::export_detail_multi(&items, &label);
+        let result = crate::export::export_detail_multi(&items, &label, &self.export_options);
         drop(items);
         self.pending_deep_export = None;
         self.deep_export_progress = None;

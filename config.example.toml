@@ -33,6 +33,16 @@
 # instead of one section at a time. `\` toggles it at runtime.
 # detail_flat = true
 
+# ── Export ───────────────────────────────────────────────────────────────────
+
+# Which files X (detail), Ctrl-X (list) and the deep export write. Any of
+# "json", "csv", "md" ("markdown" also works). Default: all three.
+# export_formats = ["json"]
+
+# Where export files go (~/ expanded, created on first export). Default: the
+# working directory. The NEBOTO_EXPORT_DIR environment variable overrides it.
+# export_dir = "~/neboto-exports"
+
 # ── Theme ────────────────────────────────────────────────────────────────────
 
 # Preset: dark (default), light, solarized-dark, solarized-light, gruvbox-dark,

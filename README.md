@@ -42,8 +42,8 @@ auditably read-only. See [Why read-only](#why-read-only).
 - **Macros** (`,`) — record a navigation routine once, replay it with one key
   or from the CLI with `--macro`.
 - **Themes** — 10 presets (light and dark) plus per-color overrides.
-- **Export** (`X` / `Ctrl-X`) to JSON + CSV + Markdown, including deep exports
-  of a multi-row selection.
+- **Export** (`X` / `Ctrl-X`) to JSON, CSV and/or Markdown (`export_formats`),
+  including deep exports of a multi-row selection.
 
 ---
 
@@ -311,6 +311,8 @@ template.
 | `show_banner` | ASCII banner on startup |
 | `watch`, `watch_interval` | Start in watch mode, and its cadence in seconds |
 | `detail_flat` | Start with the flat all-sections detail view |
+| `export_formats` | Which files exports write: any of `"json"`, `"csv"`, `"md"` (default all three) |
+| `export_dir` | Where exports go (default the working directory; `NEBOTO_EXPORT_DIR` overrides) |
 | `theme`, `[theme_colors]` | Preset name and per-color overrides |
 | `cache_ttl`, `[cache_ttls]` | Base cache freshness (seconds) and per-service overrides keyed by `@`-prefix |
 | `org_access_role`, `org_access_roles` | Role name(s) for the member-account switch |
