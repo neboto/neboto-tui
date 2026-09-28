@@ -8,6 +8,7 @@ mod error;
 mod export;
 mod event;
 mod html;
+mod keycast;
 mod lazy;
 mod macros;
 mod navigation;
@@ -37,7 +38,7 @@ use ui::widgets::{
     details_pane,
     dx_tabs,
     ec2_tabs,
-    athena_tabs, cli_picker, ecs_tabs, elb_tabs, eventbridge_tabs, fms_tabs, fsx_tabs, gd_tabs, glue_tabs, help_overlay, iam_tabs, idc_tabs, insp_tabs, jump_list, kinesis_tabs, macro_picker, messaging_tabs, s3tables_tabs, sfn_tabs,
+    athena_tabs, cli_picker, keycast_box, ecs_tabs, elb_tabs, eventbridge_tabs, fms_tabs, fsx_tabs, gd_tabs, glue_tabs, help_overlay, iam_tabs, idc_tabs, insp_tabs, jump_list, kinesis_tabs, macro_picker, messaging_tabs, s3tables_tabs, sfn_tabs,
     message_log,
     network_firewall_tabs,
     ram_tabs,
@@ -234,6 +235,10 @@ async fn run(cli: cli::Cli) -> Result<()> {
         // (inject the next step once the app is quiescent). Runs before the
         // draw so the recorder's step count and the picker are current.
         app.macro_tick(&event_tx);
+
+        // Keycast (`--show-keys`): name the key just dispatched by what it
+        // changed. After the macro pass, so a replayed step shows too.
+        app.keycast_tick();
 
         // Draw UI first to show input immediately
         if let Some(ref mut t) = tui {
@@ -603,6 +608,9 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
     // Metric charts, the S3 object browser, and the DynamoDB item
     // browser all render inside the detail pane now (see
     // render_details_pane), not as full-screen overlays.
+
+    // Keycast last, so it floats above panes and pickers alike.
+    keycast_box::render_keycast(app, layout.status_area, frame);
 }
 
 /// Trim a `theme::hint_line` to `max_width` cells on a `  ·  ` boundary, so
