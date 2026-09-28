@@ -27,6 +27,7 @@ use ratatui::Terminal;
 mod deep_export_test;
 mod load_stream_test;
 mod macros_test;
+mod keycast_test;
 mod ec2_console_test;
 mod cli_picker_test;
 mod ec2_lb_test;
