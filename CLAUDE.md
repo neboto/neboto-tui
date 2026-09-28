@@ -974,7 +974,7 @@ and the approaches you rejected are the part nobody can recover from your code.
   `[[`/`]]` (group headers), `Tab`/`Shift-Tab` + `1`–`9` (sections),
   `H`/`L` (sub-tabs, as in the list pane),
   `l`/`→`/`Enter` (follow jump), `h`/`←`/`Esc` (back to list), `Ctrl-O`
-  (nav-back through history, same as the list pane), `y`/`v`/`e`,
+  (nav-back through history, same as the list pane), `y`/`e`,
   `m`/`o`/`i`/`t` (rich views), `W`/`U`/`N` (timeline / referenced-by /
   network-access lenses, also from the list pane), `X` (export detail;
   `Ctrl-X` exports the list),

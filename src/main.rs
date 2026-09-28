@@ -694,7 +694,7 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
         } else {
             let mut hints: Vec<(&str, &str)> = vec![
                 ("j/k", "move"),
-                ("h/l", "sub-tab"),
+                ("H/L", "sub-tab"),
                 ("/", "search"),
                 ("⏎", "details"),
                 ("y", "copy id"),
