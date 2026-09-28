@@ -118,6 +118,7 @@ pub fn render_metrics_in_pane(app: &App, kind: MetricsKind, area: Rect, frame: &
         MetricsKind::R53Zone => render_r53_zone_metrics_overlay(app, area, frame),
         MetricsKind::ResolverEndpoint => render_resolver_ep_metrics_overlay(app, area, frame),
         MetricsKind::CodeBuild => render_codebuild_metrics_overlay(app, area, frame),
+        MetricsKind::Dms => render_dms_metrics_overlay(app, area, frame),
     }
 }
 
@@ -6601,6 +6602,57 @@ fn render_codebuild_charts(data: &CodeBuildMetricsData, area: Rect, frame: &mut 
     render_value_chart("Succeeded", &data.succeeded, x_max, start_label, crate::ui::theme::success(), cells[1], frame);
     render_value_chart("Failed", &data.failed, x_max, start_label, crate::ui::theme::error(), cells[2], frame);
     render_value_chart("Avg Duration (s)", &data.duration_avg, x_max, start_label, crate::ui::theme::heading(), cells[3], frame);
+}
+
+/// DMS task (CDC latency / throughput) or replication instance (CPU / memory
+/// / storage / swap) — one overlay, four charts, titles carried by the data.
+pub fn render_dms_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
+    use crate::aws::services::dms::{DmsMetricsFlavor, DmsMetricsState};
+    let Some(resource) = app.get_selected_resource() else {
+        return;
+    };
+    let (name, id) = (resource.name().to_string(), resource.id().to_string());
+    let heading = if resource.resource_type() == "DMS Task" {
+        " DMS Task Metrics — "
+    } else {
+        " DMS Instance Metrics — "
+    };
+    let chunks = render_metrics_chrome(heading, &name, app.dms_metrics_time_range.label(), area, frame);
+
+    match app.dms_metrics.get(&id) {
+        None | Some(DmsMetricsState::Loading) => {
+            frame.render_widget(
+                Paragraph::new(Line::styled(
+                    "  Loading metrics…",
+                    Style::default().fg(theme::text_dim()),
+                )),
+                chunks[1],
+            );
+        }
+        Some(DmsMetricsState::Loaded(data)) => {
+            let start_label = data.time_range.start_label();
+            let cells = grid_2x2(chunks[1]);
+            let colors = match data.flavor {
+                // Latency charts in warning colour: rising CDC latency is the
+                // "why is my replica behind" signal.
+                DmsMetricsFlavor::Task => [
+                    crate::ui::theme::warning(),
+                    crate::ui::theme::warning(),
+                    crate::ui::theme::accent(),
+                    crate::ui::theme::success(),
+                ],
+                DmsMetricsFlavor::Instance => [
+                    crate::ui::theme::accent(),
+                    crate::ui::theme::success(),
+                    crate::ui::theme::heading(),
+                    crate::ui::theme::warning(),
+                ],
+            };
+            for (i, (title, series)) in data.series.iter().enumerate().take(4) {
+                render_value_chart(title, series, data.x_max, start_label, colors[i], cells[i], frame);
+            }
+        }
+    }
 }
 
 /// AgentCore's five families share one namespace and one overlay; the flavor

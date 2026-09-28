@@ -597,6 +597,10 @@ impl AwsClients {
         aws_sdk_xray::Client::new(&self.config)
     }
 
+    pub fn dms_client(&self) -> aws_sdk_databasemigration::Client {
+        aws_sdk_databasemigration::Client::new(&self.config)
+    }
+
     pub fn fms_client(&self) -> aws_sdk_fms::Client {
         aws_sdk_fms::Client::new(&self.config)
     }

@@ -356,7 +356,10 @@ in `any_pane_overlay_active` (which gates the mouse).
   us-east-1 like health checks; private zones publish nothing → not
   offered)/Route 53 Resolver endpoints (`AWS/Route53Resolver` dim
   `EndpointId`, regional — both direction volumes fetched, the wrong one is
-  just empty)/CodeBuild projects (`AWS/CodeBuild` dim `ProjectName`). Each is
+  just empty)/CodeBuild projects (`AWS/CodeBuild` dim `ProjectName`)/DMS tasks +
+  replication instances (`AWS/DMS` — a task needs **two** dims, the
+  instance's *name* and the task's ARN *resource id*; one `MetricsKind::Dms`
+  with a flavor). Each is
   namespace +
   dimension-set specific — see the `fetch_*_metrics` fn and `MetricsKind` arm for
   a given service. Adding one ≈ an enum variant + an open arm + a render arm
@@ -601,7 +604,7 @@ Tasks sub-tab has an `f` status filter (All/Running/Stopped).
   sampled requests, secrets, S3 objects…); ② a contextual override
   (`editor_override_content` — CFN template/events, KMS / VPC-endpoint /
   OpenSearch policies **section-gated**, EC2 console log / user data (raw text, section-gated), REST-API / S3 bucket policies, SSM doc
-  body, CW dashboard JSON, buildspec, launch-template data, SFN definition) —
+  body, CW dashboard JSON, buildspec, launch-template data, SFN definition, DMS task/serverless settings (section-gated)) —
   overrides **fall through** when they have nothing, never error; ③
   `Resource::raw_content()` — **raw AWS JSON only** (CloudTrail events,
   GuardDuty / Inspector / Security Hub findings); ④ the default: the full
