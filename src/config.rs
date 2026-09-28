@@ -48,6 +48,10 @@ pub struct Config {
     /// `w` toggles it at runtime either way; the toggle is sticky for the
     /// session. Default false (clip).
     pub log_wrap: Option<bool>,
+    /// Show each key as it's pressed, and what it did, in a box in the
+    /// bottom-right corner — for screen recordings, shares and demos.
+    /// `--show-keys` turns it on for one run. Default false.
+    pub show_keys: Option<bool>,
     /// Which files `X` / `Ctrl-X` / the deep export write: any of `"json"`,
     /// `"csv"`, `"md"` (`"markdown"` also works). Default all three. Unknown
     /// values warn at startup and are ignored.
