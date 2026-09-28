@@ -195,7 +195,7 @@ impl AwsService for RedshiftService {
             }
         }
         // Newest first — the recent restore point is what you're looking for.
-        snapshots.sort_by(|a, b| b.created_epoch.cmp(&a.created_epoch));
+        snapshots.sort_by_key(|x| std::cmp::Reverse(x.created_epoch));
         if !snapshots.is_empty() {
             total += snapshots.len();
             let batch: Vec<Box<dyn Resource>> = snapshots

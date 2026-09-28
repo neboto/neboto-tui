@@ -246,7 +246,7 @@ impl AwsService for GlueService {
         }
         if !runs.is_empty() {
             // Most-recent-first across all jobs.
-            runs.sort_by(|a, b| b.started_epoch.cmp(&a.started_epoch));
+            runs.sort_by_key(|x| std::cmp::Reverse(x.started_epoch));
             total += runs.len();
             let batch: Vec<Box<dyn Resource>> = runs
                 .into_iter()

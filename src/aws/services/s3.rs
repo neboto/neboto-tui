@@ -416,10 +416,8 @@ impl AwsService for S3Service {
             let results = futures::future::join_all(detail_tasks).await;
 
             let mut batch_resources: Vec<Box<dyn Resource>> = Vec::new();
-            for result in results {
-                if let Ok(bucket) = result {
-                    batch_resources.push(Box::new(bucket) as Box<dyn Resource>);
-                }
+            for bucket in results.into_iter().flatten() {
+                batch_resources.push(Box::new(bucket) as Box<dyn Resource>);
             }
 
             total_loaded += batch_resources.len();

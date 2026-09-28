@@ -1236,7 +1236,7 @@ mod tests {
             org_scope: false,
             org_accounts: vec![],
         };
-        let mut checks = vec![mk("c-ok", "ok"), mk("a-err", "error"), mk("b-warn", "warning")];
+        let mut checks = [mk("c-ok", "ok"), mk("a-err", "error"), mk("b-warn", "warning")];
         checks.sort_by(|a, b| {
             status_rank(&a.status)
                 .cmp(&status_rank(&b.status))

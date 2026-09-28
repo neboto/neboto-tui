@@ -18,7 +18,7 @@ and say so in the description.
 
 ```bash
 cargo test               # unit tests + the offline wiring harness, no AWS needed
-cargo clippy             # must not add new warnings
+cargo clippy --all-targets -- -D warnings   # CI fails on any warning
 python3 scripts/check-readonly.py
 ```
 

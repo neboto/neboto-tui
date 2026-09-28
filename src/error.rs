@@ -28,7 +28,7 @@ pub enum Error {
 
     #[error("Event channel error")]
     #[allow(dead_code)]
-    ChannelError,
+    Channel,
 
     #[error("Editor operation failed: {0}")]
     EditorFailed(String),

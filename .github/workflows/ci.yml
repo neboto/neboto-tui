@@ -36,7 +36,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch, 2026-09-03
         with:
-          toolchain: stable
+          # Pinned, not `stable`: clippy fails on warnings, and each Rust
+          # release adds lints, so floating would turn an unrelated PR red
+          # the day a release lands. Bump deliberately, fixing what it finds
+          # in the same PR. (The release workflow still builds on stable.)
+          toolchain: "1.97.0"
           components: clippy
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -45,7 +49,7 @@ jobs:
         run: cargo test --locked
 
       - name: Clippy
-        run: cargo clippy --locked --all-targets
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       # neboto's core promise: every SDK operation the code calls has a
       # read-only verb (or a written exception), and so does every IAM action

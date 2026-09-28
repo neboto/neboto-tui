@@ -779,7 +779,7 @@ pub async fn fetch_sampled_requests(
     let total = resp.population_size();
     let samples = resp.sampled_requests();
 
-    lines.push(format!("WAF Sampled Requests (last 3 hours)"));
+    lines.push("WAF Sampled Requests (last 3 hours)".to_string());
     lines.push(format!("Total population: {}  |  Samples shown: {}", total, samples.len()));
     lines.push(String::new());
     lines.push(format!(

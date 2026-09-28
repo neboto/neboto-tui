@@ -383,8 +383,8 @@ pub async fn fetch_lambda_metrics(
             .namespace("AWS/Lambda")
             .metric_name("Invocations")
             .dimensions(make_dim())
-            .start_time(start_dt.clone())
-            .end_time(end_dt.clone())
+            .start_time(start_dt)
+            .end_time(end_dt)
             .period(period)
             .set_statistics(Some(vec![Statistic::Sum]))
             .send(),
@@ -393,8 +393,8 @@ pub async fn fetch_lambda_metrics(
             .namespace("AWS/Lambda")
             .metric_name("Duration")
             .dimensions(make_dim())
-            .start_time(start_dt.clone())
-            .end_time(end_dt.clone())
+            .start_time(start_dt)
+            .end_time(end_dt)
             .period(period)
             .set_statistics(Some(vec![Statistic::Average]))
             .send(),
@@ -403,8 +403,8 @@ pub async fn fetch_lambda_metrics(
             .namespace("AWS/Lambda")
             .metric_name("Errors")
             .dimensions(make_dim())
-            .start_time(start_dt.clone())
-            .end_time(end_dt.clone())
+            .start_time(start_dt)
+            .end_time(end_dt)
             .period(period)
             .set_statistics(Some(vec![Statistic::Sum]))
             .send(),
@@ -413,8 +413,8 @@ pub async fn fetch_lambda_metrics(
             .namespace("AWS/Lambda")
             .metric_name("Throttles")
             .dimensions(make_dim())
-            .start_time(start_dt.clone())
-            .end_time(end_dt.clone())
+            .start_time(start_dt)
+            .end_time(end_dt)
             .period(period)
             .set_statistics(Some(vec![Statistic::Sum]))
             .send(),
@@ -868,7 +868,7 @@ pub async fn download_and_extract_lambda_code(
     let count = tokio::task::spawn_blocking(move || -> std::io::Result<usize> {
         use std::io::Read;
         let io_err =
-            |e: String| std::io::Error::new(std::io::ErrorKind::Other, e);
+            |e: String| std::io::Error::other(e);
 
         // Pull the whole package into memory (Lambda packages are ≤ ~250 MB
         // unzipped, usually far smaller).

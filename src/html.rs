@@ -28,9 +28,7 @@ pub fn html_to_text(html: &str) -> String {
             i = j + 1; // skip past '>'
 
             let tl = tag.trim().to_lowercase();
-            if tl.starts_with("br") {
-                out.push('\n');
-            } else if tl == "/p" || tl == "/div" {
+            if tl.starts_with("br") || tl == "/p" || tl == "/div" {
                 out.push('\n');
             } else if tl == "p" || tl.starts_with("p ") || tl == "div" || tl.starts_with("div ") {
                 if !out.is_empty() && !out.ends_with('\n') {

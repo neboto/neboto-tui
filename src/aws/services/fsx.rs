@@ -884,6 +884,9 @@ pub struct FsxMetricsData {
     pub x_max: f64,
 }
 
+// One per file system in a map, and `Loading` is momentary — boxing the
+// payload saves nothing worth an extra allocation on every load.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum FsxMetricsState {
     Loading,

@@ -241,7 +241,7 @@ impl AwsService for AthenaService {
                 }
             }
             // Most-recent-first (by submission time).
-            executions.sort_by(|a, b| b.submitted_epoch.cmp(&a.submitted_epoch));
+            executions.sort_by_key(|x| std::cmp::Reverse(x.submitted_epoch));
             if !executions.is_empty() {
                 total += executions.len();
                 let batch: Vec<Box<dyn Resource>> = executions
@@ -282,7 +282,7 @@ impl AwsService for AthenaService {
                     }
                 }
             }
-            named.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            named.sort_by_key(|a| a.name.to_lowercase());
             if !named.is_empty() {
                 total += named.len();
                 let batch: Vec<Box<dyn Resource>> = named
@@ -733,7 +733,7 @@ pub async fn fetch_athena_tables(
             });
         }
     }
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.sort_by_key(|a| a.name.to_lowercase());
     Ok(out)
 }
 
