@@ -1,0 +1,24 @@
+{
+ "Events": [
+  {
+   "EventId": "7c0de008-demo-4e2a-9b1c-000000000008",
+   "EventName": "DetachVolume",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000JSMITH99",
+   "EventTime": {{epoch:now-6d}},
+   "EventSource": "ec2.amazonaws.com",
+   "Username": "jsmith",
+   "Resources": [
+    {
+     "ResourceType": "AWS::EC2::Volume",
+     "ResourceName": "vol-0orphan00000004"
+    },
+    {
+     "ResourceType": "AWS::EC2::Instance",
+     "ResourceName": "i-0legacy000000009"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"IAMUser\",\"principalId\":\"AIDADEMO00000JSMITH0\",\"arn\":\"arn:aws:iam::{{account}}:user/jsmith\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000JSMITH99\",\"userName\":\"jsmith\",\"sessionContext\":{\"attributes\":{\"mfaAuthenticated\":\"true\"}}},\"eventTime\":\"{{iso:now-6d}}\",\"eventSource\":\"ec2.amazonaws.com\",\"eventName\":\"DetachVolume\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"198.51.100.23\",\"userAgent\":\"Mozilla/5.0 (Macintosh) AWS Console\",\"requestParameters\":{\"volumeId\":\"vol-0orphan00000004\",\"instanceId\":\"i-0legacy000000009\",\"force\":false},\"responseElements\":{\"volumeId\":\"vol-0orphan00000004\",\"status\":\"detaching\"},\"requestID\":\"req-0008\",\"eventID\":\"7c0de008-demo-4e2a-9b1c-000000000008\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  }
+ ]
+}

@@ -183,6 +183,16 @@ pub trait Resource: Send + Sync + Debug {
         None
     }
 
+    /// Operational commands the `C` picker offers beside `cli_command` —
+    /// start/stop, force deploy, connect (see `aws::cli_actions` for the
+    /// rules: **nothing destructive**, no secret-revealing reads, value-taking
+    /// commands prefilled with the current value). neboto never runs these;
+    /// `C` only copies them. Use `CliAction::batchable` where the id flag
+    /// takes a list, so a visual selection merges into one command.
+    fn cli_actions(&self) -> Vec<crate::aws::cli_actions::CliAction> {
+        Vec::new()
+    }
+
     /// Identifiers to search CloudTrail by for the "who changed this?" lens
     /// (`W`), tried in order until one yields events. CloudTrail's
     /// `ResourceName` attribute indexes by the value that appears in an event's

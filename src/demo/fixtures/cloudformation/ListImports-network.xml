@@ -1,0 +1,6 @@
+<ListImportsResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <ListImportsResult>
+    <Imports><member>storefront-prod</member></Imports>
+  </ListImportsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListImportsResponse>

@@ -1,0 +1,99 @@
+<DescribeSecurityGroupsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+  <requestId>neboto-demo</requestId>
+  <securityGroupInfo>
+    <item>
+      <ownerId>{{account}}</ownerId>
+      <groupId>sg-0web0000000000001</groupId>
+      <groupName>web-sg</groupName>
+      <groupDescription>Storefront web tier</groupDescription>
+      <vpcId>vpc-0acme000000prod1</vpcId>
+      <ipPermissions>
+        <item>
+          <ipProtocol>tcp</ipProtocol><fromPort>443</fromPort><toPort>443</toPort>
+          <groups/>
+          <ipRanges><item><cidrIp>0.0.0.0/0</cidrIp><description>public HTTPS</description></item></ipRanges>
+          <ipv6Ranges/><prefixListIds/>
+        </item>
+        <item>
+          <ipProtocol>tcp</ipProtocol><fromPort>8080</fromPort><toPort>8080</toPort>
+          <groups><item><userId>{{account}}</userId><groupId>sg-0alb000000000003</groupId><description>from the storefront ALB</description></item></groups>
+          <ipRanges/><ipv6Ranges/><prefixListIds/>
+        </item>
+        <item>
+          <ipProtocol>tcp</ipProtocol><fromPort>22</fromPort><toPort>22</toPort>
+          <groups/>
+          <ipRanges><item><cidrIp>0.0.0.0/0</cidrIp><description>temp debug access - remove</description></item></ipRanges>
+          <ipv6Ranges/><prefixListIds/>
+        </item>
+      </ipPermissions>
+      <ipPermissionsEgress>
+        <item>
+          <ipProtocol>-1</ipProtocol>
+          <groups/>
+          <ipRanges><item><cidrIp>0.0.0.0/0</cidrIp></item></ipRanges>
+          <ipv6Ranges/><prefixListIds/>
+        </item>
+      </ipPermissionsEgress>
+      <tagSet>
+        <item><key>team</key><value>storefront</value></item>
+        <item><key>ManagedBy</key><value>terraform</value></item>
+      </tagSet>
+    </item>
+    <item>
+      <ownerId>{{account}}</ownerId>
+      <groupId>sg-0db00000000000002</groupId>
+      <groupName>reporting-db-sg</groupName>
+      <groupDescription>Reporting ETL box - Postgres from the app tier only</groupDescription>
+      <vpcId>vpc-0acme000000prod1</vpcId>
+      <ipPermissions>
+        <item>
+          <ipProtocol>tcp</ipProtocol><fromPort>5432</fromPort><toPort>5432</toPort>
+          <groups><item><userId>{{account}}</userId><groupId>sg-0web0000000000001</groupId></item></groups>
+          <ipRanges/><ipv6Ranges/><prefixListIds/>
+        </item>
+      </ipPermissions>
+      <ipPermissionsEgress>
+        <item>
+          <ipProtocol>-1</ipProtocol>
+          <groups/>
+          <ipRanges><item><cidrIp>0.0.0.0/0</cidrIp></item></ipRanges>
+          <ipv6Ranges/><prefixListIds/>
+        </item>
+      </ipPermissionsEgress>
+      <tagSet><item><key>team</key><value>data</value></item></tagSet>
+    </item>
+    <item>
+      <ownerId>{{account}}</ownerId>
+      <groupId>sg-0alb000000000003</groupId>
+      <groupName>storefront-alb-sg</groupName>
+      <groupDescription>Public load balancers</groupDescription>
+      <vpcId>vpc-0acme000000prod1</vpcId>
+      <ipPermissions>
+        <item>
+          <ipProtocol>tcp</ipProtocol><fromPort>443</fromPort><toPort>443</toPort>
+          <groups/>
+          <ipRanges><item><cidrIp>0.0.0.0/0</cidrIp><description>HTTPS from anywhere</description></item></ipRanges>
+          <ipv6Ranges/><prefixListIds/>
+        </item>
+        <item>
+          <ipProtocol>tcp</ipProtocol><fromPort>80</fromPort><toPort>80</toPort>
+          <groups/>
+          <ipRanges><item><cidrIp>0.0.0.0/0</cidrIp><description>HTTP redirect</description></item></ipRanges>
+          <ipv6Ranges/><prefixListIds/>
+        </item>
+      </ipPermissions>
+      <ipPermissionsEgress>
+        <item>
+          <ipProtocol>-1</ipProtocol>
+          <groups/>
+          <ipRanges><item><cidrIp>0.0.0.0/0</cidrIp></item></ipRanges>
+          <ipv6Ranges/><prefixListIds/>
+        </item>
+      </ipPermissionsEgress>
+      <tagSet>
+        <item><key>aws:cloudformation:stack-name</key><value>storefront-prod</value></item>
+        <item><key>team</key><value>storefront</value></item>
+      </tagSet>
+    </item>
+  </securityGroupInfo>
+</DescribeSecurityGroupsResponse>

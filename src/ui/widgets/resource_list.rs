@@ -214,6 +214,13 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                     "searching cached services only · Esc clear".to_string(),
                 )
             }
+        } else if app.resources.is_empty() && crate::demo::enabled() {
+            // Demo mode answers uncovered calls with empty successes, so an
+            // empty service is a dataset gap, not a permission problem.
+            (
+                "Not in the demo dataset yet".to_string(),
+                "try @ecs or @ec2 — the demo account's problems live there".to_string(),
+            )
         } else if app.resources.is_empty() {
             // FMS from a non-admin account fails every call — say why instead
             // of a generic "no resources". (The admin-account id, when the
@@ -243,6 +250,15 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                 (
                     "No Control Tower resources found".to_string(),
                     "Control Tower answers only in its home region, from the management account · R switch region"
+                        .to_string(),
+                )
+            }
+            // X-Ray with nothing at all in the window: tracing is off, or the
+            // window is too short for the sampling rate — not a permission gap.
+            else if app.current_service == Some(crate::aws::service::ServiceType::XRay) {
+                (
+                    format!("No X-Ray data in the last {}", app.xray_window.label()),
+                    "] widen the window · tracing must be enabled on the service (SDK / Lambda active tracing)"
                         .to_string(),
                 )
             }
@@ -305,6 +321,31 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                     ("No hosted zones".to_string(), "r refresh".to_string())
                 }
             }
+            // Batch Jobs: finished jobs age out after a while, and an `f`
+            // group may just have nothing in it — neither is a load gap.
+            else if app.current_service == Some(crate::aws::service::ServiceType::Batch)
+                && app.batch_view == crate::app::BatchView::Jobs
+                && app.list_state_filter.is_none()
+            {
+                (
+                    if app.batch_job_filter == crate::app::BatchJobStatusFilter::All {
+                        "No jobs on any queue".to_string()
+                    } else {
+                        format!("No {} jobs", app.batch_job_filter.label())
+                    },
+                    "Batch keeps finished jobs for a limited time · f cycles the status group".to_string(),
+                )
+            }
+            // No queues / compute environments at all: Batch isn't set up in
+            // this region.
+            else if app.current_service == Some(crate::aws::service::ServiceType::Batch)
+                && app.resources.is_empty()
+            {
+                (
+                    "No Batch resources in this region".to_string(),
+                    "R switch region · r refresh".to_string(),
+                )
+            }
             // The Pull Requests tab eagerly loads OPEN PRs only (closed ones
             // are a per-repo lazy fetch on the repo pane) — an empty tab
             // usually means nothing is waiting on review, not a load gap.
@@ -315,6 +356,19 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                 (
                     "No open pull requests".to_string(),
                     "closed PRs live on each repo's Pull Requests section".to_string(),
+                )
+            }
+            // An empty X-Ray map/traces tab while the other tabs have rows:
+            // nothing was traced in the window (sampling rules decide how
+            // much is), not a load failure.
+            else if app.current_service == Some(crate::aws::service::ServiceType::XRay)
+                && app.xray_view != crate::app::XRayView::Config
+                && app.list_state_filter.is_none()
+            {
+                (
+                    format!("Nothing traced in the last {}", app.xray_window.label()),
+                    "] widen the window · 3 Groups & Sampling shows which rules decide what gets traced"
+                        .to_string(),
                 )
             }
             // An empty Cross-Account tab means OAM just isn't configured —

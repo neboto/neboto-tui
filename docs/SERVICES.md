@@ -651,6 +651,14 @@ the service you're touching.
 - **Route 53** (`@r53`) — sub-tabs Zones / **Records** / Health Checks.
   Zones stream first, then health checks stream as a second batch
   (`ListHealthChecks`, tags batched 10-at-a-time via `ListTagsForResources`).
+  **Zone tags are batched the same way at list time** — `ListHostedZones`
+  returns none, and without the eager fill `Resource::tags()` is empty for
+  the ribbon / `tag:` filters / `U` / exports. **The tag APIs take the bare
+  `Z…` id**, not the `/hostedzone/Z…` path `ListHostedZones` hands out:
+  `GetHostedZone` and friends tolerate the path, `ListTagsForResource(s)`
+  reject it, and the lazy bundle used to swallow that rejection into "No
+  tags" (#26). `resolve_zone_tags` / `fetch_zone_tags` strip it; the bundle
+  now carries `tags_error` and the Tags section renders it via `error_rows`.
   **Records is a real cross-zone list**, not a second view of the zones (it
   used to be: same type filter, the only difference was firing the selected
   zone's records fetch, which `Enter` on the zone already did). Each
@@ -950,6 +958,56 @@ the service you're touching.
   (`{AWS/Kafka,"Cluster Name","Broker ID"}`) restricts the search to broker-level
   series so per-topic series don't double-count. `ListNodes` (per-broker ENI/IP
   enumeration) is deferred — the section list doesn't need it.
+- **DMS** (`@dms`, `dms.rs`, **aws-sdk-databasemigration**) — browse-only,
+  four sub-tabs **Tasks / Replication Instances / Endpoints / Serverless**.
+  **SDK pin**: added at `1.120.0`, the newest release whose `aws-smithy-types`
+  requirement (^1.6.2) fits the locked set — 1.123+ want 1.6.3+/1.8 and drag
+  the lock into the unbuildable smithy refresh (see RELEASING.md). Bump it
+  with the rest of the SDK, not on its own.
+  **Load**: instances + endpoints + `DescribeConnections` first (their names
+  label task rows, joined by ARN at load time), then tasks, then serverless
+  `DescribeReplicationConfigs` joined to `DescribeReplications` by config ARN
+  (a config never started has no replication → state "not started"), then
+  **one batched `ListTagsForResource`** over every ARN (`ResourceArnList`,
+  chunks of 50 — tags are not on the Describe responses). Everything is sent
+  in one batch once tags land; DMS accounts are small. A total failure of
+  tasks + instances + endpoints is a `ResourceLoadError`; any one failing is a
+  warning. **ids are ARNs** (`id()` = ARN, `name()` = identifier): the
+  user-facing identifier isn't unique across types and the metrics/log keys
+  need the ARN's resource id anyway. `arn_jump_target` routes `dms` ARNs
+  (`task:` / `rep:` / `endpoint:` / `replication-config:`) to
+  `JumpView::Dms(view)` — the view must travel with the target, because a
+  same-service jump keeps the current sub-tab and its type filter hides the
+  row (`align!` only runs for `@all` / refs-lens jumps). The jump searches
+  by ARN, so every DMS `search_text()` includes the ARN.
+  **Status**: DMS leaves a task that died at `stopped` and says why only in
+  `StopReason` (`… FATAL_ERROR …`), so `stopped_on_error()` reads the reason
+  and paints the row red as **"stopped (error)"**; an endpoint with a failed
+  connection test reads **"connection failed"**. Rows needing attention sort
+  first. **Sections**: task Overview (stop reason, last failure, progress,
+  source/target/instance with jumpable ARN rows, CDC positions, logging) /
+  **Tables** (lazy `DescribeTableStatistics`, capped 1000, errored tables
+  first and `✗`-marked) / **Assessments** (lazy premigration runs, newest
+  first, result counts + the S3 report location) / Settings (table mappings +
+  task settings pretty-printed) / Tags. Instance: Overview / Network / Tasks
+  (**sibling-filtered**, no fetch) / Tags. Endpoint: Overview / Connections /
+  Used by (sibling tasks + serverless) / Tags. Serverless: Overview / Capacity
+  (DCU range, provisioned now) / Tables (lazy
+  `DescribeReplicationTableStatistics`) / Settings / Tags.
+  **Credentials**: some engine settings blocks carry `password` — never read;
+  only `secrets_manager_secret_id` is kept, shown as a reference.
+  **`m`**: `AWS/DMS`. A task is dimensioned by `ReplicationInstanceIdentifier`
+  (the instance **name**) **+** `ReplicationTaskIdentifier` — the task's
+  opaque **resource id** (ARN suffix), not its identifier; CDC latency
+  source/target, incoming changes, full-load rows/s. An instance takes the
+  first dim only: CPU, freeable memory, free storage, swap. A task whose
+  instance wasn't listed has no metrics (the dim is unknown).
+  **`t`**: a task with `Logging.EnableLogging` writes to log group
+  `dms-tasks-<instance id>` stream `dms-task-<task resource id>`; derived, no
+  lookup. Serverless replications have no tail yet.
+  **`C`**: tasks/serverless offer `start … resume-processing` and `stop`
+  (Change); endpoints offer `test-connection` per instance they've been
+  tested from. Never `reload-target`, never a delete.
 - **Redshift** (`@redshift`, `redshift.rs`, two clients: `redshift` +
   `redshiftserverless`) — sub-tabs **Clusters / Serverless / Snapshots**,
   streamed as three error-tolerant batches. **Clusters**: one paginated
@@ -1530,7 +1588,7 @@ the service you're touching.
     `GetManagedPrefixListEntries` paginated, `lazy.pl_entries` keyed by pl id) /
     Tags. `pl-` ids (route destinations, SG rules) jump to the Routing tab.
 - **Compute Optimizer lens** (B7) — a lazy **Optimizer** section on five panes:
-  EC2 instance (key 8), EBS volume (5), Lambda (6), ASG (5), ECS service (7).
+  EC2 instance (key 9), EBS volume (5), Lambda (6), ASG (5), ECS service (7).
   Not a `ServiceType`: `aws/services/computeoptimizer.rs` flattens the per-ARN
   `Get*Recommendations` into one `OptimizerRec`; `details_pane::optimizer_lines`
   is the shared row-builder. `App.optimizer_recs` is keyed by ARN (region+account
@@ -1540,7 +1598,7 @@ the service you're touching.
   built from region + `account_id`; `AsgGroup.arn` is captured from the SDK
   (contains a UUID). "No recommendation" (`Loaded(None)`) is a normal state, not
   an error.
-- **EC2 instance Console section** (key 6, `GetConsoleOutput`) — the system
+- **EC2 instance Console section** (key 7, `GetConsoleOutput`) — the system
   log the console shows under *Get system log*; lazy `lazy.ec2_instance_console`
   keyed by instance id, same shape as User Data. The buffer comes back
   **base64** and is decoded + sanitised (`sanitize_console_line`: ANSI
@@ -1557,6 +1615,26 @@ the service you're touching.
   `.yaml` / `.txt` sniffed from line 1, no header — `#!` and `#cloud-config`
   must stay first) via `editor_override_content`, not the snapshot JSON.
   `GetConsoleScreenshot` (a JPEG) is deliberately not offered.
+- **EC2 instance Load Balancing section** (key 4,
+  `elb::fetch_instance_lb_membership`) — "is this instance behind a load
+  balancer?". **There is no reverse API** (nothing answers "which target
+  groups hold target X"), so the lazy fetch lists every target group, keeps
+  the ones that could hold the instance (same VPC; `instance`-type matched on
+  the instance id, `ip`-type on its private IPs — `lambda`/`alb`-type groups
+  can't hold it), and probes each with `DescribeTargetHealth`, 8 at a time.
+  Capped at `MAX_INSTANCE_LB_CANDIDATES` (a large account would otherwise
+  make hundreds of calls from a `Tab` press); when the instance carries an
+  `aws:autoscaling:groupName` tag, one `DescribeAutoScalingGroups` supplies
+  the ASG's attached groups (`TargetGroupARNs` + `elbv2` traffic sources) and
+  they **sort first**, so they're always inside the cap. The ASG lookup and
+  individual health calls fail soft (a `⚠` row); only `DescribeTargetGroups`
+  failing errors the section. Load-balancer names come from the ARN
+  (`lb_kind_and_name`), no `DescribeLoadBalancers`. The `Target Group` /
+  `Load Balancer` rows carry ARNs so the generic ARN classifier jumps them.
+  Rejected: loading every group's targets at ELB list time (N+1 calls on
+  every ELB load and watch tick, for a question asked from the instance).
+  Only the primary private IP of each ENI is known (`EmbeddedNic`), so an
+  `ip`-type registration on a secondary IP isn't matched.
 - **EBS / AMIs / Snapshots / Launch Templates** — EC2 sub-tabs (keys 3, 5–7),
   **self-owned only**. Cross-jumps: `snap-`→Snapshots, `vol-`→EBS, `i-`→instance.
 - **ENIs** — EC2 sub-tab (`Ec2View::NetworkInterfaces`, key 4): paginated
@@ -1676,6 +1754,90 @@ the service you're touching.
   (`service_tabs::visible_window`, same algorithm as `subtab_bar`). A config
   file that fails to parse no longer silently defaults everything —
   `Config.load_warning` surfaces it in the status bar at startup.
+- **Batch** (`@batch`, `batch.rs`, **aws-sdk-batch**) — browse-only,
+  sub-tabs **Job Queues / Compute Environments / Jobs / Job Definitions**.
+  **SDK pin**: added at `1.125.0`, the newest release whose smithy
+  requirements (`aws-smithy-types` ^1.6.2, `aws-smithy-runtime-api` ^1.15)
+  fit the locked set; 1.126+ needs `aws-smithy-types` 1.6.3. **Rows are
+  keyed by name** (queue, compute environment), `name:revision` (job
+  definition) and job id — the tail of each ARN — so the `"batch"` arm in
+  `arn_jump_target` maps `job-queue/`, `compute-environment/`, `job/` and
+  `job-definition/` ARNs to `JumpView::Batch(view)`. It carries the view
+  because a same-service jump to another sub-tab needs it: `JumpView::None`
+  leaves you on the current tab, whose type filter hides the target.
+  **Jobs**: `ListJobs` returns **RUNNING only** without a status, so the
+  load queries every (queue, status) pair (7 statuses, 6 in flight), caps
+  each at `MAX_JOBS_PER_STATUS` (200, warns when hit — SUCCEEDED can be
+  huge), then `DescribeJobs` in chunks of 100 and sorts newest-first. All
+  jobs load eagerly into one Jobs tab rather than the per-queue drill the
+  issue sketched: the queue pane's **Jobs** section lists that queue's jobs
+  (status counts + job ARNs that `⏎` into the Jobs tab), which covers the
+  drill without a second list mode. `f` on the Jobs tab cycles status
+  *groups* (all / active / failed / succeeded — `BatchJobStatusFilter`, the
+  ECS-task precedent); `F` still narrows to one exact status. **The
+  stuck-queue verdict** is computed at render time from the loaded rows (no
+  extra calls): a compute environment's `blocker()` is disabled / INVALID /
+  managed-with-desired-vCPU-0, and the CE pane counts RUNNABLE jobs on the
+  queues that list it. Desired 0 with RUNNABLE jobs is normal for a few
+  minutes while Batch scales, so it's a ⚠ that says "if it stays at 0" plus
+  the usual causes, not a ✗. The queue pane flags RUNNABLE jobs when none of
+  its CEs can take work, and a job RUNNABLE for >10m points at the queue.
+  **Containers**: a classic job's `container` and a multi-container job's
+  `ecsProperties.taskProperties[].containers` fold into one
+  `BatchContainer` list; vCPU/memory come from `resourceRequirements`,
+  falling back to the deprecated top-level fields older jobs still set.
+  **Log tail**: `t` on a job tails the first container's awslogs group
+  (`awslogs-group` option, else `/aws/batch/job`) filtered to its stream.
+  No stream (not started yet), a non-awslogs driver, and EKS jobs (logs
+  live in the cluster) each get their own status message rather than
+  tailing the whole group. **Empty states**: finished jobs age out after a
+  while, so an empty Jobs tab says so. Deliberately v2: `m` metrics
+  (Batch publishes almost nothing without Container Insights), fair-share
+  scheduling policy detail (`DescribeSchedulingPolicies` — the queue shows
+  the policy ARN), array-child listing (`ListJobs --array-job-id`, offered
+  as a `C` command), multi-node per-node detail, and EKS pod detail.
+- **X-Ray** (`@xray`, `xray.rs`, **aws-sdk-xray**) — browse-only, sub-tabs
+  **Service Map / Traces / Groups & Sampling** (the third is a pipe-grouped
+  filter of `X-Ray Group|X-Ray Sampling Rule`, both flat `details()`).
+  **SDK pin**: added at `1.109.0` — the newest release whose
+  `aws-smithy-types` (^1.6.2) / `aws-smithy-runtime` (^1.14) requirements fit
+  the locked set; newer ones drag the lock into the unbuildable smithy
+  refresh (RELEASING.md). **Time window**: every list is scoped to
+  `App.xray_window` (5m / 15m / 1h / 6h; `[`/`]` in the list pane, chips on
+  the tab bar are clickable halves). The service struct carries the window
+  and the cache is variant-keyed by its label — the WAF-scope rebuild
+  pattern (`apply_xray_window`, re-seeded in `recreate_services`). **6h is
+  the ceiling**: `GetServiceGraph` rejects longer spans. **Service map**:
+  one `XRayNode` per graph node, keyed `type::name` (the graph's
+  `ReferenceId` is not stable across queries); edges are resolved against
+  the same response (Downstream) and **inverted** at load time (Upstream);
+  p50/p90/p99 come from `ResponseTimeHistogram`. Nodes sort worst-first
+  (faults, errors, volume); `state_label()` is the fault/error % so the list
+  column reads the health. A node whose X-Ray name *is* a neboto resource
+  name (Lambda function, DynamoDB table, S3 bucket, state machine, SNS topic,
+  EKS cluster) gets a **"Jump To"** row valued `@prefix name` — a generic
+  classifier arm (0a in `resource_jump_target`) switches service and
+  resolves by id/name; other node types (API GW stages, ECS, clients,
+  remote) don't map 1:1 and have no row. **Traces**: `GetTraceSummaries`,
+  capped at 500 per load (the first pages returned, re-sorted newest-first;
+  hitting the cap warns and says to narrow the window). No custom filter
+  key: `state_label()` returns `fault` / `error` / `throttled` / `ok`, so the
+  generic **`F`** state filter *is* the faults filter. Trace pane: Overview
+  (outcome, HTTP method/URL/status, client, entry point, services, resource
+  ARNs) / Root Cause (fault + error root causes with the entity path and the
+  first exception; response-time root causes with their coverage %) /
+  **Segments** (lazy `BatchGetTraces`; segment documents parsed and flattened
+  depth-first with the subsegments indented, offsets relative to the first
+  segment, `✗`/`⚠` on fault/error; `e` opens the raw trace JSON, an
+  `editor_override_content` arm gated on the section). **Empty states**: an
+  empty map/traces tab is almost always "tracing off / too little sampled in
+  this window", so `resource_list.rs` says that (with `]` and the sampling
+  tab as the next steps) rather than blaming permissions. Sampling rules
+  sort by priority (evaluation order); a rule with rate 0 and reservoir 0
+  reads **"samples nothing"**. Deliberately v2: a timing-bar segment tree,
+  insights (`GetInsightSummaries`), per-group service maps, and CloudWatch
+  Application Signals / Transaction Search (spans sent there instead of
+  X-Ray don't appear here).
 - **CloudTrail** (`@cloudtrail`) — sub-tabs **Events / Trails / Insights**.
   Events: JSON parsed **eagerly** (no extra API calls); `is_noise()` returns
   `read_only` so `a` hides reads (noise is **shown by default** app-wide). `f`
@@ -2312,6 +2474,22 @@ the service you're touching.
     pre-versioning objects report the literal version id `"null"` — display
     it, don't special-case it. Object-meta cache keys gain an `@version`
     suffix so a version's HEAD never shadows the current object's.
+  - **Terraform state viewer** (`t` in the object browser on a `.tfstate` /
+    `.tfstate.backup` key; `src/terraform.rs`): one `GetObject`, parsed with
+    serde into `TfState` (version, serial, terraform_version, resource
+    blocks → instances, outputs), then `App.terraform_state` is set, the
+    browser closes and the detail pane renders `render_tf_state_pane`.
+    `tf_state_detail_lines` feeds `get_detail_lines` directly (it takes
+    priority over the selected resource while set), so `Enter` reaches the
+    generic `resource_jump_target` on the `(address, ARN-or-id)` rows for
+    free — no tfstate-specific jump code, and any new id prefix the
+    classifier learns works here too. The identifier prefers the `arn`
+    attribute over `id` for exactly that reason (an `id` like `app` is
+    ambiguous; the ARN classifies). Instances with no identifier render as
+    plain lines. Off the LazyStore deliberately: it isn't keyed to a
+    resource selection and `Esc` drops it; the flat view, snapshot walk and
+    export never see it. Providers are summarised as counts rather than
+    repeated per row — the per-row `provider:` noise was the first draft.
 - **S3 Files** (`@s3files`, `s3files.rs`) — the 2026 S3 shared-file-system
   feature (EFS-based NFS file systems linked to a bucket or prefix, two-way
   sync). Single-list (file systems, `ListFileSystems`, cap 200, single-phase
@@ -2355,9 +2533,13 @@ the service you're touching.
   - **Ids are the full ARN** for both types — table-bucket APIs are
     ARN-keyed, and table names are only unique per namespace. The
     `"s3tables"` `arn_jump_target` arm therefore jumps with the whole ARN
-    (`bucket/<name>` and `bucket/<name>/table/<uuid>` both resolve; the
-    sub-tab aligns to the resolved type via `align!`). A table's pane
-    renders its Bucket ARN row as the jump back to its table bucket.
+    (`bucket/<name>` and `bucket/<name>/table/<uuid>` both resolve) with
+    `JumpView::S3Tables(view)` — Buckets, or Tables when the ARN has
+    `/table/`. The view must travel with the target: a same-service jump
+    keeps the current sub-tab, and `align!` only runs for `@all` /
+    refs-lens jumps. A table's pane renders its Bucket ARN row as the jump
+    back to its table bucket; the bucket's `search_text()` includes its ARN
+    because the jump searches by it.
   - **Bucket pane** (Details / Namespaces / Maintenance / Policy / Tags):
     Details folds in a lazy `GetTableBucketEncryption` — a **404 means the
     SSE-S3 default**, not an error (`is_not_found_exception()` → "SSE-S3

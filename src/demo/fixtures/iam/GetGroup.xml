@@ -1,0 +1,8 @@
+<GetGroupResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetGroupResult>
+    <IsTruncated>false</IsTruncated>
+    <Group><Path>/</Path><GroupName>platform-admins</GroupName><GroupId>AGPADEMO000PLATADMIN</GroupId><Arn>arn:aws:iam::{{account}}:group/platform-admins</Arn><CreateDate>{{iso:now-800d}}</CreateDate></Group>
+    <Users><member><Path>/</Path><UserName>jsmith</UserName><UserId>AIDADEMO00000JSMITH0</UserId><Arn>arn:aws:iam::{{account}}:user/jsmith</Arn><CreateDate>{{iso:now-800d}}</CreateDate><PasswordLastUsed>{{iso:now-3h}}</PasswordLastUsed></member></Users>
+  </GetGroupResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetGroupResponse>

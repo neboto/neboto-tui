@@ -418,6 +418,14 @@ pub struct LazyStore {
     pub kinesis_tags: LazyMap<Vec<(String, String)>>,
     /// A delivery stream's tags, keyed by stream name.
     pub firehose_tags: LazyMap<Vec<(String, String)>>,
+    /// X-Ray trace Segments section (`BatchGetTraces`), keyed by trace id.
+    pub xray_traces: LazyMap<crate::aws::services::xray::XRayTraceDetail>,
+    /// DMS task Tables section (`DescribeTableStatistics`), keyed by task ARN.
+    pub dms_table_stats: LazyMap<crate::aws::services::dms::DmsTableStats>,
+    /// DMS task Assessments section, keyed by task ARN.
+    pub dms_assessments: LazyMap<Vec<crate::aws::services::dms::DmsAssessmentRun>>,
+    /// DMS serverless replication Tables section, keyed by config ARN.
+    pub dms_serverless_table_stats: LazyMap<crate::aws::services::dms::DmsTableStats>,
 
     // ── Transfer Family ──────────────────────────────────────────────────
     /// A server's users, keyed by server id.
@@ -499,6 +507,9 @@ pub struct LazyStore {
     /// An instance's system console output (`GetConsoleOutput`), keyed by
     /// instance id. `Loaded(None)` = AWS has posted nothing for it yet.
     pub ec2_instance_console: LazyMap<Option<crate::aws::services::ec2::ConsoleOutput>>,
+    /// The target groups an instance is registered in (+ health), keyed by
+    /// instance id.
+    pub ec2_instance_lb: LazyMap<crate::aws::services::elb::InstanceLbInfo>,
     /// The ENIs a security group is attached to (the Used-By section), keyed
     /// by group id. Shared by the EC2 and VPC security-group panes.
     pub sg_network_interfaces: LazyMap<Vec<crate::aws::services::ec2::SgEni>>,

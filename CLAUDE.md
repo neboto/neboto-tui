@@ -148,7 +148,8 @@ Variations on the pattern:
 - **Toggle rows** (rebuild + variant-cache the service, not resource filters):
   Cost (`cost_group_by` keys 1–4 + `cost_period` keys 5–7, `t` cycles), WAF
   (`waf_scope`), RAM (`ram_owner` SELF/OTHER via `t`), Service Quotas
-  (`quota_service_code`, `c` picker), CloudTrail (`ct_query`, `f` filter
+  (`quota_service_code`, `c` picker), X-Ray (`xray_window`, `[`/`]` in
+  the list pane), CloudTrail (`ct_query`, `f` filter
   modal). **Cost specifics**: the drill-down (Breakdown/Regions/Forecast) is
   fetched over the **active period's window** and the `cost_drilldown` map is
   keyed by `App::cost_drilldown_key` (period + row key) — never the bare row
@@ -355,7 +356,10 @@ in `any_pane_overlay_active` (which gates the mouse).
   us-east-1 like health checks; private zones publish nothing → not
   offered)/Route 53 Resolver endpoints (`AWS/Route53Resolver` dim
   `EndpointId`, regional — both direction volumes fetched, the wrong one is
-  just empty)/CodeBuild projects (`AWS/CodeBuild` dim `ProjectName`). Each is
+  just empty)/CodeBuild projects (`AWS/CodeBuild` dim `ProjectName`)/DMS tasks +
+  replication instances (`AWS/DMS` — a task needs **two** dims, the
+  instance's *name* and the task's ARN *resource id*; one `MetricsKind::Dms`
+  with a flavor). Each is
   namespace +
   dimension-set specific — see the `fetch_*_metrics` fn and `MetricsKind` arm for
   a given service. Adding one ≈ an enum variant + an open arm + a render arm
@@ -428,8 +432,8 @@ in `any_pane_overlay_active` (which gates the mouse).
   gates the status-bar hint.
 - **Live log tail** (`t`, on a log group, Lambda, RDS, ECS task, Network
   Firewall, WAF web ACL, CloudTrail trail, Route 53 hosted zone (query
-  logs), Step Functions state machine or execution, CodeBuild, or a
-  CodePipeline run): `log_tail.rs` /
+  logs), Step Functions state machine or execution, CodeBuild, a
+  CodePipeline run, or a Batch job): `log_tail.rs` /
   `LogTailState`. **Adding a tail source takes two changes**: the downcast
   branch in `open_log_tail` AND its `is_selected_*` in `supports_log_tail()` —
   the latter gates the `t` key itself (and the status-bar hint), so a branch
@@ -524,7 +528,9 @@ in `any_pane_overlay_active` (which gates the mouse).
   refetches all). `merge_rules` collapses identical `(direction, protocol,
   ports, source)` rules and lists the contributing groups; sorted inbound
   first then by port. `t` cycles inbound → outbound → both (sticky across
-  opens), open-to-world sources render in the warning colour, `⏎` jumps to
+  opens), open-to-world sources render in the warning colour, a source that
+  is a load balancer's own SG is labelled `⇠ ALB name` (warm ELB cache only,
+  `cached_lb_security_groups`; a cold cache says so in the header), `⏎` jumps to
   the row's group (a referenced `sg-` source wins over the contributor),
   `e` opens the whole table, `y` copies a row.
   Both lenses share the `W` plumbing: a `handle_*_key` early in
@@ -598,7 +604,7 @@ Tasks sub-tab has an `f` status filter (All/Running/Stopped).
   sampled requests, secrets, S3 objects…); ② a contextual override
   (`editor_override_content` — CFN template/events, KMS / VPC-endpoint /
   OpenSearch policies **section-gated**, EC2 console log / user data (raw text, section-gated), REST-API / S3 bucket policies, SSM doc
-  body, CW dashboard JSON, buildspec, launch-template data, SFN definition) —
+  body, CW dashboard JSON, buildspec, launch-template data, SFN definition, DMS task/serverless settings (section-gated)) —
   overrides **fall through** when they have nothing, never error; ③
   `Resource::raw_content()` — **raw AWS JSON only** (CloudTrail events,
   GuardDuty / Inspector / Security Hub findings); ④ the default: the full
@@ -702,6 +708,19 @@ CloudTrail-filter / SSM-session modals are dropped with no checkpoint, so a
 macro simply doesn't reproduce those (it never stalls waiting on a modal it
 can't drive). In-pane overlays (`m`/`t`/`o`/`i`) record as raw keys and replay
 consistently, but aren't modelled.
+
+### Keycast (`--show-keys`, `src/keycast.rs`)
+
+A corner box naming each key and what it did (`W  change timeline`,
+`2  Deployments`), for recordings and screen shares; the demo tapes use it.
+It rides the macro recorder's shape: `handle_key` snapshots a
+`keycast::View` before dispatch, `keycast_tick` (main loop, after
+`macro_tick`) snapshots again, and `classify` names the **difference** — an
+overlay opened, the service or section changed, focus moved. A small fallback
+table covers keys with no visible effect (copy, wrap, filter chips). So a new
+feature gets a correct label for free if its state is in `View`; a new
+in-pane view needs a name in `App::keycast_view`'s overlay chain. Typing is
+never echoed: while `View.input` is set only `⏎`/`Esc` show.
 
 ### Caching (`src/aws/cache.rs`)
 
@@ -878,13 +897,26 @@ and the approaches you rejected are the part nobody can recover from your code.
   unconditional `loading = false` on the mismatch paths.
 - **Clipboard**: `App.clipboard` is kept alive for the process — dropping the
   handle clears the selection on Linux. Reuse it via `copy_to_clipboard`.
-- **CLI command copy** (`C`, either pane): `Resource::cli_command()` returns
-  the per-type **read** command (`aws ec2 describe-instances --instance-ids …`);
-  `App::copy_cli_command` appends `--region` + `--profile` (profile
-  omitted while an org role is assumed — a flag can't reproduce that session)
-  and copies it. Rules: read-only commands only, never one that reveals a
-  secret (Secrets Manager → `describe-secret`, SSM parameter → `get-parameter`
-  without `--with-decryption`); quote values with `aws::resource::shell_quote`.
+- **CLI command copy** (`C`, either pane; `src/aws/cli_actions.rs`, picker
+  `cli_picker.rs`): `Resource::cli_command()` returns the per-type **read**
+  command (`aws ec2 describe-instances --instance-ids …`) — always the first
+  row — and `Resource::cli_actions()` adds operational commands in three
+  tiers: Inspect, Connect (`ssm start-session`, `eks update-kubeconfig`,
+  `ecs execute-command`) and Change (start/stop, force deploy, scale).
+  neboto **never runs them** — `C` only copies, so the read-only guarantee
+  and `PERMISSIONS.md` are untouched. `App::copy_cli_command` appends
+  `--region` + `--profile` + `--endpoint-url` (an emulator session must say
+  so, or a pasted change hits the real account); the profile is omitted
+  while an org role is assumed (a flag can't reproduce that session), and
+  **Change rows are disabled then**. One row copies straight away (the
+  original `C`); more open the picker. A list visual selection offers the
+  `CliAction::batchable` commands every selected row shares, ids merged
+  into one list. Rules: **nothing destructive** (no terminate / delete /
+  purge / deregister), never a command that reveals a secret (Secrets
+  Manager → `describe-secret`, SSM parameter → `get-parameter` without
+  `--with-decryption`), value-taking commands prefilled with the **current**
+  value so a blind paste is a no-op; quote values with
+  `aws::resource::shell_quote`.
 - **Secrets**: the Secrets service surfaces metadata only; values are fetched
   only on `x` (reveal) / `Y` (copy) and are **never** stored in `App` or echoed
   into a message/log/row. Two extensions of the same line: where an API hands
@@ -900,7 +932,7 @@ and the approaches you rejected are the part nobody can recover from your code.
   to sub-tab), `/` (search), `@` (search seeded with `@`, for a fast
   `@service …` switch — works from either pane, via `start_service_search`),
   `y` (copy id/ARN; with a visual selection active, copy the rows as a
-  Markdown table), `C` (copy AWS CLI command), `V`/`J`/`K`/`Ctrl-A` (visual
+  Markdown table), `C` (copy an AWS CLI command — picker), `V`/`J`/`K`/`Ctrl-A` (visual
   row selection — see below), `a` (hide-noise filter, gated by
   `is_noise()`; **noise shows by default** — `a` opts in to hiding; the arm
   must check for **no modifier**, or it eats `Ctrl-A` select-all on every
@@ -1012,10 +1044,11 @@ and the approaches you rejected are the part nobody can recover from your code.
   `*_tabs.rs` (one per multi-resource service); the `*_selector.rs` modals
   (`S`/`R`/`P`/`c` pickers); `splash.rs` (welcome screen).
 - **`src/export.rs`**: `X` export (detail) / `Ctrl-X` (list) → JSON + CSV +
-  Markdown, via `detail_sections_snapshot()`; also `detail_json()` — the
-  sections-as-JSON serializer behind the default `e` editor view. Files land
-  in the working directory unless `NEBOTO_EXPORT_DIR` redirects (the test
-  harness sets it to a temp dir). The detail Markdown synthesizes
+  Markdown (the formats config `export_formats` enables), via
+  `detail_sections_snapshot()`; also `detail_json()` — the sections-as-JSON
+  serializer behind the default `e` editor view. Files land in the working
+  directory, or config `export_dir`; `NEBOTO_EXPORT_DIR` overrides both (the
+  test harness sets it to a temp dir). The detail Markdown synthesizes
   a `## Tags` section when no captured section is named "Tags" (exact
   case-insensitive match — `contains` would hit "Stages").
 - **`src/config.rs`**: TOML `Config` (`$NEBOTO_CONFIG` → XDG → `~/.neboto.toml`):
@@ -1023,6 +1056,10 @@ and the approaches you rejected are the part nobody can recover from your code.
   `endpoint_url`, `watch`/`watch_interval` (start in watch mode / its cadence),
   `detail_flat` (start in the flat all-section detail view),
   `log_wrap` (start log tail/search panes with long lines wrapped),
+  `show_keys` (keycast: each key and what it did, in a corner box),
+  `export_formats` (which of `json`/`csv`/`md` exports write, default all
+  three — `export::ExportFormats`; bad values warn at startup, never fatal) +
+  `export_dir` (`~/` expanded, created on demand; `NEBOTO_EXPORT_DIR` wins),
   `theme` (presets: `dark` default, `light`, `solarized-dark/-light`,
   `gruvbox-dark/-light`, `dracula`, `nord`, `catppuccin-mocha/-latte` —
   `theme::PRESET_NAMES`; separators optional, `mocha`/`latte` also resolve) +
@@ -1046,7 +1083,7 @@ and the approaches you rejected are the part nobody can recover from your code.
   No `default_service` ⇒ welcome splash, nothing loads.
 - **`src/cli.rs`**: clap `Cli` (parsed in `main` before the runtime).
   `-s/--service`, `-r/--region`, `-p/--profile`, `--endpoint-url`,
-  `--banner`/`--no-banner`, `-w/--watch`, `--theme` — each **overrides the config file**
+  `--banner`/`--no-banner`, `-w/--watch`, `--theme`, `--show-keys` — each **overrides the config file**
   for the run via
   `Cli::apply_to(&mut Config)`, applied in `App::new(cli)` after `Config::load()`.
   `-m/--macro NAME` is the exception: it names an action, not a setting, so it
@@ -1069,6 +1106,48 @@ When active, `AwsClients::build` injects dummy `test`/`test` creds, `s3_client()
 forces path-style, and the tab bar shows a `⚙ host:port` badge. Seed bulk data
 with `COUNT=200 ./scripts/seed-floci.sh`, then
 `AWS_ENDPOINT_URL=http://localhost:4566 cargo run`.
+
+### Demo mode (`--demo`, `src/demo/`)
+
+An offline, made-up account (`acme-prod`, #47). `demo::enable()` runs before
+the clients are built. `AwsClients::build` then installs `demo::http_client()`
+on the `SdkConfig`, which answers every request from embedded fixtures, and
+skips the profile and assumed-role credentials. Nothing above the HTTP layer
+changes: lists, lazy sections and jumps all make real SDK calls. **Covering a
+new service or section means adding fixtures, never demo branches in app
+code.**
+
+Fixtures live in `src/demo/fixtures/<service>/` and are registered in
+`fixtures.rs`, whose header lists the story (what's planted, for which clip):
+- **Lookup key:** the service (endpoint host label) and the operation (the
+  `X-Amz-Target` suffix, the `Action` form field, or `METHOD /path` for
+  restJson — a `*` path segment matches any one segment). An entry can also
+  list `when` substrings the request URI + body must all contain; the first
+  match wins, so narrow entries go first.
+- **Wire format:** bodies are raw wire format (EC2 query XML, awsQuery XML,
+  awsJson, restJson). A body starting `!status 404` fails with that status
+  (with `__type` copied to `x-amzn-errortype`) — use it where the real API
+  errors for "none", or the app reads an empty success as "configured".
+- **Placeholders:** `{{account}}`, `{{region}}`, `{{iso:now-15m}}`,
+  `{{epoch:now-2h}}` and `{{epochms:…}}` (CloudWatch Logs). Offsets chain
+  (`now-26h+31s`) for events seconds apart. Times are always relative to now.
+- **Id filtering:** EC2 describe calls that name ids (`GroupId.N`,
+  `VolumeId.N`) get the fixture's list cut down to them (`narrow`); callers
+  like the `N` lens merge whatever comes back. Extend `narrow` for another
+  by-id call rather than adding one fixture per id.
+- **Generated:** `FilterLogEvents` on a scripted group (`generate.rs`) is
+  computed per request from a fixed clock, so a live tail keeps moving and a
+  search finds the same lines.
+- **No fixture:** an unmatched operation returns a protocol-correct *empty*
+  success, so the service lists empty and `resource_list.rs` says "Not in the
+  demo dataset yet".
+- **Finding what to add:** `NEBOTO_DEMO_TRACE=<file>` logs every request with
+  `fixture` / `generated` / `EMPTY` — open a view and read which calls it made.
+
+The fixture tests in `src/demo/tests.rs` drive real SDK clients, so a fixture
+that doesn't deserialize fails `cargo test`; another checks every fixture
+renders to parseable JSON / balanced XML. The showcase clips are VHS tapes in
+`demo/scenes/` recorded against `--demo`.
 
 ## Testing
 

@@ -1,0 +1,36 @@
+{
+ "events": [
+  {
+   "timestamp": {{epochms:now-19m}},
+   "message": "[orders-worker] v1.19.0 starting (node 20.17.0)",
+   "ingestionTime": {{epochms:now-19m}}
+  },
+  {
+   "timestamp": {{epochms:now-19m}},
+   "message": "[orders-worker] loading config from environment",
+   "ingestionTime": {{epochms:now-19m}}
+  },
+  {
+   "timestamp": {{epochms:now-19m}},
+   "message": "Error: required environment variable DATABASE_URL is not set",
+   "ingestionTime": {{epochms:now-19m}}
+  },
+  {
+   "timestamp": {{epochms:now-19m}},
+   "message": "    at requireEnv (/app/dist/config.js:14:11)",
+   "ingestionTime": {{epochms:now-19m}}
+  },
+  {
+   "timestamp": {{epochms:now-19m}},
+   "message": "    at loadConfig (/app/dist/config.js:31:17)",
+   "ingestionTime": {{epochms:now-19m}}
+  },
+  {
+   "timestamp": {{epochms:now-19m}},
+   "message": "    at main (/app/dist/index.js:9:18)",
+   "ingestionTime": {{epochms:now-19m}}
+  }
+ ],
+ "nextForwardToken": "f/demo",
+ "nextBackwardToken": "b/demo"
+}

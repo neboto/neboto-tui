@@ -1,0 +1,8 @@
+<ListEntitiesForPolicyResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListEntitiesForPolicyResult>
+    <IsTruncated>false</IsTruncated>
+    <PolicyGroups/><PolicyUsers/>
+    <PolicyRoles><member><RoleName>orders-worker-task</RoleName><RoleId>X</RoleId></member><member><RoleName>orders-api-lambda</RoleName><RoleId>X</RoleId></member></PolicyRoles>
+  </ListEntitiesForPolicyResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListEntitiesForPolicyResponse>

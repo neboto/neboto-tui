@@ -421,7 +421,8 @@ fetch and a green `cargo test`.
   cannot mutate, and one gated write action changes that conversation
   permanently. The value was captured instead by **`C`** (CLI command copy),
   which shipped: the user never reconstructs ids/ARNs by hand, at zero risk
-  to the read-only identity.
+  to the read-only identity. #34 extended it to the operational commands
+  themselves (start/stop, force deploy, scale, connect) — copied, never run.
 - **`@all` search is scoped to warm cache entries, deliberately.** It never
   fires fetches. A true account-wide search means a background fan-out load
   (slow, throttling-prone, permission-noisy in locked-down accounts) or

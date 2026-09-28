@@ -1,0 +1,10 @@
+<ListPoliciesResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListPoliciesResult>
+    <IsTruncated>false</IsTruncated>
+    <Policies>
+      <member><PolicyName>storefront-web-s3</PolicyName><PolicyId>ANPADEMO0000STOREWS3</PolicyId><Arn>arn:aws:iam::{{account}}:policy/storefront-web-s3</Arn><Path>/</Path><DefaultVersionId>v3</DefaultVersionId><AttachmentCount>1</AttachmentCount><PermissionsBoundaryUsageCount>0</PermissionsBoundaryUsageCount><IsAttachable>true</IsAttachable><Description>Storefront assets bucket read/write</Description><CreateDate>{{iso:now-200d}}</CreateDate><UpdateDate>{{iso:now-30d}}</UpdateDate></member>
+      <member><PolicyName>orders-dynamodb</PolicyName><PolicyId>ANPADEMO0000ORDERSDDB</PolicyId><Arn>arn:aws:iam::{{account}}:policy/orders-dynamodb</Arn><Path>/</Path><DefaultVersionId>v2</DefaultVersionId><AttachmentCount>2</AttachmentCount><PermissionsBoundaryUsageCount>0</PermissionsBoundaryUsageCount><IsAttachable>true</IsAttachable><Description>Orders table access</Description><CreateDate>{{iso:now-120d}}</CreateDate><UpdateDate>{{iso:now-60d}}</UpdateDate></member>
+    </Policies>
+  </ListPoliciesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListPoliciesResponse>

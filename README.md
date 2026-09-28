@@ -9,10 +9,14 @@ Built in Rust with [Ratatui](https://ratatui.rs/). Website and guide:
 
 <p align="center">
   <img src="demo/neboto.gif" width="100%"
-       alt="neboto demo: filter EC2 instances, open the detail pane, jump to the subnet, its VPC, the security group and back to an instance">
+       alt="neboto demo: an ECS service is half healthy; its deployments show revision 15 failed and rolled back; the change timeline shows CI deployed it; the stopped task's log says DATABASE_URL is not set">
 </p>
 
-https://github.com/user-attachments/assets/f7a4dee9-d38d-4624-b883-4df75489636d
+<p align="center"><em>Recorded with <code>neboto --demo</code>. Nothing on screen is a real account.</em></p>
+
+**Try it without an AWS account:** `neboto --demo` opens a made-up account
+with a few problems planted in it (a failed ECS deploy, SSH open to the world,
+a drifted CloudFormation stack) and makes no network calls.
 
 **neboto is read-only.** It issues only `describe`/`list`/`get` calls. Nothing
 it does can change your account, which is the point: it is safe to run against
@@ -42,8 +46,25 @@ auditably read-only. See [Why read-only](#why-read-only).
 - **Macros** (`,`) — record a navigation routine once, replay it with one key
   or from the CLI with `--macro`.
 - **Themes** — 10 presets (light and dark) plus per-color overrides.
-- **Export** (`X` / `Ctrl-X`) to JSON + CSV + Markdown, including deep exports
-  of a multi-row selection.
+- **Export** (`X` / `Ctrl-X`) to JSON, CSV and/or Markdown (`export_formats`),
+  including deep exports of a multi-row selection.
+
+---
+
+## See it in action
+
+Each clip is one workflow against `neboto --demo`. Click for full size.
+
+<table>
+  <tr>
+    <td width="50%"><a href="demo/scenes/follow-links.gif"><img src="demo/scenes/follow-links.gif" alt="Following links: an ECS service to its target group to the load balancer, back, then the service's effective network access"></a><br><b>Follow the links.</b> <kbd>Enter</kbd> from an ECS service to its target group and load balancer, <kbd>Ctrl-O</kbd> back, then <kbd>N</kbd> for the service's effective network access.</td>
+    <td width="50%"><a href="demo/scenes/who-changed.gif"><img src="demo/scenes/who-changed.gif" alt="A security group with SSH open to the world; the change timeline shows who opened it"></a><br><b>Who changed this?</b> SSH is open to the world; <kbd>W</kbd> shows who opened it and when.</td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="demo/scenes/lambda-tail.gif"><img src="demo/scenes/lambda-tail.gif" alt="Live-tailing a Lambda function's logs, filtered to errors"></a><br><b>Tail the logs.</b> <kbd>t</kbd> live-tails a Lambda; <kbd>/</kbd> filters to the DynamoDB throttles.</td>
+    <td width="50%"><a href="demo/scenes/stack-drift.gif"><img src="demo/scenes/stack-drift.gif" alt="A drifted CloudFormation stack; the change timeline on the drifted resource shows the console edit behind it"></a><br><b>Explain the drift.</b> A stack's Drift section names the changed property; <kbd>W</kbd> on that resource finds the console edit.</td>
+  </tr>
+</table>
 
 ---
 
@@ -117,7 +138,9 @@ Every flag overrides the config file for that run only.
 | `-w`, `--watch` | Start in watch mode (auto-refresh) |
 | `-m`, `--macro <NAME>` | Run a saved macro on startup |
 | `--theme <THEME>` | Color preset (see [Themes](#themes)) |
+| `--show-keys` | Show each key and what it did in a corner box, for recordings and screen shares |
 | `--endpoint-url <URL>` | Point at a local emulator |
+| `--demo` | Browse a made-up account offline — no credentials, no network |
 | `--banner` / `--no-banner` | Show or hide the ASCII banner |
 
 With no arguments and no `default_service` configured, neboto shows a welcome
@@ -190,7 +213,7 @@ full-width; `\` flattens all sections into one scroll.
 | `F` | Cycle a filter over the states present in this view |
 | `V`, `J` / `K` | Visual row selection; `Ctrl-A` selects all |
 | `y` | Copy the id/ARN — or the selection as a Markdown table |
-| `C` | Copy the equivalent read-only AWS CLI command |
+| `C` | Copy an AWS CLI command for the resource — the read command, plus start/stop, force-deploy, scale and connect commands where they apply (copied, never run) |
 | `X` / `Ctrl-X` | Export |
 
 ### Detail pane
@@ -218,8 +241,8 @@ Each takes over the keymap while open; `Esc` closes, `Z` goes full-width.
 | `t` | Live log tail — `[` / `]` widen the lookback, `s` flips to search |
 | `f` | Log search (server-side filter pattern) · CloudTrail event filter · ECS/execution status filter |
 | `W` | CloudTrail lens — who changed this resource; `[` / `]` widen to 90d, `a` includes reads |
-| `o` | S3 object browser |
-| `i` | DynamoDB item browser (Scan / Query) |
+| `o` | S3 object browser — folders, `/` filter, `V` version history incl. delete markers, `i` metadata, `v`/`e` preview, `d` download, `p` presigned URL; `t` on a `.tfstate` opens the Terraform state viewer (one row per instance, `Enter` jumps to the live resource) |
+| `i` | DynamoDB item browser (Scan / Query, filters, GSI/LSI) · AgentCore memory session browser |
 | `s` | SSM Session Manager · ECS Exec · assume an org member-account role |
 | `x` / `Y` | Reveal / copy a secret or SSM parameter value (never cached) |
 | `O` | Open this resource in the AWS Console |
@@ -255,16 +278,16 @@ same grouping.
 
 | Category | Services (`@prefix`) |
 |---|---|
-| **Compute** | EC2 `@ec2` · Lambda `@lambda` · Auto Scaling `@asg` · WorkSpaces `@workspaces` |
+| **Compute** | EC2 `@ec2` · Lambda `@lambda` · Auto Scaling `@asg` · Batch `@batch` · WorkSpaces `@workspaces` |
 | **Containers** | ECS `@ecs` · EKS `@eks` · ECR `@ecr` |
 | **Storage** | S3 `@s3` · EFS `@efs` · FSx `@fsx` · Backup `@backup` · Transfer Family `@transfer` |
-| **Database** | RDS `@rds` · DynamoDB `@ddb` · ElastiCache `@elasticache` |
+| **Database** | RDS `@rds` · DynamoDB `@ddb` · ElastiCache `@elasticache` · DMS `@dms` |
 | **Networking** | VPC `@vpc` · ELB `@elb` · Route 53 `@r53` · Route 53 Resolver `@resolver` · Route 53 Profiles `@profiles` · CloudFront `@cloudfront` · Transit Gateway `@tgw` · Direct Connect `@dx` · Global Accelerator `@ga` · API Gateway `@apigw` |
 | **Security & Identity** | IAM `@iam` · Identity Center `@idc` · Cognito `@cognito` · KMS `@kms` · Secrets Manager `@secrets` · ACM `@acm` · WAF `@waf` · Network Firewall `@anfw` · GuardDuty `@gd` · Security Hub `@sh` · Inspector `@inspector` · Firewall Manager `@fms` |
 | **Analytics** | Athena `@athena` · Glue `@glue` · Kinesis `@kinesis` · MSK `@msk` · Redshift `@redshift` · OpenSearch `@opensearch` |
 | **ML & AI** | Bedrock `@bedrock` |
 | **App Integration** | SQS/SNS `@sqs` · EventBridge `@events` · Step Functions `@sfn` · SES `@ses` |
-| **Management** | CloudFormation `@cfn` · CloudWatch `@cw` · CloudTrail `@cloudtrail` · AWS Config `@config` · Systems Manager `@ssm` · Organizations `@orgs` · Trusted Advisor `@ta` · Health `@health` · Service Quotas `@quotas` · Resource Explorer `@explorer` · Resource Groups `@resourcegroups` · RAM `@ram` · Control Tower `@controltower` |
+| **Management** | CloudFormation `@cfn` · CloudWatch `@cw` · X-Ray `@xray` · CloudTrail `@cloudtrail` · AWS Config `@config` · Systems Manager `@ssm` · Organizations `@orgs` · Trusted Advisor `@ta` · Health `@health` · Service Quotas `@quotas` · Resource Explorer `@explorer` · Resource Groups `@resourcegroups` · RAM `@ram` · Control Tower `@controltower` |
 | **Developer Tools** | CodeSuite `@code` |
 | **Cost** | Cost Explorer `@cost` · Budgets `@budgets` · Invoices `@invoices` |
 
@@ -311,6 +334,9 @@ template.
 | `show_banner` | ASCII banner on startup |
 | `watch`, `watch_interval` | Start in watch mode, and its cadence in seconds |
 | `detail_flat` | Start with the flat all-sections detail view |
+| `show_keys` | Show each key and what it did in a corner box (`--show-keys` for one run) |
+| `export_formats` | Which files exports write: any of `"json"`, `"csv"`, `"md"` (default all three) |
+| `export_dir` | Where exports go (default the working directory; `NEBOTO_EXPORT_DIR` overrides) |
 | `theme`, `[theme_colors]` | Preset name and per-color overrides |
 | `cache_ttl`, `[cache_ttls]` | Base cache freshness (seconds) and per-service overrides keyed by `@`-prefix |
 | `org_access_role`, `org_access_roles` | Role name(s) for the member-account switch |
@@ -376,8 +402,15 @@ stays that way:
    mutate. One gated write action changes that conversation permanently.
 
 Where a mutation is genuinely what you want, **`C`** copies the ready-to-run AWS
-CLI command for the selected resource, with the region and ids filled in. You
-never reconstruct an ARN by hand, and neboto never holds the ability to run it.
+CLI command for the selected resource, with the region, profile and ids filled
+in: stop an instance, force an ECS redeployment, set an Auto Scaling group's
+capacity, open an SSM session, write a kubeconfig. A picker groups the commands
+as Inspect / Connect / Change and previews the exact text before copying.
+Change commands are flagged, anything destructive (terminate, delete) is left
+out, commands that take a value are prefilled with the current one, and a
+visual selection of several instances becomes one `--instance-ids a b c`
+command. You never reconstruct an ARN by hand, and neboto never holds the
+ability to run it.
 
 ---
 

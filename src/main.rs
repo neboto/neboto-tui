@@ -3,11 +3,13 @@ mod aws;
 mod bookmarks;
 mod cli;
 mod config;
+mod demo;
 mod editor;
 mod error;
 mod export;
 mod event;
 mod html;
+mod keycast;
 mod lazy;
 mod macros;
 mod navigation;
@@ -37,7 +39,7 @@ use ui::widgets::{
     details_pane,
     dx_tabs,
     ec2_tabs,
-    athena_tabs, ecs_tabs, elb_tabs, eventbridge_tabs, fms_tabs, fsx_tabs, gd_tabs, glue_tabs, help_overlay, iam_tabs, idc_tabs, insp_tabs, jump_list, kinesis_tabs, macro_picker, messaging_tabs, s3tables_tabs, sfn_tabs,
+    athena_tabs, cli_picker, keycast_box, ecs_tabs, elb_tabs, eventbridge_tabs, fms_tabs, fsx_tabs, gd_tabs, glue_tabs, help_overlay, iam_tabs, idc_tabs, insp_tabs, jump_list, kinesis_tabs, macro_picker, messaging_tabs, s3tables_tabs, sfn_tabs,
     message_log,
     network_firewall_tabs,
     ram_tabs,
@@ -46,6 +48,9 @@ use ui::widgets::{
     organizations_tabs, org_role_selector, profile_selector, quota_service_selector, r53_tabs,
     rds_tabs,
     redshift_tabs,
+    batch_tabs,
+    xray_tabs,
+    dms_tabs,
     region_selector, resolver_tabs, resource_list,
     s3_tabs, search_bar, ses_tabs, service_selector, service_tabs, sh_tabs, splash, sq_tabs,
     ssm_session_modal, tgw_tabs, vpc_tabs,
@@ -234,6 +239,10 @@ async fn run(cli: cli::Cli) -> Result<()> {
         // draw so the recorder's step count and the picker are current.
         app.macro_tick(&event_tx);
 
+        // Keycast (`--show-keys`): name the key just dispatched by what it
+        // changed. After the macro pass, so a replayed step shows too.
+        app.keycast_tick();
+
         // Draw UI first to show input immediately
         if let Some(ref mut t) = tui {
             t.terminal().draw(|frame| render_app(&app, frame))?;
@@ -309,6 +318,9 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
             | Some(ServiceType::Kinesis)
             | Some(ServiceType::StepFunctions)
             | Some(ServiceType::Redshift)
+            | Some(ServiceType::Batch)
+            | Some(ServiceType::XRay)
+            | Some(ServiceType::Dms)
             | Some(ServiceType::Athena)
             | Some(ServiceType::Glue)
             | Some(ServiceType::Ses)
@@ -417,8 +429,17 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
             Some(ServiceType::StepFunctions) => {
                 sfn_tabs::render_sfn_tabs(app, sub_tabs_area, frame);
             }
+            Some(ServiceType::XRay) => {
+                xray_tabs::render_xray_tabs(app, sub_tabs_area, frame);
+            }
+            Some(ServiceType::Dms) => {
+                dms_tabs::render_dms_tabs(app, sub_tabs_area, frame);
+            }
             Some(ServiceType::Redshift) => {
                 redshift_tabs::render_redshift_tabs(app, sub_tabs_area, frame);
+            }
+            Some(ServiceType::Batch) => {
+                batch_tabs::render_batch_tabs(app, sub_tabs_area, frame);
             }
             Some(ServiceType::ControlTower) => {
                 controltower_tabs::render_controltower_tabs(app, sub_tabs_area, frame);
@@ -590,9 +611,17 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
         macro_picker::render_macro_picker(app, frame);
     }
 
+    // Render the `C` command picker if open
+    if app.cli_picker.is_some() {
+        cli_picker::render_cli_picker(app, frame);
+    }
+
     // Metric charts, the S3 object browser, and the DynamoDB item
     // browser all render inside the detail pane now (see
     // render_details_pane), not as full-screen overlays.
+
+    // Keycast last, so it floats above panes and pickers alike.
+    keycast_box::render_keycast(app, layout.status_area, frame);
 }
 
 /// Trim a `theme::hint_line` to `max_width` cells on a `  ·  ` boundary, so

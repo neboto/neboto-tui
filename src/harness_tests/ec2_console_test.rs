@@ -74,7 +74,7 @@ async fn console_section_renders_captured_row_and_log_lines() {
     })))
     .await;
     assert!(
-        screen.contains("6 Console"),
+        screen.contains("7 Console"),
         "section tab missing:\n{screen}"
     );
     assert!(

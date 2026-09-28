@@ -1,0 +1,6 @@
+<ListOpenIDConnectProvidersResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListOpenIDConnectProvidersResult>
+    <OpenIDConnectProviderList><member><Arn>arn:aws:iam::{{account}}:oidc-provider/token.actions.githubusercontent.com</Arn></member></OpenIDConnectProviderList>
+  </ListOpenIDConnectProvidersResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListOpenIDConnectProvidersResponse>

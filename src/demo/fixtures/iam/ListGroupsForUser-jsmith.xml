@@ -1,0 +1,7 @@
+<ListGroupsForUserResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListGroupsForUserResult>
+    <IsTruncated>false</IsTruncated>
+    <Groups><member><Path>/</Path><GroupName>platform-admins</GroupName><GroupId>AGPADEMO000PLATADMIN</GroupId><Arn>arn:aws:iam::{{account}}:group/platform-admins</Arn><CreateDate>{{iso:now-800d}}</CreateDate></member></Groups>
+  </ListGroupsForUserResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListGroupsForUserResponse>

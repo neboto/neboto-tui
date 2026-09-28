@@ -1,0 +1,11 @@
+<DescribeTargetGroupAttributesResponse xmlns="http://elasticloadbalancing.amazonaws.com/doc/2015-12-01/">
+  <DescribeTargetGroupAttributesResult>
+    <Attributes>
+      <member><Key>deregistration_delay.timeout_seconds</Key><Value>300</Value></member>
+      <member><Key>stickiness.enabled</Key><Value>false</Value></member>
+      <member><Key>load_balancing.algorithm.type</Key><Value>round_robin</Value></member>
+      <member><Key>slow_start.duration_seconds</Key><Value>0</Value></member>
+    </Attributes>
+  </DescribeTargetGroupAttributesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeTargetGroupAttributesResponse>

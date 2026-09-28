@@ -1,0 +1,12 @@
+{"taskDefinition": {
+  "taskDefinitionArn": "arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:14", "family": "orders-worker", "revision": 14, "status": "ACTIVE",
+  "networkMode": "awsvpc", "requiresCompatibilities": ["FARGATE"], "cpu": "512", "memory": "1024",
+  "taskRoleArn": "arn:aws:iam::{{account}}:role/orders-worker-task", "executionRoleArn": "arn:aws:iam::{{account}}:role/ecs-task-execution",
+  "registeredAt": {{epoch:now-30d}},
+  "containerDefinitions": [{
+    "name": "worker", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/orders-worker:v1.18.2", "essential": true,
+    "cpu": 512, "memory": 1024, "portMappings": [],
+    "environment": [{"name": "QUEUE", "value": "orders"}, {"name": "DATABASE_URL", "value": "postgres://orders.internal:5432/orders"}],
+    "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "/ecs/orders-worker", "awslogs-region": "{{region}}", "awslogs-stream-prefix": "ecs"}}
+  }]
+}, "tags": []}

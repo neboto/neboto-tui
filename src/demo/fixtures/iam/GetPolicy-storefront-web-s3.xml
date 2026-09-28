@@ -1,0 +1,6 @@
+<GetPolicyResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetPolicyResult>
+    <Policy><PolicyName>storefront-web-s3</PolicyName><PolicyId>ANPADEMO0000STOREWS3</PolicyId><Arn>arn:aws:iam::{{account}}:policy/storefront-web-s3</Arn><Path>/</Path><DefaultVersionId>v3</DefaultVersionId><AttachmentCount>1</AttachmentCount><PermissionsBoundaryUsageCount>0</PermissionsBoundaryUsageCount><IsAttachable>true</IsAttachable><Description>Storefront assets bucket read/write</Description><CreateDate>{{iso:now-200d}}</CreateDate><UpdateDate>{{iso:now-30d}}</UpdateDate><Tags><member><Key>ManagedBy</Key><Value>terraform</Value></member></Tags></Policy>
+  </GetPolicyResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetPolicyResponse>

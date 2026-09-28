@@ -1,0 +1,1 @@
+{"taskArns": ["arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/0f1e2d3c4b5a69788796a5b4c3d2e1f0", "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/1a2b3c4d5e6f70819283a4b5c6d7e8f9", "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/2b3c4d5e6f7081929384b5c6d7e8f9a0"]}

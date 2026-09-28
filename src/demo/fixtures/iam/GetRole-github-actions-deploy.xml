@@ -1,0 +1,6 @@
+<GetRoleResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetRoleResult>
+    <Role><Path>/</Path><RoleName>github-actions-deploy</RoleName><RoleId>AROADEMO0000GHDEPLOY</RoleId><Arn>arn:aws:iam::{{account}}:role/github-actions-deploy</Arn><CreateDate>{{iso:now-300d}}</CreateDate><AssumeRolePolicyDocument>%7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%7B%22Effect%22%3A%22Allow%22%2C%22Principal%22%3A%7B%22Federated%22%3A%22arn%3Aaws%3Aiam%3A%3A%7B%7Baccount%7D%7D%3Aoidc-provider%2Ftoken.actions.githubusercontent.com%22%7D%2C%22Action%22%3A%22sts%3AAssumeRoleWithWebIdentity%22%2C%22Condition%22%3A%7B%22StringEquals%22%3A%7B%22token.actions.githubusercontent.com%3Aaud%22%3A%22sts.amazonaws.com%22%7D%2C%22StringLike%22%3A%7B%22token.actions.githubusercontent.com%3Asub%22%3A%22repo%3Aacme%2F%2A%22%7D%7D%7D%5D%7D</AssumeRolePolicyDocument><Description>CI deploys from GitHub Actions</Description><MaxSessionDuration>3600</MaxSessionDuration><RoleLastUsed><LastUsedDate>{{iso:now-40m}}</LastUsedDate><Region>{{region}}</Region></RoleLastUsed><Tags><member><Key>team</Key><Value>platform</Value></member></Tags></Role>
+  </GetRoleResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetRoleResponse>

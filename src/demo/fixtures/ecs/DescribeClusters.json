@@ -1,0 +1,7 @@
+{"clusters": [{
+  "clusterArn": "arn:aws:ecs:{{region}}:{{account}}:cluster/acme-prod", "clusterName": "acme-prod", "status": "ACTIVE",
+  "registeredContainerInstancesCount": 0, "runningTasksCount": 5, "pendingTasksCount": 0, "activeServicesCount": 2,
+  "statistics": [], "settings": [{"name": "containerInsights", "value": "enabled"}],
+  "capacityProviders": ["FARGATE", "FARGATE_SPOT"],
+  "tags": [{"key": "team", "value": "platform"}, {"key": "ManagedBy", "value": "terraform"}]
+}], "failures": []}

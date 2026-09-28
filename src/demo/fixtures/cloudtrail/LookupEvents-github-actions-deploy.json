@@ -1,0 +1,44 @@
+{
+ "Events": [
+  {
+   "EventId": "7c0de006-demo-4e2a-9b1c-000000000006",
+   "EventName": "AttachRolePolicy",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000JSMITH99",
+   "EventTime": {{epoch:now-3d}},
+   "EventSource": "iam.amazonaws.com",
+   "Username": "jsmith",
+   "Resources": [
+    {
+     "ResourceType": "AWS::IAM::Role",
+     "ResourceName": "github-actions-deploy"
+    },
+    {
+     "ResourceType": "AWS::IAM::Policy",
+     "ResourceName": "arn:aws:iam::aws:policy/AdministratorAccess"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"IAMUser\",\"principalId\":\"AIDADEMO00000JSMITH0\",\"arn\":\"arn:aws:iam::{{account}}:user/jsmith\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000JSMITH99\",\"userName\":\"jsmith\",\"sessionContext\":{\"attributes\":{\"mfaAuthenticated\":\"true\"}}},\"eventTime\":\"{{iso:now-3d}}\",\"eventSource\":\"iam.amazonaws.com\",\"eventName\":\"AttachRolePolicy\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"198.51.100.23\",\"userAgent\":\"Mozilla/5.0 (Macintosh) AWS Console\",\"requestParameters\":{\"roleName\":\"github-actions-deploy\",\"policyArn\":\"arn:aws:iam::aws:policy/AdministratorAccess\"},\"responseElements\":null,\"requestID\":\"req-0006\",\"eventID\":\"7c0de006-demo-4e2a-9b1c-000000000006\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "7c0de007-demo-4e2a-9b1c-000000000007",
+   "EventName": "DetachRolePolicy",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000JSMITH99",
+   "EventTime": {{epoch:now-3d-40s}},
+   "EventSource": "iam.amazonaws.com",
+   "Username": "jsmith",
+   "Resources": [
+    {
+     "ResourceType": "AWS::IAM::Role",
+     "ResourceName": "github-actions-deploy"
+    },
+    {
+     "ResourceType": "AWS::IAM::Policy",
+     "ResourceName": "arn:aws:iam::{{account}}:policy/ci-deploy-scoped"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"IAMUser\",\"principalId\":\"AIDADEMO00000JSMITH0\",\"arn\":\"arn:aws:iam::{{account}}:user/jsmith\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000JSMITH99\",\"userName\":\"jsmith\",\"sessionContext\":{\"attributes\":{\"mfaAuthenticated\":\"true\"}}},\"eventTime\":\"{{iso:now-3d-40s}}\",\"eventSource\":\"iam.amazonaws.com\",\"eventName\":\"DetachRolePolicy\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"198.51.100.23\",\"userAgent\":\"Mozilla/5.0 (Macintosh) AWS Console\",\"requestParameters\":{\"roleName\":\"github-actions-deploy\",\"policyArn\":\"arn:aws:iam::{{account}}:policy/ci-deploy-scoped\"},\"responseElements\":null,\"requestID\":\"req-0007\",\"eventID\":\"7c0de007-demo-4e2a-9b1c-000000000007\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  }
+ ]
+}

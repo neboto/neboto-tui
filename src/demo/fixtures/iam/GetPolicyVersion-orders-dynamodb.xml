@@ -1,0 +1,6 @@
+<GetPolicyVersionResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetPolicyVersionResult>
+    <PolicyVersion><Document>%7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%7B%22Sid%22%3A%22OrdersTable%22%2C%22Effect%22%3A%22Allow%22%2C%22Action%22%3A%5B%22dynamodb%3AGetItem%22%2C%22dynamodb%3APutItem%22%2C%22dynamodb%3AUpdateItem%22%2C%22dynamodb%3AQuery%22%5D%2C%22Resource%22%3A%5B%22arn%3Aaws%3Adynamodb%3A%2A%3A%7B%7Baccount%7D%7D%3Atable%2Forders%22%2C%22arn%3Aaws%3Adynamodb%3A%2A%3A%7B%7Baccount%7D%7D%3Atable%2Forders%2Findex%2F%2A%22%5D%7D%5D%7D</Document><VersionId>v2</VersionId><IsDefaultVersion>true</IsDefaultVersion><CreateDate>{{iso:now-60d}}</CreateDate></PolicyVersion>
+  </GetPolicyVersionResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetPolicyVersionResponse>

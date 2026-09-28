@@ -1,0 +1,6 @@
+<GetUserResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetUserResult>
+    <User><Path>/</Path><UserName>jsmith</UserName><UserId>AIDADEMO00000JSMITH0</UserId><Arn>arn:aws:iam::{{account}}:user/jsmith</Arn><CreateDate>{{iso:now-800d}}</CreateDate><PasswordLastUsed>{{iso:now-3h}}</PasswordLastUsed><Tags><member><Key>team</Key><Value>platform</Value></member></Tags></User>
+  </GetUserResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetUserResponse>

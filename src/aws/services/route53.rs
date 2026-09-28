@@ -43,22 +43,39 @@ impl AwsService for Route53Service {
         service_type: ServiceType,
     ) -> Result<()> {
         let mut total = 0usize;
+        let mut zone_tags_failed = false;
         let mut paginator = self.client.list_hosted_zones().into_paginator().send();
 
         while let Some(result) = paginator.next().await {
             match result {
                 Ok(page) => {
-                    let batch: Vec<Box<dyn Resource>> = page
+                    let mut zones: Vec<R53HostedZone> = page
                         .hosted_zones()
                         .iter()
-                        .map(|z| Box::new(R53HostedZone::from_sdk(z)) as Box<dyn Resource>)
+                        .map(R53HostedZone::from_sdk)
                         .collect();
-
-                    let count = batch.len();
-                    if count == 0 {
+                    if zones.is_empty() {
                         continue;
                     }
-                    total += count;
+                    // `ListHostedZones` carries no tags; batch-resolve them here so
+                    // `Resource::tags()` is real for the ribbon / `tag:` filters /
+                    // `U` / exports. One warning on the first failure, then stop
+                    // asking — a denied `ListTagsForResources` stays denied.
+                    if !zone_tags_failed {
+                        if let Err(e) = resolve_zone_tags(&self.client, &mut zones).await {
+                            zone_tags_failed = true;
+                            let _ = event_tx.send(Event::ResourceLoadWarning {
+                                service: service_type,
+                                warning: format!("hosted zone tags: {e}"),
+                            });
+                        }
+                    }
+                    let batch: Vec<Box<dyn Resource>> = zones
+                        .into_iter()
+                        .map(|z| Box::new(z) as Box<dyn Resource>)
+                        .collect();
+
+                    total += batch.len();
 
                     let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
                         service: service_type,
@@ -166,9 +183,12 @@ pub struct R53HostedZone {
     pub private_zone: bool,
     pub record_count: i64,
     pub comment: String,
-    /// Always empty — zone tags are fetched lazily as part of the Sharing
-    /// bundle (`R53ZoneDetail`) and shown in the Tags section; this
-    /// field backs the `Resource::tags()` fallback only.
+    /// `ListHostedZones` returns no tags — the list load batch-resolves them
+    /// via `ListTagsForResources` (bare ids, 10 per call; see
+    /// `resolve_zone_tags`). The pane's Tags section reads the lazy bundle's
+    /// own `ListTagsForResource` copy (`R53ZoneDetail::tags`) instead, so a
+    /// pane refresh sees fresh tags; this field feeds `Resource::tags()`
+    /// (ownership ribbon, `tag:` filters, `U`, exports).
     pub tags: HashMap<String, String>,
 }
 
@@ -206,6 +226,43 @@ crate::sections! {
         Info "Info" => crate::app::App::trigger_r53_zone_detail_load,
         Tags "Tags" => crate::app::App::trigger_r53_zone_detail_load,
     ]
+}
+
+/// Batch-resolve hosted zone tags (`ListTagsForResources`,
+/// `ResourceType=hostedzone`, up to 10 ids per call). Route 53's tag APIs
+/// take the **bare** zone id (`Z…`), not the `/hostedzone/Z…` path that
+/// `ListHostedZones` hands out and that `GetHostedZone` tolerates — passing
+/// the path is exactly how zone tags read "No tags" for months (#26). Calls
+/// run sequentially: Route 53 throttles at 5 req/s account-wide.
+async fn resolve_zone_tags(
+    client: &R53Client,
+    zones: &mut [R53HostedZone],
+) -> std::result::Result<(), String> {
+    for chunk in zones.chunks_mut(10) {
+        let ids: Vec<String> = chunk.iter().map(|z| z.bare_id().to_string()).collect();
+        let resp = client
+            .list_tags_for_resources()
+            .resource_type(aws_sdk_route53::types::TagResourceType::Hostedzone)
+            .set_resource_ids(Some(ids))
+            .send()
+            .await
+            .map_err(|e| crate::error::sdk_error_message(&e))?;
+        for set in resp.resource_tag_sets() {
+            let Some(rid) = set.resource_id() else {
+                continue;
+            };
+            // The response echoes the bare id; tolerate a path-shaped one too.
+            let rid = rid.trim_start_matches("/hostedzone/");
+            if let Some(z) = chunk.iter_mut().find(|z| z.bare_id() == rid) {
+                for t in set.tags() {
+                    if let (Some(k), Some(v)) = (t.key(), t.value()) {
+                        z.tags.insert(k.to_string(), v.to_string());
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 impl Resource for R53HostedZone {
@@ -992,7 +1049,11 @@ pub struct R53ZoneDetail {
     /// VPC can show up here *and* in `associated` at the same time (a dangling
     /// authorization worth flagging, not an error).
     pub authorized: Vec<R53ZoneVpc>,
+    /// Tags from `ListTagsForResource` (bare zone id). Empty when the call
+    /// failed — `tags_error` says so, and the Tags section must render it
+    /// rather than "No tags".
     pub tags: Vec<(String, String)>,
+    pub tags_error: Option<String>,
     /// The delegation set's name servers (public zones; private zones have
     /// none) — what the registrar / parent zone must delegate to.
     pub name_servers: Vec<String>,
@@ -1054,7 +1115,10 @@ pub async fn fetch_zone_detail(
     zone_id: String,
     private_zone: bool,
 ) -> Result<R53ZoneDetail> {
-    let tags = fetch_zone_tags(&client, &zone_id).await;
+    let (tags, tags_error) = match fetch_zone_tags(&client, &zone_id).await {
+        Ok(tags) => (tags, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
 
     let get_resp = client
         .get_hosted_zone()
@@ -1116,6 +1180,7 @@ pub async fn fetch_zone_detail(
             associated: Vec::new(),
             authorized: Vec::new(),
             tags,
+            tags_error,
             name_servers,
             dnssec,
             query_log_group,
@@ -1168,6 +1233,7 @@ pub async fn fetch_zone_detail(
         associated,
         authorized,
         tags,
+        tags_error,
         name_servers,
         dnssec: None,
         query_log_group,
@@ -1175,25 +1241,29 @@ pub async fn fetch_zone_detail(
     })
 }
 
-async fn fetch_zone_tags(client: &R53Client, zone_id: &str) -> Vec<(String, String)> {
-    match client
+/// `ListTagsForResource` for one zone. Takes the path id and strips it: the
+/// tag APIs want the bare `Z…` id (see `resolve_zone_tags`). Errors are
+/// returned, not swallowed — an empty `Vec` must mean "no tags".
+async fn fetch_zone_tags(
+    client: &R53Client,
+    zone_id: &str,
+) -> std::result::Result<Vec<(String, String)>, String> {
+    let resp = client
         .list_tags_for_resource()
         .resource_type(aws_sdk_route53::types::TagResourceType::Hostedzone)
-        .resource_id(zone_id)
+        .resource_id(zone_id.trim_start_matches("/hostedzone/"))
         .send()
         .await
-    {
-        Ok(resp) => resp
-            .resource_tag_set()
-            .map(|set| {
-                set.tags()
-                    .iter()
-                    .filter_map(|t| Some((t.key()?.to_string(), t.value()?.to_string())))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        Err(_) => Vec::new(),
-    }
+        .map_err(|e| crate::error::sdk_error_message(&e))?;
+    Ok(resp
+        .resource_tag_set()
+        .map(|set| {
+            set.tags()
+                .iter()
+                .filter_map(|t| Some((t.key()?.to_string(), t.value()?.to_string())))
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 // ── Health-check live status (lazy, `GetHealthCheckStatus`) ───────────────────

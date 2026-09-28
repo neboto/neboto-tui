@@ -559,6 +559,53 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         render_firehose_split(app, s, area, frame);
         return;
     }
+    if let Some(n) = resource.and_then(|r| r.as_any().downcast_ref::<crate::aws::services::xray::XRayNode>()) {
+        render_xray_node_split(app, n, area, frame);
+        return;
+    }
+    if let Some(t) = resource.and_then(|r| r.as_any().downcast_ref::<crate::aws::services::xray::XRayTrace>()) {
+        render_xray_trace_split(app, t, area, frame);
+        return;
+    }
+    if let Some(r) = resource {
+        use crate::aws::services::batch::*;
+        let any = r.as_any();
+        if let Some(q) = any.downcast_ref::<BatchJobQueue>() {
+            render_batch_queue_split(app, q, area, frame);
+            return;
+        }
+        if let Some(c) = any.downcast_ref::<BatchComputeEnv>() {
+            render_batch_ce_split(app, c, area, frame);
+            return;
+        }
+        if let Some(j) = any.downcast_ref::<BatchJob>() {
+            render_batch_job_split(app, j, area, frame);
+            return;
+        }
+        if let Some(d) = any.downcast_ref::<BatchJobDefinition>() {
+            render_batch_jobdef_split(app, d, area, frame);
+            return;
+        }
+    }
+    if let Some(r) = resource {
+        use crate::aws::services::dms::{DmsEndpoint, DmsInstance, DmsServerless, DmsTask};
+        if let Some(t) = r.as_any().downcast_ref::<DmsTask>() {
+            render_dms_task_split(app, t, area, frame);
+            return;
+        }
+        if let Some(i) = r.as_any().downcast_ref::<DmsInstance>() {
+            render_dms_instance_split(app, i, area, frame);
+            return;
+        }
+        if let Some(e) = r.as_any().downcast_ref::<DmsEndpoint>() {
+            render_dms_endpoint_split(app, e, area, frame);
+            return;
+        }
+        if let Some(s) = r.as_any().downcast_ref::<DmsServerless>() {
+            render_dms_serverless_split(app, s, area, frame);
+            return;
+        }
+    }
     if let Some(c) = resource.and_then(|r| r.as_any().downcast_ref::<RedshiftCluster>()) {
         render_redshift_cluster_split(app, c, area, frame);
         return;
@@ -2608,6 +2655,17 @@ pub fn resource_jump_target(
         }
     }
 
+    // 0a. A "Jump To" row whose value is `@prefix id` (X-Ray service-map
+    // nodes naming a Lambda / table / bucket): switch service, resolve by
+    // exact id then name.
+    if key.trim() == "Jump To" {
+        if let Some((prefix, id)) = value.trim().strip_prefix('@').and_then(|v| v.split_once(' ')) {
+            if let Some(service) = ServiceType::from_prefix(prefix) {
+                return mk(service, JumpView::None, id.trim());
+            }
+        }
+    }
+
     // 0b. Ownership: the CFN stack-name tag row (bare name, no ARN — the
     // `:stack-id` tag's ARN value is caught by rule 0 above) jumps to the
     // owning stack. Key may arrive indented (`map_tags_lines` shape).
@@ -2951,6 +3009,33 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
     let last_seg = || resource.rsplit(['/', ':']).next().unwrap_or(resource);
 
     match service {
+        // Batch rows are keyed by name (queue / compute environment),
+        // `name:revision` (job definition) and job id — the ARN's tail.
+        "batch" => {
+            let (kind, rest) = resource.split_once('/')?;
+            let view = match kind {
+                "job-queue" => crate::app::BatchView::Queues,
+                "compute-environment" => crate::app::BatchView::ComputeEnvironments,
+                "job" => crate::app::BatchView::Jobs,
+                "job-definition" => crate::app::BatchView::JobDefinitions,
+                _ => return None,
+            };
+            mk(ServiceType::Batch, JumpView::Batch(view), rest)
+        }
+        // DMS rows are keyed by ARN (`id()`), so the ARN itself is the
+        // target. The view has to travel with it: a same-service jump keeps
+        // the current sub-tab otherwise, and its type filter hides the row.
+        "dms" => {
+            use crate::app::DmsView;
+            let view = match resource.split(':').next()? {
+                "task" => DmsView::Tasks,
+                "rep" => DmsView::Instances,
+                "endpoint" => DmsView::Endpoints,
+                "replication-config" => DmsView::Serverless,
+                _ => return None,
+            };
+            mk(ServiceType::Dms, JumpView::Dms(view), arn)
+        }
         "route53" => {
             // resource = "hostedzone/Z123…". R53HostedZone::id() stores the
             // full "/hostedzone/ID" form, so reconstruct it for an exact-id
@@ -3063,10 +3148,17 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
             .strip_prefix("file-system/")
             .and_then(|id| mk(ServiceType::S3Files, JumpView::None, id)),
         // S3 Tables: resource = "bucket/<name>[/table/<uuid>]". Both types use
-        // the full ARN as their id, so jump with the whole ARN; the sub-tab
-        // aligns to the resolved resource's type.
+        // the full ARN as their id, so jump with the whole ARN. The view has
+        // to travel with it: a same-service jump (a table's Bucket row) keeps
+        // the current sub-tab otherwise, whose type filter hides the target.
         "s3tables" if resource.starts_with("bucket/") => {
-            mk(ServiceType::S3Tables, JumpView::None, arn)
+            use crate::app::S3TablesView;
+            let view = if resource.contains("/table/") {
+                S3TablesView::Tables
+            } else {
+                S3TablesView::Buckets
+            };
+            mk(ServiceType::S3Tables, JumpView::S3Tables(view), arn)
         }
         "organizations" => {
             // resource = "ou/o-…/ou-…", "account/o-…/<12 digits>" or
@@ -3168,6 +3260,11 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
                 name.strip_suffix(":*").unwrap_or(name),
             )
         }
+        // EKS is a single-list service keyed by cluster name (Batch's
+        // EKS-backed compute environments name their cluster by ARN).
+        "eks" => resource
+            .strip_prefix("cluster/")
+            .and_then(|n| mk(ServiceType::Eks, JumpView::None, n)),
         "ecs" => {
             // service/<cluster>/<name> or cluster/<name>
             if resource.starts_with("service/") {
@@ -3951,6 +4048,7 @@ pub fn ec2_section_lines(
     ssm_status: Option<crate::aws::services::ec2::SsmInstanceStatus>,
     user_data: Option<&crate::lazy::Lazy<Option<String>>>,
     console: Option<&crate::lazy::Lazy<Option<crate::aws::services::ec2::ConsoleOutput>>>,
+    lb: Option<&Lazy<crate::aws::services::elb::InstanceLbInfo>>,
     optimizer: Option<&Lazy<Option<crate::aws::services::computeoptimizer::OptimizerRec>>>,
     enrollment: Option<&crate::aws::services::computeoptimizer::CoEnrollment>,
 ) -> Vec<(String, String)> {
@@ -3958,6 +4056,7 @@ pub fn ec2_section_lines(
         Ec2InstanceDetailSection::Details => ec2_details_lines(instance, ssm_status),
         Ec2InstanceDetailSection::Security => ec2_security_lines(instance, profile_roles),
         Ec2InstanceDetailSection::Networking => ec2_networking_lines(instance),
+        Ec2InstanceDetailSection::LoadBalancing => ec2_load_balancing_lines(lb),
         Ec2InstanceDetailSection::Storage => ec2_storage_lines(instance),
         Ec2InstanceDetailSection::UserData => ec2_user_data_lines(user_data),
         Ec2InstanceDetailSection::Console => ec2_console_lines(console),
@@ -3994,6 +4093,139 @@ fn ec2_user_data_lines(
 /// System console output (`GetConsoleOutput`, base64-decoded) — a captured-at
 /// row, then one plain content line per log line so `e` opens the whole
 /// buffer in `$EDITOR` via the snapshot path.
+/// Target-group membership (lazy `DescribeTargetHealth` probe). One group
+/// header per target group; the `Target Group` / `Load Balancer` ARN rows
+/// jump via the generic ARN classifier.
+fn ec2_load_balancing_lines(
+    lb: Option<&Lazy<crate::aws::services::elb::InstanceLbInfo>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::elb::{lb_kind_and_name, MAX_INSTANCE_LB_CANDIDATES};
+    let mut rows: Vec<(String, String)> = Vec::new();
+    let info = match lb {
+        None | Some(Lazy::Loading) => {
+            rows.push(("Loading…".to_string(), String::new()));
+            return rows;
+        }
+        Some(Lazy::Error(e)) => {
+            rows.extend(error_rows(e));
+            return rows;
+        }
+        Some(Lazy::Loaded(info)) => info,
+    };
+
+    let groups: std::collections::BTreeSet<&str> = info
+        .memberships
+        .iter()
+        .map(|m| m.target_group_arn.as_str())
+        .collect();
+    let healthy = info.memberships.iter().filter(|m| m.state == "healthy").count();
+    if info.memberships.is_empty() {
+        rows.push(("Behind a load balancer".to_string(), "✗ No".to_string()));
+    } else {
+        let mut lbs: Vec<String> = info
+            .memberships
+            .iter()
+            .flat_map(|m| m.load_balancer_arns.iter())
+            .filter_map(|arn| lb_kind_and_name(arn).map(|(k, n)| format!("{} {}", k, n)))
+            .collect();
+        lbs.sort();
+        lbs.dedup();
+        rows.push((
+            "Behind a load balancer".to_string(),
+            if lbs.is_empty() {
+                "⚠ Registered, but no group is attached to a load balancer".to_string()
+            } else {
+                format!("✓ {}", lbs.join(", "))
+            },
+        ));
+        rows.push((
+            "Target groups".to_string(),
+            format!(
+                "{} · {}/{} target{} healthy",
+                groups.len(),
+                healthy,
+                info.memberships.len(),
+                if info.memberships.len() == 1 { "" } else { "s" }
+            ),
+        ));
+    }
+    if let Some(asg) = &info.asg_name {
+        rows.push((
+            "Auto Scaling group".to_string(),
+            format!(
+                "{} ({} target group{} attached)",
+                asg,
+                info.asg_target_groups,
+                if info.asg_target_groups == 1 { "" } else { "s" }
+            ),
+        ));
+    }
+    let checked = if info.candidates > info.checked {
+        format!(
+            "{} of {} same-VPC target groups (capped at {})",
+            info.checked, info.candidates, MAX_INSTANCE_LB_CANDIDATES
+        )
+    } else {
+        format!(
+            "{} same-VPC target group{}",
+            info.checked,
+            if info.checked == 1 { "" } else { "s" }
+        )
+    };
+    rows.push(("Checked".to_string(), checked));
+    for w in &info.warnings {
+        rows.push((format!(" ⚠ {}", w), String::new()));
+    }
+    if info.memberships.is_empty() {
+        rows.push((String::new(), String::new()));
+        rows.push((
+            String::new(),
+            "· instance- and ip-type groups in this VPC were checked by instance id and private IP"
+                .to_string(),
+        ));
+        return rows;
+    }
+
+    for m in &info.memberships {
+        rows.push((String::new(), String::new()));
+        rows.push((m.target_group_name.clone(), String::new()));
+        let health = match (&m.reason, m.state.as_str()) {
+            (Some(r), s) if s != "healthy" => format!("{} — {}", s, r),
+            (_, s) => s.to_string(),
+        };
+        rows.push(("Health".to_string(), health));
+        if m.state != "healthy" {
+            if let Some(d) = &m.description {
+                rows.push(("Reason".to_string(), d.clone()));
+            }
+        }
+        let port = match (m.group_port, m.target_port) {
+            (Some(g), Some(t)) if g != t => format!("{}:{} → instance :{}", m.protocol, g, t),
+            (_, Some(t)) => format!("{}:{}", m.protocol, t),
+            (Some(g), None) => format!("{}:{}", m.protocol, g),
+            (None, None) => m.protocol.clone(),
+        };
+        rows.push(("Port".to_string(), port));
+        if let Some(ip) = &m.matched_ip {
+            rows.push(("Registered as".to_string(), format!("IP {}", ip)));
+        }
+        if let Some(az) = &m.availability_zone {
+            rows.push(("Zone".to_string(), az.clone()));
+        }
+        if m.via_asg {
+            rows.push(("Registered by".to_string(), "Auto Scaling group".to_string()));
+        }
+        rows.push(("Target Group".to_string(), m.target_group_arn.clone()));
+        if m.load_balancer_arns.is_empty() {
+            rows.push(("Load Balancer".to_string(), "⚠ none — group not attached".to_string()));
+        }
+        for arn in &m.load_balancer_arns {
+            rows.push(("Load Balancer".to_string(), arn.clone()));
+        }
+    }
+    rows
+}
+
 fn ec2_console_lines(
     console: Option<&crate::lazy::Lazy<Option<crate::aws::services::ec2::ConsoleOutput>>>,
 ) -> Vec<(String, String)> {
@@ -7200,6 +7432,11 @@ fn r53_tags_lines(
             rows.push(("  Loading…".to_string(), "".to_string()));
         }
         Some(crate::lazy::Lazy::Error(err)) => rows.extend(error_rows(err)),
+        // The bundle is best-effort on tags: a failed `ListTagsForResource`
+        // must not read as "No tags" (#26).
+        Some(crate::lazy::Lazy::Loaded(d)) if d.tags_error.is_some() => {
+            rows.extend(error_rows(d.tags_error.as_deref().unwrap_or_default()));
+        }
         Some(crate::lazy::Lazy::Loaded(d)) if d.tags.is_empty() => {
             rows.push(("  No tags".to_string(), "".to_string()));
         }
@@ -16741,6 +16978,996 @@ pub fn firehose_section_lines(
     }
 }
 
+// ── X-Ray split panes ───────────────────────────────────────────────────────
+
+fn render_xray_node_split(
+    app: &App,
+    n: &crate::aws::services::xray::XRayNode,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let label = n.state_label();
+    let subtitle = if label.is_empty() {
+        format!("{} · last {}", n.node_type, n.window)
+    } else {
+        format!("{} · {} · last {}", n.node_type, label, n.window)
+    };
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "X-Ray Service",
+        &n.name,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::xray::XRAY_NODE_SECTIONS),
+    );
+}
+
+fn render_xray_trace_split(
+    app: &App,
+    t: &crate::aws::services::xray::XRayTrace,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let mut subtitle = t.state_label();
+    if let Some(d) = t.duration {
+        subtitle.push_str(&format!(" · {}", crate::aws::services::xray::fmt_secs(d)));
+    }
+    if let Some(s) = t.status {
+        subtitle.push_str(&format!(" · HTTP {s}"));
+    }
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "X-Ray Trace",
+        &t.label,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::xray::XRAY_TRACE_SECTIONS),
+    );
+}
+
+/// Request-count block shared by node Overview and edge rows.
+fn xray_stats_value(s: &crate::aws::services::xray::XRayStats, n: i64) -> String {
+    format!("{n} ({:.1}%)", s.pct(n))
+}
+
+fn xray_edge_rows(
+    edges: &[crate::aws::services::xray::XRayEdge],
+    empty: &str,
+) -> Vec<(String, String)> {
+    use crate::aws::services::xray::fmt_secs;
+    if edges.is_empty() {
+        return vec![("".to_string(), empty.to_string())];
+    }
+    let mut edges: Vec<&crate::aws::services::xray::XRayEdge> = edges.iter().collect();
+    edges.sort_by(|a, b| {
+        (b.stats.faults, b.stats.errors, b.stats.total).cmp(&(a.stats.faults, a.stats.errors, a.stats.total))
+    });
+    let mut rows = Vec::new();
+    for (i, e) in edges.iter().enumerate() {
+        if i > 0 {
+            rows.push((String::new(), String::new()));
+        }
+        rows.push((e.name.clone(), String::new()));
+        rows.push(("  Type".to_string(), e.node_type.clone()));
+        rows.push(("  Requests".to_string(), e.stats.total.to_string()));
+        if e.stats.faults > 0 {
+            rows.push(("  Faults (5xx)".to_string(), format!("✗ {}", xray_stats_value(&e.stats, e.stats.faults))));
+        }
+        if e.stats.errors > 0 {
+            rows.push(("  Errors (4xx)".to_string(), format!("⚠ {}", xray_stats_value(&e.stats, e.stats.errors))));
+        }
+        if let Some(m) = e.stats.mean() {
+            rows.push(("  Avg Latency".to_string(), fmt_secs(m)));
+        }
+    }
+    rows
+}
+
+pub fn xray_node_section_lines(
+    n: &crate::aws::services::xray::XRayNode,
+    section: crate::aws::services::xray::XRayNodeDetailSection,
+) -> Vec<(String, String)> {
+    use crate::aws::services::xray::{fmt_secs, XRayNodeDetailSection as S};
+    match section {
+        S::Overview => {
+            let mut rows = vec![
+                ("Service".to_string(), n.name.clone()),
+                ("Type".to_string(), n.node_type.clone()),
+                ("Window".to_string(), format!("last {} ([ ] in the list to change)", n.window)),
+            ];
+            if let Some(target) = n.neboto_target() {
+                rows.push(("Jump To".to_string(), target));
+            }
+            if let Some(a) = &n.account {
+                rows.push(("Account".to_string(), a.clone()));
+            }
+            if let Some(st) = &n.state {
+                rows.push(("State".to_string(), st.clone()));
+            }
+            if n.root {
+                rows.push(("Entry Point".to_string(), "✓ receives client requests".to_string()));
+            }
+            if !n.aliases.is_empty() {
+                rows.push(("Also Known As".to_string(), n.aliases.join(", ")));
+            }
+            match n.stats {
+                None => rows.push((
+                    "".to_string(),
+                    "· no request statistics (a client or an inferred node)".to_string(),
+                )),
+                Some(s) => {
+                    rows.push((String::new(), String::new()));
+                    rows.push(("Requests".to_string(), String::new()));
+                    rows.push(("  Total".to_string(), s.total.to_string()));
+                    rows.push(("  OK".to_string(), xray_stats_value(&s, s.ok)));
+                    rows.push((
+                        "  Faults (5xx)".to_string(),
+                        if s.faults > 0 {
+                            format!("✗ {}", xray_stats_value(&s, s.faults))
+                        } else {
+                            "✓ 0".to_string()
+                        },
+                    ));
+                    rows.push((
+                        "  Errors (4xx)".to_string(),
+                        if s.errors > 0 {
+                            format!("⚠ {}", xray_stats_value(&s, s.errors))
+                        } else {
+                            "0".to_string()
+                        },
+                    ));
+                    if s.throttles > 0 {
+                        rows.push(("  Throttles (429)".to_string(), format!("⚠ {}", xray_stats_value(&s, s.throttles))));
+                    }
+                    rows.push((String::new(), String::new()));
+                    rows.push(("Response Time".to_string(), String::new()));
+                    if let Some(m) = s.mean() {
+                        rows.push(("  Average".to_string(), fmt_secs(m)));
+                    }
+                    for (k, v) in [("  p50", n.p50), ("  p90", n.p90), ("  p99", n.p99)] {
+                        if let Some(v) = v {
+                            rows.push((k.to_string(), fmt_secs(v)));
+                        }
+                    }
+                }
+            }
+            rows.push((String::new(), String::new()));
+            rows.push((
+                "Edges".to_string(),
+                format!("{} downstream · {} upstream", n.downstream.len(), n.upstream.len()),
+            ));
+            rows
+        }
+        S::Downstream => xray_edge_rows(&n.downstream, "No downstream calls recorded in this window"),
+        S::Upstream => xray_edge_rows(&n.upstream, "No callers recorded in this window"),
+    }
+}
+
+pub fn xray_trace_section_lines(
+    t: &crate::aws::services::xray::XRayTrace,
+    section: crate::aws::services::xray::XRayTraceDetailSection,
+    detail: Option<&crate::lazy::Lazy<crate::aws::services::xray::XRayTraceDetail>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::xray::{fmt_secs, XRayTraceDetailSection as S};
+    use crate::lazy::Lazy;
+    match section {
+        S::Overview => {
+            let mut rows = vec![
+                ("Trace ID".to_string(), t.trace_id.clone()),
+                (
+                    "Outcome".to_string(),
+                    match t.state_label().as_str() {
+                        "fault" => "✗ fault (5xx)".to_string(),
+                        "error" => "⚠ error (4xx)".to_string(),
+                        "throttled" => "⚠ throttled (429)".to_string(),
+                        other => format!("✓ {other}"),
+                    },
+                ),
+            ];
+            if let Some(s) = &t.start {
+                rows.push(("Started".to_string(), s.clone()));
+            }
+            if let Some(d) = t.duration {
+                rows.push(("Duration".to_string(), fmt_secs(d)));
+            }
+            if let Some(r) = t.response_time {
+                rows.push(("Response Time".to_string(), fmt_secs(r)));
+            }
+            if t.partial {
+                rows.push(("".to_string(), "⚠ partial trace — some segments haven't arrived".to_string()));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("Request".to_string(), String::new()));
+            if let Some(m) = &t.method {
+                rows.push(("  Method".to_string(), m.clone()));
+            }
+            if let Some(u) = &t.url {
+                rows.push(("  URL".to_string(), u.clone()));
+            }
+            if let Some(s) = t.status {
+                let v = if s >= 500 {
+                    format!("✗ {s}")
+                } else if s >= 400 {
+                    format!("⚠ {s}")
+                } else {
+                    s.to_string()
+                };
+                rows.push(("  Status".to_string(), v));
+            }
+            if let Some(ip) = &t.client_ip {
+                rows.push(("  Client IP".to_string(), ip.clone()));
+            }
+            if let Some(ua) = &t.user_agent {
+                rows.push(("  User Agent".to_string(), ua.clone()));
+            }
+            if let Some(e) = &t.entry_point {
+                rows.push(("  Entry Point".to_string(), e.clone()));
+            }
+            if !t.services.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Services".to_string(), String::new()));
+                for s in &t.services {
+                    rows.push((format!("  {s}"), String::new()));
+                }
+            }
+            if !t.resource_arns.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Resources".to_string(), String::new()));
+                for a in &t.resource_arns {
+                    rows.push(("  Resource".to_string(), a.clone()));
+                }
+            }
+            rows
+        }
+        S::RootCause => {
+            if t.root_causes.is_empty() {
+                return vec![(
+                    "".to_string(),
+                    if t.fault || t.error {
+                        "X-Ray didn't attribute a root cause — see Segments".to_string()
+                    } else {
+                        "No faults, errors or latency outliers in this trace".to_string()
+                    },
+                )];
+            }
+            let mut rows = Vec::new();
+            for (i, rc) in t.root_causes.iter().enumerate() {
+                if i > 0 {
+                    rows.push((String::new(), String::new()));
+                }
+                let mark = match rc.kind {
+                    "fault" => "✗",
+                    "error" => "⚠",
+                    _ => "⏱",
+                };
+                rows.push((format!("{} {}", rc.kind, rc.service), String::new()));
+                rows.push(("  Kind".to_string(), format!("{mark} {}", rc.kind)));
+                if !rc.path.is_empty() {
+                    rows.push(("  Path".to_string(), rc.path.clone()));
+                }
+                if let Some(x) = &rc.exception {
+                    rows.push(("  Exception".to_string(), format!("{mark} {x}")));
+                }
+            }
+            rows
+        }
+        S::Segments => match detail {
+            None | Some(Lazy::Loading) => vec![("".to_string(), "Loading…".to_string())],
+            Some(Lazy::Error(e)) => error_rows(e),
+            Some(Lazy::Loaded(d)) if d.rows.is_empty() => {
+                vec![("".to_string(), "No segments returned (the trace may have aged out — X-Ray keeps 30 days)".to_string())]
+            }
+            Some(Lazy::Loaded(d)) => {
+                let mut rows = vec![("Segments".to_string(), format!("{} · e opens the raw trace JSON", d.rows.len()))];
+                if d.limit_exceeded {
+                    rows.push(("".to_string(), "⚠ trace exceeded X-Ray's size limit — segments are incomplete".to_string()));
+                }
+                rows.push((String::new(), String::new()));
+                rows.push((
+                    format!("    {:<48} {:>10} {:>10}  {}", "SEGMENT", "START", "DURATION", "STATUS"),
+                    String::new(),
+                ));
+                for r in &d.rows {
+                    let mark = if r.fault {
+                        "✗ "
+                    } else if r.error || r.throttle {
+                        "⚠ "
+                    } else {
+                        "  "
+                    };
+                    let name = format!(
+                        "{}{}{}",
+                        "  ".repeat(r.depth),
+                        r.name,
+                        r.origin.as_deref().map(|o| format!(" ({o})")).unwrap_or_default()
+                    );
+                    let mut status = r.http_status.map(|s| s.to_string()).unwrap_or_default();
+                    if let Some(x) = &r.exception {
+                        if !status.is_empty() {
+                            status.push_str("  ");
+                        }
+                        status.push_str(x);
+                    }
+                    rows.push((
+                        format!(
+                            "  {mark}{:<48} {:>10} {:>10}  {}",
+                            truncate_chars_x(&name, 48),
+                            format!("+{}", fmt_secs(r.offset)),
+                            r.duration.map(fmt_secs).unwrap_or_else(|| "…".to_string()),
+                            status
+                        ),
+                        String::new(),
+                    ));
+                }
+                rows
+            }
+        },
+    }
+}
+
+fn truncate_chars_x(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
+// ── DMS split panes ─────────────────────────────────────────────────────────
+
+fn render_dms_task_split(
+    app: &App,
+    t: &crate::aws::services::dms::DmsTask,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let subtitle = format!("{} · {}", t.migration_type, t.state_label());
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "DMS Replication Task",
+        &t.identifier,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::dms::DMS_TASK_SECTIONS),
+    );
+}
+
+fn render_dms_instance_split(
+    app: &App,
+    i: &crate::aws::services::dms::DmsInstance,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let subtitle = format!("{} · {}", i.class, i.status);
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "DMS Replication Instance",
+        &i.identifier,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::dms::DMS_INSTANCE_SECTIONS),
+    );
+}
+
+fn render_dms_endpoint_split(
+    app: &App,
+    e: &crate::aws::services::dms::DmsEndpoint,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let subtitle = format!("{} · {} · {}", e.endpoint_type, e.engine_label(), e.state_label());
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "DMS Endpoint",
+        &e.identifier,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::dms::DMS_ENDPOINT_SECTIONS),
+    );
+}
+
+fn render_dms_serverless_split(
+    app: &App,
+    s: &crate::aws::services::dms::DmsServerless,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let subtitle = format!("{} · {}", s.replication_type, s.state_label());
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "DMS Serverless Replication",
+        &s.identifier,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::dms::DMS_SERVERLESS_SECTIONS),
+    );
+}
+
+fn kv(k: &str, v: impl Into<String>) -> (String, String) {
+    (k.to_string(), v.into())
+}
+
+/// "2h 14m" / "37s" from milliseconds.
+fn dms_elapsed(ms: i64) -> String {
+    let secs = ms / 1000;
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    if h > 0 {
+        format!("{h}h {m}m")
+    } else if m > 0 {
+        format!("{m}m {s}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
+/// Source/target endpoint block: name + engine, then the ARN row (which is
+/// what `⏎` follows to the Endpoints tab).
+fn dms_endpoint_rows(
+    rows: &mut Vec<(String, String)>,
+    heading: &str,
+    resolved: &Option<(String, String)>,
+    arn: &str,
+) {
+    if arn.is_empty() {
+        return;
+    }
+    rows.push((heading.to_string(), String::new()));
+    match resolved {
+        Some((name, engine)) => rows.push(kv("  Endpoint", format!("{name} ({engine})"))),
+        None => rows.push(kv("  Endpoint", "· not in the endpoints list")),
+    }
+    rows.push(kv("  Endpoint ARN", arn));
+}
+
+/// Progress block shared by provisioned tasks and serverless replications.
+fn dms_stats_rows(rows: &mut Vec<(String, String)>, stats: &crate::aws::services::dms::DmsStats) {
+    rows.push((String::new(), String::new()));
+    rows.push(("Progress".to_string(), String::new()));
+    rows.push(kv("  Full Load", format!("{}%", stats.full_load_pct)));
+    let tables = format!(
+        "{} loaded · {} loading · {} queued · {} errored",
+        stats.tables_loaded, stats.tables_loading, stats.tables_queued, stats.tables_errored
+    );
+    rows.push(kv(
+        "  Tables",
+        if stats.tables_errored > 0 {
+            format!("✗ {tables}")
+        } else {
+            tables
+        },
+    ));
+    if stats.elapsed_ms > 0 {
+        rows.push(kv("  Elapsed", dms_elapsed(stats.elapsed_ms)));
+    }
+    for (k, v) in [
+        ("  Started", &stats.started),
+        ("  Stopped", &stats.stopped),
+        ("  Full Load Started", &stats.full_load_started),
+        ("  Full Load Finished", &stats.full_load_finished),
+    ] {
+        if let Some(v) = v {
+            rows.push(kv(k, v.clone()));
+        }
+    }
+}
+
+/// Table-statistics body (tasks and serverless share it): errored tables
+/// first and marked `✗`, one fixed-width line per table.
+fn dms_table_stats_rows(
+    stats: Option<&crate::lazy::Lazy<crate::aws::services::dms::DmsTableStats>>,
+) -> Vec<(String, String)> {
+    use crate::lazy::Lazy;
+    let data = match stats {
+        None | Some(Lazy::Loading) => return vec![("".to_string(), "Loading…".to_string())],
+        Some(Lazy::Error(e)) => return error_rows(e),
+        Some(Lazy::Loaded(d)) => d,
+    };
+    if data.tables.is_empty() {
+        return vec![(
+            "".to_string(),
+            "No table statistics yet — the task hasn't started loading tables".to_string(),
+        )];
+    }
+    let errored = data.tables.iter().filter(|t| t.is_error()).count();
+    let mut rows = vec![kv("Tables", data.tables.len().to_string())];
+    rows.push(kv(
+        "Errored",
+        if errored > 0 {
+            format!("✗ {errored}")
+        } else {
+            "✓ 0".to_string()
+        },
+    ));
+    if data.truncated {
+        rows.push(kv(
+            "",
+            format!(
+                "· first {} tables shown (cap)",
+                crate::aws::services::dms::MAX_TABLE_STATS
+            ),
+        ));
+    }
+    rows.push((String::new(), String::new()));
+    rows.push((
+        format!(
+            "    {:<22} {:<40} {:>10} {:>9} {:>9} {:>9}  {}",
+            "STATE", "TABLE", "FULL LOAD", "INSERTS", "UPDATES", "DELETES", "VALIDATION"
+        ),
+        String::new(),
+    ));
+    for t in &data.tables {
+        let mark = if t.is_error() { "✗ " } else { "  " };
+        let mut validation = t.validation_state.clone().unwrap_or_default();
+        if t.validation_failed > 0 {
+            validation = format!("{validation} ({} failed)", t.validation_failed);
+        }
+        let mut full = t.full_load_rows.to_string();
+        if t.full_load_error_rows > 0 {
+            full = format!("{full} ({} err)", t.full_load_error_rows);
+        }
+        rows.push((
+            format!(
+                "  {mark}{:<22} {:<40} {:>10} {:>9} {:>9} {:>9}  {}",
+                truncate_chars(&t.state, 22),
+                truncate_chars(&format!("{}.{}", t.schema, t.table), 40),
+                full,
+                t.inserts,
+                t.updates,
+                t.deletes,
+                validation
+            ),
+            String::new(),
+        ));
+    }
+    rows
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// Pretty JSON as plain content lines, under a group header.
+fn dms_json_rows(rows: &mut Vec<(String, String)>, heading: &str, json: Option<&str>) {
+    rows.push((heading.to_string(), String::new()));
+    match json {
+        Some(j) if !j.trim().is_empty() => {
+            for line in crate::aws::services::dms::pretty_json(j).lines() {
+                rows.push((format!("  {line}"), String::new()));
+            }
+        }
+        _ => rows.push(("".to_string(), "· none".to_string())),
+    }
+}
+
+pub fn dms_task_section_lines(
+    t: &crate::aws::services::dms::DmsTask,
+    section: crate::aws::services::dms::DmsTaskDetailSection,
+    tables: Option<&crate::lazy::Lazy<crate::aws::services::dms::DmsTableStats>>,
+    assessments: Option<&crate::lazy::Lazy<Vec<crate::aws::services::dms::DmsAssessmentRun>>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::dms::DmsTaskDetailSection as S;
+    use crate::lazy::Lazy;
+    match section {
+        S::Overview => {
+            let mut rows = vec![
+                kv("Task", t.identifier.clone()),
+                kv("Status", t.state_label()),
+                kv("Migration Type", t.migration_type.clone()),
+            ];
+            if let Some(r) = &t.stop_reason {
+                let v = if t.stopped_on_error() { format!("✗ {r}") } else { r.clone() };
+                rows.push(kv("Stop Reason", v));
+            }
+            if let Some(f) = &t.last_failure {
+                rows.push(kv("Last Failure", format!("✗ {f}")));
+            }
+            if let Some(stats) = &t.stats {
+                dms_stats_rows(&mut rows, stats);
+            }
+            rows.push((String::new(), String::new()));
+            dms_endpoint_rows(&mut rows, "Source", &t.source_endpoint, &t.source_endpoint_arn);
+            dms_endpoint_rows(&mut rows, "Target", &t.target_endpoint, &t.target_endpoint_arn);
+            if !t.instance_arn.is_empty() {
+                rows.push(("Replication Instance".to_string(), String::new()));
+                rows.push(kv(
+                    "  Instance",
+                    t.instance_id.clone().unwrap_or_else(|| "· not in the instances list".to_string()),
+                ));
+                rows.push(kv("  Instance ARN", t.instance_arn.clone()));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("CDC".to_string(), String::new()));
+            for (k, v) in [
+                ("  Start Position", &t.cdc_start_position),
+                ("  Stop Position", &t.cdc_stop_position),
+                ("  Recovery Checkpoint", &t.recovery_checkpoint),
+            ] {
+                rows.push(kv(k, v.clone().unwrap_or_else(|| "—".to_string())));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("Other".to_string(), String::new()));
+            rows.push(kv(
+                "  CloudWatch Logging",
+                match (t.logging_enabled, t.log_group()) {
+                    (Some(true), Some(g)) => format!("✓ {g} (t to tail)"),
+                    (Some(true), None) => "✓ enabled".to_string(),
+                    (Some(false), _) => "✗ disabled — no task log to tail".to_string(),
+                    (None, _) => "unknown".to_string(),
+                },
+            ));
+            if let Some(c) = &t.created {
+                rows.push(kv("  Created", c.clone()));
+            }
+            if let Some(s) = &t.started {
+                rows.push(kv("  Last Started", s.clone()));
+            }
+            rows.push(kv("  ARN", t.arn.clone()));
+            rows
+        }
+        S::Tables => dms_table_stats_rows(tables),
+        S::Assessments => match assessments {
+            None | Some(Lazy::Loading) => vec![("".to_string(), "Loading…".to_string())],
+            Some(Lazy::Error(e)) => error_rows(e),
+            Some(Lazy::Loaded(runs)) if runs.is_empty() => {
+                vec![("".to_string(), "No premigration assessment runs for this task".to_string())]
+            }
+            Some(Lazy::Loaded(runs)) => {
+                let mut rows = Vec::new();
+                for (i, r) in runs.iter().enumerate() {
+                    if i > 0 {
+                        rows.push((String::new(), String::new()));
+                    }
+                    let latest = if r.latest { " (latest)" } else { "" };
+                    rows.push((format!("{}{}", r.name, latest), String::new()));
+                    rows.push(kv("  Status", r.status.clone()));
+                    if let Some(c) = &r.created {
+                        rows.push(kv("  Created", c.clone()));
+                    }
+                    if let Some((done, total)) = r.progress {
+                        rows.push(kv("  Progress", format!("{done}/{total} assessments")));
+                    }
+                    let outcome = format!(
+                        "{} passed · {} failed · {} error · {} warning · {} skipped",
+                        r.passed, r.failed, r.error, r.warning, r.skipped
+                    );
+                    rows.push(kv(
+                        "  Results",
+                        if r.failed + r.error > 0 {
+                            format!("✗ {outcome}")
+                        } else if r.warning > 0 {
+                            format!("⚠ {outcome}")
+                        } else {
+                            outcome
+                        },
+                    ));
+                    if let Some(f) = &r.last_failure {
+                        rows.push(kv("  Failure", format!("✗ {f}")));
+                    }
+                    if let Some(loc) = &r.result_location {
+                        rows.push(kv("  Report", loc.clone()));
+                    }
+                }
+                rows
+            }
+        },
+        S::Settings => {
+            let mut rows = Vec::new();
+            dms_json_rows(&mut rows, "Table Mappings", t.table_mappings.as_deref());
+            rows.push((String::new(), String::new()));
+            dms_json_rows(&mut rows, "Task Settings", t.settings.as_deref());
+            rows
+        }
+        S::Tags => tag_rows(&t.tags),
+    }
+}
+
+pub fn dms_instance_section_lines(
+    i: &crate::aws::services::dms::DmsInstance,
+    section: crate::aws::services::dms::DmsInstanceDetailSection,
+    tasks: &[&crate::aws::services::dms::DmsTask],
+) -> Vec<(String, String)> {
+    use crate::aws::services::dms::DmsInstanceDetailSection as S;
+    match section {
+        S::Overview => {
+            let mut rows = vec![
+                kv("Instance", i.identifier.clone()),
+                kv("Status", i.state_label()),
+                kv("Class", i.class.clone()),
+                kv("Allocated Storage", format!("{} GB", i.allocated_storage_gb)),
+                kv("Engine Version", i.engine_version.clone().unwrap_or_default()),
+                kv("Multi-AZ", if i.multi_az { "✓ yes" } else { "no" }),
+                kv("Auto Minor Upgrade", if i.auto_minor_upgrade { "yes" } else { "no" }),
+            ];
+            if let Some(w) = &i.maintenance_window {
+                rows.push(kv("Maintenance Window", w.clone()));
+            }
+            if !i.pending.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Pending Changes".to_string(), String::new()));
+                for p in &i.pending {
+                    rows.push((format!("  ⚠ {p}"), String::new()));
+                }
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("Other".to_string(), String::new()));
+            if let Some(k) = &i.kms_key_id {
+                rows.push(kv("  KMS Key", k.clone()));
+            }
+            if let Some(c) = &i.created {
+                rows.push(kv("  Created", c.clone()));
+            }
+            rows.push(kv("  ARN", i.arn.clone()));
+            rows
+        }
+        S::Network => {
+            let mut rows = Vec::new();
+            if let Some(v) = &i.vpc_id {
+                rows.push(kv("VPC", v.clone()));
+            }
+            if let Some(g) = &i.subnet_group {
+                rows.push(kv("Subnet Group", g.clone()));
+            }
+            if let Some(az) = &i.availability_zone {
+                rows.push(kv("Availability Zone", az.clone()));
+            }
+            if let Some(az) = &i.secondary_az {
+                rows.push(kv("Standby AZ", az.clone()));
+            }
+            rows.push(kv(
+                "Publicly Accessible",
+                if i.publicly_accessible { "⚠ yes" } else { "no" },
+            ));
+            if let Some(n) = &i.network_type {
+                rows.push(kv("Network Type", n.clone()));
+            }
+            if !i.private_ips.is_empty() {
+                rows.push(kv("Private IPs", i.private_ips.join(", ")));
+            }
+            if !i.public_ips.is_empty() {
+                rows.push(kv("Public IPs", i.public_ips.join(", ")));
+            }
+            if !i.security_groups.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Security Groups".to_string(), String::new()));
+                for (sg, status) in &i.security_groups {
+                    rows.push((format!("  {sg}"), status.clone()));
+                }
+            }
+            if !i.subnets.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Subnets".to_string(), String::new()));
+                for (sn, az) in &i.subnets {
+                    rows.push((format!("  {sn}"), az.clone()));
+                }
+            }
+            rows
+        }
+        S::Tasks => {
+            if tasks.is_empty() {
+                return vec![("".to_string(), "No replication tasks on this instance".to_string())];
+            }
+            let mut rows = Vec::new();
+            for t in tasks {
+                rows.push((t.identifier.clone(), String::new()));
+                rows.push(kv("  Status", t.state_label()));
+                rows.push(kv("  Type", t.migration_type.clone()));
+                rows.push(kv("  Task ARN", t.arn.clone()));
+            }
+            rows
+        }
+        S::Tags => tag_rows(&i.tags),
+    }
+}
+
+pub fn dms_endpoint_section_lines(
+    e: &crate::aws::services::dms::DmsEndpoint,
+    section: crate::aws::services::dms::DmsEndpointDetailSection,
+    tasks: &[&crate::aws::services::dms::DmsTask],
+    serverless: &[&crate::aws::services::dms::DmsServerless],
+) -> Vec<(String, String)> {
+    use crate::aws::services::dms::DmsEndpointDetailSection as S;
+    match section {
+        S::Overview => {
+            let mut rows = vec![
+                kv("Endpoint", e.identifier.clone()),
+                kv("Type", e.endpoint_type.clone()),
+                kv("Engine", e.engine_label()),
+                kv("Status", e.state_label()),
+            ];
+            rows.push((String::new(), String::new()));
+            rows.push(("Connection".to_string(), String::new()));
+            if let Some(s) = &e.server {
+                let port = e.port.map(|p| format!(":{p}")).unwrap_or_default();
+                rows.push(kv("  Server", format!("{s}{port}")));
+            }
+            if let Some(d) = &e.database {
+                rows.push(kv("  Database", d.clone()));
+            }
+            if let Some(u) = &e.username {
+                rows.push(kv("  Username", u.clone()));
+            }
+            if let Some(m) = &e.ssl_mode {
+                rows.push(kv(
+                    "  SSL Mode",
+                    if m == "none" { format!("⚠ {m}") } else { m.clone() },
+                ));
+            }
+            if let Some(c) = &e.certificate_arn {
+                rows.push(kv("  Certificate", c.clone()));
+            }
+            if let Some(a) = &e.extra_connection_attributes {
+                rows.push(kv("  Extra Attributes", a.clone()));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("Access".to_string(), String::new()));
+            // A reference only — never resolved (see the Secrets rules).
+            rows.push(kv(
+                "  Credentials Secret",
+                e.secret_ref.clone().unwrap_or_else(|| "· inline credentials (not shown)".to_string()),
+            ));
+            if let Some(r) = &e.service_access_role {
+                rows.push(kv("  Service Access Role", r.clone()));
+            }
+            if let Some(k) = &e.kms_key_id {
+                rows.push(kv("  KMS Key", k.clone()));
+            }
+            rows.push(kv("  ARN", e.arn.clone()));
+            rows
+        }
+        S::Connections => {
+            if e.connections.is_empty() {
+                return vec![(
+                    "".to_string(),
+                    "No connection tests recorded — run one from the console, or `C` for the command"
+                        .to_string(),
+                )];
+            }
+            let mut rows = Vec::new();
+            for c in &e.connections {
+                let status = match c.status.as_str() {
+                    "successful" => format!("✓ {}", c.status),
+                    "failed" => format!("✗ {}", c.status),
+                    _ => c.status.clone(),
+                };
+                rows.push((c.instance_id.clone(), String::new()));
+                rows.push(kv("  Status", status));
+                if let Some(f) = &c.last_failure {
+                    rows.push(kv("  Last Failure", format!("✗ {f}")));
+                }
+                rows.push(kv("  Instance ARN", c.instance_arn.clone()));
+            }
+            rows
+        }
+        S::UsedBy => {
+            if tasks.is_empty() && serverless.is_empty() {
+                return vec![("".to_string(), "No task or serverless replication uses this endpoint".to_string())];
+            }
+            let mut rows = Vec::new();
+            for t in tasks {
+                let role = if t.source_endpoint_arn == e.arn { "source" } else { "target" };
+                rows.push((t.identifier.clone(), String::new()));
+                rows.push(kv("  Role", role));
+                rows.push(kv("  Status", t.state_label()));
+                rows.push(kv("  Task ARN", t.arn.clone()));
+            }
+            for s in serverless {
+                let role = if s.source_endpoint_arn == e.arn { "source" } else { "target" };
+                rows.push((format!("{} (serverless)", s.identifier), String::new()));
+                rows.push(kv("  Role", role));
+                rows.push(kv("  Status", s.state_label()));
+                rows.push(kv("  Replication ARN", s.arn.clone()));
+            }
+            rows
+        }
+        S::Tags => tag_rows(&e.tags),
+    }
+}
+
+pub fn dms_serverless_section_lines(
+    s: &crate::aws::services::dms::DmsServerless,
+    section: crate::aws::services::dms::DmsServerlessDetailSection,
+    tables: Option<&crate::lazy::Lazy<crate::aws::services::dms::DmsTableStats>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::dms::DmsServerlessDetailSection as S;
+    match section {
+        S::Overview => {
+            let mut rows = vec![
+                kv("Replication", s.identifier.clone()),
+                kv("Status", s.state_label()),
+                kv("Replication Type", s.replication_type.clone()),
+            ];
+            if let Some(r) = &s.stop_reason {
+                rows.push(kv("Stop Reason", r.clone()));
+            }
+            for f in &s.failures {
+                rows.push(kv("Failure", format!("✗ {f}")));
+            }
+            if let Some(stats) = &s.stats {
+                dms_stats_rows(&mut rows, stats);
+            }
+            rows.push((String::new(), String::new()));
+            dms_endpoint_rows(&mut rows, "Source", &s.source_endpoint, &s.source_endpoint_arn);
+            dms_endpoint_rows(&mut rows, "Target", &s.target_endpoint, &s.target_endpoint_arn);
+            rows.push((String::new(), String::new()));
+            rows.push(("Other".to_string(), String::new()));
+            for (k, v) in [
+                ("  CDC Start Position", &s.cdc_start_position),
+                ("  Recovery Checkpoint", &s.recovery_checkpoint),
+                ("  Last Stopped", &s.last_stop),
+                ("  Created", &s.created),
+            ] {
+                if let Some(v) = v {
+                    rows.push(kv(k, v.clone()));
+                }
+            }
+            rows.push(kv("  ARN", s.arn.clone()));
+            rows
+        }
+        S::Capacity => {
+            let mut rows = vec![kv(
+                "Capacity Range",
+                match (s.min_dcu, s.max_dcu) {
+                    (Some(min), Some(max)) => format!("{min}–{max} DCU"),
+                    (None, Some(max)) => format!("up to {max} DCU"),
+                    _ => "—".to_string(),
+                },
+            )];
+            if let Some(p) = s.provisioned_dcu {
+                rows.push(kv("Provisioned Now", format!("{p} DCU")));
+            }
+            if let Some(p) = &s.provision_state {
+                rows.push(kv("Provision State", p.clone()));
+            }
+            if let Some(m) = s.multi_az {
+                rows.push(kv("Multi-AZ", if m { "✓ yes" } else { "no" }));
+            }
+            if let Some(g) = &s.subnet_group {
+                rows.push(kv("Subnet Group", g.clone()));
+            }
+            if !s.security_group_ids.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Security Groups".to_string(), String::new()));
+                for sg in &s.security_group_ids {
+                    rows.push((format!("  {sg}"), String::new()));
+                }
+            }
+            if let Some(k) = &s.kms_key_id {
+                rows.push((String::new(), String::new()));
+                rows.push(kv("KMS Key", k.clone()));
+            }
+            rows
+        }
+        S::Tables => {
+            if s.status.is_none() {
+                return vec![("".to_string(), "Not started yet — no table statistics".to_string())];
+            }
+            dms_table_stats_rows(tables)
+        }
+        S::Settings => {
+            let mut rows = Vec::new();
+            dms_json_rows(&mut rows, "Table Mappings", s.table_mappings.as_deref());
+            rows.push((String::new(), String::new()));
+            dms_json_rows(&mut rows, "Replication Settings", s.settings.as_deref());
+            rows
+        }
+        S::Tags => tag_rows(&s.tags),
+    }
+}
+
 // ── Redshift split panes ────────────────────────────────────────────────────
 
 fn render_redshift_cluster_split(app: &App, c: &RedshiftCluster, area: Rect, frame: &mut Frame) {
@@ -23366,6 +24593,742 @@ fn descriptor_tabs(
             )
         })
         .collect()
+}
+
+// ── Batch split panes ───────────────────────────────────────────────────────
+
+fn render_batch_queue_split(
+    app: &App,
+    q: &crate::aws::services::batch::BatchJobQueue,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let subtitle = format!("{} · priority {}", q.state_label(), q.priority);
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "Batch Job Queue",
+        &q.name,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::batch::BATCH_QUEUE_SECTIONS),
+    );
+}
+
+fn render_batch_ce_split(
+    app: &App,
+    c: &crate::aws::services::batch::BatchComputeEnv,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let mut subtitle = format!("{} · {}", c.ce_type, c.state_label());
+    if let Some(p) = &c.provisioning {
+        subtitle = format!("{} {} · {}", c.ce_type, p, c.state_label());
+    }
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "Batch Compute Environment",
+        &c.name,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::batch::BATCH_CE_SECTIONS),
+    );
+}
+
+fn render_batch_job_split(
+    app: &App,
+    j: &crate::aws::services::batch::BatchJob,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let subtitle = format!("{} · {} · {}", j.status, j.queue, j.job_id);
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "Batch Job",
+        &j.name,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::batch::BATCH_JOB_SECTIONS),
+    );
+}
+
+fn render_batch_jobdef_split(
+    app: &App,
+    d: &crate::aws::services::batch::BatchJobDefinition,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let subtitle = format!("{} · {}", d.def_type, d.status.to_lowercase());
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "Batch Job Definition",
+        &d.label,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::batch::BATCH_JOBDEF_SECTIONS),
+    );
+}
+
+fn batch_vcpu_rows(c: &crate::aws::services::batch::BatchComputeEnv, indent: &str) -> Vec<(String, String)> {
+    let n = |v: Option<i32>| v.map(|v| v.to_string()).unwrap_or_else(|| "—".to_string());
+    let mut rows = Vec::new();
+    if c.is_managed() {
+        rows.push((
+            format!("{indent}vCPU min / desired / max"),
+            format!("{} / {} / {}", n(c.min_vcpus), n(c.desired_vcpus), n(c.max_vcpus)),
+        ));
+    } else if let Some(u) = c.unmanaged_vcpus {
+        rows.push((format!("{indent}Unmanaged vCPU"), u.to_string()));
+    }
+    rows
+}
+
+fn batch_status_value(label: &str, blocked: bool) -> String {
+    if blocked {
+        format!("✗ {label}")
+    } else {
+        label.to_string()
+    }
+}
+
+/// The "why is nothing running" verdict for a compute environment with
+/// RUNNABLE jobs waiting on the queues it serves.
+fn batch_ce_waiting_rows(
+    c: &crate::aws::services::batch::BatchComputeEnv,
+    waiting: usize,
+) -> Vec<(String, String)> {
+    if waiting == 0 {
+        return Vec::new();
+    }
+    let jobs = if waiting == 1 { "1 RUNNABLE job".to_string() } else { format!("{waiting} RUNNABLE jobs") };
+    // Short verdict line + dim hint lines: the pane body doesn't wrap.
+    let (verdict, hints): (String, &[&str]) = match c.blocker() {
+        Some("disabled") => (format!("✗ disabled with {jobs} waiting"), &["· enable it, or attach another environment to the queue"]),
+        Some("INVALID") => (format!("✗ INVALID with {jobs} waiting"), &["· Status Reason above says what AWS rejected"]),
+        Some(_) if c.is_fargate() => (
+            format!("⚠ desired vCPU 0 with {jobs} waiting"),
+            &[
+                "· if it stays at 0, the usual causes:",
+                "·   the job's vCPU / memory isn't a valid Fargate size",
+                "·   the subnets are out of IPs or have no route to ECR",
+            ],
+        ),
+        Some(_) => (
+            format!("⚠ desired vCPU 0 with {jobs} waiting"),
+            &[
+                "· if it stays at 0, the usual causes:",
+                "·   the job's vCPU / memory fits no allowed instance type",
+                "·   the subnets are out of IPs or have no route to ECS / ECR",
+                "·   the instance role or service role is wrong",
+            ],
+        ),
+        None if c.is_managed() && c.desired_vcpus.is_some() && c.desired_vcpus >= c.max_vcpus => (
+            format!("⚠ at max vCPU with {jobs} waiting"),
+            &["· raise max vCPU, or the jobs wait for capacity"],
+        ),
+        None => (format!("· {jobs} waiting on the queues it serves"), &[]),
+    };
+    let mut rows = vec![(String::new(), String::new()), ("".to_string(), verdict)];
+    rows.extend(hints.iter().map(|h| ("".to_string(), h.to_string())));
+    rows
+}
+
+pub fn batch_queue_section_lines(
+    q: &crate::aws::services::batch::BatchJobQueue,
+    section: crate::aws::services::batch::BatchQueueDetailSection,
+    ces: &[&crate::aws::services::batch::BatchComputeEnv],
+    jobs: &[&crate::aws::services::batch::BatchJob],
+) -> Vec<(String, String)> {
+    use crate::aws::services::batch::{BatchQueueDetailSection as S, JOB_STATUSES};
+    let find_ce = |name: &str| ces.iter().find(|c| c.name == name);
+    match section {
+        S::Overview => {
+            let blocked = q.state == "DISABLED" || q.status == "INVALID";
+            let mut rows = vec![
+                ("Queue".to_string(), q.name.clone()),
+                ("Status".to_string(), batch_status_value(&q.state_label(), blocked)),
+                ("State".to_string(), q.state.clone()),
+            ];
+            if let Some(r) = &q.status_reason {
+                rows.push(("Status Reason".to_string(), r.clone()));
+            }
+            rows.push(("Priority".to_string(), format!("{} (higher is scheduled first)", q.priority)));
+            if let Some(t) = &q.queue_type {
+                rows.push(("Queue Type".to_string(), t.clone()));
+            }
+            rows.push((
+                "Scheduling Policy".to_string(),
+                q.scheduling_policy
+                    .clone()
+                    .unwrap_or_else(|| "FIFO (no fair-share policy)".to_string()),
+            ));
+            rows.push(("ARN".to_string(), q.arn.clone()));
+
+            // The stuck-queue verdict: RUNNABLE jobs and no environment that
+            // can take them.
+            let runnable = jobs.iter().filter(|j| j.status == "RUNNABLE").count();
+            if runnable > 0 {
+                let usable = q
+                    .ce_order
+                    .iter()
+                    .filter(|(_, n)| find_ce(n).is_some_and(|c| c.blocker().is_none()))
+                    .count();
+                rows.push((String::new(), String::new()));
+                if q.state == "DISABLED" {
+                    rows.push((String::new(), format!("⚠ disabled with {runnable} RUNNABLE job(s)")));
+                    rows.push((String::new(), "· a disabled queue schedules nothing new".to_string()));
+                } else if usable == 0 && !q.ce_order.is_empty() {
+                    rows.push((String::new(), format!("⚠ {runnable} RUNNABLE job(s), and no compute environment can take them")));
+                    rows.push((String::new(), "· 2 Compute Environments shows why".to_string()));
+                } else {
+                    rows.push((String::new(), format!("· {runnable} RUNNABLE job(s) waiting")));
+                }
+            }
+
+            if !q.time_limit_actions.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Job State Time Limits".to_string(), String::new()));
+                for (state, secs, action, reason) in &q.time_limit_actions {
+                    rows.push((
+                        format!("  {state} after {}", crate::aws::services::step_functions::fmt_duration(*secs as i64)),
+                        if reason.is_empty() { action.clone() } else { format!("{action} — {reason}") },
+                    ));
+                }
+            }
+            rows
+        }
+        S::ComputeEnvironments => {
+            if q.ce_order.is_empty() && q.service_envs.is_empty() {
+                return vec![("".to_string(), "No compute environments attached".to_string())];
+            }
+            let mut rows = Vec::new();
+            for (i, (order, name)) in q.ce_order.iter().enumerate() {
+                if i > 0 {
+                    rows.push((String::new(), String::new()));
+                }
+                rows.push((name.clone(), String::new()));
+                rows.push(("  Order".to_string(), order.to_string()));
+                match find_ce(name) {
+                    Some(c) => {
+                        let mut model = c.ce_type.clone();
+                        if let Some(p) = &c.provisioning {
+                            model.push_str(&format!(" · {p}"));
+                        }
+                        rows.push((
+                            "  Status".to_string(),
+                            match c.blocker() {
+                                Some(b @ ("disabled" | "INVALID")) => format!("✗ {b}"),
+                                _ => c.state_label(),
+                            },
+                        ));
+                        rows.push(("  Model".to_string(), model));
+                        rows.extend(batch_vcpu_rows(c, "  "));
+                        rows.push(("  ARN".to_string(), c.arn.clone()));
+                    }
+                    None => rows.push(("".to_string(), "· not in the loaded list".to_string())),
+                }
+            }
+            if !q.service_envs.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Service Environments".to_string(), String::new()));
+                for (order, name) in &q.service_envs {
+                    rows.push((format!("  {order}"), name.clone()));
+                }
+            }
+            rows
+        }
+        S::Jobs => {
+            if jobs.is_empty() {
+                return vec![
+                    ("".to_string(), "No jobs on this queue".to_string()),
+                    (
+                        "".to_string(),
+                        "· Batch keeps finished jobs for a limited time — an empty list may just be age".to_string(),
+                    ),
+                ];
+            }
+            let mut rows = vec![("By Status".to_string(), String::new())];
+            for s in JOB_STATUSES {
+                let n = jobs.iter().filter(|j| j.status == s).count();
+                if n > 0 {
+                    let v = match s {
+                        "FAILED" => format!("✗ {n}"),
+                        "RUNNABLE" => format!("⚠ {n}"),
+                        _ => n.to_string(),
+                    };
+                    rows.push((format!("  {s}"), v));
+                }
+            }
+            // Newest first within each status; ARNs so ⏎ opens the job.
+            for s in JOB_STATUSES {
+                let mut of: Vec<&&crate::aws::services::batch::BatchJob> =
+                    jobs.iter().filter(|j| j.status == s).collect();
+                if of.is_empty() {
+                    continue;
+                }
+                of.sort_by_key(|j| std::cmp::Reverse(j.created_ms));
+                rows.push((String::new(), String::new()));
+                rows.push((format!("{s} ({})", of.len()), String::new()));
+                for j in of.iter().take(25) {
+                    rows.push((format!("  {}", j.name), j.arn.clone()));
+                }
+                if of.len() > 25 {
+                    rows.push(("".to_string(), format!("· {} more — 3 Jobs lists them all", of.len() - 25)));
+                }
+            }
+            rows
+        }
+        S::Tags => tag_rows(&q.tags),
+    }
+}
+
+pub fn batch_ce_section_lines(
+    c: &crate::aws::services::batch::BatchComputeEnv,
+    section: crate::aws::services::batch::BatchCeDetailSection,
+    queues: &[&crate::aws::services::batch::BatchJobQueue],
+    waiting: &[&crate::aws::services::batch::BatchJob],
+) -> Vec<(String, String)> {
+    use crate::aws::services::batch::BatchCeDetailSection as S;
+    match section {
+        S::Overview => {
+            let blocked = matches!(c.blocker(), Some("disabled" | "INVALID"));
+            let mut rows = vec![
+                ("Compute Environment".to_string(), c.name.clone()),
+                ("Status".to_string(), batch_status_value(&c.state_label(), blocked)),
+                ("State".to_string(), c.state.clone()),
+            ];
+            if let Some(r) = &c.status_reason {
+                rows.push((
+                    "Status Reason".to_string(),
+                    if c.status == "INVALID" { format!("✗ {r}") } else { r.clone() },
+                ));
+            }
+            rows.push(("Type".to_string(), c.ce_type.clone()));
+            if let Some(p) = &c.provisioning {
+                rows.push(("Provisioning".to_string(), p.clone()));
+            }
+            if let Some(o) = &c.orchestration {
+                rows.push(("Orchestration".to_string(), o.clone()));
+            }
+            rows.extend(batch_vcpu_rows(c, ""));
+            rows.push(("ARN".to_string(), c.arn.clone()));
+            rows.extend(batch_ce_waiting_rows(c, waiting.len()));
+            rows
+        }
+        S::Compute => {
+            let mut rows = Vec::new();
+            let opt = |rows: &mut Vec<(String, String)>, k: &str, v: &Option<String>| {
+                if let Some(v) = v {
+                    rows.push((k.to_string(), v.clone()));
+                }
+            };
+            if !c.instance_types.is_empty() {
+                rows.push(("Instance Types".to_string(), c.instance_types.join(", ")));
+            } else if c.is_managed() && !c.is_fargate() {
+                rows.push(("Instance Types".to_string(), "—".to_string()));
+            }
+            opt(&mut rows, "Allocation Strategy", &c.allocation_strategy);
+            opt(&mut rows, "Image", &c.image_id);
+            opt(&mut rows, "Launch Template", &c.launch_template);
+            opt(&mut rows, "Instance Role", &c.instance_role);
+            opt(&mut rows, "Spot Fleet Role", &c.spot_fleet_role);
+            if let Some(b) = c.bid_percentage {
+                rows.push(("Spot Bid".to_string(), format!("{b}% of On-Demand")));
+            }
+            opt(&mut rows, "Service Role", &c.service_role);
+            opt(&mut rows, "ECS Cluster", &c.ecs_cluster_arn);
+            opt(&mut rows, "EKS Cluster", &c.eks_cluster_arn);
+            opt(&mut rows, "Kubernetes Namespace", &c.eks_namespace);
+            if rows.is_empty() {
+                rows.push((
+                    "".to_string(),
+                    "· unmanaged — you run the instances; Batch only schedules onto them".to_string(),
+                ));
+            }
+            rows
+        }
+        S::Network => {
+            if c.subnets.is_empty() && c.security_groups.is_empty() {
+                return vec![("".to_string(), "No subnets or security groups (unmanaged environment)".to_string())];
+            }
+            let mut rows = vec![("Subnets".to_string(), String::new())];
+            for s in &c.subnets {
+                rows.push(("  Subnet".to_string(), s.clone()));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("Security Groups".to_string(), String::new()));
+            for g in &c.security_groups {
+                rows.push(("  Security Group".to_string(), g.clone()));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("".to_string(), "· N shows the effective rules across these groups".to_string()));
+            rows
+        }
+        S::Queues => {
+            if queues.is_empty() {
+                return vec![(
+                    "".to_string(),
+                    "No queue uses this compute environment — it will never run a job".to_string(),
+                )];
+            }
+            let mut rows = Vec::new();
+            for (i, q) in queues.iter().enumerate() {
+                if i > 0 {
+                    rows.push((String::new(), String::new()));
+                }
+                rows.push((q.name.clone(), String::new()));
+                rows.push(("  Status".to_string(), q.state_label()));
+                rows.push(("  Priority".to_string(), q.priority.to_string()));
+                if let Some((order, _)) = q.ce_order.iter().find(|(_, n)| *n == c.name) {
+                    rows.push(("  Order on Queue".to_string(), order.to_string()));
+                }
+                let n = waiting.iter().filter(|j| j.queue == q.name).count();
+                if n > 0 {
+                    rows.push(("  RUNNABLE Jobs".to_string(), format!("⚠ {n}")));
+                }
+                rows.push(("  ARN".to_string(), q.arn.clone()));
+            }
+            rows
+        }
+        S::Tags => tag_rows(&c.tags),
+    }
+}
+
+fn batch_container_rows(
+    c: &crate::aws::services::batch::BatchContainer,
+    runtime: bool,
+) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    let opt = |rows: &mut Vec<(String, String)>, k: &str, v: &Option<String>| {
+        if let Some(v) = v {
+            rows.push((k.to_string(), v.clone()));
+        }
+    };
+    opt(&mut rows, "Image", &c.image);
+    opt(&mut rows, "vCPU", &c.vcpus);
+    if let Some(m) = &c.memory_mib {
+        rows.push(("Memory".to_string(), format!("{m} MiB")));
+    }
+    opt(&mut rows, "GPU", &c.gpus);
+    if !c.command.is_empty() {
+        rows.push(("Command".to_string(), c.command.join(" ")));
+    }
+    if runtime {
+        match c.exit_code {
+            Some(0) => rows.push(("Exit Code".to_string(), "✓ 0".to_string())),
+            Some(n) => rows.push(("Exit Code".to_string(), format!("✗ {n}"))),
+            None => {}
+        }
+        if let Some(r) = &c.reason {
+            rows.push(("Reason".to_string(), format!("✗ {r}")));
+        }
+        opt(&mut rows, "Instance Type", &c.instance_type);
+    } else {
+        opt(&mut rows, "Instance Type", &c.instance_type);
+    }
+    match (&c.log_group, &c.log_driver) {
+        (Some(g), _) => rows.push(("Log Group".to_string(), g.clone())),
+        (None, Some(d)) => rows.push(("Log Driver".to_string(), format!("{d} (not CloudWatch)"))),
+        (None, None) => {}
+    }
+    if runtime {
+        rows.push((
+            "Log Stream".to_string(),
+            c.log_stream
+                .clone()
+                .unwrap_or_else(|| "· none yet — created when the container starts".to_string()),
+        ));
+    }
+    opt(&mut rows, "Job Role", &c.job_role);
+    opt(&mut rows, "Execution Role", &c.execution_role);
+    if runtime {
+        opt(&mut rows, "Task ARN", &c.task_arn);
+    }
+    rows
+}
+
+pub fn batch_job_section_lines(
+    j: &crate::aws::services::batch::BatchJob,
+    section: crate::aws::services::batch::BatchJobDetailSection,
+) -> Vec<(String, String)> {
+    use crate::aws::services::batch::{fmt_ms, BatchJobDetailSection as S};
+    use crate::aws::services::step_functions::fmt_duration;
+    match section {
+        S::Overview => {
+            let status = match j.status.as_str() {
+                "FAILED" => format!("✗ {}", j.status),
+                "SUCCEEDED" => format!("✓ {}", j.status),
+                _ => j.status.clone(),
+            };
+            let mut rows = vec![
+                ("Job".to_string(), j.name.clone()),
+                ("Job ID".to_string(), j.job_id.clone()),
+                ("Status".to_string(), status),
+            ];
+            if let Some(r) = &j.status_reason {
+                rows.push((
+                    "Status Reason".to_string(),
+                    if j.status == "FAILED" { format!("✗ {r}") } else { r.clone() },
+                ));
+            }
+            // A job parked in RUNNABLE is the classic stuck-queue symptom;
+            // the cause is on the compute environments, not the job.
+            if j.status == "RUNNABLE" {
+                if let Some(age) = j.age_ms().filter(|a| *a > 10 * 60 * 1000) {
+                    rows.push((String::new(), format!("⚠ RUNNABLE for {}", fmt_duration(age / 1000))));
+                    rows.push((
+                        String::new(),
+                        "· the cause is on the queue's compute environments — ⏎ on Queue".to_string(),
+                    ));
+                }
+            }
+            rows.push(("Queue".to_string(), j.queue_arn.clone()));
+            rows.push(("Job Definition".to_string(), j.job_definition.clone()));
+            if let Some(t) = j.created_ms {
+                rows.push(("Created".to_string(), fmt_ms(t)));
+            }
+            if let Some(t) = j.started_ms {
+                rows.push(("Started".to_string(), fmt_ms(t)));
+            }
+            if let Some(t) = j.stopped_ms {
+                rows.push(("Stopped".to_string(), fmt_ms(t)));
+            }
+            if let Some(ms) = j.run_ms() {
+                rows.push((
+                    if j.stopped_ms.is_some() { "Ran For" } else { "Running For" }.to_string(),
+                    fmt_duration(ms / 1000),
+                ));
+            }
+            let attempts = j.attempts.len();
+            rows.push((
+                "Attempts".to_string(),
+                match j.retry_attempts {
+                    Some(max) => format!("{attempts} of {max}"),
+                    None => attempts.to_string(),
+                },
+            ));
+            if let Some(t) = j.timeout_secs {
+                rows.push(("Attempt Timeout".to_string(), fmt_duration(t as i64)));
+            }
+            if !j.platform.is_empty() {
+                rows.push(("Platform".to_string(), j.platform.join(", ")));
+            }
+            if j.multinode {
+                rows.push(("Multi-node".to_string(), "yes — per-node detail is in the console".to_string()));
+            }
+            if let Some(s) = &j.share_identifier {
+                rows.push(("Share Identifier".to_string(), s.clone()));
+            }
+            if let Some(p) = j.scheduling_priority {
+                rows.push(("Scheduling Priority".to_string(), p.to_string()));
+            }
+            if let Some(c) = &j.eks_cluster_arn {
+                rows.push(("EKS Cluster".to_string(), c.clone()));
+            }
+            if let Some(p) = &j.eks_pod {
+                rows.push(("Pod".to_string(), p.clone()));
+            }
+            if j.is_cancelled {
+                rows.push(("Cancelled".to_string(), "⚠ a cancel was requested".to_string()));
+            }
+            if j.is_terminated {
+                rows.push(("Terminated".to_string(), "⚠ a terminate was requested".to_string()));
+            }
+            if !j.parameters.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Parameters".to_string(), String::new()));
+                for (k, v) in &j.parameters {
+                    rows.push((format!("  {k}"), v.clone()));
+                }
+            }
+            rows
+        }
+        S::Container => {
+            if j.containers.is_empty() {
+                return vec![(
+                    "".to_string(),
+                    if j.eks_cluster_arn.is_some() {
+                        "EKS job — the pod's containers live in the cluster".to_string()
+                    } else {
+                        "No container detail on this job".to_string()
+                    },
+                )];
+            }
+            let multi = j.containers.len() > 1;
+            let mut rows = Vec::new();
+            for (i, c) in j.containers.iter().enumerate() {
+                if i > 0 {
+                    rows.push((String::new(), String::new()));
+                }
+                if multi {
+                    rows.push((c.name.clone().unwrap_or_else(|| format!("Container {}", i + 1)), String::new()));
+                    rows.extend(batch_container_rows(c, true).into_iter().map(|(k, v)| (format!("  {k}"), v)));
+                } else {
+                    rows.extend(batch_container_rows(c, true));
+                }
+            }
+            if j.log_target().is_some() {
+                rows.push((String::new(), String::new()));
+                rows.push(("".to_string(), "· t tails this stream".to_string()));
+            }
+            rows
+        }
+        S::Attempts => {
+            if j.attempts.is_empty() {
+                return vec![("".to_string(), "No attempts yet — the job hasn't started".to_string())];
+            }
+            let mut rows = Vec::new();
+            for (i, a) in j.attempts.iter().enumerate() {
+                if i > 0 {
+                    rows.push((String::new(), String::new()));
+                }
+                rows.push((format!("Attempt {}", i + 1), String::new()));
+                if let Some(t) = a.started_ms {
+                    rows.push(("  Started".to_string(), fmt_ms(t)));
+                }
+                if let (Some(s), Some(e)) = (a.started_ms, a.stopped_ms) {
+                    rows.push(("  Ran For".to_string(), fmt_duration((e - s).max(0) / 1000)));
+                }
+                match a.exit_code {
+                    Some(0) => rows.push(("  Exit Code".to_string(), "✓ 0".to_string())),
+                    Some(n) => rows.push(("  Exit Code".to_string(), format!("✗ {n}"))),
+                    None => {}
+                }
+                if let Some(r) = &a.reason {
+                    rows.push(("  Reason".to_string(), format!("✗ {r}")));
+                }
+                if let Some(r) = &a.status_reason {
+                    rows.push(("  Status Reason".to_string(), r.clone()));
+                }
+                if let Some(s) = &a.log_stream {
+                    rows.push(("  Log Stream".to_string(), s.clone()));
+                }
+            }
+            rows
+        }
+        S::Dependencies => {
+            let mut rows = Vec::new();
+            if let Some(size) = j.array_size {
+                rows.push(("Array Size".to_string(), size.to_string()));
+            }
+            if let Some(idx) = j.array_index {
+                rows.push(("Array Index".to_string(), idx.to_string()));
+            }
+            if !j.array_summary.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Children by Status".to_string(), String::new()));
+                for (s, n) in &j.array_summary {
+                    let v = match s.as_str() {
+                        "FAILED" if *n > 0 => format!("✗ {n}"),
+                        _ => n.to_string(),
+                    };
+                    rows.push((format!("  {s}"), v));
+                }
+            }
+            if !j.depends_on.is_empty() {
+                if !rows.is_empty() {
+                    rows.push((String::new(), String::new()));
+                }
+                rows.push(("Depends On".to_string(), String::new()));
+                for (id, kind) in &j.depends_on {
+                    rows.push((
+                        format!("  {id}"),
+                        if kind.is_empty() { "—".to_string() } else { kind.clone() },
+                    ));
+                }
+            }
+            if rows.is_empty() {
+                rows.push(("".to_string(), "Not an array job, and no dependencies".to_string()));
+            }
+            rows
+        }
+        S::Tags => tag_rows(&j.tags),
+    }
+}
+
+pub fn batch_jobdef_section_lines(
+    d: &crate::aws::services::batch::BatchJobDefinition,
+    section: crate::aws::services::batch::BatchJobDefDetailSection,
+) -> Vec<(String, String)> {
+    use crate::aws::services::batch::BatchJobDefDetailSection as S;
+    use crate::aws::services::step_functions::fmt_duration;
+    match section {
+        S::Overview => {
+            let mut rows = vec![
+                ("Job Definition".to_string(), d.def_name.clone()),
+                ("Revision".to_string(), d.revision.to_string()),
+                ("Status".to_string(), d.status.clone()),
+                ("Type".to_string(), d.def_type.clone()),
+            ];
+            if let Some(o) = &d.orchestration {
+                rows.push(("Orchestration".to_string(), o.clone()));
+            }
+            if !d.platform.is_empty() {
+                rows.push(("Platform".to_string(), d.platform.join(", ")));
+            }
+            rows.push((
+                "Retry Attempts".to_string(),
+                d.retry_attempts
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "1 (no retries)".to_string()),
+            ));
+            for r in &d.retry_rules {
+                rows.push(("  Retry Rule".to_string(), r.clone()));
+            }
+            rows.push((
+                "Attempt Timeout".to_string(),
+                d.timeout_secs
+                    .map(|t| fmt_duration(t as i64))
+                    .unwrap_or_else(|| "none — an attempt can run forever".to_string()),
+            ));
+            if let Some(p) = d.scheduling_priority {
+                rows.push(("Scheduling Priority".to_string(), p.to_string()));
+            }
+            rows.push((
+                "Propagate Tags".to_string(),
+                if d.propagate_tags { "yes" } else { "no" }.to_string(),
+            ));
+            rows.push(("ARN".to_string(), d.arn.clone()));
+            if !d.parameters.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Parameter Defaults".to_string(), String::new()));
+                for (k, v) in &d.parameters {
+                    rows.push((format!("  {k}"), v.clone()));
+                }
+            }
+            rows
+        }
+        S::Container => {
+            if d.containers.is_empty() {
+                return vec![(
+                    "".to_string(),
+                    if d.def_type == "multinode" {
+                        "Multi-node definition — node ranges are in the console".to_string()
+                    } else {
+                        "No container properties (EKS pod definition)".to_string()
+                    },
+                )];
+            }
+            let multi = d.containers.len() > 1;
+            let mut rows = Vec::new();
+            for (i, c) in d.containers.iter().enumerate() {
+                if i > 0 {
+                    rows.push((String::new(), String::new()));
+                }
+                if multi {
+                    rows.push((c.name.clone().unwrap_or_else(|| format!("Container {}", i + 1)), String::new()));
+                    rows.extend(batch_container_rows(c, false).into_iter().map(|(k, v)| (format!("  {k}"), v)));
+                } else {
+                    rows.extend(batch_container_rows(c, false));
+                }
+            }
+            rows
+        }
+        S::Tags => tag_rows(&d.tags),
+    }
 }
 
 fn render_simple_split(

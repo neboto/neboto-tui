@@ -773,6 +773,40 @@ impl Resource for EcsServiceInfo {
         ))
     }
 
+    fn cli_actions(&self) -> Vec<crate::aws::cli_actions::CliAction> {
+        use crate::aws::cli_actions::{CliAction, CliTier};
+        use crate::aws::resource::shell_quote;
+        let cluster = shell_quote(&self.cluster_name);
+        let service = shell_quote(&self.service_name);
+        vec![
+            CliAction::new(
+                CliTier::Inspect,
+                "list-tasks",
+                format!("aws ecs list-tasks --cluster {} --service-name {}", cluster, service),
+            ),
+            CliAction::new(
+                CliTier::Change,
+                "force new deployment",
+                format!(
+                    "aws ecs update-service --cluster {} --service {} --force-new-deployment",
+                    cluster, service
+                ),
+            )
+            .with_note("replaces every task with the same task definition"),
+            // Prefilled with the current count: a blind paste is a no-op, the
+            // number is there to edit.
+            CliAction::new(
+                CliTier::Change,
+                "scale (desired count)",
+                format!(
+                    "aws ecs update-service --cluster {} --service {} --desired-count {}",
+                    cluster, service, self.desired_count
+                ),
+            )
+            .with_note(format!("prefilled with the current desired count ({}) — edit before running", self.desired_count)),
+        ]
+    }
+
     fn id(&self) -> &str {
         &self.service_arn
     }
@@ -1474,6 +1508,37 @@ impl Resource for EcsTask {
             crate::aws::resource::shell_quote(&self.cluster_name),
             crate::aws::resource::shell_quote(&self.task_arn)
         ))
+    }
+
+    fn cli_actions(&self) -> Vec<crate::aws::cli_actions::CliAction> {
+        use crate::aws::cli_actions::{CliAction, CliTier};
+        use crate::aws::resource::shell_quote;
+        let cluster = shell_quote(&self.cluster_name);
+        let mut out = vec![CliAction::batchable(
+            CliTier::Inspect,
+            "describe-tasks",
+            format!("aws ecs describe-tasks --cluster {} --tasks", cluster),
+            &self.task_arn,
+            "",
+        )];
+        // One exec row per container — the flag is mandatory once a task has
+        // more than one, and naming it always is harmless.
+        for c in &self.containers {
+            out.push(
+                CliAction::new(
+                    CliTier::Connect,
+                    format!("execute-command · {}", c.name),
+                    format!(
+                        "aws ecs execute-command --cluster {} --task {} --container {} --interactive --command /bin/sh",
+                        cluster,
+                        shell_quote(&self.task_arn),
+                        shell_quote(&c.name)
+                    ),
+                )
+                .with_note("needs ECS Exec enabled on the task + the Session Manager plugin"),
+            );
+        }
+        out
     }
 
     fn id(&self) -> &str {

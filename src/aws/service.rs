@@ -69,6 +69,9 @@ pub enum ServiceType {
     Msk,
     Fms,
     Redshift,
+    Batch,
+    XRay,
+    Dms,
     Budgets,
     Invoices,
     ControlTower,
@@ -144,6 +147,9 @@ impl ServiceType {
             ServiceType::Msk,
             ServiceType::Fms,
             ServiceType::Redshift,
+            ServiceType::Batch,
+            ServiceType::XRay,
+            ServiceType::Dms,
             ServiceType::Budgets,
             ServiceType::Invoices,
             ServiceType::ControlTower,
@@ -198,6 +204,7 @@ impl ServiceType {
             ServiceType::EC2
             | ServiceType::Lambda
             | ServiceType::Asg
+            | ServiceType::Batch
             | ServiceType::Workspaces => "Compute",
             ServiceType::ECS | ServiceType::Eks | ServiceType::Ecr => "Containers",
             ServiceType::S3
@@ -207,7 +214,10 @@ impl ServiceType {
             | ServiceType::Fsx
             | ServiceType::Backup
             | ServiceType::Transfer => "Storage",
-            ServiceType::RDS | ServiceType::DynamoDb | ServiceType::ElastiCache => "Database",
+            ServiceType::RDS
+            | ServiceType::DynamoDb
+            | ServiceType::ElastiCache
+            | ServiceType::Dms => "Database",
             ServiceType::VPC
             | ServiceType::Elb
             | ServiceType::Route53
@@ -243,6 +253,7 @@ impl ServiceType {
             | ServiceType::Ses => "App Integration",
             ServiceType::CloudFormation
             | ServiceType::CloudWatch
+            | ServiceType::XRay
             | ServiceType::CloudTrail
             | ServiceType::Config
             | ServiceType::Ssm
@@ -274,6 +285,7 @@ impl ServiceType {
             ServiceType::Route53 => "Route53",
             ServiceType::Acm => "ACM",
             ServiceType::CloudWatch => "CloudWatch",
+            ServiceType::XRay => "X-Ray",
             ServiceType::IAM => "IAM",
             ServiceType::Organizations => "Organizations",
             ServiceType::Elb => "ELB",
@@ -323,8 +335,10 @@ impl ServiceType {
             ServiceType::Glue => "Glue",
             ServiceType::Ses => "SES",
             ServiceType::Msk => "MSK",
+            ServiceType::Dms => "DMS",
             ServiceType::Fms => "Firewall Manager",
             ServiceType::Redshift => "Redshift",
+            ServiceType::Batch => "Batch",
             ServiceType::Budgets => "Budgets",
             ServiceType::Invoices => "Invoices",
             ServiceType::ControlTower => "Control Tower",
@@ -349,6 +363,7 @@ impl ServiceType {
             ServiceType::Route53 => "R53",
             ServiceType::Acm => "ACM",
             ServiceType::CloudWatch => "CW",
+            ServiceType::XRay => "XRAY",
             ServiceType::IAM => "IAM",
             ServiceType::Organizations => "Org",
             ServiceType::Elb => "ELB",
@@ -398,8 +413,10 @@ impl ServiceType {
             ServiceType::Glue => "GLU",
             ServiceType::Ses => "SES",
             ServiceType::Msk => "MSK",
+            ServiceType::Dms => "DMS",
             ServiceType::Fms => "FMS",
             ServiceType::Redshift => "RSH",
+            ServiceType::Batch => "BAT",
             ServiceType::Budgets => "BUD",
             ServiceType::Invoices => "INV",
             ServiceType::ControlTower => "CTW",
@@ -423,6 +440,7 @@ impl ServiceType {
             ServiceType::Route53 => "Route53 Hosted Zones",
             ServiceType::Acm => "ACM Certificates",
             ServiceType::CloudWatch => "CloudWatch Alarms & Logs",
+            ServiceType::XRay => "Service Map, Traces, Groups, Sampling Rules",
             ServiceType::IAM => "IAM Roles, Policies, Users & Groups",
             ServiceType::Organizations => "Organizations Accounts, OUs & SCPs",
             ServiceType::Elb => "Load Balancers & Target Groups",
@@ -476,6 +494,8 @@ impl ServiceType {
             ServiceType::Msk => "Kafka clusters (provisioned + serverless)",
             ServiceType::Fms => "Firewall Manager Policies, App/Protocol Lists, Resource Sets",
             ServiceType::Redshift => "Clusters, Serverless Workgroups, Snapshots",
+            ServiceType::Batch => "Job Queues, Compute Environments, Jobs, Job Definitions",
+            ServiceType::Dms => "Replication Tasks, Instances, Endpoints, Serverless Replications",
             ServiceType::Budgets => "Cost & Usage Budgets, Alerts, Subscribers",
             ServiceType::Invoices => "Invoice Summaries & PDF Download",
             ServiceType::ControlTower => "Landing Zone, Enabled Controls, Baselines & Operations",
@@ -493,6 +513,7 @@ impl ServiceType {
             "vpc" | "networks" | "network" => Some(ServiceType::VPC),
             "rds" | "databases" | "db" => Some(ServiceType::RDS),
             "ecs" | "containers" | "clusters" => Some(ServiceType::ECS),
+            "batch" | "awsbatch" | "jobqueues" => Some(ServiceType::Batch),
             "cloudtrail" | "ct" | "trail" => Some(ServiceType::CloudTrail),
             "s3" | "buckets" | "bucket" => Some(ServiceType::S3),
             "idc" | "sso" | "ic" | "identitycenter" => Some(ServiceType::IdentityCenter),
@@ -501,6 +522,7 @@ impl ServiceType {
             "r53" | "route53" | "dns" | "zones" => Some(ServiceType::Route53),
             "acm" | "certs" | "certificates" | "tls" | "ssl" => Some(ServiceType::Acm),
             "cw" | "cloudwatch" | "alarms" | "logs" => Some(ServiceType::CloudWatch),
+            "xray" | "x-ray" | "traces" | "tracing" | "servicemap" => Some(ServiceType::XRay),
             "iam" | "roles" | "policies" => Some(ServiceType::IAM),
             "orgs" | "organizations" | "org" | "accounts" | "ous" | "scps" => {
                 Some(ServiceType::Organizations)
@@ -581,6 +603,7 @@ impl ServiceType {
             "glue" | "etl" | "crawler" | "crawlers" | "datacatalog" => Some(ServiceType::Glue),
             "ses" | "sesv2" | "email" | "identities" | "suppression" => Some(ServiceType::Ses),
             "msk" | "kafka" | "managedkafka" => Some(ServiceType::Msk),
+            "dms" | "migration" | "databasemigration" | "replication" => Some(ServiceType::Dms),
             "fms" | "firewallmanager" | "fwmanager" => Some(ServiceType::Fms),
             "redshift" | "rs" | "warehouse" | "datawarehouse" | "dwh" => {
                 Some(ServiceType::Redshift)
@@ -611,6 +634,7 @@ impl ServiceType {
             ServiceType::Route53 => "@r53",
             ServiceType::Acm => "@acm",
             ServiceType::CloudWatch => "@cw",
+            ServiceType::XRay => "@xray",
             ServiceType::IAM => "@iam",
             ServiceType::Organizations => "@orgs",
             ServiceType::Elb => "@elb",
@@ -660,8 +684,10 @@ impl ServiceType {
             ServiceType::Glue => "@glue",
             ServiceType::Ses => "@ses",
             ServiceType::Msk => "@msk",
+            ServiceType::Dms => "@dms",
             ServiceType::Fms => "@fms",
             ServiceType::Redshift => "@redshift",
+            ServiceType::Batch => "@batch",
             ServiceType::Budgets => "@budgets",
             ServiceType::Invoices => "@invoices",
             ServiceType::ControlTower => "@controltower",

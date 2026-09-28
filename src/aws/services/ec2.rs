@@ -962,6 +962,7 @@ crate::sections! {
         Details "Details",
         Security "Security" => crate::app::App::trigger_ec2_instance_profile_roles_load,
         Networking "Networking",
+        LoadBalancing "Load Balancing" => crate::app::App::trigger_ec2_instance_lb_load,
         Storage "Storage",
         UserData "User Data" => crate::app::App::trigger_ec2_instance_user_data_load,
         Console "Console" => crate::app::App::trigger_ec2_instance_console_load,
@@ -1000,6 +1001,58 @@ impl Resource for Ec2Instance {
             "aws ec2 describe-instances --instance-ids {}",
             crate::aws::resource::shell_quote(self.id())
         ))
+    }
+
+    fn cli_actions(&self) -> Vec<crate::aws::cli_actions::CliAction> {
+        use crate::aws::cli_actions::{CliAction, CliTier};
+        use crate::aws::resource::shell_quote;
+        let id = self.id();
+        vec![
+            // Same text as `cli_command`, declared batchable so a visual
+            // selection describes every selected instance at once.
+            CliAction::batchable(
+                CliTier::Inspect,
+                "describe-instances",
+                "aws ec2 describe-instances --instance-ids",
+                id,
+                "",
+            ),
+            CliAction::new(
+                CliTier::Inspect,
+                "get-console-output",
+                format!(
+                    "aws ec2 get-console-output --instance-id {} --latest --output text",
+                    shell_quote(id)
+                ),
+            ),
+            CliAction::new(
+                CliTier::Connect,
+                "ssm start-session",
+                format!("aws ssm start-session --target {}", shell_quote(id)),
+            )
+            .with_note("needs the SSM agent + Session Manager plugin"),
+            CliAction::batchable(
+                CliTier::Change,
+                "start-instances",
+                "aws ec2 start-instances --instance-ids",
+                id,
+                "",
+            ),
+            CliAction::batchable(
+                CliTier::Change,
+                "stop-instances",
+                "aws ec2 stop-instances --instance-ids",
+                id,
+                "",
+            ),
+            CliAction::batchable(
+                CliTier::Change,
+                "reboot-instances",
+                "aws ec2 reboot-instances --instance-ids",
+                id,
+                "",
+            ),
+        ]
     }
 
     fn id(&self) -> &str {

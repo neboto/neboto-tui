@@ -1,0 +1,36 @@
+{
+ "Events": [
+  {
+   "EventId": "7c0de004-demo-4e2a-9b1c-000000000004",
+   "EventName": "UpdateService",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000GHA00001",
+   "EventTime": {{epoch:now-40m}},
+   "EventSource": "ecs.amazonaws.com",
+   "Username": "GitHubActions",
+   "Resources": [
+    {
+     "ResourceType": "AWS::ECS::Service",
+     "ResourceName": "arn:aws:ecs:{{region}}:{{account}}:service/acme-prod/orders-worker"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"AssumedRole\",\"principalId\":\"AROADEMO0000GHDEPLOY:GitHubActions\",\"arn\":\"arn:aws:sts::{{account}}:assumed-role/github-actions-deploy/GitHubActions\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000GHA00001\",\"sessionContext\":{\"sessionIssuer\":{\"type\":\"Role\",\"principalId\":\"AROADEMO0000GHDEPLOY\",\"arn\":\"arn:aws:iam::{{account}}:role/github-actions-deploy\",\"accountId\":\"{{account}}\",\"userName\":\"github-actions-deploy\"},\"webIdFederationData\":{\"federatedProvider\":\"arn:aws:iam::{{account}}:oidc-provider/token.actions.githubusercontent.com\"}}},\"eventTime\":\"{{iso:now-40m}}\",\"eventSource\":\"ecs.amazonaws.com\",\"eventName\":\"UpdateService\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"140.82.112.22\",\"userAgent\":\"aws-cli/2.17.0 GitHubActions\",\"requestParameters\":{\"cluster\":\"acme-prod\",\"service\":\"orders-worker\",\"taskDefinition\":\"orders-worker:15\",\"forceNewDeployment\":false},\"responseElements\":{\"service\":{\"serviceArn\":\"arn:aws:ecs:{{region}}:{{account}}:service/acme-prod/orders-worker\",\"taskDefinition\":\"arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:15\"}},\"requestID\":\"req-0004\",\"eventID\":\"7c0de004-demo-4e2a-9b1c-000000000004\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "7c0de005-demo-4e2a-9b1c-000000000005",
+   "EventName": "RegisterTaskDefinition",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000GHA00001",
+   "EventTime": {{epoch:now-41m}},
+   "EventSource": "ecs.amazonaws.com",
+   "Username": "GitHubActions",
+   "Resources": [
+    {
+     "ResourceType": "AWS::ECS::TaskDefinition",
+     "ResourceName": "arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:15"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"AssumedRole\",\"principalId\":\"AROADEMO0000GHDEPLOY:GitHubActions\",\"arn\":\"arn:aws:sts::{{account}}:assumed-role/github-actions-deploy/GitHubActions\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000GHA00001\",\"sessionContext\":{\"sessionIssuer\":{\"type\":\"Role\",\"principalId\":\"AROADEMO0000GHDEPLOY\",\"arn\":\"arn:aws:iam::{{account}}:role/github-actions-deploy\",\"accountId\":\"{{account}}\",\"userName\":\"github-actions-deploy\"},\"webIdFederationData\":{\"federatedProvider\":\"arn:aws:iam::{{account}}:oidc-provider/token.actions.githubusercontent.com\"}}},\"eventTime\":\"{{iso:now-41m}}\",\"eventSource\":\"ecs.amazonaws.com\",\"eventName\":\"RegisterTaskDefinition\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"140.82.112.22\",\"userAgent\":\"aws-cli/2.17.0 GitHubActions\",\"requestParameters\":{\"family\":\"orders-worker\",\"containerDefinitions\":[{\"name\":\"worker\",\"image\":\"{{account}}.dkr.ecr.{{region}}.amazonaws.com/orders-worker:v1.19.0\",\"environment\":[{\"name\":\"QUEUE\",\"value\":\"orders\"},{\"name\":\"DB_URL\",\"value\":\"HIDDEN_DUE_TO_SECURITY_REASONS\"}]}]},\"responseElements\":{\"taskDefinition\":{\"taskDefinitionArn\":\"arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:15\",\"revision\":15}},\"requestID\":\"req-0005\",\"eventID\":\"7c0de005-demo-4e2a-9b1c-000000000005\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  }
+ ]
+}

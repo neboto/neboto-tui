@@ -1,0 +1,8 @@
+<ListStacksResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <ListStacksResult>
+    <StackSummaries>
+      <member><StackId>arn:aws:cloudformation:{{region}}:{{account}}:stack/storefront-staging/3e5a7c90-2f1a-11ef-b5c4-3b1d4e5f6071</StackId><StackName>storefront-staging</StackName><TemplateDescription>Storefront web tier: ALB, ECS service, image resizer</TemplateDescription><CreationTime>{{iso:now-150d}}</CreationTime><DeletionTime>{{iso:now-20d}}</DeletionTime><StackStatus>DELETE_COMPLETE</StackStatus><DriftInformation><StackDriftStatus>NOT_CHECKED</StackDriftStatus></DriftInformation></member>
+    </StackSummaries>
+  </ListStacksResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListStacksResponse>

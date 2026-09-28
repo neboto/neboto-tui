@@ -29,6 +29,44 @@ pub(super) fn mocks() -> Vec<Mock> {
             )),
         ),
         (
+            ServiceType::Batch,
+            "BatchJobQueue",
+            Box::new(svc::batch::BatchJobQueue::from_sdk(
+                &aws_sdk_batch::types::JobQueueDetail::builder()
+                    .job_queue_name("mock-queue")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Batch,
+            "BatchComputeEnv",
+            Box::new(svc::batch::BatchComputeEnv::from_sdk(
+                &aws_sdk_batch::types::ComputeEnvironmentDetail::builder()
+                    .compute_environment_name("mock-ce")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Batch,
+            "BatchJob",
+            Box::new(svc::batch::BatchJob::from_sdk(
+                &aws_sdk_batch::types::JobDetail::builder()
+                    .job_id("mock-job-id")
+                    .job_name("mock-job")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Batch,
+            "BatchJobDefinition",
+            Box::new(svc::batch::BatchJobDefinition::from_sdk(
+                &aws_sdk_batch::types::JobDefinition::builder()
+                    .job_definition_name("mock-def")
+                    .revision(1)
+                    .build(),
+            )),
+        ),
+        (
             ServiceType::Redshift,
             "RedshiftCluster",
             Box::new(svc::redshift::RedshiftCluster::from_sdk(
@@ -45,6 +83,77 @@ pub(super) fn mocks() -> Vec<Mock> {
                     .workgroup_name("mock-wg")
                     .build(),
                 None,
+            )),
+        ),
+        (
+            ServiceType::XRay,
+            "XRayNode",
+            Box::new(
+                svc::xray::XRayNode::from_graph(
+                    &[aws_sdk_xray::types::Service::builder()
+                        .reference_id(0)
+                        .name("mock-api")
+                        .r#type("AWS::Lambda::Function")
+                        .build()],
+                    svc::xray::XRayWindow::OneHour,
+                )
+                .remove(0),
+            ),
+        ),
+        (
+            ServiceType::XRay,
+            "XRayTrace",
+            Box::new(svc::xray::XRayTrace::from_sdk(
+                &aws_sdk_xray::types::TraceSummary::builder()
+                    .id("1-5f000000-abcdef0123456789abcdef01")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Dms,
+            "DmsTask",
+            Box::new(svc::dms::DmsTask::from_sdk(
+                &aws_sdk_databasemigration::types::ReplicationTask::builder()
+                    .replication_task_identifier("mock-task")
+                    .replication_task_arn("arn:aws:dms:us-east-1:123456789012:task:MOCKTASK")
+                    .status("running")
+                    .build(),
+                &HashMap::new(),
+                &HashMap::new(),
+            )),
+        ),
+        (
+            ServiceType::Dms,
+            "DmsInstance",
+            Box::new(svc::dms::DmsInstance::from_sdk(
+                &aws_sdk_databasemigration::types::ReplicationInstance::builder()
+                    .replication_instance_identifier("mock-rep")
+                    .replication_instance_arn("arn:aws:dms:us-east-1:123456789012:rep:MOCKREP")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Dms,
+            "DmsEndpoint",
+            Box::new(svc::dms::DmsEndpoint::from_sdk(
+                &aws_sdk_databasemigration::types::Endpoint::builder()
+                    .endpoint_identifier("mock-endpoint")
+                    .endpoint_arn("arn:aws:dms:us-east-1:123456789012:endpoint:MOCKEP")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Dms,
+            "DmsServerless",
+            Box::new(svc::dms::DmsServerless::from_sdk(
+                &aws_sdk_databasemigration::types::ReplicationConfig::builder()
+                    .replication_config_identifier("mock-sl")
+                    .replication_config_arn(
+                        "arn:aws:dms:us-east-1:123456789012:replication-config:MOCKSL",
+                    )
+                    .build(),
+                None,
+                &HashMap::new(),
             )),
         ),
         (
