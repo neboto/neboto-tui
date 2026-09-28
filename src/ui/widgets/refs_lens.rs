@@ -243,7 +243,7 @@ pub fn render_refs_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) {
             let spans = vec![
                 Span::styled(marker, Style::default().fg(theme::accent())),
                 Span::styled(
-                    format!("{:<10} ", trim(&format!("@{}", row.service.prefix()), 10)),
+                    format!("{:<10} ", trim(row.service.prefix(), 10)),
                     Style::default().fg(theme::heading()),
                 ),
                 Span::styled(

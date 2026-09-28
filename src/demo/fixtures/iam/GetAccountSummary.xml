@@ -1,0 +1,6 @@
+<GetAccountSummaryResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetAccountSummaryResult>
+    <SummaryMap><entry><key>Users</key><value>2</value></entry><entry><key>Roles</key><value>7</value></entry><entry><key>Groups</key><value>1</value></entry><entry><key>Policies</key><value>2</value></entry><entry><key>MFADevices</key><value>1</value></entry><entry><key>MFADevicesInUse</key><value>1</value></entry><entry><key>AccountMFAEnabled</key><value>1</value></entry><entry><key>AccountAccessKeysPresent</key><value>0</value></entry><entry><key>UsersQuota</key><value>5000</value></entry><entry><key>RolesQuota</key><value>1000</value></entry><entry><key>PoliciesQuota</key><value>1500</value></entry><entry><key>GroupsQuota</key><value>300</value></entry></SummaryMap>
+  </GetAccountSummaryResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetAccountSummaryResponse>

@@ -1,0 +1,1 @@
+{"clusterArns": ["arn:aws:ecs:{{region}}:{{account}}:cluster/acme-prod"]}

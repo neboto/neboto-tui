@@ -1,0 +1,7 @@
+<ListAttachedUserPoliciesResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListAttachedUserPoliciesResult>
+    <IsTruncated>false</IsTruncated>
+    <AttachedPolicies><member><PolicyName>AmazonS3FullAccess</PolicyName><PolicyArn>arn:aws:iam::aws:policy/AmazonS3FullAccess</PolicyArn></member><member><PolicyName>AmazonECS_FullAccess</PolicyName><PolicyArn>arn:aws:iam::aws:policy/AmazonECS_FullAccess</PolicyArn></member></AttachedPolicies>
+  </ListAttachedUserPoliciesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListAttachedUserPoliciesResponse>

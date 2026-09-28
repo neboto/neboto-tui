@@ -1,0 +1,7 @@
+<ListRolePoliciesResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListRolePoliciesResult>
+    <IsTruncated>false</IsTruncated>
+    <PolicyNames><member>sqs-consume-orders</member></PolicyNames>
+  </ListRolePoliciesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListRolePoliciesResponse>

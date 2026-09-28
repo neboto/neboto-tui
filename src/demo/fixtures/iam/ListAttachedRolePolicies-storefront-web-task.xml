@@ -1,0 +1,7 @@
+<ListAttachedRolePoliciesResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListAttachedRolePoliciesResult>
+    <IsTruncated>false</IsTruncated>
+    <AttachedPolicies><member><PolicyName>storefront-web-s3</PolicyName><PolicyArn>arn:aws:iam::{{account}}:policy/storefront-web-s3</PolicyArn></member></AttachedPolicies>
+  </ListAttachedRolePoliciesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListAttachedRolePoliciesResponse>

@@ -1,0 +1,7 @@
+<GetAccessKeyLastUsedResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetAccessKeyLastUsedResult>
+    <UserName>jsmith</UserName>
+    <AccessKeyLastUsed><LastUsedDate>{{iso:now-3h}}</LastUsedDate><ServiceName>ec2</ServiceName><Region>{{region}}</Region></AccessKeyLastUsed>
+  </GetAccessKeyLastUsedResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetAccessKeyLastUsedResponse>

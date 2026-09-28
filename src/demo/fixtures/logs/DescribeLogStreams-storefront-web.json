@@ -1,0 +1,31 @@
+{
+ "logStreams": [
+  {
+   "logStreamName": "ecs/web/0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+   "creationTime": {{epochms:now-3d}},
+   "firstEventTimestamp": {{epochms:now-3d}},
+   "lastEventTimestamp": {{epochms:now}},
+   "lastIngestionTime": {{epochms:now}},
+   "arn": "arn:aws:logs:{{region}}:{{account}}:log-group:x:log-stream:ecs/web/0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+   "storedBytes": 0
+  },
+  {
+   "logStreamName": "ecs/web/1a2b3c4d5e6f70819283a4b5c6d7e8f9",
+   "creationTime": {{epochms:now-3d}},
+   "firstEventTimestamp": {{epochms:now-3d}},
+   "lastEventTimestamp": {{epochms:now}},
+   "lastIngestionTime": {{epochms:now}},
+   "arn": "arn:aws:logs:{{region}}:{{account}}:log-group:x:log-stream:ecs/web/1a2b3c4d5e6f70819283a4b5c6d7e8f9",
+   "storedBytes": 0
+  },
+  {
+   "logStreamName": "ecs/web/2b3c4d5e6f7081929384b5c6d7e8f9a0",
+   "creationTime": {{epochms:now-3d}},
+   "firstEventTimestamp": {{epochms:now-3d}},
+   "lastEventTimestamp": {{epochms:now}},
+   "lastIngestionTime": {{epochms:now}},
+   "arn": "arn:aws:logs:{{region}}:{{account}}:log-group:x:log-stream:ecs/web/2b3c4d5e6f7081929384b5c6d7e8f9a0",
+   "storedBytes": 0
+  }
+ ]
+}

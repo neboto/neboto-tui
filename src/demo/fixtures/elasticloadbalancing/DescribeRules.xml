@@ -1,0 +1,21 @@
+<DescribeRulesResponse xmlns="http://elasticloadbalancing.amazonaws.com/doc/2015-12-01/">
+  <DescribeRulesResult>
+    <Rules>
+      <member>
+        <RuleArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:listener-rule/app/storefront-alb/50dc6c495c0c9188/1a2b3c4d5e6f7a8b/9f8e7d6c5b4a3f2e</RuleArn>
+        <Priority>10</Priority>
+        <Conditions><member><Field>path-pattern</Field><PathPatternConfig><Values><member>/api/*</member></Values></PathPatternConfig></member></Conditions>
+        <Actions><member><Type>forward</Type><TargetGroupArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:targetgroup/storefront-web/0a1b2c3d4e5f6a7b</TargetGroupArn><Order>1</Order><ForwardConfig><TargetGroups><member><TargetGroupArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:targetgroup/storefront-web/0a1b2c3d4e5f6a7b</TargetGroupArn><Weight>1</Weight></member></TargetGroups></ForwardConfig></member></Actions>
+        <IsDefault>false</IsDefault>
+      </member>
+      <member>
+        <RuleArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:listener-rule/app/storefront-alb/50dc6c495c0c9188/1a2b3c4d5e6f7a8b/0000000000000001</RuleArn>
+        <Priority>default</Priority>
+        <Conditions/>
+        <Actions><member><Type>forward</Type><TargetGroupArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:targetgroup/storefront-web/0a1b2c3d4e5f6a7b</TargetGroupArn><Order>1</Order><ForwardConfig><TargetGroups><member><TargetGroupArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:targetgroup/storefront-web/0a1b2c3d4e5f6a7b</TargetGroupArn><Weight>1</Weight></member></TargetGroups></ForwardConfig></member></Actions>
+        <IsDefault>true</IsDefault>
+      </member>
+    </Rules>
+  </DescribeRulesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeRulesResponse>

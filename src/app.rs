@@ -2504,6 +2504,9 @@ impl App {
         let mut config = crate::config::Config::load();
         // CLI switches override the config file for this run.
         cli.apply_to(&mut config);
+        if cli.demo {
+            crate::demo::enable();
+        }
 
         // Install the color palette before anything draws (the theme accessors
         // fall back to dark if read first, and OnceLock only sets once). Theme

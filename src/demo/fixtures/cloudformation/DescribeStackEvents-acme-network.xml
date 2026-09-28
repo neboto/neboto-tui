@@ -1,0 +1,10 @@
+<DescribeStackEventsResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <DescribeStackEventsResult>
+    <StackEvents>
+      <member><StackId>arn:aws:cloudformation:{{region}}:{{account}}:stack/acme-network/1c3e5a70-0d9f-11ee-a4b3-2a0c3d4e5f60</StackId><EventId>acme-network-demo-0018</EventId><StackName>acme-network</StackName><LogicalResourceId>acme-network</LogicalResourceId><PhysicalResourceId>arn:aws:cloudformation:{{region}}:{{account}}:stack/acme-network/1c3e5a70-0d9f-11ee-a4b3-2a0c3d4e5f60</PhysicalResourceId><ResourceType>AWS::CloudFormation::Stack</ResourceType><Timestamp>{{iso:now-400d}}</Timestamp><ResourceStatus>UPDATE_COMPLETE</ResourceStatus></member>
+      <member><StackId>arn:aws:cloudformation:{{region}}:{{account}}:stack/acme-network/1c3e5a70-0d9f-11ee-a4b3-2a0c3d4e5f60</StackId><EventId>NatGateway-demo-0019</EventId><StackName>acme-network</StackName><LogicalResourceId>NatGateway</LogicalResourceId><PhysicalResourceId>nat-0acme00000000001a</PhysicalResourceId><ResourceType>AWS::EC2::NatGateway</ResourceType><Timestamp>{{iso:now-400d}}</Timestamp><ResourceStatus>CREATE_COMPLETE</ResourceStatus></member>
+      <member><StackId>arn:aws:cloudformation:{{region}}:{{account}}:stack/acme-network/1c3e5a70-0d9f-11ee-a4b3-2a0c3d4e5f60</StackId><EventId>acme-network-demo-0020</EventId><StackName>acme-network</StackName><LogicalResourceId>acme-network</LogicalResourceId><PhysicalResourceId>arn:aws:cloudformation:{{region}}:{{account}}:stack/acme-network/1c3e5a70-0d9f-11ee-a4b3-2a0c3d4e5f60</PhysicalResourceId><ResourceType>AWS::CloudFormation::Stack</ResourceType><Timestamp>{{iso:now-900d}}</Timestamp><ResourceStatus>CREATE_COMPLETE</ResourceStatus></member>
+    </StackEvents>
+  </DescribeStackEventsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeStackEventsResponse>

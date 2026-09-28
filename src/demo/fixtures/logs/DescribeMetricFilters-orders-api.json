@@ -1,0 +1,18 @@
+{
+ "metricFilters": [
+  {
+   "filterName": "orders-api-errors",
+   "filterPattern": "\"ERROR\"",
+   "metricTransformations": [
+    {
+     "metricName": "OrdersApiErrors",
+     "metricNamespace": "Acme/Orders",
+     "metricValue": "1",
+     "defaultValue": 0.0
+    }
+   ],
+   "creationTime": {{epochms:now-60d}},
+   "logGroupName": "/aws/lambda/orders-api"
+  }
+ ]
+}

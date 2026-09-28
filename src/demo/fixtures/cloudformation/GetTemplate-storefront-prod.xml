@@ -1,0 +1,60 @@
+<GetTemplateResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <GetTemplateResult>
+    <TemplateBody>AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Storefront web tier: ALB, ECS service, image resizer'
+Parameters:
+  ImageTag: {Type: String}
+  DesiredCount: {Type: Number, Default: 3}
+  VpcStack: {Type: String, Default: acme-network}
+Resources:
+  PublicLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: storefront-alb
+      Scheme: internet-facing
+      Subnets: !Split [',', !ImportValue {'Fn::Sub': '${VpcStack}-PublicSubnets'}]
+  WebTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: storefront-web
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckPath: /healthz
+      HealthCheckIntervalSeconds: 30
+      VpcId: !ImportValue {'Fn::Sub': '${VpcStack}-VpcId'}
+  WebService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: storefront-web
+      Cluster: acme-prod
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      TaskDefinition: !Ref WebTaskDefinition
+      LoadBalancers:
+        - {ContainerName: web, ContainerPort: 8080, TargetGroupArn: !Ref WebTargetGroup}
+  WebTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: storefront-web
+      TaskRoleArn: !GetAtt WebTaskRole.Arn
+      ContainerDefinitions:
+        - Name: web
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/storefront-web:${ImageTag}'
+  WebTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: storefront-web-task
+  ThumbnailFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: thumbnail-resizer
+      Runtime: python3.12
+Outputs:
+  LoadBalancerDns:
+    Value: !GetAtt PublicLoadBalancer.DNSName
+</TemplateBody>
+    <StagesAvailable><member>Original</member><member>Processed</member></StagesAvailable>
+  </GetTemplateResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetTemplateResponse>

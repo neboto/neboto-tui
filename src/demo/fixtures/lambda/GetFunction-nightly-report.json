@@ -1,0 +1,46 @@
+{
+ "Configuration": {
+  "FunctionName": "nightly-report",
+  "FunctionArn": "arn:aws:lambda:{{region}}:{{account}}:function:nightly-report",
+  "Runtime": "python3.9",
+  "Role": "arn:aws:iam::{{account}}:role/legacy-reporting-role",
+  "Handler": "report.main",
+  "CodeSize": 31457280,
+  "Description": "Nightly sales CSV to finance",
+  "Timeout": 900,
+  "MemorySize": 3008,
+  "LastModified": "{{iso:now-400d}}",
+  "CodeSha256": "q1z3Yx0mZ0l5c2VkZW1vZGF0YXNldDAwMDAwMDA=",
+  "Version": "$LATEST",
+  "TracingConfig": {
+   "Mode": "PassThrough"
+  },
+  "RevisionId": "0d7a6f1e-demo-4c3b-9a8e-nigh00000000",
+  "State": "Active",
+  "LastUpdateStatus": "Successful",
+  "PackageType": "Zip",
+  "Architectures": [
+   "x86_64"
+  ],
+  "EphemeralStorage": {
+   "Size": 512
+  },
+  "LoggingConfig": {
+   "LogFormat": "Text",
+   "LogGroup": "/aws/lambda/nightly-report"
+  },
+  "Environment": {
+   "Variables": {
+    "REPORT_BUCKET": "acme-finance-reports",
+    "DB_HOST": "reporting-etl.internal"
+   }
+  }
+ },
+ "Code": {
+  "RepositoryType": "S3",
+  "Location": "https://awslambda-{{region}}-tasks.s3.{{region}}.amazonaws.com/snapshots/{{account}}/nightly-report-demo"
+ },
+ "Tags": {
+  "team": "data"
+ }
+}

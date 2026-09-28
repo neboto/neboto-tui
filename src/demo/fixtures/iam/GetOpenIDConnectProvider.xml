@@ -1,0 +1,9 @@
+<GetOpenIDConnectProviderResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetOpenIDConnectProviderResult>
+    <Url>token.actions.githubusercontent.com</Url>
+    <ClientIDList><member>sts.amazonaws.com</member></ClientIDList>
+    <ThumbprintList><member>6938fd4d98bab03faadb97b34396831e3780aea1</member></ThumbprintList>
+    <CreateDate>{{iso:now-300d}}</CreateDate>
+  </GetOpenIDConnectProviderResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetOpenIDConnectProviderResponse>

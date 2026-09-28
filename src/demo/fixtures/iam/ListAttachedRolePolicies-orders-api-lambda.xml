@@ -1,0 +1,7 @@
+<ListAttachedRolePoliciesResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListAttachedRolePoliciesResult>
+    <IsTruncated>false</IsTruncated>
+    <AttachedPolicies><member><PolicyName>AWSLambdaBasicExecutionRole</PolicyName><PolicyArn>arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole</PolicyArn></member><member><PolicyName>orders-dynamodb</PolicyName><PolicyArn>arn:aws:iam::{{account}}:policy/orders-dynamodb</PolicyArn></member></AttachedPolicies>
+  </ListAttachedRolePoliciesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListAttachedRolePoliciesResponse>

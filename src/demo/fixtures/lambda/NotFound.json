@@ -1,0 +1,2 @@
+!status 404
+{"__type":"ResourceNotFoundException","Type":"User","Message":"The function doesn't have an EventInvokeConfig"}

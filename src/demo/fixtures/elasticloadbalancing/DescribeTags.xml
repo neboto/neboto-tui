@@ -1,0 +1,23 @@
+<DescribeTagsResponse xmlns="http://elasticloadbalancing.amazonaws.com/doc/2015-12-01/">
+  <DescribeTagsResult>
+    <TagDescriptions>
+      <member>
+        <ResourceArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:loadbalancer/app/storefront-alb/50dc6c495c0c9188</ResourceArn>
+        <Tags><member><Key>aws:cloudformation:stack-name</Key><Value>storefront-prod</Value></member><member><Key>aws:cloudformation:logical-id</Key><Value>PublicLoadBalancer</Value></member><member><Key>aws:cloudformation:stack-id</Key><Value>arn:aws:cloudformation:{{region}}:{{account}}:stack/storefront-prod/6d1f2c30-4a5b-11ef-9c1d-0e8a1b2c3d4e</Value></member><member><Key>team</Key><Value>storefront</Value></member></Tags>
+      </member>
+      <member>
+        <ResourceArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:targetgroup/storefront-web/0a1b2c3d4e5f6a7b</ResourceArn>
+        <Tags><member><Key>aws:cloudformation:stack-name</Key><Value>storefront-prod</Value></member><member><Key>aws:cloudformation:logical-id</Key><Value>WebTargetGroup</Value></member><member><Key>aws:cloudformation:stack-id</Key><Value>arn:aws:cloudformation:{{region}}:{{account}}:stack/storefront-prod/6d1f2c30-4a5b-11ef-9c1d-0e8a1b2c3d4e</Value></member><member><Key>team</Key><Value>storefront</Value></member></Tags>
+      </member>
+      <member>
+        <ResourceArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:loadbalancer/app/legacy-admin-alb/7f3e2d1c0b9a8e6d</ResourceArn>
+        <Tags><member><Key>Name</Key><Value>legacy-admin</Value></member><member><Key>team</Key><Value>platform</Value></member><member><Key>created-by</Key><Value>jsmith</Value></member></Tags>
+      </member>
+      <member>
+        <ResourceArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:targetgroup/legacy-admin/9e8d7c6b5a4f3e2d</ResourceArn>
+        <Tags><member><Key>Name</Key><Value>legacy-admin</Value></member><member><Key>team</Key><Value>platform</Value></member><member><Key>created-by</Key><Value>jsmith</Value></member></Tags>
+      </member>
+    </TagDescriptions>
+  </DescribeTagsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeTagsResponse>

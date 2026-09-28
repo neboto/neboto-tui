@@ -1,0 +1,30 @@
+{"tasks": [
+  {
+    "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/3c4d5e6f708192a3b4c5d6e7f8091a2b", "clusterArn": "arn:aws:ecs:{{region}}:{{account}}:cluster/acme-prod", "taskDefinitionArn": "arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:14",
+    "group": "service:orders-worker", "lastStatus": "RUNNING", "desiredStatus": "RUNNING", "launchType": "FARGATE",
+    "platformVersion": "1.4.0", "cpu": "512", "memory": "1024", "availabilityZone": "{{region}}a",
+    "connectivity": "CONNECTED", "healthStatus": "HEALTHY",
+    "createdAt": {{epoch:now-11m}}, "startedAt": {{epoch:now-11m}},
+    "containers": [{
+      "containerArn": "arn:aws:ecs:{{region}}:{{account}}:container/acme-prod/3c4d5e6f708192a3b4c5d6e7f8091a2b/c0", "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/3c4d5e6f708192a3b4c5d6e7f8091a2b",
+      "name": "worker", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/orders-worker:latest", "lastStatus": "RUNNING",
+      "networkInterfaces": [{"attachmentId": "a-3c4d5e6f708192a3b4c5d6e7f8091a2b", "privateIpv4Address": "10.20.11.55"}]
+    }],
+    "tags": []
+  }
+,
+  {
+    "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/4d5e6f708192a3b4c5d6e7f8091a2b3c", "clusterArn": "arn:aws:ecs:{{region}}:{{account}}:cluster/acme-prod", "taskDefinitionArn": "arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:14",
+    "group": "service:orders-worker", "lastStatus": "RUNNING", "desiredStatus": "RUNNING", "launchType": "FARGATE",
+    "platformVersion": "1.4.0", "cpu": "512", "memory": "1024", "availabilityZone": "{{region}}b",
+    "connectivity": "CONNECTED", "healthStatus": "HEALTHY",
+    "createdAt": {{epoch:now-11m}}, "startedAt": {{epoch:now-11m}},
+    "containers": [{
+      "containerArn": "arn:aws:ecs:{{region}}:{{account}}:container/acme-prod/4d5e6f708192a3b4c5d6e7f8091a2b3c/c0", "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/4d5e6f708192a3b4c5d6e7f8091a2b3c",
+      "name": "worker", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/orders-worker:latest", "lastStatus": "RUNNING",
+      "networkInterfaces": [{"attachmentId": "a-4d5e6f708192a3b4c5d6e7f8091a2b3c", "privateIpv4Address": "10.20.12.62"}]
+    }],
+    "tags": []
+  }
+], "failures": [
+], "failures": []}

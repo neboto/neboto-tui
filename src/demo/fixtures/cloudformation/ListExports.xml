@@ -1,0 +1,11 @@
+<ListExportsResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <ListExportsResult>
+    <Exports>
+      <member><ExportingStackId>arn:aws:cloudformation:{{region}}:{{account}}:stack/acme-network/1c3e5a70-0d9f-11ee-a4b3-2a0c3d4e5f60</ExportingStackId><Name>acme-network-VpcId</Name><Value>vpc-0acme000000prod1</Value></member>
+      <member><ExportingStackId>arn:aws:cloudformation:{{region}}:{{account}}:stack/acme-network/1c3e5a70-0d9f-11ee-a4b3-2a0c3d4e5f60</ExportingStackId><Name>acme-network-PrivateSubnets</Name><Value>subnet-0a11prv00000001a,subnet-0a11prv00000002b</Value></member>
+      <member><ExportingStackId>arn:aws:cloudformation:{{region}}:{{account}}:stack/acme-network/1c3e5a70-0d9f-11ee-a4b3-2a0c3d4e5f60</ExportingStackId><Name>acme-network-PublicSubnets</Name><Value>subnet-0a11pub00000001a,subnet-0a11pub00000002b</Value></member>
+      <member><ExportingStackId>arn:aws:cloudformation:{{region}}:{{account}}:stack/orders-pipeline/8a2e3d40-5b6c-11ef-8d2e-1f9b2c3d4e5f</ExportingStackId><Name>orders-queue-url</Name><Value>https://sqs.{{region}}.amazonaws.com/{{account}}/orders</Value></member>
+    </Exports>
+  </ListExportsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListExportsResponse>

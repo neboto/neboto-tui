@@ -214,6 +214,13 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                     "searching cached services only · Esc clear".to_string(),
                 )
             }
+        } else if app.resources.is_empty() && crate::demo::enabled() {
+            // Demo mode answers uncovered calls with empty successes, so an
+            // empty service is a dataset gap, not a permission problem.
+            (
+                "Not in the demo dataset yet".to_string(),
+                "try @ecs or @ec2 — the demo account's problems live there".to_string(),
+            )
         } else if app.resources.is_empty() {
             // FMS from a non-admin account fails every call — say why instead
             // of a generic "no resources". (The admin-account id, when the

@@ -1,0 +1,55 @@
+{"services": [
+  {
+    "serviceArn": "arn:aws:ecs:{{region}}:{{account}}:service/acme-prod/storefront-web",
+    "serviceName": "storefront-web", "clusterArn": "arn:aws:ecs:{{region}}:{{account}}:cluster/acme-prod", "status": "ACTIVE",
+    "desiredCount": 3, "runningCount": 3, "pendingCount": 0, "launchType": "FARGATE", "platformVersion": "LATEST",
+    "taskDefinition": "arn:aws:ecs:{{region}}:{{account}}:task-definition/storefront-web:42",
+    "deploymentConfiguration": {"deploymentCircuitBreaker": {"enable": true, "rollback": true}, "maximumPercent": 200, "minimumHealthyPercent": 100},
+    "deployments": [{
+      "id": "ecs-svc/1111111111111111111", "status": "PRIMARY", "taskDefinition": "arn:aws:ecs:{{region}}:{{account}}:task-definition/storefront-web:42",
+      "desiredCount": 3, "pendingCount": 0, "runningCount": 3, "failedTasks": 0,
+      "createdAt": {{epoch:now-3d}}, "updatedAt": {{epoch:now-3d}}, "launchType": "FARGATE",
+      "rolloutState": "COMPLETED", "rolloutStateReason": "ECS deployment ecs-svc/1111111111111111111 completed."
+    }],
+    "events": [
+      {"id": "e-web-2", "createdAt": {{epoch:now-2h}}, "message": "(service storefront-web) has reached a steady state."},
+      {"id": "e-web-1", "createdAt": {{epoch:now-3d}}, "message": "(service storefront-web) (deployment ecs-svc/1111111111111111111) deployment completed."}
+    ],
+    "networkConfiguration": {"awsvpcConfiguration": {"subnets": ["subnet-0a11prv00000001a", "subnet-0a11prv00000002b"], "securityGroups": ["sg-0web0000000000001"], "assignPublicIp": "DISABLED"}},
+    "loadBalancers": [{"targetGroupArn": "arn:aws:elasticloadbalancing:{{region}}:{{account}}:targetgroup/storefront-web/0a1b2c3d4e5f6a7b", "containerName": "web", "containerPort": 8080}],
+    "healthCheckGracePeriodSeconds": 60, "schedulingStrategy": "REPLICA", "enableExecuteCommand": true,
+    "createdAt": {{epoch:now-200d}},
+    "tags": [{"key": "team", "value": "storefront"}, {"key": "aws:cloudformation:stack-name", "value": "storefront-prod"}]
+  },
+  {
+    "serviceArn": "arn:aws:ecs:{{region}}:{{account}}:service/acme-prod/orders-worker",
+    "serviceName": "orders-worker", "clusterArn": "arn:aws:ecs:{{region}}:{{account}}:cluster/acme-prod", "status": "ACTIVE",
+    "desiredCount": 2, "runningCount": 2, "pendingCount": 0, "launchType": "FARGATE", "platformVersion": "LATEST",
+    "taskDefinition": "arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:14",
+    "deploymentConfiguration": {"deploymentCircuitBreaker": {"enable": true, "rollback": true}, "maximumPercent": 200, "minimumHealthyPercent": 100},
+    "deployments": [
+      {
+        "id": "ecs-svc/2222222222222222222", "status": "PRIMARY", "taskDefinition": "arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:14",
+        "desiredCount": 2, "pendingCount": 0, "runningCount": 2, "failedTasks": 0,
+        "createdAt": {{epoch:now-25m}}, "updatedAt": {{epoch:now-12m}}, "launchType": "FARGATE",
+        "rolloutState": "IN_PROGRESS", "rolloutStateReason": "ECS deployment circuit breaker: rolling back to deploymentId ecs-svc/3333333333333333333."
+      },
+      {
+        "id": "ecs-svc/4444444444444444444", "status": "ACTIVE", "taskDefinition": "arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:15",
+        "desiredCount": 0, "pendingCount": 0, "runningCount": 0, "failedTasks": 6,
+        "createdAt": {{epoch:now-40m}}, "updatedAt": {{epoch:now-12m}}, "launchType": "FARGATE",
+        "rolloutState": "FAILED", "rolloutStateReason": "ECS deployment circuit breaker: tasks failed to start."
+      }
+    ],
+    "events": [
+      {"id": "e-ow-4", "createdAt": {{epoch:now-12m}}, "message": "(service orders-worker) (deployment ecs-svc/4444444444444444444) deployment failed: tasks failed to start."},
+      {"id": "e-ow-3", "createdAt": {{epoch:now-12m}}, "message": "(service orders-worker) rolling back to deployment ecs-svc/3333333333333333333."},
+      {"id": "e-ow-2", "createdAt": {{epoch:now-18m}}, "message": "(service orders-worker) (task 5d1e0c7a9b8f4e2d8c6a4b2e0f1d3c5a) failed container health checks or exited: Essential container in task exited."},
+      {"id": "e-ow-1", "createdAt": {{epoch:now-40m}}, "message": "(service orders-worker) has started 2 tasks: (task 5d1e0c7a9b8f4e2d8c6a4b2e0f1d3c5a) (task 6e2f1d8b0c9a5f3e9d7b5c3f1a2e4d6b)."}
+    ],
+    "networkConfiguration": {"awsvpcConfiguration": {"subnets": ["subnet-0a11prv00000001a", "subnet-0a11prv00000002b"], "securityGroups": ["sg-0db00000000000002"], "assignPublicIp": "DISABLED"}},
+    "loadBalancers": [], "schedulingStrategy": "REPLICA", "enableExecuteCommand": false,
+    "createdAt": {{epoch:now-120d}},
+    "tags": [{"key": "team", "value": "orders"}, {"key": "ManagedBy", "value": "terraform"}]
+  }
+], "failures": []}

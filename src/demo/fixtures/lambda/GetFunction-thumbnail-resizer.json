@@ -1,0 +1,46 @@
+{
+ "Configuration": {
+  "FunctionName": "thumbnail-resizer",
+  "FunctionArn": "arn:aws:lambda:{{region}}:{{account}}:function:thumbnail-resizer",
+  "Runtime": "python3.12",
+  "Role": "arn:aws:iam::{{account}}:role/orders-api-lambda",
+  "Handler": "app.handler",
+  "CodeSize": 8812004,
+  "Description": "Resizes product images on upload",
+  "Timeout": 60,
+  "MemorySize": 1024,
+  "LastModified": "{{iso:now-45d}}",
+  "CodeSha256": "q1z3Yx0mZ0l5c2VkZW1vZGF0YXNldDAwMDAwMDA=",
+  "Version": "$LATEST",
+  "TracingConfig": {
+   "Mode": "PassThrough"
+  },
+  "RevisionId": "0d7a6f1e-demo-4c3b-9a8e-thum00000000",
+  "State": "Active",
+  "LastUpdateStatus": "Successful",
+  "PackageType": "Zip",
+  "Architectures": [
+   "arm64"
+  ],
+  "EphemeralStorage": {
+   "Size": 512
+  },
+  "LoggingConfig": {
+   "LogFormat": "Text",
+   "LogGroup": "/aws/lambda/thumbnail-resizer"
+  },
+  "Environment": {
+   "Variables": {
+    "MAX_WIDTH": "1200"
+   }
+  }
+ },
+ "Code": {
+  "RepositoryType": "S3",
+  "Location": "https://awslambda-{{region}}-tasks.s3.{{region}}.amazonaws.com/snapshots/{{account}}/thumbnail-resizer-demo"
+ },
+ "Tags": {
+  "team": "storefront",
+  "aws:cloudformation:stack-name": "storefront-prod"
+ }
+}

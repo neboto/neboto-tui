@@ -1,0 +1,6 @@
+<GetLoginProfileResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetLoginProfileResult>
+    <LoginProfile><UserName>jsmith</UserName><CreateDate>{{iso:now-800d}}</CreateDate><PasswordResetRequired>false</PasswordResetRequired></LoginProfile>
+  </GetLoginProfileResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetLoginProfileResponse>
