@@ -723,11 +723,10 @@ pub async fn handle_terminal_events(tx: mpsc::UnboundedSender<Event>) {
                         break;
                     }
                 }
-                CrosstermEvent::Resize(_, _) => {
-                    if tx.send(Event::Resize).is_err() {
+                CrosstermEvent::Resize(_, _)
+                    if tx.send(Event::Resize).is_err() => {
                         break;
                     }
-                }
                 _ => {}
             },
             Ok(None) => {

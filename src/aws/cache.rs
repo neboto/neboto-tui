@@ -73,7 +73,7 @@ impl ResourceCache {
         let ttl = self.effective_ttl(service);
         self.entries.get(&key).and_then(|entry| {
             if entry.timestamp.elapsed() < ttl {
-                Some(entry.resources.iter().map(|r| r.clone()).collect())
+                Some(entry.resources.to_vec())
             } else {
                 None
             }

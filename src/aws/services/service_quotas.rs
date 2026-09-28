@@ -126,7 +126,7 @@ impl AwsService for ServiceQuotasService {
             }
         }
 
-        quotas.sort_by(|a, b| a.quota_name.to_lowercase().cmp(&b.quota_name.to_lowercase()));
+        quotas.sort_by_key(|a| a.quota_name.to_lowercase());
         let total = quotas.len();
         if total > 0 {
             let batch: Vec<Box<dyn Resource>> = quotas
@@ -198,7 +198,7 @@ pub async fn fetch_quota_services(client: SqClient) -> Result<Vec<(String, Strin
             break;
         }
     }
-    out.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    out.sort_by_key(|a| a.1.to_lowercase());
     Ok(out)
 }
 

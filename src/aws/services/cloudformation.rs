@@ -1181,8 +1181,7 @@ impl CfnStack {
 
         let drift_status = stack
             .drift_information()
-            .map(|d| d.stack_drift_status().map(|s| s.as_str().to_string()))
-            .flatten();
+            .and_then(|d| d.stack_drift_status().map(|s| s.as_str().to_string()));
 
         let notification_arns = stack
             .notification_arns()

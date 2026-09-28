@@ -467,8 +467,8 @@ pub async fn fetch_asg_metrics(
                     .value(&group_name)
                     .build(),
             )
-            .start_time(start_dt.clone())
-            .end_time(end_dt.clone())
+            .start_time(start_dt)
+            .end_time(end_dt)
             .period(period)
             .set_statistics(Some(vec![Statistic::Average]))
             .send()

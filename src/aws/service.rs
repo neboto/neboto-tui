@@ -4,6 +4,9 @@ use crate::event::Event;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
+// `EC2`, `ECS`, `IAM`, … are serialized by name into bookmark and macro
+// files, so the Rust-style `Ecs` rename would break every saved one.
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ServiceType {
     EC2,

@@ -822,11 +822,10 @@ impl Ec2Instance {
 
         let launch_time = instance
             .launch_time()
-            .map(|t| {
+            .and_then(|t| {
                 t.fmt(aws_sdk_ec2::primitives::DateTimeFormat::DateTime)
                     .ok()
             })
-            .flatten()
             .map(|s| s.to_string());
 
         let availability_zone = instance
@@ -2106,8 +2105,8 @@ pub async fn fetch_ec2_metrics(
             .namespace("AWS/EC2")
             .metric_name("CPUUtilization")
             .dimensions(make_dim())
-            .start_time(start_dt.clone())
-            .end_time(end_dt.clone())
+            .start_time(start_dt)
+            .end_time(end_dt)
             .period(period)
             .set_statistics(Some(vec![aws_sdk_cloudwatch::types::Statistic::Average]))
             .send(),
@@ -2116,8 +2115,8 @@ pub async fn fetch_ec2_metrics(
             .namespace("AWS/EC2")
             .metric_name("NetworkIn")
             .dimensions(make_dim())
-            .start_time(start_dt.clone())
-            .end_time(end_dt.clone())
+            .start_time(start_dt)
+            .end_time(end_dt)
             .period(period)
             .set_statistics(Some(vec![aws_sdk_cloudwatch::types::Statistic::Average]))
             .send(),
@@ -2218,8 +2217,8 @@ pub async fn fetch_ebs_metrics(
             .namespace("AWS/EBS")
             .metric_name(name)
             .dimensions(make_dim())
-            .start_time(start_dt.clone())
-            .end_time(end_dt.clone())
+            .start_time(start_dt)
+            .end_time(end_dt)
             .period(period)
             .set_statistics(Some(vec![Statistic::Sum]))
             .send()
@@ -2230,8 +2229,8 @@ pub async fn fetch_ebs_metrics(
             .namespace("AWS/EBS")
             .metric_name(name)
             .dimensions(make_dim())
-            .start_time(start_dt.clone())
-            .end_time(end_dt.clone())
+            .start_time(start_dt)
+            .end_time(end_dt)
             .period(period)
             .set_statistics(Some(vec![Statistic::Average]))
             .send()
@@ -2509,7 +2508,7 @@ pub async fn fetch_volume_snapshots(
             Err(e) => return Err(crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e))),
         }
     }
-    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.sort_by_key(|x| std::cmp::Reverse(x.0));
     Ok(out.into_iter().map(|(_, s)| s).collect())
 }
 
@@ -3185,7 +3184,7 @@ pub async fn fetch_launch_template_versions(
             break;
         }
     }
-    out.sort_by(|a, b| b.version_number.cmp(&a.version_number));
+    out.sort_by_key(|x| std::cmp::Reverse(x.version_number));
     Ok(out)
 }
 

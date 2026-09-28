@@ -4439,10 +4439,8 @@ impl App {
                             self.lambda_metrics_scroll += 1;
                         }
                     }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        if self.lambda_metrics_scroll > 0 {
-                            self.lambda_metrics_scroll -= 1;
-                        }
+                    KeyCode::Char('k') | KeyCode::Up if self.lambda_metrics_scroll > 0 => {
+                        self.lambda_metrics_scroll -= 1;
                     }
                     _ => {}
                 },
@@ -7896,12 +7894,15 @@ impl App {
         // `Ctrl-A` (select all rows), leaving the visual selection — and so
         // every selection verb, `X` deep export included — dead on any screen
         // that happens to have noise rows.
-        if !self.search_active && !self.details_focused && self.noise_in_view {
-            if key.code == KeyCode::Char('a') && key.modifiers == KeyModifiers::NONE {
-                self.hide_noise = !self.hide_noise;
-                self.update_search();
-                return Ok(());
-            }
+        if !self.search_active
+            && !self.details_focused
+            && self.noise_in_view
+            && key.code == KeyCode::Char('a')
+            && key.modifiers == KeyModifiers::NONE
+        {
+            self.hide_noise = !self.hide_noise;
+            self.update_search();
+            return Ok(());
         }
 
         // `gg` chord for the list pane: capture whether `g` was the previous
@@ -8953,7 +8954,7 @@ impl App {
             if let Some(list) =
                 self.cache.get_ref(&svc, &self.current_region, variant.as_deref())
             {
-                sources.extend(std::iter::repeat(svc).take(list.len()));
+                sources.extend(std::iter::repeat_n(svc, list.len()));
                 resources.extend(list.iter().cloned());
             }
         }
@@ -10568,10 +10569,11 @@ impl App {
         }
     }
 
-    pub fn get_selected_resource(&self) -> Option<&Box<dyn Resource>> {
+    pub fn get_selected_resource(&self) -> Option<&dyn Resource> {
         self.selected_index
             .and_then(|idx| self.filtered_resources.get(idx))
             .and_then(|&resource_idx| self.resources.get(resource_idx))
+            .map(|r| r.as_ref())
     }
 
     fn is_selected_ec2_instance(&self) -> bool {
@@ -11591,12 +11593,11 @@ impl App {
             match self.lazy.rest_api_details.get(&api.id) {
                 Some(crate::lazy::Lazy::Loaded(d)) => (&d.stages, api.name().to_string()),
                 _ => return None}
-        } else if let Some(api) = resource.as_any().downcast_ref::<HttpApi>() {
+        } else {
+            let api = resource.as_any().downcast_ref::<HttpApi>()?;
             match self.lazy.http_api_details.get(&api.id) {
                 Some(crate::lazy::Lazy::Loaded(d)) => (&d.stages, api.name().to_string()),
                 _ => return None}
-        } else {
-            return None;
         };
 
         // 1. The access-log row under the cursor (value is the logs ARN).
@@ -17564,7 +17565,7 @@ impl App {
         let (title, keys) = match self.get_selected_resource() {
             Some(r) => (
                 r.name().to_string(),
-                crate::references::lookup_keys(r.as_ref()),
+                crate::references::lookup_keys(r),
             ),
             None => {
                 self.error_message = Some("No resource selected".to_string());
@@ -22062,7 +22063,7 @@ impl App {
     /// The "referenced by" lens (`U`) works for any selection with an id.
     pub fn supports_refs_lens(&self) -> bool {
         self.get_selected_resource()
-            .map(|r| !crate::references::lookup_keys(r.as_ref()).is_empty())
+            .map(|r| !crate::references::lookup_keys(r).is_empty())
             .unwrap_or(false)
     }
 
@@ -26515,7 +26516,7 @@ impl App {
             } else {
                 format!("{} ({})", resource.id(), resource.name())
             };
-            (subject, single_actions(resource.as_ref()), false)
+            (subject, single_actions(resource), false)
         };
 
         if actions.is_empty() {
@@ -26701,7 +26702,7 @@ impl App {
         let resource = self
             .get_selected_resource()
             .expect("selection checked above");
-        let json = crate::export::detail_json(resource.as_ref(), &sections);
+        let json = crate::export::detail_json(resource, &sections);
         self.spawn_editor_checked(&json, ".json")
     }
 
@@ -29735,7 +29736,7 @@ impl App {
         let sections = self.detail_sections_snapshot();
         let result = self
             .get_selected_resource()
-            .map(|r| crate::export::export_detail(r.as_ref(), &sections, &label, &self.export_options));
+            .map(|r| crate::export::export_detail(r, &sections, &label, &self.export_options));
         match result {
             Some(Ok(paths)) => {
                 self.error_message = None;

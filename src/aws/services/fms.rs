@@ -212,7 +212,7 @@ impl AwsService for FmsService {
                 .buffer_unordered(8)
                 .collect()
                 .await;
-            policies.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            policies.sort_by_key(|a| a.name.to_lowercase());
 
             total += policies.len();
             let batch: Vec<Box<dyn Resource>> = policies

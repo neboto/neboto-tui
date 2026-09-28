@@ -292,7 +292,7 @@ impl AwsService for EcsService {
                 }
             }
             // Most-recently-stopped first.
-            stopped.sort_by(|a, b| b.0.cmp(&a.0));
+            stopped.sort_by_key(|x| std::cmp::Reverse(x.0));
             for (_, task) in stopped {
                 task_resources.push(Box::new(task));
             }
@@ -1698,8 +1698,8 @@ pub async fn fetch_ecs_metrics(
             .namespace("ECS/ContainerInsights")
             .metric_name(name)
             .set_dimensions(Some(make_dims()))
-            .start_time(start_dt.clone())
-            .end_time(end_dt.clone())
+            .start_time(start_dt)
+            .end_time(end_dt)
             .period(period)
             .set_statistics(Some(vec![Statistic::Average]))
             .send()
@@ -1813,8 +1813,8 @@ pub async fn fetch_ecs_task_metrics(
             .namespace("ECS/ContainerInsights")
             .metric_name(name)
             .set_dimensions(Some(task_dims()))
-            .start_time(start_dt.clone())
-            .end_time(end_dt.clone())
+            .start_time(start_dt)
+            .end_time(end_dt)
             .period(period)
             .set_statistics(Some(vec![Statistic::Average]))
             .send()
@@ -1849,8 +1849,8 @@ pub async fn fetch_ecs_task_metrics(
                 .namespace("ECS/ContainerInsights")
                 .metric_name(name)
                 .set_dimensions(Some(cdims()))
-                .start_time(start_dt.clone())
-                .end_time(end_dt.clone())
+                .start_time(start_dt)
+                .end_time(end_dt)
                 .period(period)
                 .set_statistics(Some(vec![Statistic::Average]))
                 .send()
@@ -2022,7 +2022,7 @@ pub async fn fetch_service_tasks(
             }
         }
         if stopped {
-            out.sort_by(|a, b| b.0.cmp(&a.0));
+            out.sort_by_key(|x| std::cmp::Reverse(x.0));
         }
         out.into_iter().map(|(_, t)| t).collect()
     }

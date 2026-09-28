@@ -53,7 +53,7 @@ macro_rules! define_regions {
             }
 
             /// Convert to AWS SDK Region type
-            pub fn to_sdk_region(&self) -> SdkRegion {
+            pub fn to_sdk_region(self) -> SdkRegion {
                 SdkRegion::new(self.as_str().to_string())
             }
 

@@ -165,6 +165,18 @@ aws-sdk-oam = "1.111.0"
 # — dominates `target/` (easily half of it). Keep line tables for our own code
 # (panic backtraces still name our functions) and strip debuginfo from every
 # dependency. Cuts `target/` substantially with no practical downside.
+[lints.clippy]
+# Renderers take (app, area, frame) plus the pane's own data; a struct per
+# call site would only rename the parameters.
+too_many_arguments = "allow"
+# The flagged types are row/series tuples used at one site each; an alias
+# would just move the same type a screen away.
+type_complexity = "allow"
+# Detail-row builders are sequences of `rows.push(…)`. Rewriting only the
+# ones whose first push happens to be unconditional would make three of
+# hundreds read differently.
+vec_init_then_push = "allow"
+
 [profile.dev]
 debug = "line-tables-only"
 

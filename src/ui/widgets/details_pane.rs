@@ -2010,7 +2010,7 @@ fn fmt_count(n: i64) -> String {
     let s = n.abs().to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -3267,9 +3267,7 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
             .and_then(|n| mk(ServiceType::Eks, JumpView::None, n)),
         "ecs" => {
             // service/<cluster>/<name> or cluster/<name>
-            if resource.starts_with("service/") {
-                mk(ServiceType::ECS, JumpView::None, last_seg())
-            } else if resource.starts_with("cluster/") {
+            if resource.starts_with("service/") || resource.starts_with("cluster/") {
                 mk(ServiceType::ECS, JumpView::None, last_seg())
             } else {
                 None
@@ -8818,12 +8816,11 @@ pub fn fsx_section_lines(
                         rows.push(("Preferred File Server IP".to_string(), w.preferred_file_server_ip.clone()));
                     }
                 }
-                FsxConfig::Ontap(o) => {
-                    if !o.endpoint_ip_address_range.is_empty() {
+                FsxConfig::Ontap(o)
+                    if !o.endpoint_ip_address_range.is_empty() => {
                         rows.push(("".to_string(), "".to_string()));
                         rows.push(("Endpoint IP Range".to_string(), o.endpoint_ip_address_range.clone()));
                     }
-                }
                 _ => {}
             }
             rows
@@ -31419,7 +31416,7 @@ fn config_rule_noncompliant_lines(state: Option<&crate::lazy::Lazy<Vec<crate::aw
             }
             let mut rows = vec![];
             for r in results {
-                rows.push((format!("{}", r.resource_type), r.resource_id.clone()));
+                rows.push((r.resource_type.to_string(), r.resource_id.clone()));
                 if !r.annotation.is_empty() {
                     rows.push((format!("  → {}", r.annotation), "".to_string()));
                 }
