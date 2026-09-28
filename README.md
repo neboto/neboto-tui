@@ -117,6 +117,7 @@ Every flag overrides the config file for that run only.
 | `-w`, `--watch` | Start in watch mode (auto-refresh) |
 | `-m`, `--macro <NAME>` | Run a saved macro on startup |
 | `--theme <THEME>` | Color preset (see [Themes](#themes)) |
+| `--show-keys` | Show each key and what it did in a corner box, for recordings and screen shares |
 | `--endpoint-url <URL>` | Point at a local emulator |
 | `--banner` / `--no-banner` | Show or hide the ASCII banner |
 
@@ -258,7 +259,7 @@ same grouping.
 | **Compute** | EC2 `@ec2` · Lambda `@lambda` · Auto Scaling `@asg` · Batch `@batch` · WorkSpaces `@workspaces` |
 | **Containers** | ECS `@ecs` · EKS `@eks` · ECR `@ecr` |
 | **Storage** | S3 `@s3` · EFS `@efs` · FSx `@fsx` · Backup `@backup` · Transfer Family `@transfer` |
-| **Database** | RDS `@rds` · DynamoDB `@ddb` · ElastiCache `@elasticache` |
+| **Database** | RDS `@rds` · DynamoDB `@ddb` · ElastiCache `@elasticache` · DMS `@dms` |
 | **Networking** | VPC `@vpc` · ELB `@elb` · Route 53 `@r53` · Route 53 Resolver `@resolver` · Route 53 Profiles `@profiles` · CloudFront `@cloudfront` · Transit Gateway `@tgw` · Direct Connect `@dx` · Global Accelerator `@ga` · API Gateway `@apigw` |
 | **Security & Identity** | IAM `@iam` · Identity Center `@idc` · Cognito `@cognito` · KMS `@kms` · Secrets Manager `@secrets` · ACM `@acm` · WAF `@waf` · Network Firewall `@anfw` · GuardDuty `@gd` · Security Hub `@sh` · Inspector `@inspector` · Firewall Manager `@fms` |
 | **Analytics** | Athena `@athena` · Glue `@glue` · Kinesis `@kinesis` · MSK `@msk` · Redshift `@redshift` · OpenSearch `@opensearch` |
@@ -311,6 +312,7 @@ template.
 | `show_banner` | ASCII banner on startup |
 | `watch`, `watch_interval` | Start in watch mode, and its cadence in seconds |
 | `detail_flat` | Start with the flat all-sections detail view |
+| `show_keys` | Show each key and what it did in a corner box (`--show-keys` for one run) |
 | `export_formats` | Which files exports write: any of `"json"`, `"csv"`, `"md"` (default all three) |
 | `export_dir` | Where exports go (default the working directory; `NEBOTO_EXPORT_DIR` overrides) |
 | `theme`, `[theme_colors]` | Preset name and per-color overrides |

@@ -431,6 +431,7 @@ pub enum MetricsKind {
     GlueJob,
     Redshift,
     RedshiftSl,
+    Dms,
     VpcEndpoint,
     Tgw,
     LogGroup,
@@ -679,6 +680,40 @@ impl BatchJobStatusFilter {
     }
 }
 
+/// Sub-tab view for DMS (Tasks / Instances / Endpoints / Serverless).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum DmsView {
+    Tasks,
+    Instances,
+    Endpoints,
+    Serverless}
+
+impl DmsView {
+    pub fn resource_type_filter(&self) -> &'static str {
+        match self {
+            DmsView::Tasks => "DMS Task",
+            DmsView::Instances => "DMS Replication Instance",
+            DmsView::Endpoints => "DMS Endpoint",
+            DmsView::Serverless => "DMS Serverless Replication"}
+    }
+
+    fn next(self) -> Self {
+        match self {
+            DmsView::Tasks => DmsView::Instances,
+            DmsView::Instances => DmsView::Endpoints,
+            DmsView::Endpoints => DmsView::Serverless,
+            DmsView::Serverless => DmsView::Tasks}
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            DmsView::Tasks => DmsView::Serverless,
+            DmsView::Instances => DmsView::Tasks,
+            DmsView::Endpoints => DmsView::Instances,
+            DmsView::Serverless => DmsView::Endpoints}
+    }
+}
+
 /// Sub-tab view for the Athena service.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AthenaView {
@@ -863,6 +898,8 @@ pub enum JumpView {
     Sh(SecurityHubView),
     AgentCore(AgentCoreView),
     Batch(BatchView),
+    Dms(DmsView),
+    S3Tables(S3TablesView),
     /// WAF carries both the sub-tab and the scope (CLOUDFRONT vs REGIONAL) — a
     /// CloudFront distribution's Web ACL is always CLOUDFRONT scope, which lives
     /// in a separate (us-east-1) variant of the WAF list.
@@ -1811,6 +1848,9 @@ pub struct App {
     // `record_message_history` diffing the single-slot message fields, so the
     // hundreds of direct `error_message = Some(…)` assignments need no sweep.
     pub message_history: std::collections::VecDeque<MessageEntry>,
+    /// Keycast (`--show-keys`, config `show_keys`): the keys just pressed
+    /// and what they did, drawn in a corner box. `None` when off.
+    pub keycast: Option<crate::keycast::Keycast>,
     pub message_history_visible: bool,
     pub message_history_selected: usize,
     last_seen_error: Option<String>,
@@ -2041,6 +2081,10 @@ pub struct App {
     pub batch_view: BatchView,
     /// Batch Jobs sub-tab status group (`f`).
     pub batch_job_filter: BatchJobStatusFilter,
+    pub dms_view: DmsView,
+    /// DMS task / replication instance `m` metrics, keyed by ARN.
+    pub dms_metrics: HashMap<String, crate::aws::services::dms::DmsMetricsState>,
+    pub dms_metrics_time_range: MetricsTimeRange,
 
     // Firehose detail section state (tags/metrics keyed by delivery-stream name)
     pub firehose_metrics: HashMap<String, FirehoseMetricsState>,
@@ -2667,6 +2711,7 @@ impl App {
             detail_search_query: String::new(),
             detail_flat_mode: config.detail_flat.unwrap_or(false),
             log_wrap: config.log_wrap.unwrap_or(false),
+            keycast: config.show_keys.unwrap_or(false).then(crate::keycast::Keycast::default),
             export_options: crate::export::ExportOptions {
                 formats: crate::export::ExportFormats::from_config(config.export_formats.as_deref()).0,
                 dir: config.export_dir.as_deref().map(crate::export::expand_home),
@@ -2822,6 +2867,9 @@ impl App {
             redshift_metrics_time_range: MetricsTimeRange::OneHour,
             batch_view: BatchView::Queues,
             batch_job_filter: BatchJobStatusFilter::All,
+            dms_view: DmsView::Tasks,
+            dms_metrics: HashMap::new(),
+            dms_metrics_time_range: MetricsTimeRange::OneHour,
             firehose_metrics: HashMap::new(),
             firehose_metrics_time_range: MetricsTimeRange::OneHour,
 
@@ -3146,6 +3194,10 @@ impl App {
                     id,
                     crate::aws::services::route53resolver::ResolverEpMetricsState::Loaded(data),
                 );
+            }
+            Event::DmsMetricsLoaded { arn, data } => {
+                self.dms_metrics
+                    .insert(arn, crate::aws::services::dms::DmsMetricsState::Loaded(data));
             }
             Event::CodeBuildMetricsLoaded { arn, data } => {
                 self.codebuild_metrics.insert(
@@ -3680,6 +3732,12 @@ impl App {
         // search query in particular is cleared by `Esc` further down.
         if self.macro_recorder.is_some() {
             self.macro_note_key(key);
+        }
+        if self.keycast.is_some() {
+            let before = self.keycast_view();
+            if let Some(kc) = self.keycast.as_mut() {
+                kc.note(key, before);
+            }
         }
 
         // `,` (macros) is intercepted here rather than sitting with the other
@@ -4893,6 +4951,18 @@ impl App {
                         self.resolver_ep_metrics_time_range =
                             self.resolver_ep_metrics_time_range.next();
                         self.trigger_resolver_ep_metrics_load(event_tx);
+                    }
+                    _ => {}
+                },
+                MetricsKind::Dms => match key.code {
+                    KeyCode::Char('r') => self.trigger_dms_metrics_load(event_tx),
+                    KeyCode::Char('[') => {
+                        self.dms_metrics_time_range = self.dms_metrics_time_range.prev();
+                        self.trigger_dms_metrics_load(event_tx);
+                    }
+                    KeyCode::Char(']') => {
+                        self.dms_metrics_time_range = self.dms_metrics_time_range.next();
+                        self.trigger_dms_metrics_load(event_tx);
                     }
                     _ => {}
                 },
@@ -6196,6 +6266,23 @@ impl App {
             }
             if key.code == KeyCode::Char('f') && self.batch_view == BatchView::Jobs {
                 self.batch_job_filter = self.batch_job_filter.next();
+                self.update_search();
+                return Ok(());
+            }
+        }
+
+        // DMS (Tasks / Instances / Endpoints / Serverless) sub-tab switching
+        if !self.search_active && self.current_service == Some(ServiceType::Dms) {
+            let view = match key.code {
+                KeyCode::Char('1') => Some(DmsView::Tasks),
+                KeyCode::Char('2') => Some(DmsView::Instances),
+                KeyCode::Char('3') => Some(DmsView::Endpoints),
+                KeyCode::Char('4') => Some(DmsView::Serverless),
+                KeyCode::Tab => Some(self.dms_view.next()),
+                KeyCode::BackTab => Some(self.dms_view.prev()),
+                _ => None};
+            if let Some(v) = view {
+                self.dms_view = v;
                 self.update_search();
                 return Ok(());
             }
@@ -8399,6 +8486,7 @@ impl App {
             Some(ServiceType::Kinesis) => Some(self.kinesis_view.resource_type_filter()),
             Some(ServiceType::Redshift) => Some(self.redshift_view.resource_type_filter()),
             Some(ServiceType::Batch) => Some(self.batch_view.resource_type_filter()),
+            Some(ServiceType::Dms) => Some(self.dms_view.resource_type_filter()),
             Some(ServiceType::ControlTower) => {
                 Some(self.controltower_view.resource_type_filter())
             }
@@ -8577,6 +8665,9 @@ impl App {
                 self, rtype, batch_view, BatchView,
                 [Queues, ComputeEnvironments, Jobs, JobDefinitions]
             ),
+            Some(ServiceType::Dms) => {
+                align!(self, rtype, dms_view, DmsView, [Tasks, Instances, Endpoints, Serverless])
+            }
             Some(ServiceType::ControlTower) => {
                 align!(
                     self,
@@ -9553,6 +9644,10 @@ impl App {
         services.insert(
             ServiceType::Batch,
             Arc::new(batch::BatchService::new(aws_clients)),
+        );
+        services.insert(
+            ServiceType::Dms,
+            Arc::new(crate::aws::services::dms::DmsService::new(aws_clients)),
         );
         services.insert(
             ServiceType::Budgets,
@@ -16186,6 +16281,9 @@ impl App {
                     matches!(self.lazy.r53_zone_detail.get(&z.id), Some(crate::lazy::Lazy::Loaded(_)))
                 });
 
+        // A DMS task's group/stream are derived from its instance + ARN.
+        let dms_task_log = self.selected_dms_task_log();
+
         let (src, title) = {
             let Some(resource) = self.get_selected_resource() else {
                 self.error_message = Some("Nothing to tail".to_string());
@@ -16408,6 +16506,13 @@ impl App {
                         return;
                     }
                 }
+            } else if let Some((group, stream, name)) = dms_task_log {
+                (
+                    Src::Group {
+                        group,
+                        streams: vec![stream]},
+                    format!("DMS task {}", name),
+                )
             } else if let Some(fh) = resource
                 .as_any()
                 .downcast_ref::<crate::aws::services::kinesis::FirehoseStream>()
@@ -19166,6 +19271,8 @@ impl App {
             JumpView::Sh(v) => self.securityhub_view = *v,
             JumpView::AgentCore(v) => self.agentcore_view = *v,
             JumpView::Batch(v) => self.batch_view = *v,
+            JumpView::Dms(v) => self.dms_view = *v,
+            JumpView::S3Tables(v) => self.s3tables_view = *v,
             JumpView::Waf(v, scope) => {
                 self.waf_view = *v;
                 // CloudFront Web ACLs live in the CLOUDFRONT-scope variant; if we
@@ -19684,6 +19791,8 @@ impl App {
             Some(ServiceType::Inspector) => JumpView::Inspector(self.inspector_view),
             Some(ServiceType::Waf) => JumpView::Waf(self.waf_view, self.waf_scope),
             Some(ServiceType::Batch) => JumpView::Batch(self.batch_view),
+            Some(ServiceType::Dms) => JumpView::Dms(self.dms_view),
+            Some(ServiceType::S3Tables) => JumpView::S3Tables(self.s3tables_view),
             // AWS Config has sub-tabs (config_view) but no JumpView variant, so a
             // back-jump returns to the service with its default sub-tab.
             _ => JumpView::None}
@@ -20182,6 +20291,98 @@ impl App {
         }
         rec.last_service = service;
         rec.service_selector_was_open = service_picker_open;
+    }
+
+    /// What a key can visibly change, for the keycast to diff (see
+    /// `src/keycast.rs`). The overlay names are what the box prints.
+    fn keycast_view(&self) -> crate::keycast::View {
+        use crate::keycast::Input;
+        let overlay = if self.help_visible {
+            Some("help")
+        } else if self.service_selector.visible {
+            Some("services")
+        } else if self.region_selector.visible {
+            Some("regions")
+        } else if self.profile_selector.visible {
+            Some("profiles")
+        } else if self.org_role_selector.visible {
+            Some("accounts")
+        } else if self.quota_service_selector.visible {
+            Some("quota services")
+        } else if self.ct_filter_modal.visible {
+            Some("event filter")
+        } else if self.ssm_session_modal.visible {
+            Some("session")
+        } else if self.jump_list_visible {
+            Some("jump list")
+        } else if self.bookmarks_visible {
+            Some("bookmarks")
+        } else if self.macro_picker_visible {
+            Some("macros")
+        } else if self.message_history_visible {
+            Some("messages")
+        } else if self.cli_picker.is_some() {
+            Some("CLI commands")
+        } else if self.trail_in_pane.is_some() {
+            Some("change timeline")
+        } else if self.refs_in_pane.is_some() {
+            Some("referenced by")
+        } else if self.access_in_pane.is_some() {
+            Some("network access")
+        } else if self.metrics_in_pane.is_some() {
+            Some("metrics")
+        } else if self.log_tail.visible {
+            Some(match self.log_tail.mode {
+                crate::ui::widgets::log_tail::LogPaneMode::Tail => "live tail",
+                crate::ui::widgets::log_tail::LogPaneMode::Search => "log search",
+            })
+        } else if self.s3_object_browser.visible {
+            Some("object browser")
+        } else if self.ddb_browser.visible {
+            Some("item browser")
+        } else if self.memory_browser.visible {
+            Some("memory browser")
+        } else {
+            None
+        };
+        let input = if self.search_active {
+            Some(Input::Search)
+        } else if self.detail_search_active
+            || (self.log_tail.visible && (self.log_tail.filter_active || self.log_tail.query_active))
+        {
+            Some(Input::Filter)
+        } else if self.service_selector.visible
+            || self.region_selector.visible
+            || self.profile_selector.visible
+            || self.org_role_selector.visible
+            || self.quota_service_selector.visible
+        {
+            Some(Input::Picker)
+        } else {
+            None
+        };
+        crate::keycast::View {
+            service: self.current_service.map(|s| s.name().to_string()),
+            details_focused: self.details_focused,
+            section: self.macro_section_label(),
+            sub_tab: self.active_type_filter().map(str::to_string),
+            overlay,
+            input,
+            search_query: if self.search_active { self.search_query.clone() } else { String::new() },
+            full_width: self.layout_mode == LayoutMode::DetailsOnly,
+            selected_id: self.get_selected_resource_id(),
+        }
+    }
+
+    /// Name the key `handle_key` just ran (main loop, after dispatch).
+    pub fn keycast_tick(&mut self) {
+        if self.keycast.is_none() {
+            return;
+        }
+        let after = self.keycast_view();
+        if let Some(kc) = self.keycast.as_mut() {
+            kc.settle(&after, std::time::Instant::now());
+        }
     }
 
     /// Drop a trailing `s`/`R`/`P` — the key that opened a credential picker.
@@ -21483,7 +21684,8 @@ impl App {
     /// hint is shown exactly when `m` actually does something — detail panes
     /// rely on this rather than repeating an `m …` footer extra.
     pub fn supports_metrics_overlay(&self) -> bool {
-        self.is_selected_ec2_instance()
+        self.selected_dms_metrics_target().is_some()
+            || self.is_selected_ec2_instance()
             || self.is_selected_ebs_volume()
             || self.is_selected_lambda_function()
             || self.is_selected_ecs_service()
@@ -21584,7 +21786,8 @@ impl App {
     }
 
     pub fn supports_log_tail(&self) -> bool {
-        self.is_selected_cw_log_group()
+        self.selected_dms_task_log().is_some()
+            || self.is_selected_cw_log_group()
             // Runtime application logs + spans, gateway and memory vended logs.
             || self.is_selected_agentcore_tailable()
             || self.is_selected_ecs_task()
@@ -24348,6 +24551,61 @@ impl App {
                     );
                 }
             }
+            {
+                use crate::aws::services::dms::{
+                    DmsEndpoint, DmsEndpointDetailSection, DmsInstance, DmsInstanceDetailSection,
+                    DmsServerless, DmsServerlessDetailSection, DmsTask, DmsTaskDetailSection,
+                };
+                use crate::ui::widgets::details_pane as dp;
+                let tasks = || -> Vec<&DmsTask> {
+                    self.resources
+                        .iter()
+                        .filter_map(|r| r.as_any().downcast_ref::<DmsTask>())
+                        .collect()
+                };
+                if let Some(t) = resource.as_any().downcast_ref::<DmsTask>() {
+                    return dp::dms_task_section_lines(
+                        t,
+                        DmsTaskDetailSection::from_index(self.detail_section_idx),
+                        self.lazy.dms_table_stats.get(&t.arn),
+                        self.lazy.dms_assessments.get(&t.arn),
+                    );
+                }
+                if let Some(i) = resource.as_any().downcast_ref::<DmsInstance>() {
+                    let on_instance: Vec<&DmsTask> =
+                        tasks().into_iter().filter(|t| t.instance_arn == i.arn).collect();
+                    return dp::dms_instance_section_lines(
+                        i,
+                        DmsInstanceDetailSection::from_index(self.detail_section_idx),
+                        &on_instance,
+                    );
+                }
+                if let Some(e) = resource.as_any().downcast_ref::<DmsEndpoint>() {
+                    let using: Vec<&DmsTask> = tasks()
+                        .into_iter()
+                        .filter(|t| t.source_endpoint_arn == e.arn || t.target_endpoint_arn == e.arn)
+                        .collect();
+                    let serverless: Vec<&DmsServerless> = self
+                        .resources
+                        .iter()
+                        .filter_map(|r| r.as_any().downcast_ref::<DmsServerless>())
+                        .filter(|s| s.source_endpoint_arn == e.arn || s.target_endpoint_arn == e.arn)
+                        .collect();
+                    return dp::dms_endpoint_section_lines(
+                        e,
+                        DmsEndpointDetailSection::from_index(self.detail_section_idx),
+                        &using,
+                        &serverless,
+                    );
+                }
+                if let Some(sl) = resource.as_any().downcast_ref::<DmsServerless>() {
+                    return dp::dms_serverless_section_lines(
+                        sl,
+                        DmsServerlessDetailSection::from_index(self.detail_section_idx),
+                        self.lazy.dms_serverless_table_stats.get(&sl.arn),
+                    );
+                }
+            }
             if let Some(p) = resource
                 .as_any()
                 .downcast_ref::<crate::aws::services::fms::FmsPolicy>()
@@ -26257,6 +26515,43 @@ impl App {
                 ".json"
             } else {
                 ".yaml"
+            }
+        }
+
+        // DMS task / serverless replication on Settings: the raw table
+        // mappings + settings as one JSON document (the pane shows them
+        // pretty-printed; this is the copy you'd edit and feed back to the CLI).
+        {
+            use crate::aws::services::dms::{
+                DmsServerless, DmsServerlessDetailSection, DmsTask, DmsTaskDetailSection,
+            };
+            let parse = |s: &Option<String>| {
+                s.as_deref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .unwrap_or(serde_json::Value::Null)
+            };
+            let doc = if let Some(t) = any.downcast_ref::<DmsTask>() {
+                (DmsTaskDetailSection::from_index(self.detail_section_idx) == DmsTaskDetailSection::Settings)
+                    .then(|| serde_json::json!({
+                        "ReplicationTaskIdentifier": t.identifier,
+                        "TableMappings": parse(&t.table_mappings),
+                        "ReplicationTaskSettings": parse(&t.settings),
+                    }))
+            } else if let Some(sl) = any.downcast_ref::<DmsServerless>() {
+                (DmsServerlessDetailSection::from_index(self.detail_section_idx)
+                    == DmsServerlessDetailSection::Settings)
+                    .then(|| serde_json::json!({
+                        "ReplicationConfigIdentifier": sl.identifier,
+                        "TableMappings": parse(&sl.table_mappings),
+                        "ReplicationSettings": parse(&sl.settings),
+                    }))
+            } else {
+                None
+            };
+            if let Some(doc) = doc {
+                if let Ok(text) = serde_json::to_string_pretty(&doc) {
+                    return Some((text, ".json"));
+                }
             }
         }
 
@@ -29776,6 +30071,9 @@ impl App {
         } else if self.is_selected_code_build_project() {
             self.trigger_codebuild_metrics_load(event_tx);
             Some(MetricsKind::CodeBuild)
+        } else if self.selected_dms_metrics_target().is_some() {
+            self.trigger_dms_metrics_load(event_tx);
+            Some(MetricsKind::Dms)
         } else {
             None
         };
@@ -30192,6 +30490,144 @@ impl App {
                 }
             });
         }
+    }
+
+    // ── DMS: metrics target, log location, lazy sections ─────────────────────
+
+    /// What the `m` overlay charts for the selected DMS row: `(key ARN,
+    /// flavor, instance identifier, task resource id)`. A task needs its
+    /// instance's name for the metrics dimension — resolved at load time, so a
+    /// task whose instance wasn't listed (permission gap) has no metrics.
+    fn selected_dms_metrics_target(
+        &self,
+    ) -> Option<(String, crate::aws::services::dms::DmsMetricsFlavor, String, Option<String>)> {
+        use crate::aws::services::dms::{arn_resource_id, DmsInstance, DmsMetricsFlavor, DmsTask};
+        let r = self.get_selected_resource()?;
+        if let Some(t) = r.as_any().downcast_ref::<DmsTask>() {
+            return Some((
+                t.arn.clone(),
+                DmsMetricsFlavor::Task,
+                t.instance_id.clone()?,
+                Some(arn_resource_id(&t.arn).to_string()),
+            ));
+        }
+        let i = r.as_any().downcast_ref::<DmsInstance>()?;
+        Some((i.arn.clone(), DmsMetricsFlavor::Instance, i.identifier.clone(), None))
+    }
+
+    /// `(log group, stream, title)` for `t` on a DMS task — `None` unless the
+    /// task's instance is known (the group is named after it).
+    fn selected_dms_task_log(&self) -> Option<(String, String, String)> {
+        let t = self
+            .get_selected_resource()?
+            .as_any()
+            .downcast_ref::<crate::aws::services::dms::DmsTask>()?;
+        Some((t.log_group()?, t.log_stream(), t.identifier.clone()))
+    }
+
+    fn trigger_dms_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some((arn, flavor, instance_id, task_id)) = self.selected_dms_metrics_target() else {
+            return;
+        };
+        let time_range = self.dms_metrics_time_range;
+        self.dms_metrics
+            .insert(arn.clone(), crate::aws::services::dms::DmsMetricsState::Loading);
+        let cw = self.aws_clients.cloudwatch_client();
+        let tx = event_tx.clone();
+        tokio::spawn(async move {
+            if let Ok(data) = crate::aws::services::dms::fetch_dms_metrics(
+                cw,
+                flavor,
+                instance_id,
+                task_id,
+                time_range,
+            )
+            .await
+            {
+                let _ = tx.send(crate::event::Event::DmsMetricsLoaded { arn, data });
+            }
+        });
+    }
+
+    fn selected_dms_task_arn(&self) -> Option<String> {
+        self.get_selected_resource()?
+            .as_any()
+            .downcast_ref::<crate::aws::services::dms::DmsTask>()
+            .map(|t| t.arn.clone())
+    }
+
+    pub(crate) fn trigger_dms_table_stats_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::dms::DmsTaskDetailSection;
+        if DmsTaskDetailSection::from_index(self.detail_section_idx) != DmsTaskDetailSection::Tables {
+            return;
+        }
+        let Some(arn) = self.selected_dms_task_arn() else {
+            return;
+        };
+        let client = self.aws_clients.dms_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.dms_table_stats,
+            arn.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::dms::fetch_task_table_stats(client, arn)
+                    .await
+                    .map_err(|e| format!("Table statistics unavailable: {}", e))
+            },
+        );
+    }
+
+    pub(crate) fn trigger_dms_assessments_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::dms::DmsTaskDetailSection;
+        if DmsTaskDetailSection::from_index(self.detail_section_idx)
+            != DmsTaskDetailSection::Assessments
+        {
+            return;
+        }
+        let Some(arn) = self.selected_dms_task_arn() else {
+            return;
+        };
+        let client = self.aws_clients.dms_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.dms_assessments,
+            arn.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::dms::fetch_task_assessments(client, arn)
+                    .await
+                    .map_err(|e| format!("Assessment runs unavailable: {}", e))
+            },
+        );
+    }
+
+    pub(crate) fn trigger_dms_serverless_table_stats_load(
+        &mut self,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
+        use crate::aws::services::dms::{DmsServerless, DmsServerlessDetailSection};
+        if DmsServerlessDetailSection::from_index(self.detail_section_idx)
+            != DmsServerlessDetailSection::Tables
+        {
+            return;
+        }
+        let Some(arn) = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<DmsServerless>())
+            .map(|s| s.arn.clone())
+        else {
+            return;
+        };
+        let client = self.aws_clients.dms_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.dms_serverless_table_stats,
+            arn.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::dms::fetch_serverless_table_stats(client, arn)
+                    .await
+                    .map_err(|e| format!("Table statistics unavailable: {}", e))
+            },
+        );
     }
 
     fn trigger_codebuild_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {

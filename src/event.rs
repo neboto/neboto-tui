@@ -292,6 +292,12 @@ pub enum Event {
         data: crate::aws::services::kinesis::FirehoseMetricsData,
     },
 
+    /// DMS task / replication instance CloudWatch metrics (`m` overlay),
+    /// keyed by ARN.
+    DmsMetricsLoaded {
+        arn: String,
+        data: crate::aws::services::dms::DmsMetricsData,
+    },
     /// Redshift cluster CloudWatch metrics (`m` overlay), keyed by cluster id.
     RedshiftMetricsLoaded {
         cluster_id: String,

@@ -204,7 +204,9 @@ impl S3TableBucket {
             .r#type()
             .map(|t| t.as_str().to_string())
             .unwrap_or_else(|| "customer".to_string());
-        let search_blob = format!("{} {} {}", name, b.owner_account_id(), bucket_type);
+        // The ARN is in the blob because jumps (and pasted ARNs) search by it —
+        // the id is the ARN. Tables already include theirs.
+        let search_blob = format!("{} {} {} {}", name, b.owner_account_id(), bucket_type, b.arn());
         Self {
             arn: b.arn().to_string(),
             name,
