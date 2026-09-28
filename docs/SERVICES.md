@@ -2441,9 +2441,13 @@ the service you're touching.
   - **Ids are the full ARN** for both types — table-bucket APIs are
     ARN-keyed, and table names are only unique per namespace. The
     `"s3tables"` `arn_jump_target` arm therefore jumps with the whole ARN
-    (`bucket/<name>` and `bucket/<name>/table/<uuid>` both resolve; the
-    sub-tab aligns to the resolved type via `align!`). A table's pane
-    renders its Bucket ARN row as the jump back to its table bucket.
+    (`bucket/<name>` and `bucket/<name>/table/<uuid>` both resolve) with
+    `JumpView::S3Tables(view)` — Buckets, or Tables when the ARN has
+    `/table/`. The view must travel with the target: a same-service jump
+    keeps the current sub-tab, and `align!` only runs for `@all` /
+    refs-lens jumps. A table's pane renders its Bucket ARN row as the jump
+    back to its table bucket; the bucket's `search_text()` includes its ARN
+    because the jump searches by it.
   - **Bucket pane** (Details / Namespaces / Maintenance / Policy / Tags):
     Details folds in a lazy `GetTableBucketEncryption` — a **404 means the
     SSE-S3 default**, not an error (`is_not_found_exception()` → "SSE-S3
