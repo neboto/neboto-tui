@@ -20,12 +20,20 @@ Set BorderRadius 8
 Env NEBOTO_CONFIG "demo/neboto.toml"
 # `e` opens the log in $EDITOR; less reads well on camera and q returns.
 Env EDITOR "less"
+# less's default prompt shows the temp file's path; say how to get back instead.
+Env LESS "-Psq returns to neboto"
 
 # ── Boot off-camera ──────────────────────────────────────────────────────────
 Hide
-Type "./target/release/neboto --demo -s ecs"
+# Load CloudWatch first, so the timeline (W) can merge alarm history instead
+# of noting "@cloudwatch not loaded", then switch to the scene's service.
+Type "./target/release/neboto --demo -s cw"
 Enter
 Sleep 3s
+Type "@ecs"
+Sleep 300ms
+Enter
+Sleep 2.5s
 Show
 Sleep 1s
 
@@ -64,7 +72,7 @@ Sleep 2s
 
 # The container's log: DATABASE_URL is not set.
 Type "e"
-Sleep 4s
+Sleep 5s
 Type "q"
 Sleep 1s
 

@@ -25,9 +25,15 @@ Env NEBOTO_CONFIG "demo/neboto.toml"
 
 # ── Boot off-camera ──────────────────────────────────────────────────────────
 Hide
-Type "./target/release/neboto --demo -s cfn"
+# Load CloudWatch first, so the timeline (W) can merge alarm history instead
+# of noting "@cloudwatch not loaded", then switch to the scene's service.
+Type "./target/release/neboto --demo -s cw"
 Enter
 Sleep 3s
+Type "@cfn"
+Sleep 300ms
+Enter
+Sleep 2.5s
 Show
 Sleep 1s
 
@@ -48,7 +54,7 @@ Sleep 2s
 Type "Z"
 Sleep 600ms
 Type "W"
-Sleep 3.5s
+Sleep 5s
 
 # Leave the app before the recording ends so ttyd does not hold the tty.
 Hide

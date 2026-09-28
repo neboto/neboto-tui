@@ -27,10 +27,13 @@ Sleep 3s
 Show
 Sleep 1s
 
-# orders-api is the first row. t starts the tail, seeded with the last 15m.
+# orders-api is the first row. t starts the tail, seeded with the last 15m;
+# Z then gives the tail the full width so the log lines read in full.
 Sleep 1s
 Type "t"
-Sleep 5s
+Sleep 1.5s
+Type "Z"
+Sleep 4s
 
 # Filter to the errors; new ones keep arriving.
 Type "/"
@@ -38,7 +41,11 @@ Sleep 300ms
 Type "ERROR"
 Sleep 500ms
 Enter
-Sleep 5s
+Sleep 2.5s
+
+# w wraps long lines, so the throttle message itself is readable.
+Type "w"
+Sleep 4.5s
 
 # Leave the app before the recording ends so ttyd does not hold the tty.
 Hide

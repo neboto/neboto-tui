@@ -19,7 +19,13 @@ Record from the repo root, with the tools the main tape lists (`vhs` v0.11.0,
 ```bash
 cargo build --release
 for t in demo/scenes/*.tape; do vhs "$t"; done   # writes demo/scenes/<name>.gif + .mp4
+# (go install puts vhs in ~/go/bin, which may not be on PATH)
 ```
+
+Each tape loads CloudWatch off-camera before switching to its service, so the
+change timeline (`W`) can merge alarm history instead of noting that
+CloudWatch isn't loaded. The crash-log scene sets `EDITOR=less` with a
+`LESS` prompt, so the frame doesn't show a temp file path.
 
 Timestamps in the demo are relative to now, so a take never looks stale. The
 live tail is generated per request (`src/demo/generate.rs`), so it keeps

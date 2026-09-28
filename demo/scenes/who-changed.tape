@@ -21,25 +21,31 @@ Env NEBOTO_CONFIG "demo/neboto.toml"
 
 # ── Boot off-camera ──────────────────────────────────────────────────────────
 Hide
-Type "./target/release/neboto --demo -s ec2"
+# Load CloudWatch first, so the timeline (W) can merge alarm history instead
+# of noting "@cloudwatch not loaded", then switch to the scene's service.
+Type "./target/release/neboto --demo -s cw"
 Enter
 Sleep 3s
+Type "@ec2"
+Sleep 300ms
+Enter
+Sleep 2.5s
 Show
 Sleep 1s
 
 # Security Groups tab; web-sg is the first row. Open it: the inbound rules,
 # with the open SSH rule in the warning colour.
 Type "2"
-Sleep 1.2s
+Sleep 2s
 Enter
-Sleep 2.5s
+Sleep 3.5s
 
 # The change timeline: jsmith opened port 22 five days ago.
 # Z: give the pane the full width so the lens columns fit.
 Type "Z"
 Sleep 600ms
 Type "W"
-Sleep 3.5s
+Sleep 5s
 
 # Leave the app before the recording ends so ttyd does not hold the tty.
 Hide
