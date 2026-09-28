@@ -38,7 +38,10 @@ Sleep 1s
 Type "2"
 Sleep 2s
 Enter
-Sleep 3.5s
+Sleep 2s
+# This frame is also neboto.dev's still (a security group in the split pane).
+Screenshot demo/screenshot.png
+Sleep 1.5s
 
 # The change timeline: jsmith opened port 22 five days ago.
 # Z: give the pane the full width so the lens columns fit.

@@ -9,10 +9,10 @@ Built in Rust with [Ratatui](https://ratatui.rs/). Website and guide:
 
 <p align="center">
   <img src="demo/neboto.gif" width="100%"
-       alt="neboto demo: filter EC2 instances, open the detail pane, jump to the subnet, its VPC, the security group and back to an instance">
+       alt="neboto demo: an ECS service is half healthy; its deployments show revision 15 failed and rolled back; the change timeline shows CI deployed it; the stopped task's log says DATABASE_URL is not set">
 </p>
 
-https://github.com/user-attachments/assets/f7a4dee9-d38d-4624-b883-4df75489636d
+<p align="center"><em>Recorded with <code>neboto --demo</code>. Nothing on screen is a real account.</em></p>
 
 **Try it without an AWS account:** `neboto --demo` opens a made-up account
 with a few problems planted in it (a failed ECS deploy, SSH open to the world,
@@ -48,6 +48,23 @@ auditably read-only. See [Why read-only](#why-read-only).
 - **Themes** — 10 presets (light and dark) plus per-color overrides.
 - **Export** (`X` / `Ctrl-X`) to JSON, CSV and/or Markdown (`export_formats`),
   including deep exports of a multi-row selection.
+
+---
+
+## See it in action
+
+Each clip is one workflow against `neboto --demo`. Click for full size.
+
+<table>
+  <tr>
+    <td width="50%"><a href="demo/scenes/follow-links.gif"><img src="demo/scenes/follow-links.gif" alt="Following links: an ECS service to its target group to the load balancer, back, then the service's effective network access"></a><br><b>Follow the links.</b> <kbd>Enter</kbd> from an ECS service to its target group and load balancer, <kbd>Ctrl-O</kbd> back, then <kbd>N</kbd> for the service's effective network access.</td>
+    <td width="50%"><a href="demo/scenes/who-changed.gif"><img src="demo/scenes/who-changed.gif" alt="A security group with SSH open to the world; the change timeline shows who opened it"></a><br><b>Who changed this?</b> SSH is open to the world; <kbd>W</kbd> shows who opened it and when.</td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="demo/scenes/lambda-tail.gif"><img src="demo/scenes/lambda-tail.gif" alt="Live-tailing a Lambda function's logs, filtered to errors"></a><br><b>Tail the logs.</b> <kbd>t</kbd> live-tails a Lambda; <kbd>/</kbd> filters to the DynamoDB throttles.</td>
+    <td width="50%"><a href="demo/scenes/stack-drift.gif"><img src="demo/scenes/stack-drift.gif" alt="A drifted CloudFormation stack; the change timeline on the drifted resource shows the console edit behind it"></a><br><b>Explain the drift.</b> A stack's Drift section names the changed property; <kbd>W</kbd> on that resource finds the console edit.</td>
+  </tr>
+</table>
 
 ---
 
