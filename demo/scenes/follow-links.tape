@@ -28,13 +28,15 @@ Env NEBOTO_CONFIG "demo/neboto.toml"
 Hide
 # Load CloudWatch first, so the timeline (W) can merge alarm history instead
 # of noting "@cloudwatch not loaded", then switch to the scene's service.
-Type "./target/release/neboto --demo -s cw"
+Type "./target/release/neboto --demo --show-keys -s cw"
 Enter
 Sleep 3s
 Type "@ecs"
 Sleep 300ms
 Enter
 Sleep 2.5s
+# --show-keys: let the boot's keys fade (2.5s) before the camera rolls.
+Sleep 1s
 Show
 Sleep 1s
 

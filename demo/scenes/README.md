@@ -26,6 +26,9 @@ for t in demo/scenes/*.tape; do vhs "$t"; done   # writes demo/scenes/<name>.gif
 # (go install puts vhs in ~/go/bin, which may not be on PATH)
 ```
 
+Every tape runs with `--show-keys` (#50), so a corner box names each key and
+what it did; the hidden boot waits for its own keys to fade before `Show`.
+
 Each tape loads CloudWatch off-camera before switching to its service, so the
 change timeline (`W`) can merge alarm history instead of noting that
 CloudWatch isn't loaded. The hero's crash log sets `EDITOR=less` with a

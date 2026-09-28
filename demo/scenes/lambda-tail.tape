@@ -21,7 +21,7 @@ Env NEBOTO_CONFIG "demo/neboto.toml"
 
 # ── Boot off-camera ──────────────────────────────────────────────────────────
 Hide
-Type "./target/release/neboto --demo -s lambda"
+Type "./target/release/neboto --demo --show-keys -s lambda"
 Enter
 Sleep 3s
 Show

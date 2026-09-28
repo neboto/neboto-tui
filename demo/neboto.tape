@@ -12,6 +12,9 @@
 #     (v0.12.0 prints "Creating …" and writes nothing — charmbracelet/vhs#787)
 #   vhs demo/neboto.tape              # writes demo/neboto.gif + .mp4 + poster.png
 #
+# Keys: `--show-keys` puts each key, and what it did, in a corner box — the
+# clip is silent, so that box is how a viewer knows one key did each step.
+#
 # Data: `neboto --demo`, the made-up acme-prod account in src/demo/ — no AWS
 # account, no emulator, the same data every take, timestamps relative to now.
 # The shorter clips for single workflows live in demo/scenes/.
@@ -49,7 +52,7 @@ Env LESS "-Psq returns to neboto"
 # ── Boot off-camera ───────────────────────────────────────────────────────────
 # CloudWatch first, so W can merge alarm history; then ECS on the Services tab.
 Hide
-Type "./target/release/neboto --demo -s cw"
+Type "./target/release/neboto --demo --show-keys -s cw"
 Enter
 Sleep 3s
 Type "@ecs"
@@ -57,7 +60,8 @@ Sleep 300ms
 Enter
 Sleep 2.5s
 Type "2"
-Sleep 1s
+# --show-keys: let the boot's keys fade (2.5s) before the camera rolls.
+Sleep 2.8s
 Show
 
 # The first frame doubles as the site's video poster.
