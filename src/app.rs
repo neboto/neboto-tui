@@ -431,6 +431,7 @@ pub enum MetricsKind {
     GlueJob,
     Redshift,
     RedshiftSl,
+    Dms,
     VpcEndpoint,
     Tgw,
     LogGroup,
@@ -624,6 +625,56 @@ impl RedshiftView {
 /// Load states for the Redshift cluster / serverless workgroup `m` metrics.
 pub use crate::aws::services::redshift::{RedshiftMetricsState, RedshiftSlMetricsState};
 
+/// Sub-tab view for X-Ray (Service Map / Traces / Groups & Sampling).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum XRayView {
+    ServiceMap,
+    Traces,
+    Config}
+
+impl XRayView {
+    pub fn resource_type_filter(&self) -> &'static str {
+        match self {
+            XRayView::ServiceMap => "X-Ray Service",
+            XRayView::Traces => "X-Ray Trace",
+            XRayView::Config => "X-Ray Group|X-Ray Sampling Rule"}
+    }
+}
+
+/// Sub-tab view for DMS (Tasks / Instances / Endpoints / Serverless).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum DmsView {
+    Tasks,
+    Instances,
+    Endpoints,
+    Serverless}
+
+impl DmsView {
+    pub fn resource_type_filter(&self) -> &'static str {
+        match self {
+            DmsView::Tasks => "DMS Task",
+            DmsView::Instances => "DMS Replication Instance",
+            DmsView::Endpoints => "DMS Endpoint",
+            DmsView::Serverless => "DMS Serverless Replication"}
+    }
+
+    fn next(self) -> Self {
+        match self {
+            DmsView::Tasks => DmsView::Instances,
+            DmsView::Instances => DmsView::Endpoints,
+            DmsView::Endpoints => DmsView::Serverless,
+            DmsView::Serverless => DmsView::Tasks}
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            DmsView::Tasks => DmsView::Serverless,
+            DmsView::Instances => DmsView::Tasks,
+            DmsView::Endpoints => DmsView::Instances,
+            DmsView::Serverless => DmsView::Endpoints}
+    }
+}
+
 /// Sub-tab view for the Athena service.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AthenaView {
@@ -807,6 +858,8 @@ pub enum JumpView {
     Sfn(SfnView),
     Sh(SecurityHubView),
     AgentCore(AgentCoreView),
+    Dms(DmsView),
+    S3Tables(S3TablesView),
     /// WAF carries both the sub-tab and the scope (CLOUDFRONT vs REGIONAL) — a
     /// CloudFront distribution's Web ACL is always CLOUDFRONT scope, which lives
     /// in a separate (us-east-1) variant of the WAF list.
@@ -1985,6 +2038,14 @@ pub struct App {
     pub redshift_metrics: HashMap<String, RedshiftMetricsState>,
     pub redshift_sl_metrics: HashMap<String, RedshiftSlMetricsState>,
     pub redshift_metrics_time_range: MetricsTimeRange,
+    pub xray_view: XRayView,
+    /// X-Ray list look-back window (`[`/`]` in the list pane); part of the
+    /// cache variant, so flipping back is instant.
+    pub xray_window: crate::aws::services::xray::XRayWindow,
+    pub dms_view: DmsView,
+    /// DMS task / replication instance `m` metrics, keyed by ARN.
+    pub dms_metrics: HashMap<String, crate::aws::services::dms::DmsMetricsState>,
+    pub dms_metrics_time_range: MetricsTimeRange,
 
     // Firehose detail section state (tags/metrics keyed by delivery-stream name)
     pub firehose_metrics: HashMap<String, FirehoseMetricsState>,
@@ -2768,6 +2829,11 @@ impl App {
             redshift_metrics: HashMap::new(),
             redshift_sl_metrics: HashMap::new(),
             redshift_metrics_time_range: MetricsTimeRange::OneHour,
+            xray_view: XRayView::ServiceMap,
+            xray_window: crate::aws::services::xray::XRayWindow::default(),
+            dms_view: DmsView::Tasks,
+            dms_metrics: HashMap::new(),
+            dms_metrics_time_range: MetricsTimeRange::OneHour,
             firehose_metrics: HashMap::new(),
             firehose_metrics_time_range: MetricsTimeRange::OneHour,
 
@@ -3092,6 +3158,10 @@ impl App {
                     id,
                     crate::aws::services::route53resolver::ResolverEpMetricsState::Loaded(data),
                 );
+            }
+            Event::DmsMetricsLoaded { arn, data } => {
+                self.dms_metrics
+                    .insert(arn, crate::aws::services::dms::DmsMetricsState::Loaded(data));
             }
             Event::CodeBuildMetricsLoaded { arn, data } => {
                 self.codebuild_metrics.insert(
@@ -4848,6 +4918,18 @@ impl App {
                     }
                     _ => {}
                 },
+                MetricsKind::Dms => match key.code {
+                    KeyCode::Char('r') => self.trigger_dms_metrics_load(event_tx),
+                    KeyCode::Char('[') => {
+                        self.dms_metrics_time_range = self.dms_metrics_time_range.prev();
+                        self.trigger_dms_metrics_load(event_tx);
+                    }
+                    KeyCode::Char(']') => {
+                        self.dms_metrics_time_range = self.dms_metrics_time_range.next();
+                        self.trigger_dms_metrics_load(event_tx);
+                    }
+                    _ => {}
+                },
                 MetricsKind::CodeBuild => match key.code {
                     KeyCode::Char('r') => self.trigger_codebuild_metrics_load(event_tx),
                     KeyCode::Char('[') => {
@@ -6117,6 +6199,58 @@ impl App {
                 _ => None};
             if let Some(v) = view {
                 self.redshift_view = v;
+                self.update_search();
+                return Ok(());
+            }
+        }
+
+        // X-Ray (Service Map / Traces / Groups & Sampling) sub-tab switching,
+        // plus `[`/`]` narrowing/widening the look-back window (list pane —
+        // the detail pane's `[[`/`]]` chords are handled in its own block).
+        if !self.search_active && self.current_service == Some(ServiceType::XRay) {
+            let view = match key.code {
+                KeyCode::Char('1') => Some(XRayView::ServiceMap),
+                KeyCode::Char('2') => Some(XRayView::Traces),
+                KeyCode::Char('3') => Some(XRayView::Config),
+                KeyCode::Tab => Some(match self.xray_view {
+                    XRayView::ServiceMap => XRayView::Traces,
+                    XRayView::Traces => XRayView::Config,
+                    XRayView::Config => XRayView::ServiceMap}),
+                KeyCode::BackTab => Some(match self.xray_view {
+                    XRayView::ServiceMap => XRayView::Config,
+                    XRayView::Traces => XRayView::ServiceMap,
+                    XRayView::Config => XRayView::Traces}),
+                _ => None};
+            if let Some(v) = view {
+                self.xray_view = v;
+                self.update_search();
+                return Ok(());
+            }
+            let window = match key.code {
+                KeyCode::Char('[') => Some(self.xray_window.narrower()),
+                KeyCode::Char(']') => Some(self.xray_window.wider()),
+                _ => None};
+            if let Some(w) = window {
+                if w != self.xray_window {
+                    self.xray_window = w;
+                    self.apply_xray_window();
+                }
+                return Ok(());
+            }
+        }
+
+        // DMS (Tasks / Instances / Endpoints / Serverless) sub-tab switching
+        if !self.search_active && self.current_service == Some(ServiceType::Dms) {
+            let view = match key.code {
+                KeyCode::Char('1') => Some(DmsView::Tasks),
+                KeyCode::Char('2') => Some(DmsView::Instances),
+                KeyCode::Char('3') => Some(DmsView::Endpoints),
+                KeyCode::Char('4') => Some(DmsView::Serverless),
+                KeyCode::Tab => Some(self.dms_view.next()),
+                KeyCode::BackTab => Some(self.dms_view.prev()),
+                _ => None};
+            if let Some(v) = view {
+                self.dms_view = v;
                 self.update_search();
                 return Ok(());
             }
@@ -8319,6 +8453,8 @@ impl App {
             Some(ServiceType::StepFunctions) => Some(self.sfn_view.resource_type_filter()),
             Some(ServiceType::Kinesis) => Some(self.kinesis_view.resource_type_filter()),
             Some(ServiceType::Redshift) => Some(self.redshift_view.resource_type_filter()),
+            Some(ServiceType::XRay) => Some(self.xray_view.resource_type_filter()),
+            Some(ServiceType::Dms) => Some(self.dms_view.resource_type_filter()),
             Some(ServiceType::ControlTower) => {
                 Some(self.controltower_view.resource_type_filter())
             }
@@ -8492,6 +8628,12 @@ impl App {
             }
             Some(ServiceType::Redshift) => {
                 align!(self, rtype, redshift_view, RedshiftView, [Clusters, Workgroups, Snapshots])
+            }
+            Some(ServiceType::XRay) => {
+                align!(self, rtype, xray_view, XRayView, [ServiceMap, Traces, Config])
+            }
+            Some(ServiceType::Dms) => {
+                align!(self, rtype, dms_view, DmsView, [Tasks, Instances, Endpoints, Serverless])
             }
             Some(ServiceType::ControlTower) => {
                 align!(
@@ -9456,6 +9598,14 @@ impl App {
             Arc::new(redshift::RedshiftService::new(aws_clients)),
         );
         services.insert(
+            ServiceType::XRay,
+            Arc::new(xray::XRayService::new(aws_clients, xray::XRayWindow::default())),
+        );
+        services.insert(
+            ServiceType::Dms,
+            Arc::new(crate::aws::services::dms::DmsService::new(aws_clients)),
+        );
+        services.insert(
             ServiceType::Budgets,
             Arc::new(budgets::BudgetsService::new(aws_clients)),
         );
@@ -9644,6 +9794,14 @@ impl App {
             Arc::new(crate::aws::services::ram::RamService::new(
                 &self.aws_clients,
                 self.ram_owner.clone(),
+            )),
+        );
+        // Preserve the X-Ray window (build_services seeds the default).
+        self.services.insert(
+            ServiceType::XRay,
+            Arc::new(crate::aws::services::xray::XRayService::new(
+                &self.aws_clients,
+                self.xray_window,
             )),
         );
         // Preserve the WAF scope (build_services seeds Regional).
@@ -16081,6 +16239,9 @@ impl App {
                     matches!(self.lazy.r53_zone_detail.get(&z.id), Some(crate::lazy::Lazy::Loaded(_)))
                 });
 
+        // A DMS task's group/stream are derived from its instance + ARN.
+        let dms_task_log = self.selected_dms_task_log();
+
         let (src, title) = {
             let Some(resource) = self.get_selected_resource() else {
                 self.error_message = Some("Nothing to tail".to_string());
@@ -16303,6 +16464,13 @@ impl App {
                         return;
                     }
                 }
+            } else if let Some((group, stream, name)) = dms_task_log {
+                (
+                    Src::Group {
+                        group,
+                        streams: vec![stream]},
+                    format!("DMS task {}", name),
+                )
             } else if let Some(fh) = resource
                 .as_any()
                 .downcast_ref::<crate::aws::services::kinesis::FirehoseStream>()
@@ -19036,6 +19204,8 @@ impl App {
             JumpView::Sfn(v) => self.sfn_view = *v,
             JumpView::Sh(v) => self.securityhub_view = *v,
             JumpView::AgentCore(v) => self.agentcore_view = *v,
+            JumpView::Dms(v) => self.dms_view = *v,
+            JumpView::S3Tables(v) => self.s3tables_view = *v,
             JumpView::Waf(v, scope) => {
                 self.waf_view = *v;
                 // CloudFront Web ACLs live in the CLOUDFRONT-scope variant; if we
@@ -19553,6 +19723,8 @@ impl App {
             Some(ServiceType::Route53Resolver) => JumpView::Resolver(self.resolver_view),
             Some(ServiceType::Inspector) => JumpView::Inspector(self.inspector_view),
             Some(ServiceType::Waf) => JumpView::Waf(self.waf_view, self.waf_scope),
+            Some(ServiceType::Dms) => JumpView::Dms(self.dms_view),
+            Some(ServiceType::S3Tables) => JumpView::S3Tables(self.s3tables_view),
             // AWS Config has sub-tabs (config_view) but no JumpView variant, so a
             // back-jump returns to the service with its default sub-tab.
             _ => JumpView::None}
@@ -21444,7 +21616,8 @@ impl App {
     /// hint is shown exactly when `m` actually does something — detail panes
     /// rely on this rather than repeating an `m …` footer extra.
     pub fn supports_metrics_overlay(&self) -> bool {
-        self.is_selected_ec2_instance()
+        self.selected_dms_metrics_target().is_some()
+            || self.is_selected_ec2_instance()
             || self.is_selected_ebs_volume()
             || self.is_selected_lambda_function()
             || self.is_selected_ecs_service()
@@ -21545,7 +21718,8 @@ impl App {
     }
 
     pub fn supports_log_tail(&self) -> bool {
-        self.is_selected_cw_log_group()
+        self.selected_dms_task_log().is_some()
+            || self.is_selected_cw_log_group()
             // Runtime application logs + spans, gateway and memory vended logs.
             || self.is_selected_agentcore_tailable()
             || self.is_selected_ecs_task()
@@ -24266,6 +24440,80 @@ impl App {
                     crate::aws::services::redshift::RedshiftWorkgroupDetailSection::from_index(self.detail_section_idx),
                 );
             }
+            if let Some(n) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::xray::XRayNode>()
+            {
+                return crate::ui::widgets::details_pane::xray_node_section_lines(
+                    n,
+                    crate::aws::services::xray::XRayNodeDetailSection::from_index(self.detail_section_idx),
+                );
+            }
+            if let Some(t) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::xray::XRayTrace>()
+            {
+                return crate::ui::widgets::details_pane::xray_trace_section_lines(
+                    t,
+                    crate::aws::services::xray::XRayTraceDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.xray_traces.get(&t.trace_id),
+                );
+            }
+            {
+                use crate::aws::services::dms::{
+                    DmsEndpoint, DmsEndpointDetailSection, DmsInstance, DmsInstanceDetailSection,
+                    DmsServerless, DmsServerlessDetailSection, DmsTask, DmsTaskDetailSection,
+                };
+                use crate::ui::widgets::details_pane as dp;
+                let tasks = || -> Vec<&DmsTask> {
+                    self.resources
+                        .iter()
+                        .filter_map(|r| r.as_any().downcast_ref::<DmsTask>())
+                        .collect()
+                };
+                if let Some(t) = resource.as_any().downcast_ref::<DmsTask>() {
+                    return dp::dms_task_section_lines(
+                        t,
+                        DmsTaskDetailSection::from_index(self.detail_section_idx),
+                        self.lazy.dms_table_stats.get(&t.arn),
+                        self.lazy.dms_assessments.get(&t.arn),
+                    );
+                }
+                if let Some(i) = resource.as_any().downcast_ref::<DmsInstance>() {
+                    let on_instance: Vec<&DmsTask> =
+                        tasks().into_iter().filter(|t| t.instance_arn == i.arn).collect();
+                    return dp::dms_instance_section_lines(
+                        i,
+                        DmsInstanceDetailSection::from_index(self.detail_section_idx),
+                        &on_instance,
+                    );
+                }
+                if let Some(e) = resource.as_any().downcast_ref::<DmsEndpoint>() {
+                    let using: Vec<&DmsTask> = tasks()
+                        .into_iter()
+                        .filter(|t| t.source_endpoint_arn == e.arn || t.target_endpoint_arn == e.arn)
+                        .collect();
+                    let serverless: Vec<&DmsServerless> = self
+                        .resources
+                        .iter()
+                        .filter_map(|r| r.as_any().downcast_ref::<DmsServerless>())
+                        .filter(|s| s.source_endpoint_arn == e.arn || s.target_endpoint_arn == e.arn)
+                        .collect();
+                    return dp::dms_endpoint_section_lines(
+                        e,
+                        DmsEndpointDetailSection::from_index(self.detail_section_idx),
+                        &using,
+                        &serverless,
+                    );
+                }
+                if let Some(sl) = resource.as_any().downcast_ref::<DmsServerless>() {
+                    return dp::dms_serverless_section_lines(
+                        sl,
+                        DmsServerlessDetailSection::from_index(self.detail_section_idx),
+                        self.lazy.dms_serverless_table_stats.get(&sl.arn),
+                    );
+                }
+            }
             if let Some(p) = resource
                 .as_any()
                 .downcast_ref::<crate::aws::services::fms::FmsPolicy>()
@@ -26178,6 +26426,53 @@ impl App {
             }
         }
 
+        // X-Ray trace on Segments: the raw trace (segment documents parsed).
+        if let Some(t) = any.downcast_ref::<crate::aws::services::xray::XRayTrace>() {
+            use crate::aws::services::xray::XRayTraceDetailSection as S;
+            if S::from_index(self.detail_section_idx) == S::Segments {
+                if let Some(crate::lazy::Lazy::Loaded(d)) = self.lazy.xray_traces.get(&t.trace_id) {
+                    return Some((d.raw.clone(), ".json"));
+                }
+            }
+        }
+
+        // DMS task / serverless replication on Settings: the raw table
+        // mappings + settings as one JSON document (the pane shows them
+        // pretty-printed; this is the copy you'd edit and feed back to the CLI).
+        {
+            use crate::aws::services::dms::{
+                DmsServerless, DmsServerlessDetailSection, DmsTask, DmsTaskDetailSection,
+            };
+            let parse = |s: &Option<String>| {
+                s.as_deref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .unwrap_or(serde_json::Value::Null)
+            };
+            let doc = if let Some(t) = any.downcast_ref::<DmsTask>() {
+                (DmsTaskDetailSection::from_index(self.detail_section_idx) == DmsTaskDetailSection::Settings)
+                    .then(|| serde_json::json!({
+                        "ReplicationTaskIdentifier": t.identifier,
+                        "TableMappings": parse(&t.table_mappings),
+                        "ReplicationTaskSettings": parse(&t.settings),
+                    }))
+            } else if let Some(sl) = any.downcast_ref::<DmsServerless>() {
+                (DmsServerlessDetailSection::from_index(self.detail_section_idx)
+                    == DmsServerlessDetailSection::Settings)
+                    .then(|| serde_json::json!({
+                        "ReplicationConfigIdentifier": sl.identifier,
+                        "TableMappings": parse(&sl.table_mappings),
+                        "ReplicationSettings": parse(&sl.settings),
+                    }))
+            } else {
+                None
+            };
+            if let Some(doc) = doc {
+                if let Ok(text) = serde_json::to_string_pretty(&doc) {
+                    return Some((text, ".json"));
+                }
+            }
+        }
+
         // EC2 instance: the two text-valued sections open as the text itself
         // rather than escaped strings inside the snapshot JSON. Console gets
         // a one-line header (instance + capture time) so a saved copy says
@@ -27291,6 +27586,8 @@ impl App {
             Some(format!("{:?}-{:?}", self.cost_group_by, self.cost_period))
         } else if service == ServiceType::Waf {
             Some(format!("{:?}", self.waf_scope))
+        } else if service == ServiceType::XRay {
+            Some(self.xray_window.label().to_string())
         } else if service == ServiceType::ServiceQuotas {
             Some(self.quota_service_code.clone())
         } else if service == ServiceType::GuardDuty {
@@ -27429,6 +27726,20 @@ impl App {
     }
 
     /// Rebuild the WAF service with the current scope and reload.
+    /// Rebuild the X-Ray service with the current window and reload.
+    /// Variant-cached per window, so stepping back is instant.
+    fn apply_xray_window(&mut self) {
+        self.services.insert(
+            ServiceType::XRay,
+            Arc::new(crate::aws::services::xray::XRayService::new(
+                &self.aws_clients,
+                self.xray_window,
+            )),
+        );
+        self.load_service_resources();
+        self.update_search();
+    }
+
     fn apply_waf_scope(&mut self) {
         self.services.insert(
             ServiceType::Waf,
@@ -29694,6 +30005,9 @@ impl App {
         } else if self.is_selected_code_build_project() {
             self.trigger_codebuild_metrics_load(event_tx);
             Some(MetricsKind::CodeBuild)
+        } else if self.selected_dms_metrics_target().is_some() {
+            self.trigger_dms_metrics_load(event_tx);
+            Some(MetricsKind::Dms)
         } else {
             None
         };
@@ -30110,6 +30424,169 @@ impl App {
                 }
             });
         }
+    }
+
+    pub(crate) fn trigger_xray_trace_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::xray::{XRayTrace, XRayTraceDetailSection};
+        if XRayTraceDetailSection::from_index(self.detail_section_idx) != XRayTraceDetailSection::Segments {
+            return;
+        }
+        let Some(id) = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<XRayTrace>())
+            .map(|t| t.trace_id.clone())
+        else {
+            return;
+        };
+        let client = self.aws_clients.xray_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.xray_traces,
+            id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::xray::fetch_trace_detail(client, id)
+                    .await
+                    .map_err(|e| format!("Trace unavailable: {}", e))
+            },
+        );
+    }
+
+    // ── DMS: metrics target, log location, lazy sections ─────────────────────
+
+    /// What the `m` overlay charts for the selected DMS row: `(key ARN,
+    /// flavor, instance identifier, task resource id)`. A task needs its
+    /// instance's name for the metrics dimension — resolved at load time, so a
+    /// task whose instance wasn't listed (permission gap) has no metrics.
+    fn selected_dms_metrics_target(
+        &self,
+    ) -> Option<(String, crate::aws::services::dms::DmsMetricsFlavor, String, Option<String>)> {
+        use crate::aws::services::dms::{arn_resource_id, DmsInstance, DmsMetricsFlavor, DmsTask};
+        let r = self.get_selected_resource()?;
+        if let Some(t) = r.as_any().downcast_ref::<DmsTask>() {
+            return Some((
+                t.arn.clone(),
+                DmsMetricsFlavor::Task,
+                t.instance_id.clone()?,
+                Some(arn_resource_id(&t.arn).to_string()),
+            ));
+        }
+        let i = r.as_any().downcast_ref::<DmsInstance>()?;
+        Some((i.arn.clone(), DmsMetricsFlavor::Instance, i.identifier.clone(), None))
+    }
+
+    /// `(log group, stream, title)` for `t` on a DMS task — `None` unless the
+    /// task's instance is known (the group is named after it).
+    fn selected_dms_task_log(&self) -> Option<(String, String, String)> {
+        let t = self
+            .get_selected_resource()?
+            .as_any()
+            .downcast_ref::<crate::aws::services::dms::DmsTask>()?;
+        Some((t.log_group()?, t.log_stream(), t.identifier.clone()))
+    }
+
+    fn trigger_dms_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some((arn, flavor, instance_id, task_id)) = self.selected_dms_metrics_target() else {
+            return;
+        };
+        let time_range = self.dms_metrics_time_range;
+        self.dms_metrics
+            .insert(arn.clone(), crate::aws::services::dms::DmsMetricsState::Loading);
+        let cw = self.aws_clients.cloudwatch_client();
+        let tx = event_tx.clone();
+        tokio::spawn(async move {
+            if let Ok(data) = crate::aws::services::dms::fetch_dms_metrics(
+                cw,
+                flavor,
+                instance_id,
+                task_id,
+                time_range,
+            )
+            .await
+            {
+                let _ = tx.send(crate::event::Event::DmsMetricsLoaded { arn, data });
+            }
+        });
+    }
+
+    fn selected_dms_task_arn(&self) -> Option<String> {
+        self.get_selected_resource()?
+            .as_any()
+            .downcast_ref::<crate::aws::services::dms::DmsTask>()
+            .map(|t| t.arn.clone())
+    }
+
+    pub(crate) fn trigger_dms_table_stats_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::dms::DmsTaskDetailSection;
+        if DmsTaskDetailSection::from_index(self.detail_section_idx) != DmsTaskDetailSection::Tables {
+            return;
+        }
+        let Some(arn) = self.selected_dms_task_arn() else {
+            return;
+        };
+        let client = self.aws_clients.dms_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.dms_table_stats,
+            arn.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::dms::fetch_task_table_stats(client, arn)
+                    .await
+                    .map_err(|e| format!("Table statistics unavailable: {}", e))
+            },
+        );
+    }
+
+    pub(crate) fn trigger_dms_assessments_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::dms::DmsTaskDetailSection;
+        if DmsTaskDetailSection::from_index(self.detail_section_idx)
+            != DmsTaskDetailSection::Assessments
+        {
+            return;
+        }
+        let Some(arn) = self.selected_dms_task_arn() else {
+            return;
+        };
+        let client = self.aws_clients.dms_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.dms_assessments,
+            arn.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::dms::fetch_task_assessments(client, arn)
+                    .await
+                    .map_err(|e| format!("Assessment runs unavailable: {}", e))
+            },
+        );
+    }
+
+    pub(crate) fn trigger_dms_serverless_table_stats_load(
+        &mut self,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
+        use crate::aws::services::dms::{DmsServerless, DmsServerlessDetailSection};
+        if DmsServerlessDetailSection::from_index(self.detail_section_idx)
+            != DmsServerlessDetailSection::Tables
+        {
+            return;
+        }
+        let Some(arn) = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<DmsServerless>())
+            .map(|s| s.arn.clone())
+        else {
+            return;
+        };
+        let client = self.aws_clients.dms_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.dms_serverless_table_stats,
+            arn.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::dms::fetch_serverless_table_stats(client, arn)
+                    .await
+                    .map_err(|e| format!("Table statistics unavailable: {}", e))
+            },
+        );
     }
 
     fn trigger_codebuild_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {

@@ -281,13 +281,13 @@ same grouping.
 | **Compute** | EC2 `@ec2` · Lambda `@lambda` · Auto Scaling `@asg` · WorkSpaces `@workspaces` |
 | **Containers** | ECS `@ecs` · EKS `@eks` · ECR `@ecr` |
 | **Storage** | S3 `@s3` · EFS `@efs` · FSx `@fsx` · Backup `@backup` · Transfer Family `@transfer` |
-| **Database** | RDS `@rds` · DynamoDB `@ddb` · ElastiCache `@elasticache` |
+| **Database** | RDS `@rds` · DynamoDB `@ddb` · ElastiCache `@elasticache` · DMS `@dms` |
 | **Networking** | VPC `@vpc` · ELB `@elb` · Route 53 `@r53` · Route 53 Resolver `@resolver` · Route 53 Profiles `@profiles` · CloudFront `@cloudfront` · Transit Gateway `@tgw` · Direct Connect `@dx` · Global Accelerator `@ga` · API Gateway `@apigw` |
 | **Security & Identity** | IAM `@iam` · Identity Center `@idc` · Cognito `@cognito` · KMS `@kms` · Secrets Manager `@secrets` · ACM `@acm` · WAF `@waf` · Network Firewall `@anfw` · GuardDuty `@gd` · Security Hub `@sh` · Inspector `@inspector` · Firewall Manager `@fms` |
 | **Analytics** | Athena `@athena` · Glue `@glue` · Kinesis `@kinesis` · MSK `@msk` · Redshift `@redshift` · OpenSearch `@opensearch` |
 | **ML & AI** | Bedrock `@bedrock` |
 | **App Integration** | SQS/SNS `@sqs` · EventBridge `@events` · Step Functions `@sfn` · SES `@ses` |
-| **Management** | CloudFormation `@cfn` · CloudWatch `@cw` · CloudTrail `@cloudtrail` · AWS Config `@config` · Systems Manager `@ssm` · Organizations `@orgs` · Trusted Advisor `@ta` · Health `@health` · Service Quotas `@quotas` · Resource Explorer `@explorer` · Resource Groups `@resourcegroups` · RAM `@ram` · Control Tower `@controltower` |
+| **Management** | CloudFormation `@cfn` · CloudWatch `@cw` · X-Ray `@xray` · CloudTrail `@cloudtrail` · AWS Config `@config` · Systems Manager `@ssm` · Organizations `@orgs` · Trusted Advisor `@ta` · Health `@health` · Service Quotas `@quotas` · Resource Explorer `@explorer` · Resource Groups `@resourcegroups` · RAM `@ram` · Control Tower `@controltower` |
 | **Developer Tools** | CodeSuite `@code` |
 | **Cost** | Cost Explorer `@cost` · Budgets `@budgets` · Invoices `@invoices` |
 

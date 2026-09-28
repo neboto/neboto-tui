@@ -48,6 +48,8 @@ use ui::widgets::{
     organizations_tabs, org_role_selector, profile_selector, quota_service_selector, r53_tabs,
     rds_tabs,
     redshift_tabs,
+    xray_tabs,
+    dms_tabs,
     region_selector, resolver_tabs, resource_list,
     s3_tabs, search_bar, ses_tabs, service_selector, service_tabs, sh_tabs, splash, sq_tabs,
     ssm_session_modal, tgw_tabs, vpc_tabs,
@@ -315,6 +317,8 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
             | Some(ServiceType::Kinesis)
             | Some(ServiceType::StepFunctions)
             | Some(ServiceType::Redshift)
+            | Some(ServiceType::XRay)
+            | Some(ServiceType::Dms)
             | Some(ServiceType::Athena)
             | Some(ServiceType::Glue)
             | Some(ServiceType::Ses)
@@ -422,6 +426,12 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
             }
             Some(ServiceType::StepFunctions) => {
                 sfn_tabs::render_sfn_tabs(app, sub_tabs_area, frame);
+            }
+            Some(ServiceType::XRay) => {
+                xray_tabs::render_xray_tabs(app, sub_tabs_area, frame);
+            }
+            Some(ServiceType::Dms) => {
+                dms_tabs::render_dms_tabs(app, sub_tabs_area, frame);
             }
             Some(ServiceType::Redshift) => {
                 redshift_tabs::render_redshift_tabs(app, sub_tabs_area, frame);

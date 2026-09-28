@@ -945,6 +945,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-databasemigration"
+version = "1.120.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da55acf35b666dcd235fa251afeac1b4068456e00340d363afad8f2e902db95e"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.64.0",
+ "aws-smithy-json 0.63.0",
+ "aws-smithy-observability 0.3.0",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema 0.2.0",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-directconnect"
 version = "1.94.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2452,6 +2478,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-xray"
+version = "1.109.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aaa8a863929c975e71cece4092363b01140da9afeabd2a54d8c66e7cf9fce56b"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http 0.64.0",
+ "aws-smithy-json 0.63.0",
+ "aws-smithy-observability 0.3.0",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema 0.2.0",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sigv4"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3919,7 +3971,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.1",
  "tokio",
  "tower-service",
  "tracing",
@@ -4279,6 +4331,7 @@ dependencies = [
  "aws-sdk-controlcatalog",
  "aws-sdk-controltower",
  "aws-sdk-costexplorer",
+ "aws-sdk-databasemigration",
  "aws-sdk-directconnect",
  "aws-sdk-dynamodb",
  "aws-sdk-ec2",
@@ -4339,6 +4392,7 @@ dependencies = [
  "aws-sdk-trustedadvisor",
  "aws-sdk-wafv2",
  "aws-sdk-workspaces",
+ "aws-sdk-xray",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "chrono",
