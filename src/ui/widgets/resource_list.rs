@@ -314,6 +314,31 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                     ("No hosted zones".to_string(), "r refresh".to_string())
                 }
             }
+            // Batch Jobs: finished jobs age out after a while, and an `f`
+            // group may just have nothing in it — neither is a load gap.
+            else if app.current_service == Some(crate::aws::service::ServiceType::Batch)
+                && app.batch_view == crate::app::BatchView::Jobs
+                && app.list_state_filter.is_none()
+            {
+                (
+                    if app.batch_job_filter == crate::app::BatchJobStatusFilter::All {
+                        "No jobs on any queue".to_string()
+                    } else {
+                        format!("No {} jobs", app.batch_job_filter.label())
+                    },
+                    "Batch keeps finished jobs for a limited time · f cycles the status group".to_string(),
+                )
+            }
+            // No queues / compute environments at all: Batch isn't set up in
+            // this region.
+            else if app.current_service == Some(crate::aws::service::ServiceType::Batch)
+                && app.resources.is_empty()
+            {
+                (
+                    "No Batch resources in this region".to_string(),
+                    "R switch region · r refresh".to_string(),
+                )
+            }
             // The Pull Requests tab eagerly loads OPEN PRs only (closed ones
             // are a per-repo lazy fetch on the repo pane) — an empty tab
             // usually means nothing is waiting on review, not a load gap.

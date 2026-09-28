@@ -625,6 +625,61 @@ impl RedshiftView {
 /// Load states for the Redshift cluster / serverless workgroup `m` metrics.
 pub use crate::aws::services::redshift::{RedshiftMetricsState, RedshiftSlMetricsState};
 
+/// Sub-tab view for AWS Batch (Job Queues / Compute Environments / Jobs /
+/// Job Definitions).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum BatchView {
+    Queues,
+    ComputeEnvironments,
+    Jobs,
+    JobDefinitions}
+
+impl BatchView {
+    pub fn resource_type_filter(&self) -> &'static str {
+        match self {
+            BatchView::Queues => "Batch Job Queue",
+            BatchView::ComputeEnvironments => "Batch Compute Environment",
+            BatchView::Jobs => "Batch Job",
+            BatchView::JobDefinitions => "Batch Job Definition"}
+    }
+}
+
+/// Status filter for the Batch Jobs sub-tab, cycled with `f`: the in-flight
+/// states as one group (the "stuck?" view), or just the outcomes. `F` still
+/// narrows to one exact status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchJobStatusFilter {
+    All,
+    Active,
+    Failed,
+    Succeeded}
+
+impl BatchJobStatusFilter {
+    pub fn next(self) -> Self {
+        match self {
+            BatchJobStatusFilter::All => BatchJobStatusFilter::Active,
+            BatchJobStatusFilter::Active => BatchJobStatusFilter::Failed,
+            BatchJobStatusFilter::Failed => BatchJobStatusFilter::Succeeded,
+            BatchJobStatusFilter::Succeeded => BatchJobStatusFilter::All}
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BatchJobStatusFilter::All => "all",
+            BatchJobStatusFilter::Active => "active",
+            BatchJobStatusFilter::Failed => "failed",
+            BatchJobStatusFilter::Succeeded => "succeeded"}
+    }
+
+    pub fn matches(self, job: &crate::aws::services::batch::BatchJob) -> bool {
+        match self {
+            BatchJobStatusFilter::All => true,
+            BatchJobStatusFilter::Active => job.is_active(),
+            BatchJobStatusFilter::Failed => job.status == "FAILED",
+            BatchJobStatusFilter::Succeeded => job.status == "SUCCEEDED"}
+    }
+}
+
 /// Sub-tab view for X-Ray (Service Map / Traces / Groups & Sampling).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum XRayView {
@@ -858,6 +913,7 @@ pub enum JumpView {
     Sfn(SfnView),
     Sh(SecurityHubView),
     AgentCore(AgentCoreView),
+    Batch(BatchView),
     Dms(DmsView),
     S3Tables(S3TablesView),
     /// WAF carries both the sub-tab and the scope (CLOUDFRONT vs REGIONAL) — a
@@ -2038,6 +2094,9 @@ pub struct App {
     pub redshift_metrics: HashMap<String, RedshiftMetricsState>,
     pub redshift_sl_metrics: HashMap<String, RedshiftSlMetricsState>,
     pub redshift_metrics_time_range: MetricsTimeRange,
+    pub batch_view: BatchView,
+    /// Batch Jobs sub-tab status group (`f`).
+    pub batch_job_filter: BatchJobStatusFilter,
     pub xray_view: XRayView,
     /// X-Ray list look-back window (`[`/`]` in the list pane); part of the
     /// cache variant, so flipping back is instant.
@@ -2826,6 +2885,8 @@ impl App {
             redshift_metrics: HashMap::new(),
             redshift_sl_metrics: HashMap::new(),
             redshift_metrics_time_range: MetricsTimeRange::OneHour,
+            batch_view: BatchView::Queues,
+            batch_job_filter: BatchJobStatusFilter::All,
             xray_view: XRayView::ServiceMap,
             xray_window: crate::aws::services::xray::XRayWindow::default(),
             dms_view: DmsView::Tasks,
@@ -6201,6 +6262,37 @@ impl App {
             }
         }
 
+        // Batch (Job Queues / Compute Environments / Jobs / Job Definitions)
+        // sub-tab switching, plus `f` cycling the Jobs status group.
+        if !self.search_active && self.current_service == Some(ServiceType::Batch) {
+            let view = match key.code {
+                KeyCode::Char('1') => Some(BatchView::Queues),
+                KeyCode::Char('2') => Some(BatchView::ComputeEnvironments),
+                KeyCode::Char('3') => Some(BatchView::Jobs),
+                KeyCode::Char('4') => Some(BatchView::JobDefinitions),
+                KeyCode::Tab => Some(match self.batch_view {
+                    BatchView::Queues => BatchView::ComputeEnvironments,
+                    BatchView::ComputeEnvironments => BatchView::Jobs,
+                    BatchView::Jobs => BatchView::JobDefinitions,
+                    BatchView::JobDefinitions => BatchView::Queues}),
+                KeyCode::BackTab => Some(match self.batch_view {
+                    BatchView::Queues => BatchView::JobDefinitions,
+                    BatchView::ComputeEnvironments => BatchView::Queues,
+                    BatchView::Jobs => BatchView::ComputeEnvironments,
+                    BatchView::JobDefinitions => BatchView::Jobs}),
+                _ => None};
+            if let Some(v) = view {
+                self.batch_view = v;
+                self.update_search();
+                return Ok(());
+            }
+            if key.code == KeyCode::Char('f') && self.batch_view == BatchView::Jobs {
+                self.batch_job_filter = self.batch_job_filter.next();
+                self.update_search();
+                return Ok(());
+            }
+        }
+
         // X-Ray (Service Map / Traces / Groups & Sampling) sub-tab switching,
         // plus `[`/`]` narrowing/widening the look-back window (list pane —
         // the detail pane's `[[`/`]]` chords are handled in its own block).
@@ -8450,6 +8542,7 @@ impl App {
             Some(ServiceType::StepFunctions) => Some(self.sfn_view.resource_type_filter()),
             Some(ServiceType::Kinesis) => Some(self.kinesis_view.resource_type_filter()),
             Some(ServiceType::Redshift) => Some(self.redshift_view.resource_type_filter()),
+            Some(ServiceType::Batch) => Some(self.batch_view.resource_type_filter()),
             Some(ServiceType::XRay) => Some(self.xray_view.resource_type_filter()),
             Some(ServiceType::Dms) => Some(self.dms_view.resource_type_filter()),
             Some(ServiceType::ControlTower) => {
@@ -8626,6 +8719,10 @@ impl App {
             Some(ServiceType::Redshift) => {
                 align!(self, rtype, redshift_view, RedshiftView, [Clusters, Workgroups, Snapshots])
             }
+            Some(ServiceType::Batch) => align!(
+                self, rtype, batch_view, BatchView,
+                [Queues, ComputeEnvironments, Jobs, JobDefinitions]
+            ),
             Some(ServiceType::XRay) => {
                 align!(self, rtype, xray_view, XRayView, [ServiceMap, Traces, Config])
             }
@@ -8975,6 +9072,17 @@ impl App {
                         EcsTaskStatusFilter::Running if stopped => continue,
                         EcsTaskStatusFilter::Stopped if !stopped => continue,
                         _ => {}
+                    }
+                }
+            }
+            // Batch Jobs sub-tab: the `f` status group.
+            if type_filter == Some("Batch Job") && self.batch_job_filter != BatchJobStatusFilter::All {
+                if let Some(job) = self.resources[idx]
+                    .as_any()
+                    .downcast_ref::<crate::aws::services::batch::BatchJob>()
+                {
+                    if !self.batch_job_filter.matches(job) {
+                        continue;
                     }
                 }
             }
@@ -9593,6 +9701,10 @@ impl App {
         services.insert(
             ServiceType::Redshift,
             Arc::new(redshift::RedshiftService::new(aws_clients)),
+        );
+        services.insert(
+            ServiceType::Batch,
+            Arc::new(batch::BatchService::new(aws_clients)),
         );
         services.insert(
             ServiceType::XRay,
@@ -12491,6 +12603,12 @@ impl App {
     fn is_selected_glue_job(&self) -> bool {
         self.get_selected_resource()
             .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::glue::GlueJob>())
+            .is_some()
+    }
+
+    pub fn is_selected_batch_job(&self) -> bool {
+        self.get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::batch::BatchJob>())
             .is_some()
     }
 
@@ -16504,6 +16622,30 @@ impl App {
                         streams: vec![run.id.clone()]},
                     format!("Glue job run {} logs", run.id),
                 )
+            } else if let Some(job) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::batch::BatchJob>()
+            {
+                // The container's awslogs group (default `/aws/batch/job`)
+                // and its stream — known only once the job has started.
+                match job.log_target() {
+                    Some((group, stream)) => (
+                        Src::Group {
+                            group,
+                            streams: vec![stream]},
+                        format!("Batch job {} logs", job.name),
+                    ),
+                    None => {
+                        self.error_message = Some(if job.eks_cluster_arn.is_some() {
+                            "EKS Batch jobs log inside the cluster — no CloudWatch stream to tail".to_string()
+                        } else if job.containers.iter().any(|c| c.log_driver.is_some() && c.log_group.is_none()) {
+                            "This job logs with a non-awslogs driver — nothing in CloudWatch to tail".to_string()
+                        } else {
+                            format!("No log stream yet — the job is {}", job.status)
+                        });
+                        return;
+                    }
+                }
             } else if let Some(trail) = resource
                 .as_any()
                 .downcast_ref::<crate::aws::services::cloudtrail::CloudTrailTrail>()
@@ -19201,6 +19343,7 @@ impl App {
             JumpView::Sfn(v) => self.sfn_view = *v,
             JumpView::Sh(v) => self.securityhub_view = *v,
             JumpView::AgentCore(v) => self.agentcore_view = *v,
+            JumpView::Batch(v) => self.batch_view = *v,
             JumpView::Dms(v) => self.dms_view = *v,
             JumpView::S3Tables(v) => self.s3tables_view = *v,
             JumpView::Waf(v, scope) => {
@@ -19720,6 +19863,7 @@ impl App {
             Some(ServiceType::Route53Resolver) => JumpView::Resolver(self.resolver_view),
             Some(ServiceType::Inspector) => JumpView::Inspector(self.inspector_view),
             Some(ServiceType::Waf) => JumpView::Waf(self.waf_view, self.waf_scope),
+            Some(ServiceType::Batch) => JumpView::Batch(self.batch_view),
             Some(ServiceType::Dms) => JumpView::Dms(self.dms_view),
             Some(ServiceType::S3Tables) => JumpView::S3Tables(self.s3tables_view),
             // AWS Config has sub-tabs (config_view) but no JumpView variant, so a
@@ -21730,6 +21874,7 @@ impl App {
             || self.is_selected_rds_cluster()
             || self.is_selected_firehose()
             || self.is_selected_glue_job_run()
+            || self.is_selected_batch_job()
             // WAF: detail pane only in practice — the list-pane `t` is consumed
             // first by the scope toggle (its key block runs before the generic
             // list `t`), which is the documented behaviour.
@@ -24455,6 +24600,48 @@ impl App {
                     crate::aws::services::xray::XRayTraceDetailSection::from_index(self.detail_section_idx),
                     self.lazy.xray_traces.get(&t.trace_id),
                 );
+            }
+            {
+                use crate::aws::services::batch::*;
+                use crate::ui::widgets::details_pane as dp;
+                let all = || self.resources.iter().map(|r| r.as_any());
+                let queues = || all().filter_map(|a| a.downcast_ref::<BatchJobQueue>()).collect::<Vec<_>>();
+                let ces = || all().filter_map(|a| a.downcast_ref::<BatchComputeEnv>()).collect::<Vec<_>>();
+                let jobs = || all().filter_map(|a| a.downcast_ref::<BatchJob>()).collect::<Vec<_>>();
+                if let Some(q) = resource.as_any().downcast_ref::<BatchJobQueue>() {
+                    let on_queue: Vec<&BatchJob> = jobs().into_iter().filter(|j| j.queue == q.name).collect();
+                    return dp::batch_queue_section_lines(
+                        q,
+                        BatchQueueDetailSection::from_index(self.detail_section_idx),
+                        &ces(),
+                        &on_queue,
+                    );
+                }
+                if let Some(c) = resource.as_any().downcast_ref::<BatchComputeEnv>() {
+                    let serving: Vec<&BatchJobQueue> = queues().into_iter().filter(|q| q.uses_ce(&c.name)).collect();
+                    let waiting: Vec<&BatchJob> = jobs()
+                        .into_iter()
+                        .filter(|j| j.status == "RUNNABLE" && serving.iter().any(|q| q.name == j.queue))
+                        .collect();
+                    return dp::batch_ce_section_lines(
+                        c,
+                        BatchCeDetailSection::from_index(self.detail_section_idx),
+                        &serving,
+                        &waiting,
+                    );
+                }
+                if let Some(j) = resource.as_any().downcast_ref::<BatchJob>() {
+                    return dp::batch_job_section_lines(
+                        j,
+                        BatchJobDetailSection::from_index(self.detail_section_idx),
+                    );
+                }
+                if let Some(d) = resource.as_any().downcast_ref::<BatchJobDefinition>() {
+                    return dp::batch_jobdef_section_lines(
+                        d,
+                        BatchJobDefDetailSection::from_index(self.detail_section_idx),
+                    );
+                }
             }
             {
                 use crate::aws::services::dms::{

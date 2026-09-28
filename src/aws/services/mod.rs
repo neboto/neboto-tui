@@ -6,6 +6,7 @@ pub mod awsconfig;
 pub mod backup;
 pub mod agentcore;
 pub mod bedrock;
+pub mod batch;
 pub mod budgets;
 pub mod invoicing;
 pub mod cloudformation;

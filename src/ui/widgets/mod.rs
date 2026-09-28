@@ -2,6 +2,7 @@ pub mod apigw_tabs;
 pub mod athena_tabs;
 pub mod backup_tabs;
 pub mod banner;
+pub mod batch_tabs;
 pub mod ddb_item_browser;
 pub mod cfn_tabs;
 pub mod cloudfront_tabs;
