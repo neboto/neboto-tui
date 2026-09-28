@@ -48,6 +48,30 @@ pub(super) fn mocks() -> Vec<Mock> {
             )),
         ),
         (
+            ServiceType::XRay,
+            "XRayNode",
+            Box::new(
+                svc::xray::XRayNode::from_graph(
+                    &[aws_sdk_xray::types::Service::builder()
+                        .reference_id(0)
+                        .name("mock-api")
+                        .r#type("AWS::Lambda::Function")
+                        .build()],
+                    svc::xray::XRayWindow::OneHour,
+                )
+                .remove(0),
+            ),
+        ),
+        (
+            ServiceType::XRay,
+            "XRayTrace",
+            Box::new(svc::xray::XRayTrace::from_sdk(
+                &aws_sdk_xray::types::TraceSummary::builder()
+                    .id("1-5f000000-abcdef0123456789abcdef01")
+                    .build(),
+            )),
+        ),
+        (
             ServiceType::Dms,
             "DmsTask",
             Box::new(svc::dms::DmsTask::from_sdk(

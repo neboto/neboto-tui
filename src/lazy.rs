@@ -418,6 +418,8 @@ pub struct LazyStore {
     pub kinesis_tags: LazyMap<Vec<(String, String)>>,
     /// A delivery stream's tags, keyed by stream name.
     pub firehose_tags: LazyMap<Vec<(String, String)>>,
+    /// X-Ray trace Segments section (`BatchGetTraces`), keyed by trace id.
+    pub xray_traces: LazyMap<crate::aws::services::xray::XRayTraceDetail>,
     /// DMS task Tables section (`DescribeTableStatistics`), keyed by task ARN.
     pub dms_table_stats: LazyMap<crate::aws::services::dms::DmsTableStats>,
     /// DMS task Assessments section, keyed by task ARN.

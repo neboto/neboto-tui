@@ -70,3 +70,4 @@ pub mod trusted_advisor;
 pub mod vpc;
 pub mod waf;
 pub mod workspaces;
+pub mod xray;

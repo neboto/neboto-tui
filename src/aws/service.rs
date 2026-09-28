@@ -69,6 +69,7 @@ pub enum ServiceType {
     Msk,
     Fms,
     Redshift,
+    XRay,
     Dms,
     Budgets,
     Invoices,
@@ -145,6 +146,7 @@ impl ServiceType {
             ServiceType::Msk,
             ServiceType::Fms,
             ServiceType::Redshift,
+            ServiceType::XRay,
             ServiceType::Dms,
             ServiceType::Budgets,
             ServiceType::Invoices,
@@ -248,6 +250,7 @@ impl ServiceType {
             | ServiceType::Ses => "App Integration",
             ServiceType::CloudFormation
             | ServiceType::CloudWatch
+            | ServiceType::XRay
             | ServiceType::CloudTrail
             | ServiceType::Config
             | ServiceType::Ssm
@@ -279,6 +282,7 @@ impl ServiceType {
             ServiceType::Route53 => "Route53",
             ServiceType::Acm => "ACM",
             ServiceType::CloudWatch => "CloudWatch",
+            ServiceType::XRay => "X-Ray",
             ServiceType::IAM => "IAM",
             ServiceType::Organizations => "Organizations",
             ServiceType::Elb => "ELB",
@@ -355,6 +359,7 @@ impl ServiceType {
             ServiceType::Route53 => "R53",
             ServiceType::Acm => "ACM",
             ServiceType::CloudWatch => "CW",
+            ServiceType::XRay => "XRAY",
             ServiceType::IAM => "IAM",
             ServiceType::Organizations => "Org",
             ServiceType::Elb => "ELB",
@@ -430,6 +435,7 @@ impl ServiceType {
             ServiceType::Route53 => "Route53 Hosted Zones",
             ServiceType::Acm => "ACM Certificates",
             ServiceType::CloudWatch => "CloudWatch Alarms & Logs",
+            ServiceType::XRay => "Service Map, Traces, Groups, Sampling Rules",
             ServiceType::IAM => "IAM Roles, Policies, Users & Groups",
             ServiceType::Organizations => "Organizations Accounts, OUs & SCPs",
             ServiceType::Elb => "Load Balancers & Target Groups",
@@ -509,6 +515,7 @@ impl ServiceType {
             "r53" | "route53" | "dns" | "zones" => Some(ServiceType::Route53),
             "acm" | "certs" | "certificates" | "tls" | "ssl" => Some(ServiceType::Acm),
             "cw" | "cloudwatch" | "alarms" | "logs" => Some(ServiceType::CloudWatch),
+            "xray" | "x-ray" | "traces" | "tracing" | "servicemap" => Some(ServiceType::XRay),
             "iam" | "roles" | "policies" => Some(ServiceType::IAM),
             "orgs" | "organizations" | "org" | "accounts" | "ous" | "scps" => {
                 Some(ServiceType::Organizations)
@@ -620,6 +627,7 @@ impl ServiceType {
             ServiceType::Route53 => "@r53",
             ServiceType::Acm => "@acm",
             ServiceType::CloudWatch => "@cw",
+            ServiceType::XRay => "@xray",
             ServiceType::IAM => "@iam",
             ServiceType::Organizations => "@orgs",
             ServiceType::Elb => "@elb",
