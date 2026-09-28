@@ -69,6 +69,7 @@ pub enum ServiceType {
     Msk,
     Fms,
     Redshift,
+    Batch,
     XRay,
     Dms,
     Budgets,
@@ -146,6 +147,7 @@ impl ServiceType {
             ServiceType::Msk,
             ServiceType::Fms,
             ServiceType::Redshift,
+            ServiceType::Batch,
             ServiceType::XRay,
             ServiceType::Dms,
             ServiceType::Budgets,
@@ -202,6 +204,7 @@ impl ServiceType {
             ServiceType::EC2
             | ServiceType::Lambda
             | ServiceType::Asg
+            | ServiceType::Batch
             | ServiceType::Workspaces => "Compute",
             ServiceType::ECS | ServiceType::Eks | ServiceType::Ecr => "Containers",
             ServiceType::S3
@@ -335,6 +338,7 @@ impl ServiceType {
             ServiceType::Dms => "DMS",
             ServiceType::Fms => "Firewall Manager",
             ServiceType::Redshift => "Redshift",
+            ServiceType::Batch => "Batch",
             ServiceType::Budgets => "Budgets",
             ServiceType::Invoices => "Invoices",
             ServiceType::ControlTower => "Control Tower",
@@ -412,6 +416,7 @@ impl ServiceType {
             ServiceType::Dms => "DMS",
             ServiceType::Fms => "FMS",
             ServiceType::Redshift => "RSH",
+            ServiceType::Batch => "BAT",
             ServiceType::Budgets => "BUD",
             ServiceType::Invoices => "INV",
             ServiceType::ControlTower => "CTW",
@@ -489,6 +494,7 @@ impl ServiceType {
             ServiceType::Msk => "Kafka clusters (provisioned + serverless)",
             ServiceType::Fms => "Firewall Manager Policies, App/Protocol Lists, Resource Sets",
             ServiceType::Redshift => "Clusters, Serverless Workgroups, Snapshots",
+            ServiceType::Batch => "Job Queues, Compute Environments, Jobs, Job Definitions",
             ServiceType::Dms => "Replication Tasks, Instances, Endpoints, Serverless Replications",
             ServiceType::Budgets => "Cost & Usage Budgets, Alerts, Subscribers",
             ServiceType::Invoices => "Invoice Summaries & PDF Download",
@@ -507,6 +513,7 @@ impl ServiceType {
             "vpc" | "networks" | "network" => Some(ServiceType::VPC),
             "rds" | "databases" | "db" => Some(ServiceType::RDS),
             "ecs" | "containers" | "clusters" => Some(ServiceType::ECS),
+            "batch" | "awsbatch" | "jobqueues" => Some(ServiceType::Batch),
             "cloudtrail" | "ct" | "trail" => Some(ServiceType::CloudTrail),
             "s3" | "buckets" | "bucket" => Some(ServiceType::S3),
             "idc" | "sso" | "ic" | "identitycenter" => Some(ServiceType::IdentityCenter),
@@ -680,6 +687,7 @@ impl ServiceType {
             ServiceType::Dms => "@dms",
             ServiceType::Fms => "@fms",
             ServiceType::Redshift => "@redshift",
+            ServiceType::Batch => "@batch",
             ServiceType::Budgets => "@budgets",
             ServiceType::Invoices => "@invoices",
             ServiceType::ControlTower => "@controltower",

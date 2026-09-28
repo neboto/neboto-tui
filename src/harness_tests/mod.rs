@@ -30,6 +30,7 @@ mod macros_test;
 mod keycast_test;
 mod ec2_console_test;
 mod cli_picker_test;
+mod batch_test;
 mod dms_test;
 mod s3tables_jump_test;
 mod ec2_lb_test;
