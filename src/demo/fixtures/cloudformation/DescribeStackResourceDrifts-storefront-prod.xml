@@ -1,0 +1,8 @@
+<DescribeStackResourceDriftsResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <DescribeStackResourceDriftsResult>
+    <StackResourceDrifts>
+      <member><StackId>arn:aws:cloudformation:{{region}}:{{account}}:stack/storefront-prod/6d1f2c30-4a5b-11ef-9c1d-0e8a1b2c3d4e</StackId><LogicalResourceId>WebTargetGroup</LogicalResourceId><PhysicalResourceId>arn:aws:elasticloadbalancing:{{region}}:{{account}}:targetgroup/storefront-web/0a1b2c3d4e5f6a7b</PhysicalResourceId><ResourceType>AWS::ElasticLoadBalancingV2::TargetGroup</ResourceType><ExpectedProperties>{"HealthCheckIntervalSeconds": 30, "HealthCheckPath": "/healthz", "Port": 8080, "Protocol": "HTTP", "TargetType": "ip"}</ExpectedProperties><ActualProperties>{"HealthCheckIntervalSeconds": 15, "HealthCheckPath": "/healthz", "Port": 8080, "Protocol": "HTTP", "TargetType": "ip"}</ActualProperties><PropertyDifferences><member><PropertyPath>/HealthCheckIntervalSeconds</PropertyPath><ExpectedValue>30</ExpectedValue><ActualValue>15</ActualValue><DifferenceType>NOT_EQUAL</DifferenceType></member></PropertyDifferences><StackResourceDriftStatus>MODIFIED</StackResourceDriftStatus><Timestamp>{{iso:now-6h}}</Timestamp></member>
+    </StackResourceDrifts>
+  </DescribeStackResourceDriftsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeStackResourceDriftsResponse>

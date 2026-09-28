@@ -1,0 +1,171 @@
+{
+ "Events": [
+  {
+   "EventId": "7c0de004-demo-4e2a-9b1c-000000000004",
+   "EventName": "UpdateService",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000GHA00001",
+   "EventTime": {{epoch:now-40m}},
+   "EventSource": "ecs.amazonaws.com",
+   "Username": "GitHubActions",
+   "Resources": [
+    {
+     "ResourceType": "AWS::ECS::Service",
+     "ResourceName": "arn:aws:ecs:{{region}}:{{account}}:service/acme-prod/orders-worker"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"AssumedRole\",\"principalId\":\"AROADEMO0000GHDEPLOY:GitHubActions\",\"arn\":\"arn:aws:sts::{{account}}:assumed-role/github-actions-deploy/GitHubActions\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000GHA00001\",\"sessionContext\":{\"sessionIssuer\":{\"type\":\"Role\",\"principalId\":\"AROADEMO0000GHDEPLOY\",\"arn\":\"arn:aws:iam::{{account}}:role/github-actions-deploy\",\"accountId\":\"{{account}}\",\"userName\":\"github-actions-deploy\"},\"webIdFederationData\":{\"federatedProvider\":\"arn:aws:iam::{{account}}:oidc-provider/token.actions.githubusercontent.com\"}}},\"eventTime\":\"{{iso:now-40m}}\",\"eventSource\":\"ecs.amazonaws.com\",\"eventName\":\"UpdateService\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"140.82.112.22\",\"userAgent\":\"aws-cli/2.17.0 GitHubActions\",\"requestParameters\":{\"cluster\":\"acme-prod\",\"service\":\"orders-worker\",\"taskDefinition\":\"orders-worker:15\",\"forceNewDeployment\":false},\"responseElements\":{\"service\":{\"serviceArn\":\"arn:aws:ecs:{{region}}:{{account}}:service/acme-prod/orders-worker\",\"taskDefinition\":\"arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:15\"}},\"requestID\":\"req-0004\",\"eventID\":\"7c0de004-demo-4e2a-9b1c-000000000004\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "7c0de005-demo-4e2a-9b1c-000000000005",
+   "EventName": "RegisterTaskDefinition",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000GHA00001",
+   "EventTime": {{epoch:now-41m}},
+   "EventSource": "ecs.amazonaws.com",
+   "Username": "GitHubActions",
+   "Resources": [
+    {
+     "ResourceType": "AWS::ECS::TaskDefinition",
+     "ResourceName": "arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:15"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"AssumedRole\",\"principalId\":\"AROADEMO0000GHDEPLOY:GitHubActions\",\"arn\":\"arn:aws:sts::{{account}}:assumed-role/github-actions-deploy/GitHubActions\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000GHA00001\",\"sessionContext\":{\"sessionIssuer\":{\"type\":\"Role\",\"principalId\":\"AROADEMO0000GHDEPLOY\",\"arn\":\"arn:aws:iam::{{account}}:role/github-actions-deploy\",\"accountId\":\"{{account}}\",\"userName\":\"github-actions-deploy\"},\"webIdFederationData\":{\"federatedProvider\":\"arn:aws:iam::{{account}}:oidc-provider/token.actions.githubusercontent.com\"}}},\"eventTime\":\"{{iso:now-41m}}\",\"eventSource\":\"ecs.amazonaws.com\",\"eventName\":\"RegisterTaskDefinition\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"140.82.112.22\",\"userAgent\":\"aws-cli/2.17.0 GitHubActions\",\"requestParameters\":{\"family\":\"orders-worker\",\"containerDefinitions\":[{\"name\":\"worker\",\"image\":\"{{account}}.dkr.ecr.{{region}}.amazonaws.com/orders-worker:v1.19.0\",\"environment\":[{\"name\":\"QUEUE\",\"value\":\"orders\"},{\"name\":\"DB_URL\",\"value\":\"HIDDEN_DUE_TO_SECURITY_REASONS\"}]}]},\"responseElements\":{\"taskDefinition\":{\"taskDefinitionArn\":\"arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:15\",\"revision\":15}},\"requestID\":\"req-0005\",\"eventID\":\"7c0de005-demo-4e2a-9b1c-000000000005\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "7c0de010-demo-4e2a-9b1c-000000000010",
+   "EventName": "AssumeRoleWithWebIdentity",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000GHA00001",
+   "EventTime": {{epoch:now-41m}},
+   "EventSource": "sts.amazonaws.com",
+   "Username": "GitHubActions",
+   "Resources": [
+    {
+     "ResourceType": "AWS::IAM::Role",
+     "ResourceName": "arn:aws:iam::{{account}}:role/github-actions-deploy"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"AssumedRole\",\"principalId\":\"AROADEMO0000GHDEPLOY:GitHubActions\",\"arn\":\"arn:aws:sts::{{account}}:assumed-role/github-actions-deploy/GitHubActions\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000GHA00001\",\"sessionContext\":{\"sessionIssuer\":{\"type\":\"Role\",\"principalId\":\"AROADEMO0000GHDEPLOY\",\"arn\":\"arn:aws:iam::{{account}}:role/github-actions-deploy\",\"accountId\":\"{{account}}\",\"userName\":\"github-actions-deploy\"},\"webIdFederationData\":{\"federatedProvider\":\"arn:aws:iam::{{account}}:oidc-provider/token.actions.githubusercontent.com\"}}},\"eventTime\":\"{{iso:now-41m}}\",\"eventSource\":\"sts.amazonaws.com\",\"eventName\":\"AssumeRoleWithWebIdentity\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"140.82.112.22\",\"userAgent\":\"aws-cli/2.17.0 GitHubActions\",\"requestParameters\":{\"roleArn\":\"arn:aws:iam::{{account}}:role/github-actions-deploy\",\"roleSessionName\":\"GitHubActions\"},\"responseElements\":null,\"requestID\":\"req-0010\",\"eventID\":\"7c0de010-demo-4e2a-9b1c-000000000010\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "7c0de009-demo-4e2a-9b1c-000000000009",
+   "EventName": "ConsoleLogin",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000JSMITH99",
+   "EventTime": {{epoch:now-3h}},
+   "EventSource": "signin.amazonaws.com",
+   "Username": "jsmith",
+   "Resources": [],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"IAMUser\",\"principalId\":\"AIDADEMO00000JSMITH0\",\"arn\":\"arn:aws:iam::{{account}}:user/jsmith\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000JSMITH99\",\"userName\":\"jsmith\",\"sessionContext\":{\"attributes\":{\"mfaAuthenticated\":\"true\"}}},\"eventTime\":\"{{iso:now-3h}}\",\"eventSource\":\"signin.amazonaws.com\",\"eventName\":\"ConsoleLogin\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"198.51.100.23\",\"userAgent\":\"Mozilla/5.0 (Macintosh) AWS Console\",\"requestParameters\":null,\"responseElements\":{\"ConsoleLogin\":\"Success\"},\"requestID\":\"req-0009\",\"eventID\":\"7c0de009-demo-4e2a-9b1c-000000000009\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "7c0de003-demo-4e2a-9b1c-000000000003",
+   "EventName": "ModifyTargetGroup",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000JSMITH99",
+   "EventTime": {{epoch:now-2d}},
+   "EventSource": "elasticloadbalancing.amazonaws.com",
+   "Username": "jsmith",
+   "Resources": [
+    {
+     "ResourceType": "AWS::ElasticLoadBalancingV2::TargetGroup",
+     "ResourceName": "arn:aws:elasticloadbalancing:{{region}}:{{account}}:targetgroup/storefront-web/0a1b2c3d4e5f6a7b"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"IAMUser\",\"principalId\":\"AIDADEMO00000JSMITH0\",\"arn\":\"arn:aws:iam::{{account}}:user/jsmith\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000JSMITH99\",\"userName\":\"jsmith\",\"sessionContext\":{\"attributes\":{\"mfaAuthenticated\":\"true\"}}},\"eventTime\":\"{{iso:now-2d}}\",\"eventSource\":\"elasticloadbalancing.amazonaws.com\",\"eventName\":\"ModifyTargetGroup\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"198.51.100.23\",\"userAgent\":\"Mozilla/5.0 (Macintosh) AWS Console\",\"requestParameters\":{\"targetGroupArn\":\"arn:aws:elasticloadbalancing:{{region}}:{{account}}:targetgroup/storefront-web/0a1b2c3d4e5f6a7b\",\"healthCheckIntervalSeconds\":15},\"responseElements\":{\"targetGroups\":[{\"targetGroupArn\":\"arn:aws:elasticloadbalancing:{{region}}:{{account}}:targetgroup/storefront-web/0a1b2c3d4e5f6a7b\",\"healthCheckIntervalSeconds\":15}]},\"requestID\":\"req-0003\",\"eventID\":\"7c0de003-demo-4e2a-9b1c-000000000003\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "7c0de006-demo-4e2a-9b1c-000000000006",
+   "EventName": "AttachRolePolicy",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000JSMITH99",
+   "EventTime": {{epoch:now-3d}},
+   "EventSource": "iam.amazonaws.com",
+   "Username": "jsmith",
+   "Resources": [
+    {
+     "ResourceType": "AWS::IAM::Role",
+     "ResourceName": "github-actions-deploy"
+    },
+    {
+     "ResourceType": "AWS::IAM::Policy",
+     "ResourceName": "arn:aws:iam::aws:policy/AdministratorAccess"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"IAMUser\",\"principalId\":\"AIDADEMO00000JSMITH0\",\"arn\":\"arn:aws:iam::{{account}}:user/jsmith\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000JSMITH99\",\"userName\":\"jsmith\",\"sessionContext\":{\"attributes\":{\"mfaAuthenticated\":\"true\"}}},\"eventTime\":\"{{iso:now-3d}}\",\"eventSource\":\"iam.amazonaws.com\",\"eventName\":\"AttachRolePolicy\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"198.51.100.23\",\"userAgent\":\"Mozilla/5.0 (Macintosh) AWS Console\",\"requestParameters\":{\"roleName\":\"github-actions-deploy\",\"policyArn\":\"arn:aws:iam::aws:policy/AdministratorAccess\"},\"responseElements\":null,\"requestID\":\"req-0006\",\"eventID\":\"7c0de006-demo-4e2a-9b1c-000000000006\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "7c0de007-demo-4e2a-9b1c-000000000007",
+   "EventName": "DetachRolePolicy",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000JSMITH99",
+   "EventTime": {{epoch:now-3d-40s}},
+   "EventSource": "iam.amazonaws.com",
+   "Username": "jsmith",
+   "Resources": [
+    {
+     "ResourceType": "AWS::IAM::Role",
+     "ResourceName": "github-actions-deploy"
+    },
+    {
+     "ResourceType": "AWS::IAM::Policy",
+     "ResourceName": "arn:aws:iam::{{account}}:policy/ci-deploy-scoped"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"IAMUser\",\"principalId\":\"AIDADEMO00000JSMITH0\",\"arn\":\"arn:aws:iam::{{account}}:user/jsmith\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000JSMITH99\",\"userName\":\"jsmith\",\"sessionContext\":{\"attributes\":{\"mfaAuthenticated\":\"true\"}}},\"eventTime\":\"{{iso:now-3d-40s}}\",\"eventSource\":\"iam.amazonaws.com\",\"eventName\":\"DetachRolePolicy\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"198.51.100.23\",\"userAgent\":\"Mozilla/5.0 (Macintosh) AWS Console\",\"requestParameters\":{\"roleName\":\"github-actions-deploy\",\"policyArn\":\"arn:aws:iam::{{account}}:policy/ci-deploy-scoped\"},\"responseElements\":null,\"requestID\":\"req-0007\",\"eventID\":\"7c0de007-demo-4e2a-9b1c-000000000007\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "7c0de001-demo-4e2a-9b1c-000000000001",
+   "EventName": "AuthorizeSecurityGroupIngress",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000JSMITH99",
+   "EventTime": {{epoch:now-5d}},
+   "EventSource": "ec2.amazonaws.com",
+   "Username": "jsmith",
+   "Resources": [
+    {
+     "ResourceType": "AWS::EC2::SecurityGroup",
+     "ResourceName": "sg-0web0000000000001"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"IAMUser\",\"principalId\":\"AIDADEMO00000JSMITH0\",\"arn\":\"arn:aws:iam::{{account}}:user/jsmith\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000JSMITH99\",\"userName\":\"jsmith\",\"sessionContext\":{\"attributes\":{\"mfaAuthenticated\":\"true\"}}},\"eventTime\":\"{{iso:now-5d}}\",\"eventSource\":\"ec2.amazonaws.com\",\"eventName\":\"AuthorizeSecurityGroupIngress\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"198.51.100.23\",\"userAgent\":\"Mozilla/5.0 (Macintosh) AWS Console\",\"requestParameters\":{\"groupId\":\"sg-0web0000000000001\",\"ipPermissions\":{\"items\":[{\"ipProtocol\":\"tcp\",\"fromPort\":22,\"toPort\":22,\"ipRanges\":{\"items\":[{\"cidrIp\":\"0.0.0.0/0\",\"description\":\"temp debug access - remove\"}]}}]}},\"responseElements\":{\"_return\":true,\"securityGroupRuleSet\":{\"items\":[{\"groupId\":\"sg-0web0000000000001\",\"securityGroupRuleId\":\"sgr-0ssh0000000000001\",\"isEgress\":false,\"ipProtocol\":\"tcp\",\"fromPort\":22,\"toPort\":22,\"cidrIpv4\":\"0.0.0.0/0\"}]}},\"requestID\":\"req-0001\",\"eventID\":\"7c0de001-demo-4e2a-9b1c-000000000001\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "7c0de002-demo-4e2a-9b1c-000000000002",
+   "EventName": "AuthorizeSecurityGroupIngress",
+   "ReadOnly": "false",
+   "AccessKeyId": "AKIADEMO000DEPLOYB01",
+   "EventTime": {{epoch:now-6d}},
+   "EventSource": "ec2.amazonaws.com",
+   "Username": "deploy-bot",
+   "Resources": [
+    {
+     "ResourceType": "AWS::EC2::SecurityGroup",
+     "ResourceName": "sg-0web0000000000001"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"IAMUser\",\"principalId\":\"AIDADEMO000DEPLOYBOT\",\"arn\":\"arn:aws:iam::{{account}}:user/deploy-bot\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"AKIADEMO000DEPLOYB01\",\"userName\":\"deploy-bot\"},\"eventTime\":\"{{iso:now-6d}}\",\"eventSource\":\"ec2.amazonaws.com\",\"eventName\":\"AuthorizeSecurityGroupIngress\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"52.14.88.201\",\"userAgent\":\"Terraform/1.9.5 terraform-provider-aws/5.70.0\",\"requestParameters\":{\"groupId\":\"sg-0web0000000000001\",\"ipPermissions\":{\"items\":[{\"ipProtocol\":\"tcp\",\"fromPort\":8080,\"toPort\":8080,\"groups\":{\"items\":[{\"groupId\":\"sg-0alb000000000003\"}]}}]}},\"responseElements\":{\"_return\":true},\"requestID\":\"req-0002\",\"eventID\":\"7c0de002-demo-4e2a-9b1c-000000000002\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "7c0de008-demo-4e2a-9b1c-000000000008",
+   "EventName": "DetachVolume",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000JSMITH99",
+   "EventTime": {{epoch:now-6d}},
+   "EventSource": "ec2.amazonaws.com",
+   "Username": "jsmith",
+   "Resources": [
+    {
+     "ResourceType": "AWS::EC2::Volume",
+     "ResourceName": "vol-0orphan00000004"
+    },
+    {
+     "ResourceType": "AWS::EC2::Instance",
+     "ResourceName": "i-0legacy000000009"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"IAMUser\",\"principalId\":\"AIDADEMO00000JSMITH0\",\"arn\":\"arn:aws:iam::{{account}}:user/jsmith\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000JSMITH99\",\"userName\":\"jsmith\",\"sessionContext\":{\"attributes\":{\"mfaAuthenticated\":\"true\"}}},\"eventTime\":\"{{iso:now-6d}}\",\"eventSource\":\"ec2.amazonaws.com\",\"eventName\":\"DetachVolume\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"198.51.100.23\",\"userAgent\":\"Mozilla/5.0 (Macintosh) AWS Console\",\"requestParameters\":{\"volumeId\":\"vol-0orphan00000004\",\"instanceId\":\"i-0legacy000000009\",\"force\":false},\"responseElements\":{\"volumeId\":\"vol-0orphan00000004\",\"status\":\"detaching\"},\"requestID\":\"req-0008\",\"eventID\":\"7c0de008-demo-4e2a-9b1c-000000000008\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  }
+ ]
+}

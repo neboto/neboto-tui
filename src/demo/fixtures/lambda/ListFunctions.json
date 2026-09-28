@@ -1,0 +1,114 @@
+{
+ "Functions": [
+  {
+   "FunctionName": "orders-api",
+   "FunctionArn": "arn:aws:lambda:{{region}}:{{account}}:function:orders-api",
+   "Runtime": "nodejs20.x",
+   "Role": "arn:aws:iam::{{account}}:role/orders-api-lambda",
+   "Handler": "index.handler",
+   "CodeSize": 2481337,
+   "Description": "Orders HTTP API (POST /orders)",
+   "Timeout": 15,
+   "MemorySize": 512,
+   "LastModified": "{{iso:now-2d}}",
+   "CodeSha256": "q1z3Yx0mZ0l5c2VkZW1vZGF0YXNldDAwMDAwMDA=",
+   "Version": "$LATEST",
+   "TracingConfig": {
+    "Mode": "PassThrough"
+   },
+   "RevisionId": "0d7a6f1e-demo-4c3b-9a8e-orde00000000",
+   "State": "Active",
+   "LastUpdateStatus": "Successful",
+   "PackageType": "Zip",
+   "Architectures": [
+    "arm64"
+   ],
+   "EphemeralStorage": {
+    "Size": 512
+   },
+   "LoggingConfig": {
+    "LogFormat": "Text",
+    "LogGroup": "/aws/lambda/orders-api"
+   },
+   "Environment": {
+    "Variables": {
+     "TABLE_NAME": "orders",
+     "LOG_LEVEL": "info"
+    }
+   }
+  },
+  {
+   "FunctionName": "thumbnail-resizer",
+   "FunctionArn": "arn:aws:lambda:{{region}}:{{account}}:function:thumbnail-resizer",
+   "Runtime": "python3.12",
+   "Role": "arn:aws:iam::{{account}}:role/orders-api-lambda",
+   "Handler": "app.handler",
+   "CodeSize": 8812004,
+   "Description": "Resizes product images on upload",
+   "Timeout": 60,
+   "MemorySize": 1024,
+   "LastModified": "{{iso:now-45d}}",
+   "CodeSha256": "q1z3Yx0mZ0l5c2VkZW1vZGF0YXNldDAwMDAwMDA=",
+   "Version": "$LATEST",
+   "TracingConfig": {
+    "Mode": "PassThrough"
+   },
+   "RevisionId": "0d7a6f1e-demo-4c3b-9a8e-thum00000000",
+   "State": "Active",
+   "LastUpdateStatus": "Successful",
+   "PackageType": "Zip",
+   "Architectures": [
+    "arm64"
+   ],
+   "EphemeralStorage": {
+    "Size": 512
+   },
+   "LoggingConfig": {
+    "LogFormat": "Text",
+    "LogGroup": "/aws/lambda/thumbnail-resizer"
+   },
+   "Environment": {
+    "Variables": {
+     "MAX_WIDTH": "1200"
+    }
+   }
+  },
+  {
+   "FunctionName": "nightly-report",
+   "FunctionArn": "arn:aws:lambda:{{region}}:{{account}}:function:nightly-report",
+   "Runtime": "python3.9",
+   "Role": "arn:aws:iam::{{account}}:role/legacy-reporting-role",
+   "Handler": "report.main",
+   "CodeSize": 31457280,
+   "Description": "Nightly sales CSV to finance",
+   "Timeout": 900,
+   "MemorySize": 3008,
+   "LastModified": "{{iso:now-400d}}",
+   "CodeSha256": "q1z3Yx0mZ0l5c2VkZW1vZGF0YXNldDAwMDAwMDA=",
+   "Version": "$LATEST",
+   "TracingConfig": {
+    "Mode": "PassThrough"
+   },
+   "RevisionId": "0d7a6f1e-demo-4c3b-9a8e-nigh00000000",
+   "State": "Active",
+   "LastUpdateStatus": "Successful",
+   "PackageType": "Zip",
+   "Architectures": [
+    "x86_64"
+   ],
+   "EphemeralStorage": {
+    "Size": 512
+   },
+   "LoggingConfig": {
+    "LogFormat": "Text",
+    "LogGroup": "/aws/lambda/nightly-report"
+   },
+   "Environment": {
+    "Variables": {
+     "REPORT_BUCKET": "acme-finance-reports",
+     "DB_HOST": "reporting-etl.internal"
+    }
+   }
+  }
+ ]
+}

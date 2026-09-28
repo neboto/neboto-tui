@@ -1,0 +1,11 @@
+{
+ "TrailARN": "arn:aws:cloudtrail:{{region}}:{{account}}:trail/acme-org-trail",
+ "EventSelectors": [
+  {
+   "ReadWriteType": "All",
+   "IncludeManagementEvents": true,
+   "DataResources": [],
+   "ExcludeManagementEventSources": []
+  }
+ ]
+}

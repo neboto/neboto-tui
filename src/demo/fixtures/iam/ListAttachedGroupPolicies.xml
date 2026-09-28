@@ -1,0 +1,7 @@
+<ListAttachedGroupPoliciesResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListAttachedGroupPoliciesResult>
+    <IsTruncated>false</IsTruncated>
+    <AttachedPolicies><member><PolicyName>AdministratorAccess</PolicyName><PolicyArn>arn:aws:iam::aws:policy/AdministratorAccess</PolicyArn></member></AttachedPolicies>
+  </ListAttachedGroupPoliciesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListAttachedGroupPoliciesResponse>

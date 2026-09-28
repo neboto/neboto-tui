@@ -1,0 +1,47 @@
+{
+ "Configuration": {
+  "FunctionName": "orders-api",
+  "FunctionArn": "arn:aws:lambda:{{region}}:{{account}}:function:orders-api",
+  "Runtime": "nodejs20.x",
+  "Role": "arn:aws:iam::{{account}}:role/orders-api-lambda",
+  "Handler": "index.handler",
+  "CodeSize": 2481337,
+  "Description": "Orders HTTP API (POST /orders)",
+  "Timeout": 15,
+  "MemorySize": 512,
+  "LastModified": "{{iso:now-2d}}",
+  "CodeSha256": "q1z3Yx0mZ0l5c2VkZW1vZGF0YXNldDAwMDAwMDA=",
+  "Version": "$LATEST",
+  "TracingConfig": {
+   "Mode": "PassThrough"
+  },
+  "RevisionId": "0d7a6f1e-demo-4c3b-9a8e-orde00000000",
+  "State": "Active",
+  "LastUpdateStatus": "Successful",
+  "PackageType": "Zip",
+  "Architectures": [
+   "arm64"
+  ],
+  "EphemeralStorage": {
+   "Size": 512
+  },
+  "LoggingConfig": {
+   "LogFormat": "Text",
+   "LogGroup": "/aws/lambda/orders-api"
+  },
+  "Environment": {
+   "Variables": {
+    "TABLE_NAME": "orders",
+    "LOG_LEVEL": "info"
+   }
+  }
+ },
+ "Code": {
+  "RepositoryType": "S3",
+  "Location": "https://awslambda-{{region}}-tasks.s3.{{region}}.amazonaws.com/snapshots/{{account}}/orders-api-demo"
+ },
+ "Tags": {
+  "team": "orders",
+  "ManagedBy": "terraform"
+ }
+}

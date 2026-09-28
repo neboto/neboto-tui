@@ -1,0 +1,30 @@
+# Showcase scenes
+
+One short clip per workflow, recorded against `neboto --demo`: no AWS
+account, no emulator, and the same data every take. Everything on screen is
+the made-up `acme-prod` account from `src/demo/fixtures.rs`, whose header
+lists what's planted in it.
+
+| Scene | Shows |
+|---|---|
+| `follow-links.tape` | Enter follows links: ECS service → target group → ALB, back with `Ctrl-O`, then `N` shows the service's effective network access |
+| `who-changed.tape` | `W` on `web-sg`: SSH open to the world, and CloudTrail says who opened it |
+| `failed-deploy.tape` | A failed ECS rollout: deployments, the change timeline, then the stopped task's crash log |
+| `lambda-tail.tape` | `t` live-tails a Lambda's logs, `/` filters to the errors |
+| `stack-drift.tape` | A CloudFormation stack that drifted, and `W` finds the console edit behind it |
+
+Record from the repo root, with the tools the main tape lists (`vhs` v0.11.0,
+`ttyd`, `ffmpeg`, a Nerd Font):
+
+```bash
+cargo build --release
+for t in demo/scenes/*.tape; do vhs "$t"; done   # writes demo/scenes/<name>.gif + .mp4
+```
+
+Timestamps in the demo are relative to now, so a take never looks stale. The
+live tail is generated per request (`src/demo/generate.rs`), so it keeps
+moving for as long as the camera rolls.
+
+Cursor arithmetic: the detail cursor is a plain row index, blank spacer rows
+count, and a section switch resets it to row 0. Each tape notes the rows it
+counts; if a section's layout changes, re-check those lines.

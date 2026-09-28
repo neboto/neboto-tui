@@ -1,0 +1,7 @@
+<ListAttachedRolePoliciesResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListAttachedRolePoliciesResult>
+    <IsTruncated>false</IsTruncated>
+    <AttachedPolicies><member><PolicyName>AmazonS3FullAccess</PolicyName><PolicyArn>arn:aws:iam::aws:policy/AmazonS3FullAccess</PolicyArn></member><member><PolicyName>AmazonRDSReadOnlyAccess</PolicyName><PolicyArn>arn:aws:iam::aws:policy/AmazonRDSReadOnlyAccess</PolicyArn></member></AttachedPolicies>
+  </ListAttachedRolePoliciesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListAttachedRolePoliciesResponse>

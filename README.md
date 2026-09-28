@@ -14,6 +14,10 @@ Built in Rust with [Ratatui](https://ratatui.rs/). Website and guide:
 
 https://github.com/user-attachments/assets/f7a4dee9-d38d-4624-b883-4df75489636d
 
+**Try it without an AWS account:** `neboto --demo` opens a made-up account
+with a few problems planted in it (a failed ECS deploy, SSH open to the world,
+a drifted CloudFormation stack) and makes no network calls.
+
 **neboto is read-only.** It issues only `describe`/`list`/`get` calls. Nothing
 it does can change your account, which is the point: it is safe to run against
 production, and the IAM policy in [`PERMISSIONS.md`](./PERMISSIONS.md) is
@@ -118,6 +122,7 @@ Every flag overrides the config file for that run only.
 | `-m`, `--macro <NAME>` | Run a saved macro on startup |
 | `--theme <THEME>` | Color preset (see [Themes](#themes)) |
 | `--endpoint-url <URL>` | Point at a local emulator |
+| `--demo` | Browse a made-up account offline — no credentials, no network |
 | `--banner` / `--no-banner` | Show or hide the ASCII banner |
 
 With no arguments and no `default_service` configured, neboto shows a welcome

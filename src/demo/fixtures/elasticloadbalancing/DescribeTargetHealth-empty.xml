@@ -1,0 +1,6 @@
+<DescribeTargetHealthResponse xmlns="http://elasticloadbalancing.amazonaws.com/doc/2015-12-01/">
+  <DescribeTargetHealthResult>
+    <TargetHealthDescriptions/>
+  </DescribeTargetHealthResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeTargetHealthResponse>

@@ -1,0 +1,31 @@
+{
+ "logStreams": [
+  {
+   "logStreamName": "2026/09/28/[$LATEST]5c2e0d3f9a8b4c1d9e7f6a5b4c3d2e1f",
+   "creationTime": {{epochms:now-20m}},
+   "firstEventTimestamp": {{epochms:now-20m}},
+   "lastEventTimestamp": {{epochms:now}},
+   "lastIngestionTime": {{epochms:now}},
+   "arn": "arn:aws:logs:{{region}}:{{account}}:log-group:x:log-stream:2026/09/28/[$LATEST]5c2e0d3f9a8b4c1d9e7f6a5b4c3d2e1f",
+   "storedBytes": 0
+  },
+  {
+   "logStreamName": "2026/09/28/[$LATEST]a1b2c3d4e5f60718293a4b5c6d7e8f90",
+   "creationTime": {{epochms:now-40m}},
+   "firstEventTimestamp": {{epochms:now-40m}},
+   "lastEventTimestamp": {{epochms:now-20m}},
+   "lastIngestionTime": {{epochms:now-20m}},
+   "arn": "arn:aws:logs:{{region}}:{{account}}:log-group:x:log-stream:2026/09/28/[$LATEST]a1b2c3d4e5f60718293a4b5c6d7e8f90",
+   "storedBytes": 0
+  },
+  {
+   "logStreamName": "2026/09/28/[$LATEST]0f9e8d7c6b5a49382716a5b4c3d2e1f0",
+   "creationTime": {{epochms:now-1h}},
+   "firstEventTimestamp": {{epochms:now-1h}},
+   "lastEventTimestamp": {{epochms:now-40m}},
+   "lastIngestionTime": {{epochms:now-40m}},
+   "arn": "arn:aws:logs:{{region}}:{{account}}:log-group:x:log-stream:2026/09/28/[$LATEST]0f9e8d7c6b5a49382716a5b4c3d2e1f0",
+   "storedBytes": 0
+  }
+ ]
+}

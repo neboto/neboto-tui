@@ -1,0 +1,7 @@
+<ListAccessKeysResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListAccessKeysResult>
+    <IsTruncated>false</IsTruncated>
+    <AccessKeyMetadata><member><UserName>deploy-bot</UserName><AccessKeyId>AKIADEMO000DEPLOYB01</AccessKeyId><Status>Active</Status><CreateDate>{{iso:now-497d}}</CreateDate></member></AccessKeyMetadata>
+  </ListAccessKeysResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListAccessKeysResponse>

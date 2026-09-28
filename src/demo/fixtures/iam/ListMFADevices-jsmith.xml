@@ -1,0 +1,7 @@
+<ListMFADevicesResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListMFADevicesResult>
+    <IsTruncated>false</IsTruncated>
+    <MFADevices><member><UserName>jsmith</UserName><SerialNumber>arn:aws:iam::{{account}}:mfa/jsmith-phone</SerialNumber><EnableDate>{{iso:now-790d}}</EnableDate></member></MFADevices>
+  </ListMFADevicesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListMFADevicesResponse>

@@ -1,0 +1,10 @@
+<ListUsersResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListUsersResult>
+    <IsTruncated>false</IsTruncated>
+    <Users>
+      <member><Path>/</Path><UserName>jsmith</UserName><UserId>AIDADEMO00000JSMITH0</UserId><Arn>arn:aws:iam::{{account}}:user/jsmith</Arn><CreateDate>{{iso:now-800d}}</CreateDate><PasswordLastUsed>{{iso:now-3h}}</PasswordLastUsed></member>
+      <member><Path>/</Path><UserName>deploy-bot</UserName><UserId>AIDADEMO000DEPLOYBOT</UserId><Arn>arn:aws:iam::{{account}}:user/deploy-bot</Arn><CreateDate>{{iso:now-500d}}</CreateDate></member>
+    </Users>
+  </ListUsersResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListUsersResponse>

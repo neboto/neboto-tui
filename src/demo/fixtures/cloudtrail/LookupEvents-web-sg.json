@@ -1,0 +1,36 @@
+{
+ "Events": [
+  {
+   "EventId": "7c0de001-demo-4e2a-9b1c-000000000001",
+   "EventName": "AuthorizeSecurityGroupIngress",
+   "ReadOnly": "false",
+   "AccessKeyId": "ASIADEMO0000JSMITH99",
+   "EventTime": {{epoch:now-5d}},
+   "EventSource": "ec2.amazonaws.com",
+   "Username": "jsmith",
+   "Resources": [
+    {
+     "ResourceType": "AWS::EC2::SecurityGroup",
+     "ResourceName": "sg-0web0000000000001"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"IAMUser\",\"principalId\":\"AIDADEMO00000JSMITH0\",\"arn\":\"arn:aws:iam::{{account}}:user/jsmith\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"ASIADEMO0000JSMITH99\",\"userName\":\"jsmith\",\"sessionContext\":{\"attributes\":{\"mfaAuthenticated\":\"true\"}}},\"eventTime\":\"{{iso:now-5d}}\",\"eventSource\":\"ec2.amazonaws.com\",\"eventName\":\"AuthorizeSecurityGroupIngress\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"198.51.100.23\",\"userAgent\":\"Mozilla/5.0 (Macintosh) AWS Console\",\"requestParameters\":{\"groupId\":\"sg-0web0000000000001\",\"ipPermissions\":{\"items\":[{\"ipProtocol\":\"tcp\",\"fromPort\":22,\"toPort\":22,\"ipRanges\":{\"items\":[{\"cidrIp\":\"0.0.0.0/0\",\"description\":\"temp debug access - remove\"}]}}]}},\"responseElements\":{\"_return\":true,\"securityGroupRuleSet\":{\"items\":[{\"groupId\":\"sg-0web0000000000001\",\"securityGroupRuleId\":\"sgr-0ssh0000000000001\",\"isEgress\":false,\"ipProtocol\":\"tcp\",\"fromPort\":22,\"toPort\":22,\"cidrIpv4\":\"0.0.0.0/0\"}]}},\"requestID\":\"req-0001\",\"eventID\":\"7c0de001-demo-4e2a-9b1c-000000000001\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "7c0de002-demo-4e2a-9b1c-000000000002",
+   "EventName": "AuthorizeSecurityGroupIngress",
+   "ReadOnly": "false",
+   "AccessKeyId": "AKIADEMO000DEPLOYB01",
+   "EventTime": {{epoch:now-6d}},
+   "EventSource": "ec2.amazonaws.com",
+   "Username": "deploy-bot",
+   "Resources": [
+    {
+     "ResourceType": "AWS::EC2::SecurityGroup",
+     "ResourceName": "sg-0web0000000000001"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"IAMUser\",\"principalId\":\"AIDADEMO000DEPLOYBOT\",\"arn\":\"arn:aws:iam::{{account}}:user/deploy-bot\",\"accountId\":\"{{account}}\",\"accessKeyId\":\"AKIADEMO000DEPLOYB01\",\"userName\":\"deploy-bot\"},\"eventTime\":\"{{iso:now-6d}}\",\"eventSource\":\"ec2.amazonaws.com\",\"eventName\":\"AuthorizeSecurityGroupIngress\",\"awsRegion\":\"{{region}}\",\"sourceIPAddress\":\"52.14.88.201\",\"userAgent\":\"Terraform/1.9.5 terraform-provider-aws/5.70.0\",\"requestParameters\":{\"groupId\":\"sg-0web0000000000001\",\"ipPermissions\":{\"items\":[{\"ipProtocol\":\"tcp\",\"fromPort\":8080,\"toPort\":8080,\"groups\":{\"items\":[{\"groupId\":\"sg-0alb000000000003\"}]}}]}},\"responseElements\":{\"_return\":true},\"requestID\":\"req-0002\",\"eventID\":\"7c0de002-demo-4e2a-9b1c-000000000002\",\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  }
+ ]
+}

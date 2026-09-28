@@ -1,0 +1,19 @@
+{
+ "trailList": [
+  {
+   "Name": "acme-org-trail",
+   "S3BucketName": "acme-cloudtrail-logs",
+   "IncludeGlobalServiceEvents": true,
+   "IsMultiRegionTrail": true,
+   "HomeRegion": "{{region}}",
+   "TrailARN": "arn:aws:cloudtrail:{{region}}:{{account}}:trail/acme-org-trail",
+   "LogFileValidationEnabled": true,
+   "CloudWatchLogsLogGroupArn": "arn:aws:logs:{{region}}:{{account}}:log-group:aws-cloudtrail-logs-acme:*",
+   "CloudWatchLogsRoleArn": "arn:aws:iam::{{account}}:role/CloudTrail_CloudWatchLogs_Role",
+   "KmsKeyId": "arn:aws:kms:{{region}}:{{account}}:key/1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b",
+   "HasCustomEventSelectors": true,
+   "HasInsightSelectors": false,
+   "IsOrganizationTrail": false
+  }
+ ]
+}

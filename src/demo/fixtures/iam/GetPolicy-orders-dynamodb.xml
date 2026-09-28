@@ -1,0 +1,6 @@
+<GetPolicyResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetPolicyResult>
+    <Policy><PolicyName>orders-dynamodb</PolicyName><PolicyId>ANPADEMO0000ORDERSDDB</PolicyId><Arn>arn:aws:iam::{{account}}:policy/orders-dynamodb</Arn><Path>/</Path><DefaultVersionId>v2</DefaultVersionId><AttachmentCount>2</AttachmentCount><PermissionsBoundaryUsageCount>0</PermissionsBoundaryUsageCount><IsAttachable>true</IsAttachable><Description>Orders table access</Description><CreateDate>{{iso:now-120d}}</CreateDate><UpdateDate>{{iso:now-60d}}</UpdateDate><Tags><member><Key>ManagedBy</Key><Value>terraform</Value></member></Tags></Policy>
+  </GetPolicyResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetPolicyResponse>

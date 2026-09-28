@@ -1,0 +1,14 @@
+<DescribeListenersResponse xmlns="http://elasticloadbalancing.amazonaws.com/doc/2015-12-01/">
+  <DescribeListenersResult>
+    <Listeners>
+      <member>
+        <ListenerArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:listener/app/legacy-admin-alb/7f3e2d1c0b9a8e6d/3c4d5e6f7a8b9c0d</ListenerArn>
+        <LoadBalancerArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:loadbalancer/app/legacy-admin-alb/7f3e2d1c0b9a8e6d</LoadBalancerArn>
+        <Port>80</Port>
+        <Protocol>HTTP</Protocol>
+        <DefaultActions><member><Type>forward</Type><TargetGroupArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:targetgroup/legacy-admin/9e8d7c6b5a4f3e2d</TargetGroupArn><Order>1</Order><ForwardConfig><TargetGroups><member><TargetGroupArn>arn:aws:elasticloadbalancing:{{region}}:{{account}}:targetgroup/legacy-admin/9e8d7c6b5a4f3e2d</TargetGroupArn><Weight>1</Weight></member></TargetGroups></ForwardConfig></member></DefaultActions>
+      </member>
+    </Listeners>
+  </DescribeListenersResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeListenersResponse>

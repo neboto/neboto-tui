@@ -1,0 +1,63 @@
+{
+ "logGroups": [
+  {
+   "logGroupName": "/aws/lambda/nightly-report",
+   "creationTime": {{epochms:now-700d}},
+   "metricFilterCount": 0,
+   "arn": "arn:aws:logs:{{region}}:{{account}}:log-group:/aws/lambda/nightly-report:*",
+   "storedBytes": 48318382080,
+   "logGroupClass": "STANDARD",
+   "logGroupArn": "arn:aws:logs:{{region}}:{{account}}:log-group:/aws/lambda/nightly-report"
+  },
+  {
+   "logGroupName": "/aws/lambda/orders-api",
+   "creationTime": {{epochms:now-90d}},
+   "metricFilterCount": 1,
+   "arn": "arn:aws:logs:{{region}}:{{account}}:log-group:/aws/lambda/orders-api:*",
+   "storedBytes": 2147483648,
+   "logGroupClass": "STANDARD",
+   "logGroupArn": "arn:aws:logs:{{region}}:{{account}}:log-group:/aws/lambda/orders-api",
+   "retentionInDays": 30
+  },
+  {
+   "logGroupName": "/aws/lambda/thumbnail-resizer",
+   "creationTime": {{epochms:now-45d}},
+   "metricFilterCount": 0,
+   "arn": "arn:aws:logs:{{region}}:{{account}}:log-group:/aws/lambda/thumbnail-resizer:*",
+   "storedBytes": 73400320,
+   "logGroupClass": "STANDARD",
+   "logGroupArn": "arn:aws:logs:{{region}}:{{account}}:log-group:/aws/lambda/thumbnail-resizer",
+   "retentionInDays": 14
+  },
+  {
+   "logGroupName": "/ecs/orders-worker",
+   "creationTime": {{epochms:now-120d}},
+   "metricFilterCount": 0,
+   "arn": "arn:aws:logs:{{region}}:{{account}}:log-group:/ecs/orders-worker:*",
+   "storedBytes": 5368709120,
+   "logGroupClass": "STANDARD",
+   "logGroupArn": "arn:aws:logs:{{region}}:{{account}}:log-group:/ecs/orders-worker",
+   "retentionInDays": 30
+  },
+  {
+   "logGroupName": "/ecs/storefront-web",
+   "creationTime": {{epochms:now-200d}},
+   "metricFilterCount": 0,
+   "arn": "arn:aws:logs:{{region}}:{{account}}:log-group:/ecs/storefront-web:*",
+   "storedBytes": 9663676416,
+   "logGroupClass": "STANDARD",
+   "logGroupArn": "arn:aws:logs:{{region}}:{{account}}:log-group:/ecs/storefront-web",
+   "retentionInDays": 30
+  },
+  {
+   "logGroupName": "aws-cloudtrail-logs-acme",
+   "creationTime": {{epochms:now-900d}},
+   "metricFilterCount": 0,
+   "arn": "arn:aws:logs:{{region}}:{{account}}:log-group:aws-cloudtrail-logs-acme:*",
+   "storedBytes": 112742891520,
+   "logGroupClass": "STANDARD",
+   "logGroupArn": "arn:aws:logs:{{region}}:{{account}}:log-group:aws-cloudtrail-logs-acme",
+   "retentionInDays": 365
+  }
+ ]
+}

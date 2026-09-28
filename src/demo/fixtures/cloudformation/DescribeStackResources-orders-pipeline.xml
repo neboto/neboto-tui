@@ -1,0 +1,9 @@
+<DescribeStackResourcesResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <DescribeStackResourcesResult>
+    <StackResources>
+      <member><StackName>orders-pipeline</StackName><StackId>arn:aws:cloudformation:{{region}}:{{account}}:stack/orders-pipeline/8a2e3d40-5b6c-11ef-8d2e-1f9b2c3d4e5f</StackId><LogicalResourceId>OrdersQueue</LogicalResourceId><PhysicalResourceId>https://sqs.{{region}}.amazonaws.com/{{account}}/orders</PhysicalResourceId><ResourceType>AWS::SQS::Queue</ResourceType><Timestamp>{{iso:now-120d}}</Timestamp><ResourceStatus>UPDATE_COMPLETE</ResourceStatus><DriftInformation><StackResourceDriftStatus>IN_SYNC</StackResourceDriftStatus></DriftInformation></member>
+      <member><StackName>orders-pipeline</StackName><StackId>arn:aws:cloudformation:{{region}}:{{account}}:stack/orders-pipeline/8a2e3d40-5b6c-11ef-8d2e-1f9b2c3d4e5f</StackId><LogicalResourceId>OrdersDlq</LogicalResourceId><PhysicalResourceId>https://sqs.{{region}}.amazonaws.com/{{account}}/orders-dlq</PhysicalResourceId><ResourceType>AWS::SQS::Queue</ResourceType><Timestamp>{{iso:now-120d}}</Timestamp><ResourceStatus>UPDATE_COMPLETE</ResourceStatus><DriftInformation><StackResourceDriftStatus>IN_SYNC</StackResourceDriftStatus></DriftInformation></member>
+    </StackResources>
+  </DescribeStackResourcesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeStackResourcesResponse>

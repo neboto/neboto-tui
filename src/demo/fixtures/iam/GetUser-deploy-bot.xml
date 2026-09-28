@@ -1,0 +1,6 @@
+<GetUserResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetUserResult>
+    <User><Path>/</Path><UserName>deploy-bot</UserName><UserId>AIDADEMO000DEPLOYBOT</UserId><Arn>arn:aws:iam::{{account}}:user/deploy-bot</Arn><CreateDate>{{iso:now-500d}}</CreateDate><Tags><member><Key>purpose</Key><Value>legacy CI - replace with OIDC</Value></member></Tags></User>
+  </GetUserResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetUserResponse>

@@ -1,0 +1,10 @@
+<DescribeTargetHealthResponse xmlns="http://elasticloadbalancing.amazonaws.com/doc/2015-12-01/">
+  <DescribeTargetHealthResult>
+    <TargetHealthDescriptions>
+      <member><Target><Id>10.20.11.34</Id><Port>8080</Port><AvailabilityZone>{{region}}a</AvailabilityZone></Target><HealthCheckPort>8080</HealthCheckPort><TargetHealth><State>healthy</State></TargetHealth></member>
+      <member><Target><Id>10.20.12.41</Id><Port>8080</Port><AvailabilityZone>{{region}}b</AvailabilityZone></Target><HealthCheckPort>8080</HealthCheckPort><TargetHealth><State>healthy</State></TargetHealth></member>
+      <member><Target><Id>10.20.11.48</Id><Port>8080</Port><AvailabilityZone>{{region}}a</AvailabilityZone></Target><HealthCheckPort>8080</HealthCheckPort><TargetHealth><State>healthy</State></TargetHealth></member>
+    </TargetHealthDescriptions>
+  </DescribeTargetHealthResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeTargetHealthResponse>
