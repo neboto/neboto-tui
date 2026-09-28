@@ -2,8 +2,18 @@
 # pinned to a full commit SHA with the version as a trailing comment;
 # Dependabot bumps both together, so a review of the PR is a review of the
 # exact code that will run. Rust crates are pinned by Cargo.lock (builds run
-# with --locked); Dependabot refreshes the lock monthly in one grouped PR, and
-# security alerts (enabled on the repo) open their own PRs as advisories land.
+# with --locked); Dependabot refreshes the lock monthly, and security alerts
+# (enabled on the repo) open their own PRs as advisories land.
+#
+# Crate updates come in three shapes, so that one breaking update can't hold
+# back a hundred routine ones (a single grouped PR sat red for weeks on the
+# ratatui and ureq majors):
+#   - `crates`: every minor + patch update in one PR, expected to go green.
+#   - `tui`: ratatui with the crates it pins (crossterm, unicode-width), in
+#     their own PR. They move together, and pre-1.0 "minor" releases
+#     (0.26 → 0.30) break the API, which Dependabot's semver classification
+#     would otherwise file as routine.
+#   - everything else: each major update as its own PR, one migration each.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -18,5 +28,9 @@ updates:
     schedule:
       interval: monthly
     groups:
+      tui:
+        patterns: ["ratatui", "crossterm", "unicode-width"]
       crates:
         patterns: ["*"]
+        exclude-patterns: ["ratatui", "crossterm", "unicode-width"]
+        update-types: ["minor", "patch"]
