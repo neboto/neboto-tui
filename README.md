@@ -206,8 +206,9 @@ full-width; `\` flattens all sections into one scroll.
 | `gg` / `G` | Top / bottom |
 | `Ctrl-d` / `Ctrl-u` | Half page |
 | `l` `→` `⏎` | Open the detail pane |
-| `h` `←` `⌫` `Ctrl-O` | Back through history |
+| `⌫` `Ctrl-O` | Back through history |
 | `Tab` / `Shift-Tab`, `1`–`9`, `0` | Switch sub-tab |
+| `H` / `L` | Previous / next sub-tab (from either pane) |
 | `a` | Hide noisy rows (defaults, automated snapshots, passed checks…) |
 | `z` | Cycle sort — load order → name ↑ → name ↓ → state |
 | `F` | Cycle a filter over the states present in this view |
@@ -222,9 +223,11 @@ full-width; `\` flattens all sections into one scroll.
 |---|---|
 | `j` `k`, `gg` / `G` | Scroll |
 | `Tab` / `Shift-Tab`, `1`–`9` | Switch section |
+| `H` / `L` | Previous / next sub-tab, staying in the detail pane |
 | `[[` / `]]` | Previous / next group header |
 | `l` `→` `⏎` | Follow the link under the cursor |
-| `h` `←` `Esc` `Ctrl-O` | Back |
+| `h` `←` `Esc` | Back to the list |
+| `Ctrl-O` | Back through history |
 | `/` | Filter the body text |
 | `y` / `c` | Copy the row, or the visual selection |
 | `e` | Open in `$EDITOR` |

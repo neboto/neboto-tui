@@ -178,11 +178,13 @@ fn action(key: KeyEvent, before: &View, after: &View) -> Option<String> {
     if after.full_width != before.full_width {
         return Some(if after.full_width { "full width" } else { "split view" }.into());
     }
+    // Sub-tab before section: `H` / `L` from the detail pane change both,
+    // and the tab is the point (the section just resets to the default).
+    if after.sub_tab != before.sub_tab {
+        return after.sub_tab.clone();
+    }
     if after.details_focused && after.section != before.section {
         return after.section.clone();
-    }
-    if !after.details_focused && after.sub_tab != before.sub_tab {
-        return after.sub_tab.clone();
     }
     // Cursor movement speaks for itself.
     if matches!(

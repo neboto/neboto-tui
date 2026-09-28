@@ -927,9 +927,13 @@ and the approaches you rejected are the part nobody can recover from your code.
   `GetResourcePaymentToken` return spendable material and are never called.
 - **Navigation keymap** (spatial: `h`/`l` are pane movement, not tab cycling).
   List pane — `j`/`k`, `gg`/`G` (top/bottom), `Ctrl-d`/`Ctrl-u` (half-page),
-  `l`/`→`/`Enter` (drill into detail), `h`/`←`/`⌫`/`Ctrl-O`
-  (nav-back through history), `Tab`/`Shift-Tab` (cycle sub-tabs), `1`–`9` (jump
-  to sub-tab), `/` (search), `@` (search seeded with `@`, for a fast
+  `l`/`→`/`Enter` (drill into detail), `⌫`/`Ctrl-O`
+  (nav-back through history — **not** `h`/`←`: from the detail pane they go
+  back to the list, and a second tap popping history lost your place),
+  `Tab`/`Shift-Tab` (cycle sub-tabs), `1`–`9` (jump to sub-tab), `H`/`L`
+  (previous/next sub-tab from **either** pane — `step_sub_tab` replays
+  `Shift-Tab`/`Tab` through the list handlers and re-opens the new tab's
+  first row when pressed in the detail pane; gated by `has_sub_tabs`), `/` (search), `@` (search seeded with `@`, for a fast
   `@service …` switch — works from either pane, via `start_service_search`),
   `y` (copy id/ARN; with a visual selection active, copy the rows as a
   Markdown table), `C` (copy an AWS CLI command — picker), `V`/`J`/`K`/`Ctrl-A` (visual
@@ -968,6 +972,7 @@ and the approaches you rejected are the part nobody can recover from your code.
   (service/region/profile selectors, all usable from the detail pane too).
   Detail pane — `j`/`k`, `gg`/`G`,
   `[[`/`]]` (group headers), `Tab`/`Shift-Tab` + `1`–`9` (sections),
+  `H`/`L` (sub-tabs, as in the list pane),
   `l`/`→`/`Enter` (follow jump), `h`/`←`/`Esc` (back to list), `Ctrl-O`
   (nav-back through history, same as the list pane), `y`/`v`/`e`,
   `m`/`o`/`i`/`t` (rich views), `W`/`U`/`N` (timeline / referenced-by /

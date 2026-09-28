@@ -328,7 +328,8 @@ Verified missing, roughly by value.
   trail of where you came from. The `` ` `` jump list exists but is a modal;
   a persistent status-bar breadcrumb would be discoverable. Relatedly, a
   visible `< Back` hint in the detail pane header, since new users get stuck
-  there even though `h`/`←`/`⌫`/`Ctrl-O` all work.
+  there even though `h`/`←`/`Esc` (to the list) and `Ctrl-O` (history) all
+  work.
 - **Inline JSON view** — `e` hands the terminal to `$EDITOR`, a full context
   switch. A syntax-highlighted pretty-print pane would keep you in the TUI.
 - **Custom CloudWatch metric query builder** — you can only view the
