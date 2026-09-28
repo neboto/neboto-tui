@@ -69,6 +69,7 @@ pub enum ServiceType {
     Msk,
     Fms,
     Redshift,
+    Dms,
     Budgets,
     Invoices,
     ControlTower,
@@ -144,6 +145,7 @@ impl ServiceType {
             ServiceType::Msk,
             ServiceType::Fms,
             ServiceType::Redshift,
+            ServiceType::Dms,
             ServiceType::Budgets,
             ServiceType::Invoices,
             ServiceType::ControlTower,
@@ -207,7 +209,10 @@ impl ServiceType {
             | ServiceType::Fsx
             | ServiceType::Backup
             | ServiceType::Transfer => "Storage",
-            ServiceType::RDS | ServiceType::DynamoDb | ServiceType::ElastiCache => "Database",
+            ServiceType::RDS
+            | ServiceType::DynamoDb
+            | ServiceType::ElastiCache
+            | ServiceType::Dms => "Database",
             ServiceType::VPC
             | ServiceType::Elb
             | ServiceType::Route53
@@ -323,6 +328,7 @@ impl ServiceType {
             ServiceType::Glue => "Glue",
             ServiceType::Ses => "SES",
             ServiceType::Msk => "MSK",
+            ServiceType::Dms => "DMS",
             ServiceType::Fms => "Firewall Manager",
             ServiceType::Redshift => "Redshift",
             ServiceType::Budgets => "Budgets",
@@ -398,6 +404,7 @@ impl ServiceType {
             ServiceType::Glue => "GLU",
             ServiceType::Ses => "SES",
             ServiceType::Msk => "MSK",
+            ServiceType::Dms => "DMS",
             ServiceType::Fms => "FMS",
             ServiceType::Redshift => "RSH",
             ServiceType::Budgets => "BUD",
@@ -476,6 +483,7 @@ impl ServiceType {
             ServiceType::Msk => "Kafka clusters (provisioned + serverless)",
             ServiceType::Fms => "Firewall Manager Policies, App/Protocol Lists, Resource Sets",
             ServiceType::Redshift => "Clusters, Serverless Workgroups, Snapshots",
+            ServiceType::Dms => "Replication Tasks, Instances, Endpoints, Serverless Replications",
             ServiceType::Budgets => "Cost & Usage Budgets, Alerts, Subscribers",
             ServiceType::Invoices => "Invoice Summaries & PDF Download",
             ServiceType::ControlTower => "Landing Zone, Enabled Controls, Baselines & Operations",
@@ -581,6 +589,7 @@ impl ServiceType {
             "glue" | "etl" | "crawler" | "crawlers" | "datacatalog" => Some(ServiceType::Glue),
             "ses" | "sesv2" | "email" | "identities" | "suppression" => Some(ServiceType::Ses),
             "msk" | "kafka" | "managedkafka" => Some(ServiceType::Msk),
+            "dms" | "migration" | "databasemigration" | "replication" => Some(ServiceType::Dms),
             "fms" | "firewallmanager" | "fwmanager" => Some(ServiceType::Fms),
             "redshift" | "rs" | "warehouse" | "datawarehouse" | "dwh" => {
                 Some(ServiceType::Redshift)
@@ -660,6 +669,7 @@ impl ServiceType {
             ServiceType::Glue => "@glue",
             ServiceType::Ses => "@ses",
             ServiceType::Msk => "@msk",
+            ServiceType::Dms => "@dms",
             ServiceType::Fms => "@fms",
             ServiceType::Redshift => "@redshift",
             ServiceType::Budgets => "@budgets",

@@ -418,6 +418,12 @@ pub struct LazyStore {
     pub kinesis_tags: LazyMap<Vec<(String, String)>>,
     /// A delivery stream's tags, keyed by stream name.
     pub firehose_tags: LazyMap<Vec<(String, String)>>,
+    /// DMS task Tables section (`DescribeTableStatistics`), keyed by task ARN.
+    pub dms_table_stats: LazyMap<crate::aws::services::dms::DmsTableStats>,
+    /// DMS task Assessments section, keyed by task ARN.
+    pub dms_assessments: LazyMap<Vec<crate::aws::services::dms::DmsAssessmentRun>>,
+    /// DMS serverless replication Tables section, keyed by config ARN.
+    pub dms_serverless_table_stats: LazyMap<crate::aws::services::dms::DmsTableStats>,
 
     // ── Transfer Family ──────────────────────────────────────────────────
     /// A server's users, keyed by server id.
