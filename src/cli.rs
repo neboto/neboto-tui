@@ -41,6 +41,11 @@ pub struct Cli {
     #[arg(short = 'w', long)]
     pub watch: bool,
 
+    /// Show each key as it's pressed, and what it did, in a corner box —
+    /// for screen recordings, screen shares and demos.
+    #[arg(long)]
+    pub show_keys: bool,
+
     /// Run a saved macro on startup, by name (see `,` in the TUI).
     #[arg(short = 'm', long = "macro", value_name = "NAME")]
     pub macro_name: Option<String>,
@@ -89,6 +94,9 @@ impl Cli {
         if self.watch {
             config.watch = Some(true);
         }
+        if self.show_keys {
+            config.show_keys = Some(true);
+        }
         if self.theme.is_some() {
             config.theme = self.theme.clone();
         }
@@ -108,6 +116,7 @@ mod tests {
             banner: false,
             no_banner: false,
             watch: false,
+            show_keys: false,
             macro_name: None,
             theme: None,
         }

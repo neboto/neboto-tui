@@ -705,6 +705,19 @@ macro simply doesn't reproduce those (it never stalls waiting on a modal it
 can't drive). In-pane overlays (`m`/`t`/`o`/`i`) record as raw keys and replay
 consistently, but aren't modelled.
 
+### Keycast (`--show-keys`, `src/keycast.rs`)
+
+A corner box naming each key and what it did (`W  change timeline`,
+`2  Deployments`), for recordings and screen shares; the demo tapes use it.
+It rides the macro recorder's shape: `handle_key` snapshots a
+`keycast::View` before dispatch, `keycast_tick` (main loop, after
+`macro_tick`) snapshots again, and `classify` names the **difference** — an
+overlay opened, the service or section changed, focus moved. A small fallback
+table covers keys with no visible effect (copy, wrap, filter chips). So a new
+feature gets a correct label for free if its state is in `View`; a new
+in-pane view needs a name in `App::keycast_view`'s overlay chain. Typing is
+never echoed: while `View.input` is set only `⏎`/`Esc` show.
+
 ### Caching (`src/aws/cache.rs`)
 
 - Per-`ServiceType` entry, default 5-min TTL (`effective_ttl()` overrides —
@@ -1039,6 +1052,7 @@ and the approaches you rejected are the part nobody can recover from your code.
   `endpoint_url`, `watch`/`watch_interval` (start in watch mode / its cadence),
   `detail_flat` (start in the flat all-section detail view),
   `log_wrap` (start log tail/search panes with long lines wrapped),
+  `show_keys` (keycast: each key and what it did, in a corner box),
   `export_formats` (which of `json`/`csv`/`md` exports write, default all
   three — `export::ExportFormats`; bad values warn at startup, never fatal) +
   `export_dir` (`~/` expanded, created on demand; `NEBOTO_EXPORT_DIR` wins),
@@ -1065,7 +1079,7 @@ and the approaches you rejected are the part nobody can recover from your code.
   No `default_service` ⇒ welcome splash, nothing loads.
 - **`src/cli.rs`**: clap `Cli` (parsed in `main` before the runtime).
   `-s/--service`, `-r/--region`, `-p/--profile`, `--endpoint-url`,
-  `--banner`/`--no-banner`, `-w/--watch`, `--theme` — each **overrides the config file**
+  `--banner`/`--no-banner`, `-w/--watch`, `--theme`, `--show-keys` — each **overrides the config file**
   for the run via
   `Cli::apply_to(&mut Config)`, applied in `App::new(cli)` after `Config::load()`.
   `-m/--macro NAME` is the exception: it names an action, not a setting, so it
