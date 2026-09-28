@@ -58,6 +58,64 @@ pub struct MouseGeometry {
     pub detail_body_area: Option<Rect>,
     pub detail_body_scroll: usize}
 
+/// Services that draw a sub-tab row under the service strip. `render_app`
+/// sizes the layout from it and `H` / `L` step through it.
+pub fn has_sub_tabs(service: ServiceType) -> bool {
+    matches!(
+        service,
+        ServiceType::EC2
+            | ServiceType::ECS
+            | ServiceType::IdentityCenter
+            | ServiceType::VPC
+            | ServiceType::S3
+            | ServiceType::CloudFormation
+            | ServiceType::Route53
+            | ServiceType::CloudWatch
+            | ServiceType::RDS
+            | ServiceType::IAM
+            | ServiceType::Organizations
+            | ServiceType::Elb
+            | ServiceType::Messaging
+            | ServiceType::Ssm
+            | ServiceType::Cost
+            | ServiceType::Config
+            | ServiceType::Waf
+            | ServiceType::TransitGateway
+            | ServiceType::Route53Resolver
+            | ServiceType::DirectConnect
+            | ServiceType::ApiGateway
+            | ServiceType::ServiceQuotas
+            | ServiceType::EventBridge
+            | ServiceType::GuardDuty
+            | ServiceType::SecurityHub
+            | ServiceType::Cognito
+            | ServiceType::Inspector
+            | ServiceType::Backup
+            | ServiceType::ServiceCatalog
+            | ServiceType::NetworkFirewall
+            | ServiceType::Code
+            | ServiceType::Ram
+            | ServiceType::TrustedAdvisor
+            | ServiceType::Fsx
+            | ServiceType::Bedrock
+            | ServiceType::AgentCore
+            | ServiceType::Kinesis
+            | ServiceType::StepFunctions
+            | ServiceType::Redshift
+            | ServiceType::Batch
+            | ServiceType::XRay
+            | ServiceType::Dms
+            | ServiceType::Athena
+            | ServiceType::Glue
+            | ServiceType::Ses
+            | ServiceType::Fms
+            | ServiceType::CloudFront
+            | ServiceType::CloudTrail
+            | ServiceType::ControlTower
+            | ServiceType::S3Tables
+    )
+}
+
 /// Whether a screen cell (`col`, `row`) falls inside `area`.
 fn point_in(area: Rect, col: u16, row: u16) -> bool {
     col >= area.x
@@ -3765,6 +3823,73 @@ impl App {
             }
         }
 
+        if let Some(tab) = self.sub_tab_step_key(key) {
+            return self.step_sub_tab(tab, event_tx).await;
+        }
+        self.dispatch_key(key, event_tx).await
+    }
+
+    /// `H` / `L` → the list pane's `Shift-Tab` / `Tab`: previous / next
+    /// sub-tab from **either** pane. `Tab` and the digits mean "section" in
+    /// the detail pane, so without this, changing sub-tab from there took
+    /// `h`, `Tab`, `l`. `None` whenever the letter is text — a search bar,
+    /// a picker's filter, an in-pane view, the macro name prompt — or the
+    /// service has no sub-tabs.
+    fn sub_tab_step_key(&self, key: KeyEvent) -> Option<KeyCode> {
+        let tab = match key.code {
+            KeyCode::Char('H') => KeyCode::BackTab,
+            KeyCode::Char('L') => KeyCode::Tab,
+            _ => return None,
+        };
+        let free = key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
+            && !self.search_active
+            && !self.detail_search_active
+            && self.macro_name_input.is_none()
+            && !self.any_selector_visible()
+            && !self.any_pane_overlay_active()
+            && self.current_service.is_some_and(has_sub_tabs);
+        free.then_some(tab)
+    }
+
+    /// Replay `tab` through the list pane's sub-tab handlers (the same trick
+    /// a sub-tab click uses) and, when it came from the detail pane, open
+    /// the new tab's first row there so focus stays where it was.
+    async fn step_sub_tab(
+        &mut self,
+        tab: KeyCode,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> Result<()> {
+        let from_details = self.details_focused;
+        let layout = self.layout_mode;
+        if from_details {
+            self.leave_detail_pane();
+        }
+        self.dispatch_key(KeyEvent::new(tab, KeyModifiers::NONE), event_tx)
+            .await?;
+        if from_details && self.get_selected_resource().is_some() {
+            self.focus_details_panel(event_tx);
+            self.layout_mode = layout;
+        }
+        Ok(())
+    }
+
+    /// Back from the detail pane to the list (`h` / `←` / `Esc`).
+    fn leave_detail_pane(&mut self) {
+        self.clear_detail_visual();
+        self.detail_search_active = false;
+        self.detail_search_query.clear();
+        self.details_focused = false;
+        self.details_selected_index = None;
+        self.layout_mode = LayoutMode::Split;
+        self.terraform_state = None;
+    }
+
+    async fn dispatch_key(
+        &mut self,
+        key: KeyEvent,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> Result<()> {
+
         // `,` (macros) is intercepted here rather than sitting with the other
         // global binds, because the detail-pane keymap block ends in
         // `_ => {}` + `return` — it swallows every key it doesn't name, so a
@@ -5492,13 +5617,7 @@ impl App {
                 }
                 // Spatial nav: Esc / h / ← move left, back to the list pane.
                 KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => {
-                    self.clear_detail_visual();
-                    self.detail_search_active = false;
-                    self.detail_search_query.clear();
-                    self.details_focused = false;
-                    self.details_selected_index = None;
-                    self.layout_mode = LayoutMode::Split;
-                    self.terraform_state = None;
+                    self.leave_detail_pane();
                 }
                 // Vim-style nav-back works from the detail pane too (the global
                 // arm is unreachable here — this block returns first). Plain `o`
@@ -8016,11 +8135,12 @@ impl App {
                 }
             }
 
-            // Jump back through navigation history (return to where you were).
-            // Spatial nav: h / ← / Backspace move left, retracing the jump
-            // history; Ctrl-O is the Vim-style alias.
+            // Jump back through navigation history (return to where you were):
+            // Ctrl-O (Vim) or Backspace. Not `h` / `←`: from the detail pane
+            // they mean "back to the list", and a second tap retracing history
+            // (often into another service) threw away the place you were in.
             (KeyCode::Char('o'), KeyModifiers::CONTROL)
-            | (KeyCode::Char('h') | KeyCode::Left | KeyCode::Backspace, KeyModifiers::NONE) => {
+            | (KeyCode::Backspace, KeyModifiers::NONE) => {
                 self.nav_back(event_tx);
             }
 

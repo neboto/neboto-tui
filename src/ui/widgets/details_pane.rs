@@ -21441,7 +21441,7 @@ pub fn opensearch_section_lines(
             if d.access_policies.is_some() {
                 rows.push((
                     "  Access Policy".to_string(),
-                    "set — press v to view".to_string(),
+                    "set — press e to view".to_string(),
                 ));
             } else {
                 rows.push(("  Access Policy".to_string(), "none".to_string()));
@@ -40996,7 +40996,7 @@ fn render_ecs_task_split(app: &App, task: &EcsTask, area: Rect, frame: &mut Fram
     render_ecs_split(
         app,
         "ECS Task",
-        &detail_footer(app, app.details_focused, 4, "v logs"),
+        &detail_footer(app, app.details_focused, 4, "e logs"),
         header,
         &tabs,
         area,
