@@ -138,6 +138,7 @@ Every flag overrides the config file for that run only.
 | `-w`, `--watch` | Start in watch mode (auto-refresh) |
 | `-m`, `--macro <NAME>` | Run a saved macro on startup |
 | `--theme <THEME>` | Color preset (see [Themes](#themes)) |
+| `--show-keys` | Show each key and what it did in a corner box, for recordings and screen shares |
 | `--endpoint-url <URL>` | Point at a local emulator |
 | `--demo` | Browse a made-up account offline — no credentials, no network |
 | `--banner` / `--no-banner` | Show or hide the ASCII banner |
@@ -333,6 +334,7 @@ template.
 | `show_banner` | ASCII banner on startup |
 | `watch`, `watch_interval` | Start in watch mode, and its cadence in seconds |
 | `detail_flat` | Start with the flat all-sections detail view |
+| `show_keys` | Show each key and what it did in a corner box (`--show-keys` for one run) |
 | `export_formats` | Which files exports write: any of `"json"`, `"csv"`, `"md"` (default all three) |
 | `export_dir` | Where exports go (default the working directory; `NEBOTO_EXPORT_DIR` overrides) |
 | `theme`, `[theme_colors]` | Preset name and per-color overrides |

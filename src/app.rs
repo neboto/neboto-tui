@@ -1755,6 +1755,9 @@ pub struct App {
     // `record_message_history` diffing the single-slot message fields, so the
     // hundreds of direct `error_message = Some(…)` assignments need no sweep.
     pub message_history: std::collections::VecDeque<MessageEntry>,
+    /// Keycast (`--show-keys`, config `show_keys`): the keys just pressed
+    /// and what they did, drawn in a corner box. `None` when off.
+    pub keycast: Option<crate::keycast::Keycast>,
     pub message_history_visible: bool,
     pub message_history_selected: usize,
     last_seen_error: Option<String>,
@@ -2611,6 +2614,7 @@ impl App {
             detail_search_query: String::new(),
             detail_flat_mode: config.detail_flat.unwrap_or(false),
             log_wrap: config.log_wrap.unwrap_or(false),
+            keycast: config.show_keys.unwrap_or(false).then(crate::keycast::Keycast::default),
             export_options: crate::export::ExportOptions {
                 formats: crate::export::ExportFormats::from_config(config.export_formats.as_deref()).0,
                 dir: config.export_dir.as_deref().map(crate::export::expand_home),
@@ -3622,6 +3626,12 @@ impl App {
         // search query in particular is cleared by `Esc` further down.
         if self.macro_recorder.is_some() {
             self.macro_note_key(key);
+        }
+        if self.keycast.is_some() {
+            let before = self.keycast_view();
+            if let Some(kc) = self.keycast.as_mut() {
+                kc.note(key, before);
+            }
         }
 
         // `,` (macros) is intercepted here rather than sitting with the other
@@ -20041,6 +20051,98 @@ impl App {
         }
         rec.last_service = service;
         rec.service_selector_was_open = service_picker_open;
+    }
+
+    /// What a key can visibly change, for the keycast to diff (see
+    /// `src/keycast.rs`). The overlay names are what the box prints.
+    fn keycast_view(&self) -> crate::keycast::View {
+        use crate::keycast::Input;
+        let overlay = if self.help_visible {
+            Some("help")
+        } else if self.service_selector.visible {
+            Some("services")
+        } else if self.region_selector.visible {
+            Some("regions")
+        } else if self.profile_selector.visible {
+            Some("profiles")
+        } else if self.org_role_selector.visible {
+            Some("accounts")
+        } else if self.quota_service_selector.visible {
+            Some("quota services")
+        } else if self.ct_filter_modal.visible {
+            Some("event filter")
+        } else if self.ssm_session_modal.visible {
+            Some("session")
+        } else if self.jump_list_visible {
+            Some("jump list")
+        } else if self.bookmarks_visible {
+            Some("bookmarks")
+        } else if self.macro_picker_visible {
+            Some("macros")
+        } else if self.message_history_visible {
+            Some("messages")
+        } else if self.cli_picker.is_some() {
+            Some("CLI commands")
+        } else if self.trail_in_pane.is_some() {
+            Some("change timeline")
+        } else if self.refs_in_pane.is_some() {
+            Some("referenced by")
+        } else if self.access_in_pane.is_some() {
+            Some("network access")
+        } else if self.metrics_in_pane.is_some() {
+            Some("metrics")
+        } else if self.log_tail.visible {
+            Some(match self.log_tail.mode {
+                crate::ui::widgets::log_tail::LogPaneMode::Tail => "live tail",
+                crate::ui::widgets::log_tail::LogPaneMode::Search => "log search",
+            })
+        } else if self.s3_object_browser.visible {
+            Some("object browser")
+        } else if self.ddb_browser.visible {
+            Some("item browser")
+        } else if self.memory_browser.visible {
+            Some("memory browser")
+        } else {
+            None
+        };
+        let input = if self.search_active {
+            Some(Input::Search)
+        } else if self.detail_search_active
+            || (self.log_tail.visible && (self.log_tail.filter_active || self.log_tail.query_active))
+        {
+            Some(Input::Filter)
+        } else if self.service_selector.visible
+            || self.region_selector.visible
+            || self.profile_selector.visible
+            || self.org_role_selector.visible
+            || self.quota_service_selector.visible
+        {
+            Some(Input::Picker)
+        } else {
+            None
+        };
+        crate::keycast::View {
+            service: self.current_service.map(|s| s.name().to_string()),
+            details_focused: self.details_focused,
+            section: self.macro_section_label(),
+            sub_tab: self.active_type_filter().map(str::to_string),
+            overlay,
+            input,
+            search_query: if self.search_active { self.search_query.clone() } else { String::new() },
+            full_width: self.layout_mode == LayoutMode::DetailsOnly,
+            selected_id: self.get_selected_resource_id(),
+        }
+    }
+
+    /// Name the key `handle_key` just ran (main loop, after dispatch).
+    pub fn keycast_tick(&mut self) {
+        if self.keycast.is_none() {
+            return;
+        }
+        let after = self.keycast_view();
+        if let Some(kc) = self.keycast.as_mut() {
+            kc.settle(&after, std::time::Instant::now());
+        }
     }
 
     /// Drop a trailing `s`/`R`/`P` — the key that opened a credential picker.
