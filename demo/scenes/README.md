@@ -31,6 +31,10 @@ change timeline (`W`) can merge alarm history instead of noting that
 CloudWatch isn't loaded. The hero's crash log sets `EDITOR=less` with a
 `LESS` prompt, so the frame doesn't show a temp file path.
 
+To update neboto.dev after re-recording, run `demo/site-media.sh
+<neboto.dev checkout>`. It copies the files, cropping off VHS's window bar,
+because the site frames each recording in its own.
+
 Timestamps in the demo are relative to now, so a take never looks stale. The
 live tail is generated per request (`src/demo/generate.rs`), so it keeps
 moving for as long as the camera rolls.
