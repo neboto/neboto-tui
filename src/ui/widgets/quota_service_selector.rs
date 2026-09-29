@@ -1,11 +1,10 @@
 use crate::ui::theme;
 use crate::ui::widgets::region_selector::render_search_line;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Clear, List, ListItem, ListState, Paragraph,
     },
     Frame,
@@ -144,14 +143,13 @@ pub fn render_quota_service_selector(
         return;
     }
 
-    let area = centered_rect(60, 60, frame.size());
+    let area = centered_rect(60, 60, frame.area());
     frame.render_widget(Clear, area);
 
     if state.loading {
-        let block = theme::popup_block("Pick service (quotas)").title(
-            Title::from(theme::hint_line(&[("Esc", "close")]))
-                .position(Position::Bottom)
-                .alignment(Alignment::Center),
+        let block = theme::popup_block("Pick service (quotas)").title_bottom(
+            theme::hint_line(&[("Esc", "close")])
+                .centered(),
         );
         let msg = Paragraph::new(vec![
             Line::raw(""),
@@ -167,24 +165,22 @@ pub fn render_quota_service_selector(
 
     let (pos, total) = state.position();
     let block = theme::popup_block("Pick service (quotas)")
-        .title(
-            Title::from(theme::hint_line(&[
+        .title_bottom(
+            theme::hint_line(&[
                 ("type", "filter"),
                 ("↑/↓", "move"),
                 ("^d/^u", "page"),
                 ("⏎", "select"),
                 ("Esc", "close"),
-            ]))
-            .position(Position::Bottom)
-            .alignment(Alignment::Center),
+            ])
+            .centered(),
         )
-        .title(
-            Title::from(Span::styled(
+        .title_bottom(
+            Line::from(Span::styled(
                 format!(" {}/{} ", pos, total),
                 Style::default().fg(theme::text_dim()),
             ))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+            .right_aligned(),
         );
     let inner = block.inner(area);
     frame.render_widget(block, area);

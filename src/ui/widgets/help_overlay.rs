@@ -1,11 +1,10 @@
 use crate::app::App;
 use crate::ui::theme;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Clear, Paragraph,
     },
     Frame,
@@ -116,7 +115,7 @@ const RIGHT_SECTIONS: &[Section] = &[
 /// Render the help overlay: two aligned key/description columns, sized to the
 /// content (capped at 80% of the terminal), scrollable when it doesn't fit.
 pub fn render_help_overlay(app: &App, frame: &mut Frame) {
-    let size = frame.size();
+    let size = frame.area();
 
     // Width: 76% of the terminal, capped so ultrawide screens don't stretch
     // the two columns apart. Column width drives description truncation.
@@ -138,8 +137,8 @@ pub fn render_help_overlay(app: &App, frame: &mut Frame) {
 
     frame.render_widget(Clear, area);
 
-    let mut block = theme::popup_block("Help").title(
-        Title::from(Span::styled(
+    let mut block = theme::popup_block("Help").title_bottom(
+        Line::from(Span::styled(
             if max_scroll > 0 {
                 " j/k scroll · ? / Esc close "
             } else {
@@ -147,18 +146,16 @@ pub fn render_help_overlay(app: &App, frame: &mut Frame) {
             },
             Style::default().fg(theme::text_dim()),
         ))
-        .position(Position::Bottom)
-        .alignment(Alignment::Center),
+        .centered(),
     );
     if max_scroll > 0 {
         // Overflow indicator: which slice of the content is on screen.
-        block = block.title(
-            Title::from(Span::styled(
+        block = block.title_bottom(
+            Line::from(Span::styled(
                 format!(" {}–{}/{} ", offset + 1, (offset + viewport).min(content_h), content_h),
                 Style::default().fg(theme::text_dim()),
             ))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+            .right_aligned(),
         );
     }
     let inner = block.inner(area);

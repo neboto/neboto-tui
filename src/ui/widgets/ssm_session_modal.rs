@@ -9,11 +9,10 @@
 
 use crate::ui::theme;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Clear, List, ListItem, ListState, Paragraph,
     },
     Frame,
@@ -127,21 +126,20 @@ pub fn render_ssm_session_modal(state: &SsmSessionModalState, frame: &mut Frame)
         return;
     }
 
-    let area = centered_rect(64, 40, frame.size());
+    let area = centered_rect(64, 40, frame.area());
     frame.render_widget(Clear, area);
 
     let title = format!("SSM session · {}", state.label);
 
     match state.stage {
         SsmModalStage::Menu => {
-            let block = theme::popup_block(&title).title(
-                Title::from(theme::hint_line(&[
+            let block = theme::popup_block(&title).title_bottom(
+                theme::hint_line(&[
                     ("↑/↓", "navigate"),
                     ("⏎", "select"),
                     ("Esc", "close"),
-                ]))
-                .position(Position::Bottom)
-                .alignment(Alignment::Center),
+                ])
+                .centered(),
             );
             let inner = block.inner(area);
             frame.render_widget(block, area);
@@ -169,14 +167,13 @@ pub fn render_ssm_session_modal(state: &SsmSessionModalState, frame: &mut Frame)
             frame.render_stateful_widget(list, inner, &mut list_state);
         }
         SsmModalStage::Input(action) => {
-            let block = theme::popup_block(&title).title(
-                Title::from(theme::hint_line(&[
+            let block = theme::popup_block(&title).title_bottom(
+                theme::hint_line(&[
                     ("type", "params"),
                     ("⏎", "connect"),
                     ("Esc", "back"),
-                ]))
-                .position(Position::Bottom)
-                .alignment(Alignment::Center),
+                ])
+                .centered(),
             );
             let inner = block.inner(area);
             frame.render_widget(block, area);

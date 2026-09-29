@@ -20,8 +20,8 @@ bin-dir = "{ bin }{ binary-ext }"
 
 [dependencies]
 # TUI
-ratatui = "0.26"
-crossterm = "0.27"
+ratatui = "0.30"
+crossterm = "0.29"
 
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
@@ -73,7 +73,7 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 # For number formatting
 thousands = "0.2"
 # Display-width padding for the detail pane key column (CJK / emoji / glyphs)
-unicode-width = "0.1"
+unicode-width = "0.2"
 aws-sdk-cloudwatch = "1.17"
 aws-sdk-cloudwatchlogs = "1.17"
 aws-sdk-sts = "1.17"

@@ -70,13 +70,15 @@ v0.1.0 lock was several months stale and carried HIGH advisories in the TLS
 stack (`aws-lc-sys`, `rustls`, `rustls-webpki`, `h2`, `time`) until those
 were bumped.
 
-**Don't run a bare `cargo update` without checking it builds.** As of
-2026-09 `aws-smithy-types 1.7.0` changed the public `Document` enum and the
-`aws-smithy-json 0.63` that every `aws-sdk-*` crate still depends on no
-longer compiles against it, while the newest SDK crates require
-`aws-smithy-types ^1.7` — so a full refresh resolves to a set that cannot
-build, and it can't be pinned back either. Bump security crates by name until
-upstream sorts that out, then retry the full refresh.
+**Don't run a bare `cargo update` without checking it builds.** For most of
+2026-09 a full refresh resolved to a set that could not compile
+(`aws-smithy-types 1.7.0` changed the public `Document` enum under an
+`aws-smithy-json` the SDK crates still used), and it couldn't be pinned back
+either. Upstream fixed it by `aws-smithy-types 1.8`, and the grouped
+Dependabot refresh (#63) went through — but the shape can recur, so check
+`cargo build` before trusting a refreshed lock. Minor and patch updates
+arrive monthly as one `crates` PR; majors come one per PR (see
+`.github/dependabot.yml`).
 
 Known leftovers that a `cargo update` cannot clear, and why they're accepted:
 
@@ -86,12 +88,9 @@ Known leftovers that a `cargo update` cannot clear, and why they're accepted:
   hyper-1 / rustls-0.23 client at runtime; the old stack is compiled in but
   idle. Clearing it means `default-features = false` + an explicit feature
   list on all ~80 SDK crates.
-- `lru 0.12` / `paste` (unmaintained): via `ratatui 0.26`. Neither is
-  reachable from the TUI's usage; goes away with a ratatui upgrade.
-- `aws-sdk-ec2` / `-ecs` / `-rds` (LOW, GHSA-g59m-gf8j-gjf5 — stricter
-  validation of the region string): neboto only ever passes region names
-  from its own `Region` enum, so it can't be reached. Cleared by the SDK
-  refresh above once it builds again.
+- `lru 0.16` (unsound: `LruCache::pop` isn't panic-safe): via `aws-sdk-s3`,
+  which uses it internally; neboto never touches an `LruCache`. Clears when
+  the SDK moves off it.
 
 ## Cutting a release
 

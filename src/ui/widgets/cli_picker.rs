@@ -2,11 +2,10 @@ use crate::app::App;
 use crate::aws::cli_actions::{CliPickerState, CliTier};
 use crate::ui::theme;
 use ratatui::{
-    layout::{Alignment, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Clear, Paragraph, Wrap,
     },
     Frame,
@@ -20,7 +19,7 @@ pub fn render_cli_picker(app: &App, frame: &mut Frame) {
     let Some(picker) = &app.cli_picker else {
         return;
     };
-    let full = frame.size();
+    let full = frame.area();
     let width = full.width.saturating_sub(4).clamp(20, 90).min(full.width);
     let inner_width = width.saturating_sub(4) as usize;
 
@@ -41,13 +40,12 @@ pub fn render_cli_picker(app: &App, frame: &mut Frame) {
     };
     frame.render_widget(Clear, area);
 
-    let block = theme::popup_block(&format!("Copy CLI command · {}", picker.subject)).title(
-        Title::from(Span::styled(
+    let block = theme::popup_block(&format!("Copy CLI command · {}", picker.subject)).title_bottom(
+        Line::from(Span::styled(
             " ↑↓ move · ⏎ copy · 1-9 pick · Esc close ",
             Style::default().fg(theme::text_dim()),
         ))
-        .position(Position::Bottom)
-        .alignment(Alignment::Center),
+        .centered(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);

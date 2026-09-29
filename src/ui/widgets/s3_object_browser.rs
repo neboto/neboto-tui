@@ -1,11 +1,10 @@
 use crate::aws::services::s3::{fmt_object_size, S3Entry};
 use crate::ui::theme;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Clear, Paragraph,
     },
     Frame,
@@ -272,13 +271,12 @@ pub fn render_s3_object_browser(app: &crate::app::App, area: Rect, frame: &mut F
         return;
     }
 
-    let block = theme::popup_block(&format!("Objects — {}", st.bucket)).title(
-        Title::from(Span::styled(
+    let block = theme::popup_block(&format!("Objects — {}", st.bucket)).title_bottom(
+        Line::from(Span::styled(
             " ⏎/l open · h up · i info · / filter · f recurse · V versions · s sort · n next · d dl · e edit · p url · y copy · Z width · ? help · Esc close ",
             Style::default().fg(theme::text_dim()),
         ))
-        .position(Position::Bottom)
-        .alignment(Alignment::Center),
+        .centered(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -661,10 +659,9 @@ fn render_help(area: Rect, frame: &mut Frame) {
     let popup = Rect { x, y, width: w, height: h };
     frame.render_widget(Clear, popup);
 
-    let block = theme::popup_block("Object browser — keys").title(
-        Title::from(Span::styled(" ? / Esc close ", Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Center),
+    let block = theme::popup_block("Object browser — keys").title_bottom(
+        Line::from(Span::styled(" ? / Esc close ", Style::default().fg(theme::text_dim())))
+            .centered(),
     );
     let inner = block.inner(popup);
     frame.render_widget(block, popup);

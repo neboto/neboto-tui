@@ -11,11 +11,10 @@
 
 use crate::ui::theme;
 use ratatui::{
-    layout::{Alignment, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Clear, List, ListItem, ListState, Paragraph,
     },
     Frame,
@@ -167,10 +166,10 @@ pub fn render_org_role_selector(state: &OrgRoleSelectorState, frame: &mut Frame)
                 .unwrap_or(30),
         )
         .max(40)
-        .min(frame.size().width.saturating_sub(4));
+        .min(frame.area().width.saturating_sub(4));
     let height =
-        (state.roles.len() as u16 + extra_rows + 3).min(frame.size().height.saturating_sub(4));
-    let area = centered_rect(width, height, frame.size());
+        (state.roles.len() as u16 + extra_rows + 3).min(frame.area().height.saturating_sub(4));
+    let area = centered_rect(width, height, frame.area());
     frame.render_widget(Clear, area);
 
     let hints: &[(&str, &str)] = if manual {
@@ -187,10 +186,9 @@ pub fn render_org_role_selector(state: &OrgRoleSelectorState, frame: &mut Frame)
             ("Esc", "cancel"),
         ]
     };
-    let block = theme::popup_block(&title).title(
-        Title::from(theme::hint_line(hints))
-            .position(Position::Bottom)
-            .alignment(Alignment::Center),
+    let block = theme::popup_block(&title).title_bottom(
+        theme::hint_line(hints)
+            .centered(),
     );
     let mut inner = block.inner(area);
     frame.render_widget(block, area);
