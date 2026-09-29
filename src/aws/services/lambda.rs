@@ -874,7 +874,7 @@ pub async fn download_and_extract_lambda_code(
         // unzipped, usually far smaller).
         let resp = ureq::get(&url).call().map_err(|e| io_err(e.to_string()))?;
         let mut bytes: Vec<u8> = Vec::new();
-        resp.into_reader().read_to_end(&mut bytes)?;
+        resp.into_body().into_reader().read_to_end(&mut bytes)?;
 
         // Extraction dir (caller picks a unique, timestamped path so prior
         // downloads are kept as history rather than overwritten).

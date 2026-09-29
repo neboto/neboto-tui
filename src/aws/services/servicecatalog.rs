@@ -1149,7 +1149,7 @@ pub async fn fetch_sc_template_body(url: String) -> Result<String> {
         // CFN caps S3-hosted templates at 1 MB; read_to_string would also be
         // fine, but keep a byte read so a stray BOM can't error the whole body.
         let mut bytes: Vec<u8> = Vec::new();
-        resp.into_reader().read_to_end(&mut bytes)?;
+        resp.into_body().into_reader().read_to_end(&mut bytes)?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     })
     .await

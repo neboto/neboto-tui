@@ -375,7 +375,7 @@ pub async fn download_invoice_pdf(
         let io_err = std::io::Error::other;
         let resp = ureq::get(&url).call().map_err(|e| io_err(e.to_string()))?;
         let mut bytes: Vec<u8> = Vec::new();
-        resp.into_reader().read_to_end(&mut bytes)?;
+        resp.into_body().into_reader().read_to_end(&mut bytes)?;
         if let Some(parent) = dest_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
