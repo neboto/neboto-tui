@@ -160,6 +160,15 @@ async fn get_returns_every_section_loaded() {
     }
     assert_eq!(v["sections"]["Resources"]["WebService"]["Type"], "AWS::ECS::Service");
     assert!(sections.values().all(|s| !s.is_null()));
+
+    // Every demo stack has a template, not just the one the clips use.
+    for stack in ["acme-network", "orders-pipeline"] {
+        let v = demo_get_json(GetArgs { sections: vec!["template".into()], ..get_args("cfn", &[stack]) }).await;
+        assert_eq!(
+            v["sections"]["Template"]["content"][0], "AWSTemplateFormatVersion: '2010-09-09'",
+            "{stack}: {}", v["sections"]["Template"]
+        );
+    }
 }
 
 #[tokio::test]

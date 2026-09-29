@@ -1,0 +1,31 @@
+<GetTemplateResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <GetTemplateResult>
+    <TemplateBody>AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Orders queue + dead-letter queue'
+Parameters:
+  QueueName: {Type: String, Default: orders}
+  DlqName: {Type: String, Default: orders-dlq}
+Resources:
+  OrdersQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Ref QueueName
+      VisibilityTimeout: 60
+      RedrivePolicy:
+        deadLetterTargetArn: !Sub 'arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${DlqName}'
+        maxReceiveCount: 5
+  OrdersDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: orders-dlq
+      MessageRetentionPeriod: 1209600
+Outputs:
+  QueueUrl:
+    Description: Orders queue
+    Value: !Ref OrdersQueue
+    Export: {Name: orders-queue-url}
+</TemplateBody>
+    <StagesAvailable><member>Original</member><member>Processed</member></StagesAvailable>
+  </GetTemplateResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetTemplateResponse>

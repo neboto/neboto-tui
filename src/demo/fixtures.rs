@@ -14,7 +14,9 @@
 //!   `web-sg` is the Enter-to-follow chain; everything on it is owned by
 //!   the `storefront-prod` stack, which has drifted (the target group's
 //!   health-check interval, changed in the console — `W` says by whom)
-//! - `orders-pipeline` stack is in UPDATE_ROLLBACK_COMPLETE (a DLQ rename)
+//! - `orders-pipeline` stack is in UPDATE_ROLLBACK_COMPLETE (a DLQ rename):
+//!   its template builds the redrive ARN from the `DlqName` parameter while
+//!   the DLQ itself keeps a hardcoded name
 //! - `github-actions-deploy` got AdministratorAccess three days ago
 //! - `orders-api` (Lambda) tails live logs with occasional DynamoDB
 //!   throttles, and its errors alarm is firing; `nightly-report` runs on a deprecated runtime and its log
@@ -160,6 +162,8 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("cloudformation", "DescribeStackEvents", when ["orders-pipeline"], "DescribeStackEvents-orders-pipeline.xml"),
     fx!("cloudformation", "DescribeStackEvents", when ["acme-network"], "DescribeStackEvents-acme-network.xml"),
     fx!("cloudformation", "GetTemplate", when ["storefront-prod"], "GetTemplate-storefront-prod.xml"),
+    fx!("cloudformation", "GetTemplate", when ["orders-pipeline"], "GetTemplate-orders-pipeline.xml"),
+    fx!("cloudformation", "GetTemplate", when ["acme-network"], "GetTemplate-acme-network.xml"),
     fx!("cloudformation", "DescribeStackResourceDrifts", when ["storefront-prod"], "DescribeStackResourceDrifts-storefront-prod.xml"),
     fx!("cloudformation", "ListExports", "ListExports.xml"),
     fx!("cloudformation", "ListImports", when ["acme-network"], "ListImports-network.xml"),
