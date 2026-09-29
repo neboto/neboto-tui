@@ -67,7 +67,7 @@ arboard = "3.3"
 tempfile = "3.8"
 
 # HTTP download (Lambda deployment packages from presigned URLs) + unzip
-ureq = "2"
+ureq = "3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # For number formatting
