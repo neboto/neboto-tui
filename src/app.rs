@@ -20074,10 +20074,19 @@ impl App {
         // S3 object bookmarks: stash the path to open after the bucket is selected.
         let s3_path = loc.s3_object_path.clone();
 
-        if self.current_service != Some(loc.service) {
-            self.switch_service(loc.service);
+        // An `@all` result list is rebuilt from every warm cache, whichever
+        // service is underneath — so returning to one stays put. Switching
+        // back to the service it was typed over would reload that service if
+        // its cache had lapsed, and a load finishing under @all is discarded
+        // uncached, so every Ctrl-O back to the results re-fetched it.
+        let all_search =
+            crate::search::query_parser::parse_all_query(&loc.query).is_some();
+        if !all_search {
+            if self.current_service != Some(loc.service) {
+                self.switch_service(loc.service);
+            }
+            self.apply_jump_view(&loc.view);
         }
-        self.apply_jump_view(&loc.view);
         // CloudWatch metrics are a lazy graft, not part of the base service load —
         // kick the fetch off so the bookmarked metric actually streams in (the
         // `CwMetricsLoaded` handler then resolves the pending jump). Without this
