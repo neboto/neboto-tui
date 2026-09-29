@@ -201,6 +201,32 @@ impl Config {
             .and_then(ServiceType::from_prefix)
     }
 
+    /// The member-account switch role name(s): `org_access_roles` if set,
+    /// else `org_access_role`, else `OrganizationAccountAccessRole`. Never
+    /// empty, so callers may index `[0]`.
+    pub fn org_access_roles_resolved(&self) -> Vec<String> {
+        match &self.org_access_roles {
+            Some(roles) if !roles.is_empty() => roles.clone(),
+            _ => vec![self
+                .org_access_role
+                .clone()
+                .unwrap_or_else(|| "OrganizationAccountAccessRole".to_string())],
+        }
+    }
+
+    /// The Control Tower audit hop `(account, role)`, if configured. The role
+    /// defaults to the member-switch role — a Control Tower org already has
+    /// one that works.
+    pub fn controltower_audit_target(&self, org_access_roles: &[String]) -> Option<(String, String)> {
+        self.controltower_audit_account.clone().map(|account| {
+            let role = self
+                .controltower_audit_role
+                .clone()
+                .unwrap_or_else(|| org_access_roles[0].clone());
+            (account, role)
+        })
+    }
+
     /// Resolve `default_region` to a `Region` (None if unset/unknown).
     pub fn default_region_typed(&self) -> Option<Region> {
         self.default_region.as_deref().and_then(Region::from_str)

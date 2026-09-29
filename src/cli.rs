@@ -3,29 +3,40 @@
 //! can jump straight to a service/region/profile without editing config.
 
 use crate::config::Config;
-use clap::Parser;
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// neboto — a read-only AWS resource browser TUI.
 ///
 /// With no arguments it honours your config file (or shows the welcome splash).
 /// Flags below override the config for this run, e.g. `neboto -s ec2 -r eu-west-1`.
+/// With a subcommand it runs once and prints instead of opening the TUI —
+/// the same read-only calls, for scripts and agents.
 #[derive(Debug, Parser)]
 #[command(name = "neboto", version, about, long_about = None)]
 pub struct Cli {
+    /// Run once and print instead of opening the TUI.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
+    /// Output format for subcommands (default: table on a terminal, json
+    /// when piped).
+    #[arg(short = 'o', long, value_enum, global = true, value_name = "FORMAT")]
+    pub output: Option<OutputFormat>,
+
     /// Service to open on startup (prefix/alias, e.g. ec2, s3, iam, @cw).
     #[arg(short = 's', long, value_name = "SERVICE")]
     pub service: Option<String>,
 
     /// Region to start in (e.g. us-west-2, eu-west-1).
-    #[arg(short = 'r', long, value_name = "REGION")]
+    #[arg(short = 'r', long, global = true, value_name = "REGION")]
     pub region: Option<String>,
 
     /// Named AWS profile to use.
-    #[arg(short = 'p', long, value_name = "PROFILE")]
+    #[arg(short = 'p', long, global = true, value_name = "PROFILE")]
     pub profile: Option<String>,
 
     /// Custom AWS endpoint URL (local emulator, e.g. http://localhost:4566).
-    #[arg(long, value_name = "URL")]
+    #[arg(long, global = true, value_name = "URL")]
     pub endpoint_url: Option<String>,
 
     /// Show the ASCII banner on startup.
@@ -52,7 +63,7 @@ pub struct Cli {
 
     /// Try neboto without an AWS account: browse a made-up account from
     /// canned responses, fully offline. Ignores profiles and endpoints.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub demo: bool,
 
     /// Color theme preset: dark (default), light, solarized-dark,
@@ -60,6 +71,61 @@ pub struct Cli {
     /// catppuccin-mocha, catppuccin-latte.
     #[arg(long, value_name = "THEME")]
     pub theme: Option<String>,
+}
+
+/// The one-shot subcommands. Each makes the same read-only calls the TUI
+/// makes and prints the result — nothing here can change an account.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// List every service: its @prefix, name, and whether it's global.
+    Services,
+    /// List a service's resources, filtered like the TUI's search.
+    #[command(visible_alias = "list")]
+    Ls(LsArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct LsArgs {
+    /// Service prefix or alias, with or without the @ (ec2, @lambda, iam, …;
+    /// `neboto services` lists them).
+    #[arg(value_name = "SERVICE")]
+    pub service: String,
+
+    /// Only this resource type: the type column's text or its last word(s),
+    /// any case, `|` for several — e.g. "Security Group", role, "role|policy".
+    #[arg(short = 't', long = "type", value_name = "TYPE")]
+    pub resource_type: Option<String>,
+
+    /// Filter like the TUI search: fuzzy text plus exact `tag:key[=value]`
+    /// terms, e.g. 'web tag:env=prod'.
+    #[arg(short = 'f', long, value_name = "QUERY")]
+    pub filter: Option<String>,
+
+    /// Only rows in this state, as the state column shows it
+    /// (case-insensitive), e.g. running.
+    #[arg(long, value_name = "STATE")]
+    pub state: Option<String>,
+
+    /// Drop noise rows (AWS-managed defaults, automated snapshots, …) — the
+    /// TUI's `a`.
+    #[arg(long)]
+    pub hide_noise: bool,
+
+    /// Print at most N rows.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum OutputFormat {
+    /// Aligned columns for reading in a terminal.
+    Table,
+    /// One JSON object: `{schema, service, region, count, resources: [...]}`.
+    Json,
+    /// A Markdown table.
+    Md,
+    /// CSV with every field as a column.
+    Csv,
 }
 
 impl Cli {
@@ -124,6 +190,8 @@ mod tests {
 
     fn empty() -> Cli {
         Cli {
+            command: None,
+            output: None,
             service: None,
             region: None,
             profile: None,

@@ -146,6 +146,37 @@ Every flag overrides the config file for that run only.
 With no arguments and no `default_service` configured, neboto shows a welcome
 splash and loads nothing until you pick a service — so startup is instant.
 
+### Scripts and agents
+
+Subcommands run once and print instead of opening the TUI. They make the same
+read-only calls, so they're safe to hand to a script or an AI agent: nothing
+neboto can call changes an account.
+
+```sh
+neboto services                                   # every @prefix it knows
+neboto ls @ec2                                    # all EC2 resources
+neboto ls @ec2 -t volume --state available        # unattached EBS volumes
+neboto ls @iam -t role -f 'deploy'                # IAM roles, fuzzy-matched
+neboto ls @ecs -f 'tag:team=storefront' -o md     # a Markdown table
+neboto ls @lambda --demo -o json | jq '.resources[].name'
+```
+
+| Flag | Effect |
+|---|---|
+| `-t`, `--type <TYPE>` | Only this resource type — the type column's text or its last word(s): `"Security Group"`, `role`, `role\|policy` |
+| `-f`, `--filter <QUERY>` | The TUI's search: fuzzy text plus exact `tag:key[=value]` terms |
+| `--state <STATE>` | Only rows in this state (`running`, `available`, …) |
+| `--hide-noise` | Drop AWS-managed defaults and other noise rows (the TUI's `a`) |
+| `--limit <N>` | At most N rows |
+| `-o`, `--output <FORMAT>` | `table` (default on a terminal), `json` (default when piped), `md`, `csv` |
+
+`-r`, `-p`, `--endpoint-url` and `--demo` work here too. JSON is one document,
+`{"schema": "neboto/v1", "service", "region", "count", "resources": [...]}`;
+warnings go to stderr. Exit codes: `0` success (including an empty list), `1`
+an AWS error, `2` a bad service or region. Unlike the TUI, an unknown region
+or profile is an error rather than a fallback, so a script never gets another
+account's answer.
+
 ---
 
 ## Layout

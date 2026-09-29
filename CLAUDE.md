@@ -1109,6 +1109,22 @@ and the approaches you rejected are the part nobody can recover from your code.
   (Control Tower parameters + landing-zone manifest, AgentCore agent cards and
   memory event blobs).
 
+### Headless subcommands (`neboto ls …`, `src/headless.rs`)
+
+`neboto services` / `neboto ls <@svc>` run once and print (table / json /
+md / csv) instead of starting the TUI — the read-only guarantee is the point,
+for scripts and agents (#65 has the roadmap: `get`, `search`, lenses, MCP).
+`main` dispatches on `cli.command` before the TUI is built. `ls` builds the
+same services via `App::build_services` and drains
+`list_resources_streaming`'s events (`list_all`), then applies the TUI's
+filters as flags. Rules: stdout carries only the result (warnings to stderr,
+so `| jq` holds); JSON carries `"schema": "neboto/v1"`; exit 0/1/2 =
+ok/AWS error/usage; a bad region or profile **fails** (the TUI falls back,
+which in a script would answer from the wrong account). Tests run against the
+demo account through `AwsClients::new_demo_for_test()` — never
+`demo::enable()` in a test, it's process-wide and would move every other
+test's dead-endpoint clients onto fixtures.
+
 ### Local emulator (floci / LocalStack)
 
 Point every client at a local emulator via `endpoint_url` in config or the
