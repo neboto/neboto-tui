@@ -1,11 +1,10 @@
 use crate::aws::service::ServiceType;
 use crate::ui::theme;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Clear, List, ListItem, ListState, Paragraph,
     },
     Frame,
@@ -258,7 +257,7 @@ pub fn render_service_selector(
         return;
     }
 
-    let area = centered_rect(50, 75, frame.size());
+    let area = centered_rect(50, 75, frame.area());
     frame.render_widget(Clear, area);
 
     // Split into search bar + list
@@ -332,25 +331,23 @@ pub fn render_service_selector(
     let list_block = ratatui::widgets::Block::default()
         .borders(ratatui::widgets::Borders::LEFT | ratatui::widgets::Borders::RIGHT | ratatui::widgets::Borders::BOTTOM)
         .border_style(Style::default().fg(theme::border_dim()))
-        .title(
-            Title::from(theme::hint_line(&[
+        .title_bottom(
+            theme::hint_line(&[
                 ("type", "filter"),
                 ("↑/↓", "move"),
                 ("^d/^u", "page"),
                 ("←/→", "category"),
                 ("⏎", "select"),
                 ("Esc", "cancel"),
-            ]))
-            .position(Position::Bottom)
-            .alignment(Alignment::Center),
+            ])
+            .centered(),
         )
-        .title(
-            Title::from(Span::styled(
+        .title_bottom(
+            Line::from(Span::styled(
                 format!(" {}/{} ", pos, total),
                 Style::default().fg(theme::text_dim()),
             ))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+            .right_aligned(),
         );
 
     let list = List::new(items)

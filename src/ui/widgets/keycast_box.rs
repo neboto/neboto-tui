@@ -54,7 +54,7 @@ pub fn render_keycast(app: &App, status_area: Rect, frame: &mut Frame) {
 
     // Border + one cell of padding each side. When the trail won't fit, drop
     // chips from the oldest end rather than clipping the newest.
-    let max_inner = frame.size().width.saturating_sub(8) as usize;
+    let max_inner = frame.area().width.saturating_sub(8) as usize;
     let width = |c: &[Vec<Span>]| -> usize {
         c.iter().map(|chip| chip.iter().map(Span::width).sum::<usize>()).sum::<usize>()
             + 2 * c.len().saturating_sub(1)
@@ -72,7 +72,7 @@ pub fn render_keycast(app: &App, status_area: Rect, frame: &mut Frame) {
     }
     let line = Line::from(spans);
 
-    let w = (line.width() as u16 + 4).min(frame.size().width.saturating_sub(4));
+    let w = (line.width() as u16 + 4).min(frame.area().width.saturating_sub(4));
     if w < 8 || status_area.y < 4 {
         return;
     }

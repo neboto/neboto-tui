@@ -1,11 +1,10 @@
 use crate::aws::services::cloudtrail::{CtEventQuery, CtEventRange, CtLookupAttr};
 use crate::ui::theme;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Clear, List, ListItem, ListState, Paragraph,
     },
     Frame,
@@ -135,7 +134,7 @@ pub fn render_ct_filter_modal(state: &CtFilterModalState, frame: &mut Frame) {
     }
 
     // Exact height: 8 attribute rows + value line + 2 range rows + borders.
-    let area = centered_rect(56, (CtLookupAttr::ALL.len() + 1 + 1 + 2 + 2) as u16, frame.size());
+    let area = centered_rect(56, (CtLookupAttr::ALL.len() + 1 + 1 + 2 + 2) as u16, frame.area());
     frame.render_widget(Clear, area);
 
     let hints: &[(&str, &str)] = match state.phase {
@@ -152,10 +151,9 @@ pub fn render_ct_filter_modal(state: &CtFilterModalState, frame: &mut Frame) {
             ("Esc", "back"),
         ],
     };
-    let block = theme::popup_block("Filter events (server-side)").title(
-        Title::from(theme::hint_line(hints))
-            .position(Position::Bottom)
-            .alignment(Alignment::Center),
+    let block = theme::popup_block("Filter events (server-side)").title_bottom(
+        theme::hint_line(hints)
+            .centered(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);

@@ -11,11 +11,10 @@
 use crate::aws::services::agentcore::MemoryBrowserRow;
 use crate::ui::theme;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Paragraph,
     },
     Frame,
@@ -177,13 +176,12 @@ pub fn render_memory_browser(app: &crate::app::App, area: Rect, frame: &mut Fram
         return;
     }
 
-    let block = theme::popup_block(&format!("Memory — {}", st.level.label())).title(
-        Title::from(Span::styled(
+    let block = theme::popup_block(&format!("Memory — {}", st.level.label())).title_bottom(
+        Line::from(Span::styled(
             " ⏎/l open · h up · i payload · / filter · n next · t records · e edit · y copy · Z width · ? help · Esc close ",
             Style::default().fg(theme::text_dim()),
         ))
-        .position(Position::Bottom)
-        .alignment(Alignment::Center),
+        .centered(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);

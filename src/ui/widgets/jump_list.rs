@@ -5,7 +5,6 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Clear, Paragraph,
     },
     Frame,
@@ -14,16 +13,15 @@ use ratatui::{
 /// Jump-list picker: the navigation history, most-recent first. `↑`/`↓` move,
 /// `⏎` jumps to the selected place, `Esc`/`` ` `` closes.
 pub fn render_jump_list(app: &App, frame: &mut Frame) {
-    let area = centered_rect(72, 60, frame.size());
+    let area = centered_rect(72, 60, frame.area());
     frame.render_widget(Clear, area);
 
-    let block = theme::popup_block("Jump list").title(
-        Title::from(Span::styled(
+    let block = theme::popup_block("Jump list").title_bottom(
+        Line::from(Span::styled(
             " ↑↓ move · ⏎ go · Esc close ",
             Style::default().fg(theme::text_dim()),
         ))
-        .position(Position::Bottom)
-        .alignment(Alignment::Center),
+        .centered(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -95,16 +93,15 @@ pub fn render_jump_list(app: &App, frame: &mut Frame) {
 /// Bookmarks picker: persistent, user-curated saved locations. `↑`/`↓` move,
 /// `⏎` jumps, `d` deletes the selected bookmark, `Esc`/`'` closes.
 pub fn render_bookmarks(app: &App, frame: &mut Frame) {
-    let area = centered_rect(72, 60, frame.size());
+    let area = centered_rect(72, 60, frame.area());
     frame.render_widget(Clear, area);
 
-    let block = theme::popup_block("Bookmarks").title(
-        Title::from(Span::styled(
+    let block = theme::popup_block("Bookmarks").title_bottom(
+        Line::from(Span::styled(
             " ↑↓ move · ⏎ go · d delete · Esc close ",
             Style::default().fg(theme::text_dim()),
         ))
-        .position(Position::Bottom)
-        .alignment(Alignment::Center),
+        .centered(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);

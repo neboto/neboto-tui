@@ -177,7 +177,6 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Paragraph,
     },
     Frame,
@@ -1416,10 +1415,9 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
 
     let mut block = theme::pane_block(&title, focused);
     if !footer.is_empty() {
-        block = block.title(
-            Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-                .position(Position::Bottom)
-                .alignment(Alignment::Right),
+        block = block.title_bottom(
+            Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+                .right_aligned(),
         );
     }
 
@@ -1810,10 +1808,9 @@ fn render_s3_bucket_split(app: &App, bucket: &S3Bucket, area: Rect, frame: &mut 
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 6, "o objects");
     let mut block = theme::pane_block("S3 Bucket", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -3741,10 +3738,9 @@ fn render_ec2_instance_split(app: &App, instance: &Ec2Instance, area: Rect, fram
     let footer = detail_footer(app, focused, 5, "");
 
     let mut block = theme::pane_block("EC2 Instance", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -4623,10 +4619,9 @@ fn render_subnet_split(app: &App, subnet: &Subnet, area: Rect, frame: &mut Frame
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("Subnet", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -4852,10 +4847,9 @@ fn render_route_table_split(app: &App, rt: &RouteTable, area: Rect, frame: &mut 
     let footer = detail_footer(app, focused, 3, "");
 
     let mut block = theme::pane_block("Route Table", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -5014,10 +5008,9 @@ fn render_network_acl_split(app: &App, acl: &NetworkAcl, area: Rect, frame: &mut
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("Network ACL", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -5176,10 +5169,9 @@ fn render_cfn_stack_split(app: &App, stack: &CfnStack, area: Rect, frame: &mut F
     let footer = detail_footer(app, focused, section_count, extras);
 
     let mut block = theme::pane_block(title, focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -6099,10 +6091,9 @@ fn render_cfn_export_split(app: &App, export: &CfnExport, area: Rect, frame: &mu
     let footer = detail_footer(app, focused, 2, "");
 
     let mut block = theme::pane_block("CloudFormation Export", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -6203,10 +6194,9 @@ fn render_cfn_stackset_split(app: &App, ss: &CfnStackSet, area: Rect, frame: &mu
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("CFN StackSet", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -6471,10 +6461,9 @@ fn render_lambda_function_split(
     let footer = detail_footer(app, focused, 6, extras);
 
     let mut block = theme::pane_block("Lambda Function", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -7068,10 +7057,9 @@ fn render_r53_zone_split(app: &App, zone: &R53HostedZone, area: Rect, frame: &mu
     let footer = detail_footer(app, focused, 3, "");
 
     let mut block = theme::pane_block("R53 Hosted Zone", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -7463,10 +7451,9 @@ fn render_r53_health_check_split(
     let footer = detail_footer(app, focused, 3, "");
 
     let mut block = theme::pane_block("R53 Health Check", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -7676,10 +7663,9 @@ fn render_acm_cert_split(app: &App, cert: &AcmCertificate, area: Rect, frame: &m
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("ACM Certificate", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -7970,10 +7956,9 @@ fn render_sfn_split(app: &App, sm: &SfnStateMachine, area: Rect, frame: &mut Fra
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("State Machine", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -8227,10 +8212,9 @@ fn render_sfn_exec_split(app: &App, exec: &SfnExecution, area: Rect, frame: &mut
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("Execution", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -8671,10 +8655,9 @@ fn render_health_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("Health Event", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -9081,10 +9064,9 @@ fn render_fsx_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 6, "");
     let mut block = theme::pane_block("FSx File System", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -9466,10 +9448,9 @@ fn render_code_commit_repo_split(
         "",
     );
     let mut block = theme::pane_block("Repository", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -9806,10 +9787,9 @@ fn render_cc_pr_split(
         "",
     );
     let mut block = theme::pane_block("Pull Request", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -10183,10 +10163,9 @@ fn render_code_build_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 5, "");
     let mut block = theme::pane_block("Build Project", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -10449,10 +10428,9 @@ fn render_code_exec_split(
     let footer = detail_footer(app, focused, 3, "");
 
     let mut block = theme::pane_block("Execution", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -10804,10 +10782,9 @@ fn render_code_pipeline_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("Pipeline", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -11073,10 +11050,9 @@ fn render_code_deploy_group_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("Deployment Group", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -11245,10 +11221,9 @@ fn render_code_artifact_repo_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 2, "");
     let mut block = theme::pane_block("CodeArtifact Repository", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -11338,10 +11313,9 @@ fn render_cf_distribution_split(
     let footer = detail_footer(app, focused, 7, "");
 
     let mut block = theme::pane_block("CloudFront Distribution", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -11787,10 +11761,9 @@ fn render_cf_function_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 2, "");
     let mut block = theme::pane_block("CloudFront Function", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -11918,10 +11891,9 @@ fn render_tgw_split(app: &App, tgw: &TransitGateway, area: Rect, frame: &mut Fra
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("Transit Gateway", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -11986,10 +11958,9 @@ fn render_tgw_route_table_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 2, "");
     let mut block = theme::pane_block("TGW Route Table", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -12176,10 +12147,9 @@ fn render_vpc_endpoint_split(app: &App, ep: &VpcEndpoint, area: Rect, frame: &mu
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("VPC Endpoint", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -12293,10 +12263,9 @@ fn render_vpn_connection_split(app: &App, vpn: &VpnConnection, area: Rect, frame
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("VPN Connection", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -12429,10 +12398,9 @@ fn render_kms_key_split(app: &App, key: &KmsKey, area: Rect, frame: &mut Frame) 
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("KMS Key", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -12665,10 +12633,9 @@ fn render_bedrock_guardrail_split(
     let footer = detail_footer(app, focused, 7, "");
 
     let mut block = theme::pane_block("Guardrail", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -13050,10 +13017,9 @@ fn render_bedrock_kb_split(
     let footer = detail_footer(app, focused, 5, "");
 
     let mut block = theme::pane_block("Knowledge Base", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -13298,10 +13264,9 @@ fn render_bedrock_agent_split(app: &App, agent: &BedrockAgent, area: Rect, frame
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("Agent", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -13549,10 +13514,9 @@ fn render_ram_share_split(
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("RAM Resource Share", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -13783,10 +13747,9 @@ fn render_workspace_split(
     let footer = detail_footer(app, focused, 3, "");
 
     let mut block = theme::pane_block("WorkSpace", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -14022,10 +13985,9 @@ fn render_resource_group_split(app: &App, rg: &RgGroup, area: Rect, frame: &mut 
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("Resource Group", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -14213,10 +14175,9 @@ fn render_ta_check_split(app: &App, check: &TaCheck, area: Rect, frame: &mut Fra
     let footer = detail_footer(app, focused, 2, "");
 
     let mut block = theme::pane_block("Trusted Advisor Check", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -14509,10 +14470,9 @@ fn render_ta_rec_split(
     let footer = detail_footer(app, focused, 3, "");
 
     let mut block = theme::pane_block("TA Recommendation", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -14814,10 +14774,9 @@ fn render_ddb_table_split(app: &App, table: &DdbTable, area: Rect, frame: &mut F
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "i items");
     let mut block = theme::pane_block("DynamoDB Table", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -15024,10 +14983,9 @@ fn render_dx_connection_split(app: &App, conn: &DxConnection, area: Rect, frame:
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("DX Connection", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -15060,10 +15018,9 @@ fn render_dx_vif_split(app: &App, vif: &DxVirtualInterface, area: Rect, frame: &
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("DX Virtual Interface", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -15311,10 +15268,9 @@ fn render_dx_gateway_split(app: &App, gw: &DxGateway, area: Rect, frame: &mut Fr
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("DX Gateway", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -15470,10 +15426,9 @@ fn render_ga_accelerator_split(app: &App, acc: &GaAccelerator, area: Rect, frame
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("Global Accelerator", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -15653,10 +15608,9 @@ fn render_eks_cluster_split(app: &App, cluster: &EksCluster, area: Rect, frame: 
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 8, "");
     let mut block = theme::pane_block("EKS Cluster", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -16208,10 +16162,9 @@ fn render_efs_fs_split(app: &App, fs: &EfsFileSystem, area: Rect, frame: &mut Fr
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("EFS File System", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -16401,10 +16354,9 @@ fn render_elasticache_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("ElastiCache", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -16629,10 +16581,9 @@ fn render_kinesis_split(app: &App, st: &KinesisStream, area: Rect, frame: &mut F
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("Kinesis Stream", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -16783,10 +16734,9 @@ fn render_firehose_split(app: &App, st: &FirehoseStream, area: Rect, frame: &mut
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("Firehose Delivery Stream", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -18808,10 +18758,9 @@ fn render_athena_chrome(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, tabs.len(), "");
     let mut block = theme::pane_block(title, focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -19934,10 +19883,9 @@ fn render_msk_split(app: &App, c: &MskCluster, area: Rect, frame: &mut Frame) {
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 5, "");
     let mut block = theme::pane_block("MSK Cluster", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -20174,10 +20122,9 @@ fn render_budget_split(app: &App, b: &BudgetItem, area: Rect, frame: &mut Frame)
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("Budget", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -20333,10 +20280,9 @@ fn render_landing_zone_split(app: &App, z: &LandingZone, area: Rect, frame: &mut
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("Landing Zone", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -20475,10 +20421,9 @@ fn render_enabled_control_split(app: &App, c: &EnabledControl, area: Rect, frame
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("Enabled Control", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -20628,10 +20573,9 @@ fn render_enabled_baseline_split(app: &App, b: &EnabledBaseline, area: Rect, fra
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("Enabled Baseline", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -20739,10 +20683,9 @@ fn render_ct_account_split(app: &App, a: &CtAccount, area: Rect, frame: &mut Fra
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("Account", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -21004,10 +20947,9 @@ fn render_ct_compliance_split(app: &App, c: &CtCompliance, area: Rect, frame: &m
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 2, "");
     let mut block = theme::pane_block("Compliance", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -21208,10 +21150,9 @@ fn render_opensearch_split(app: &App, d: &OpenSearchDomain, area: Rect, frame: &
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 5, "");
     let mut block = theme::pane_block("OpenSearch Domain", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -21471,10 +21412,9 @@ fn render_transfer_server_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("Transfer Server", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -21651,10 +21591,9 @@ fn render_eb_rule_split(app: &App, rule: &EbRule, area: Rect, frame: &mut Frame)
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("EventBridge Rule", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -21782,10 +21721,9 @@ fn render_eb_event_bus_split(app: &App, bus: &EbEventBus, area: Rect, frame: &mu
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("Event Bus", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -21883,10 +21821,9 @@ fn render_eb_schedule_split(app: &App, sched: &EbSchedule, area: Rect, frame: &m
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 2, "");
     let mut block = theme::pane_block("Schedule", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -22051,10 +21988,9 @@ fn render_eb_pipe_split(app: &App, pipe: &EbPipe, area: Rect, frame: &mut Frame)
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("Pipe", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -22207,10 +22143,9 @@ fn render_nfw_firewall_split(app: &App, fw: &NfwFirewall, area: Rect, frame: &mu
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 5, "");
     let mut block = theme::pane_block("Firewall", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -22272,10 +22207,9 @@ fn render_ct_event_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 5, "");
     let mut block = theme::pane_block("CloudTrail Event", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -22607,10 +22541,9 @@ fn render_permission_set_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("Permission Set", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -22849,10 +22782,9 @@ fn render_ic_principal_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, tabs.len(), "");
     let mut block = theme::pane_block(title, focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -23405,10 +23337,9 @@ fn render_security_group_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("Security Group", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -23523,10 +23454,9 @@ fn render_ebs_volume_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("EBS Volume", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -23692,10 +23622,9 @@ fn render_ami_split(app: &App, ami: &crate::aws::services::ec2::Ami, area: Rect,
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("AMI", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -23863,10 +23792,9 @@ fn render_snapshot_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 2, "");
     let mut block = theme::pane_block("EBS Snapshot", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -23975,10 +23903,9 @@ fn render_launch_template_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("Launch Template", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -24252,10 +24179,9 @@ fn render_nfw_policy_split(app: &App, policy: &NfwPolicy, area: Rect, frame: &mu
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("Firewall Policy", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -24388,10 +24314,9 @@ fn render_nfw_rule_group_split(app: &App, rg: &NfwRuleGroup, area: Rect, frame: 
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 2, "");
     let mut block = theme::pane_block("NFW Rule Group", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -25340,10 +25265,9 @@ fn render_simple_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, tabs.len(), "");
     let mut block = theme::pane_block(pane_title, focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -26876,10 +26800,9 @@ fn render_gd_finding_split(app: &App, finding: &GdFinding, area: Rect, frame: &m
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 6, "");
     let mut block = theme::pane_block("GuardDuty Finding", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -27127,10 +27050,9 @@ fn render_tf_state_pane(app: &App, area: Rect, frame: &mut Frame) {
     let focused = app.details_focused;
     let footer = " Esc close  j/k scroll  y copy  Enter jump ";
     let mut block = theme::pane_block("Terraform State", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -27194,10 +27116,9 @@ fn render_ecr_repo_split(app: &App, repo: &EcrRepository, area: Rect, frame: &mu
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("ECR Repository", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -27364,10 +27285,9 @@ fn render_sh_overview_split(app: &App, overview: &ShOverview, area: Rect, frame:
         "",
     );
     let mut block = theme::pane_block("Security Hub Overview", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -27849,10 +27769,9 @@ fn render_sh_finding_split(app: &App, finding: &ShFinding, area: Rect, frame: &m
         "",
     );
     let mut block = theme::pane_block("Security Hub Finding", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -28244,10 +28163,9 @@ fn render_sh_control_split(app: &App, control: &ShControl, area: Rect, frame: &m
         "",
     );
     let mut block = theme::pane_block("Security Control", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -28507,10 +28425,9 @@ fn render_sh_automation_rule_split(
         "",
     );
     let mut block = theme::pane_block("Automation Rule", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -29003,10 +28920,9 @@ fn render_backup_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, tabs.len(), "");
     let mut block = theme::pane_block(title, focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -29178,10 +29094,9 @@ fn render_sc_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, tabs.len(), extras);
     let mut block = theme::pane_block(title, focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -30291,10 +30206,9 @@ fn render_insp_finding_split(app: &App, finding: &InspFinding, area: Rect, frame
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("Inspector Finding", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -30444,10 +30358,9 @@ fn render_cognito_user_pool_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("Cognito User Pool", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -30610,10 +30523,9 @@ fn render_rest_api_split(app: &App, api: &RestApi, area: Rect, frame: &mut Frame
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 6, "");
     let mut block = theme::pane_block("REST API", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -30650,10 +30562,9 @@ fn render_http_api_split(app: &App, api: &HttpApi, area: Rect, frame: &mut Frame
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 5, "");
     let mut block = theme::pane_block("HTTP API", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -31035,10 +30946,9 @@ fn render_api_domain_split(app: &App, domain: &ApiCustomDomain, area: Rect, fram
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("API Custom Domain", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -31148,10 +31058,9 @@ fn render_api_usage_plan_split(app: &App, plan: &ApiUsagePlan, area: Rect, frame
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("API Usage Plan", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -31307,10 +31216,9 @@ fn render_config_rule_split(app: &App, rule: &ConfigRule, area: Rect, frame: &mu
     let footer = detail_footer(app, focused, 3, "");
 
     let mut block = theme::pane_block("Config Rule", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -31448,10 +31356,9 @@ fn render_waf_web_acl_split(app: &App, acl: &WafWebAcl, area: Rect, frame: &mut 
     let footer = detail_footer(app, focused, 6, "");
 
     let mut block = theme::pane_block("WAF Web ACL", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -31617,10 +31524,9 @@ fn render_waf_simple_split(
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, tabs.len(), "");
     let mut block = theme::pane_block(title, focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -32606,10 +32512,9 @@ fn render_cw_alarm_split(app: &App, alarm: &CwAlarm, area: Rect, frame: &mut Fra
     let footer = detail_footer(app, focused, 3, "");
 
     let mut block = theme::pane_block("CloudWatch Alarm", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -32793,10 +32698,9 @@ fn render_cw_dashboard_split(app: &App, dash: &CwDashboard, area: Rect, frame: &
     let footer = detail_footer(app, focused, 1, "m dashboard");
 
     let mut block = theme::pane_block("CloudWatch Dashboard", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -32916,10 +32820,9 @@ fn render_cw_composite_alarm_split(
     let footer = detail_footer(app, focused, 2, "");
 
     let mut block = theme::pane_block("CloudWatch Composite Alarm", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -33089,10 +32992,9 @@ fn render_cw_log_group_split(app: &App, lg: &CwLogGroup, area: Rect, frame: &mut
     let footer = detail_footer(app, focused, 3, "f search");
 
     let mut block = theme::pane_block("CloudWatch Log Group", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -33281,10 +33183,9 @@ fn render_cw_metric_stream_split(
     let footer = detail_footer(app, focused, 2, "");
 
     let mut block = theme::pane_block("Metric Stream", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -33343,10 +33244,9 @@ fn render_cw_insight_rule_split(
     let footer = detail_footer(app, focused, 2, "e definition");
 
     let mut block = theme::pane_block("Contributor Insights Rule", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -33405,10 +33305,9 @@ fn render_cw_account_policy_split(
     let footer = detail_footer(app, focused, 2, "e document");
 
     let mut block = theme::pane_block("Logs Account Policy", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -33683,10 +33582,9 @@ fn render_oam_sink_split(
     let footer = detail_footer(app, focused, 3, "");
 
     let mut block = theme::pane_block("OAM Sink", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -33741,10 +33639,9 @@ fn render_oam_link_split(
     let footer = detail_footer(app, focused, 2, "");
 
     let mut block = theme::pane_block("OAM Link", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -34018,10 +33915,9 @@ fn render_rds_instance_split(app: &App, db: &RdsInstance, area: Rect, frame: &mu
     let footer = detail_footer(app, focused, 9, extras);
 
     let mut block = theme::pane_block("RDS Instance", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -34621,10 +34517,9 @@ fn render_rds_cluster_split(app: &App, c: &RdsCluster, area: Rect, frame: &mut F
     let footer = detail_footer(app, focused, 7, "");
 
     let mut block = theme::pane_block("RDS Cluster", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -34895,10 +34790,9 @@ fn render_load_balancer_split(app: &App, lb: &LoadBalancer, area: Rect, frame: &
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("Load Balancer", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -35122,10 +35016,9 @@ fn render_target_group_split(app: &App, tg: &TargetGroup, area: Rect, frame: &mu
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("Target Group", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -35378,10 +35271,9 @@ fn render_asg_group_split(app: &App, group: &AsgGroup, area: Rect, frame: &mut F
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("Auto Scaling Group", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -35652,10 +35544,9 @@ fn render_sqs_queue_split(app: &App, queue: &SqsQueue, area: Rect, frame: &mut F
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("SQS Queue", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -35920,10 +35811,9 @@ fn render_sns_topic_split(app: &App, topic: &SnsTopic, area: Rect, frame: &mut F
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("SNS Topic", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -36134,10 +36024,9 @@ fn render_cost_split(app: &App, item: &CostLineItem, area: Rect, frame: &mut Fra
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("Cost", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -36479,10 +36368,9 @@ fn render_secret_split(app: &App, secret: &SecretEntry, area: Rect, frame: &mut 
     let footer = detail_footer(app, focused, 3, "x reveal · Y copy value");
 
     let mut block = theme::pane_block("Secret", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -36657,10 +36545,9 @@ fn render_ssm_parameter_split(app: &App, param: &SsmParameter, area: Rect, frame
     let footer = detail_footer(app, focused, 4, "x reveal · Y copy value");
 
     let mut block = theme::pane_block("SSM Parameter", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -36883,10 +36770,9 @@ fn render_ssm_document_split(app: &App, doc: &SsmDocument, area: Rect, frame: &m
     let footer = detail_footer(app, focused, 3, "e edit content");
 
     let mut block = theme::pane_block("SSM Document", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -37025,10 +36911,9 @@ fn render_ssm_association_split(app: &App, assoc: &SsmAssociation, area: Rect, f
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("SSM Association", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -37250,10 +37135,9 @@ fn render_ssm_fleet_split(app: &App, inst: &SsmManagedInstance, area: Rect, fram
     let footer = detail_footer(app, focused, 4, "s session");
 
     let mut block = theme::pane_block("SSM Managed Instance", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -37601,10 +37485,9 @@ fn render_ssm_command_split(app: &App, cmd: &SsmCommand, area: Rect, frame: &mut
     let footer = detail_footer(app, focused, 2, "");
 
     let mut block = theme::pane_block("SSM Command", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -37796,10 +37679,9 @@ fn render_ssm_automation_split(
     let footer = detail_footer(app, focused, 2, "");
 
     let mut block = theme::pane_block("SSM Automation", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -37961,10 +37843,9 @@ fn render_ssm_maint_window_split(app: &App, mw: &SsmMaintWindow, area: Rect, fra
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("SSM Maintenance Window", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -38187,10 +38068,9 @@ fn render_ssm_baseline_split(app: &App, b: &SsmPatchBaseline, area: Rect, frame:
     let footer = detail_footer(app, focused, 2, "");
 
     let mut block = theme::pane_block("SSM Patch Baseline", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -38388,10 +38268,9 @@ fn render_ssm_ops_item_split(app: &App, item: &SsmOpsItem, area: Rect, frame: &m
     let footer = detail_footer(app, focused, 2, "");
 
     let mut block = theme::pane_block("SSM OpsItem", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -38568,10 +38447,9 @@ fn render_access_analyzer_split(
     let footer = detail_footer(app, focused, 2, "");
 
     let mut block = theme::pane_block("Access Analyzer Finding", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -38719,10 +38597,9 @@ fn render_iam_role_split(app: &App, role: &IamRole, area: Rect, frame: &mut Fram
     );
 
     let mut block = theme::pane_block("IAM Role", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -38980,10 +38857,9 @@ fn render_iam_policy_split(app: &App, policy: &IamPolicy, area: Rect, frame: &mu
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("IAM Policy", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -39178,10 +39054,9 @@ fn render_iam_user_split(app: &App, user: &IamUser, area: Rect, frame: &mut Fram
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 4, "");
     let mut block = theme::pane_block("IAM User", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -39383,10 +39258,9 @@ fn render_iam_group_split(app: &App, group: &IamGroup, area: Rect, frame: &mut F
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("IAM Group", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -39494,10 +39368,9 @@ fn render_iam_idp_split(app: &App, idp: &IamIdentityProvider, area: Rect, frame:
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 2, "");
     let mut block = theme::pane_block("Identity Provider", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -39635,10 +39508,9 @@ fn render_iam_account_split(app: &App, settings: &IamAccountSettings, area: Rect
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("IAM Account Settings", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -39861,10 +39733,9 @@ fn render_org_account_split(app: &App, account: &OrgAccount, area: Rect, frame: 
     );
 
     let mut block = theme::pane_block("Organizations Account", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -40207,10 +40078,9 @@ fn render_org_scp_split(app: &App, scp: &OrgScp, area: Rect, frame: &mut Frame) 
     let footer = detail_footer(app, focused, 2, "");
 
     let mut block = theme::pane_block("Organization Policy", focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);
@@ -40348,10 +40218,9 @@ fn render_ecs_split(
     let focused = app.details_focused;
 
     let mut block = theme::pane_block(title, focused);
-    block = block.title(
-        Title::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+    block = block.title_bottom(
+        Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
+            .right_aligned(),
     );
 
     let inner = block.inner(area);

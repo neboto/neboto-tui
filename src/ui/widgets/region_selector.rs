@@ -1,11 +1,10 @@
 use crate::aws::region::Region;
 use crate::ui::theme;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Clear, List, ListItem, ListState, Paragraph,
     },
     Frame,
@@ -134,29 +133,27 @@ pub fn render_region_selector(
         return;
     }
 
-    let area = centered_rect(60, 70, frame.size());
+    let area = centered_rect(60, 70, frame.area());
     frame.render_widget(Clear, area);
 
     let (pos, total) = state.position();
     let block = theme::popup_block("Select AWS Region")
-        .title(
-            Title::from(theme::hint_line(&[
+        .title_bottom(
+            theme::hint_line(&[
                 ("type", "filter"),
                 ("↑/↓", "move"),
                 ("^d/^u", "page"),
                 ("⏎", "select"),
                 ("Esc", "close"),
-            ]))
-            .position(Position::Bottom)
-            .alignment(Alignment::Center),
+            ])
+            .centered(),
         )
-        .title(
-            Title::from(Span::styled(
+        .title_bottom(
+            Line::from(Span::styled(
                 format!(" {}/{} ", pos, total),
                 Style::default().fg(theme::text_dim()),
             ))
-            .position(Position::Bottom)
-            .alignment(Alignment::Right),
+            .right_aligned(),
         );
     let inner = block.inner(area);
     frame.render_widget(block, area);

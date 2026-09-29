@@ -2,11 +2,10 @@ use crate::app::App;
 use crate::aws::service::ServiceType;
 use crate::ui::theme;
 use ratatui::{
-    layout::{Alignment, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Block, BorderType, Borders, Clear, Paragraph,
     },
     Frame,
@@ -31,8 +30,8 @@ pub fn render_search_bar(app: &App, area: Rect, frame: &mut Frame) {
         .title(Span::styled(" Search ", title_style));
 
     if app.search_active {
-        block = block.title(
-            Title::from(Line::from(vec![
+        block = block.title_top(
+            Line::from(vec![
                 Span::styled(
                     " ⏎ ",
                     Style::default()
@@ -47,17 +46,15 @@ pub fn render_search_bar(app: &App, area: Rect, frame: &mut Frame) {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("cancel ", Style::default().fg(theme::text_dim())),
-            ]))
-            .position(Position::Top)
-            .alignment(Alignment::Right),
+            ])
+            .right_aligned(),
         );
     } else if app.show_loading_indicator() {
         // While a service loads, show a spinner + live count (and a progress bar
         // when the total is known) in the search bar's top-right corner.
-        block = block.title(
-            Title::from(loading_indicator(app))
-                .position(Position::Top)
-                .alignment(Alignment::Right),
+        block = block.title_top(
+            loading_indicator(app)
+                .right_aligned(),
         );
     }
 
@@ -112,7 +109,7 @@ pub fn render_search_bar(app: &App, area: Rect, frame: &mut Frame) {
     if app.search_active {
         let cursor_x = area.x + 1 + 2 + app.search_query.chars().count() as u16;
         let cursor_x = cursor_x.min(area.x + area.width.saturating_sub(2));
-        frame.set_cursor(cursor_x, area.y + 1);
+        frame.set_cursor_position((cursor_x, area.y + 1));
     }
 }
 
@@ -194,7 +191,7 @@ pub fn render_service_completions(app: &App, search_area: Rect, frame: &mut Fram
     }
 
     let popup_y = search_area.y + search_area.height;
-    if popup_y >= frame.size().height {
+    if popup_y >= frame.area().height {
         return;
     }
 

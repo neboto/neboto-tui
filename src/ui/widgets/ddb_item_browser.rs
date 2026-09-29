@@ -2,11 +2,10 @@ use crate::aws::services::dynamodb::{av_cell, DdbIndex, SkOp};
 use crate::ui::theme;
 use aws_sdk_dynamodb::types::AttributeValue;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Clear, Paragraph,
     },
     Frame,
@@ -175,13 +174,12 @@ pub fn render_ddb_item_browser(app: &crate::app::App, area: Rect, frame: &mut Fr
         return;
     }
 
-    let block = theme::popup_block(&format!("Items — {}", st.table)).title(
-        Title::from(Span::styled(
+    let block = theme::popup_block(&format!("Items — {}", st.table)).title_bottom(
+        Line::from(Span::styled(
             " Tab fields/results · ⏎ run/detail · n next page · Z width · ? help · Esc close ",
             Style::default().fg(theme::text_dim()),
         ))
-        .position(Position::Bottom)
-        .alignment(Alignment::Center),
+        .centered(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -232,13 +230,12 @@ fn render_help(area: Rect, frame: &mut Frame) {
     let popup = Rect { x, y, width: w, height: h };
     frame.render_widget(Clear, popup);
 
-    let block = theme::popup_block("Item browser — examples").title(
-        Title::from(Span::styled(
+    let block = theme::popup_block("Item browser — examples").title_bottom(
+        Line::from(Span::styled(
             " ? / Esc close ",
             Style::default().fg(theme::text_dim()),
         ))
-        .position(Position::Bottom)
-        .alignment(Alignment::Center),
+        .centered(),
     );
     let inner = block.inner(popup);
     frame.render_widget(block, popup);

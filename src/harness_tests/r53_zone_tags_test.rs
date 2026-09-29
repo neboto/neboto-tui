@@ -34,7 +34,7 @@ fn screen(app: &App) -> String {
     (0..buf.area.height)
         .map(|y| {
             (0..buf.area.width)
-                .map(|x| buf.get(x, y).symbol().to_string())
+                .map(|x| buf[(x, y)].symbol().to_string())
                 .collect::<String>()
         })
         .collect::<Vec<_>>()

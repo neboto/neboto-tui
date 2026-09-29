@@ -5,7 +5,6 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        block::{Position, Title},
         Clear, Paragraph,
     },
     Frame,
@@ -15,7 +14,7 @@ use ratatui::{
 /// macro's steps listed beneath it so you can see what a macro will do before
 /// running it. Doubles as the name prompt for a just-finished recording.
 pub fn render_macro_picker(app: &App, frame: &mut Frame) {
-    let area = centered_rect(72, 60, frame.size());
+    let area = centered_rect(72, 60, frame.area());
     frame.render_widget(Clear, area);
 
     // Naming a fresh recording takes over the whole popup — there is nothing
@@ -25,13 +24,12 @@ pub fn render_macro_picker(app: &App, frame: &mut Frame) {
         return;
     }
 
-    let block = theme::popup_block("Macros").title(
-        Title::from(Span::styled(
+    let block = theme::popup_block("Macros").title_bottom(
+        Line::from(Span::styled(
             " ↑↓ move · ⏎ run · n record · d delete · Esc close ",
             Style::default().fg(theme::text_dim()),
         ))
-        .position(Position::Bottom)
-        .alignment(Alignment::Center),
+        .centered(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -123,13 +121,12 @@ pub fn render_macro_picker(app: &App, frame: &mut Frame) {
 
 /// Name prompt shown when `,` stops a recording.
 fn render_name_prompt(app: &App, name: &str, area: Rect, frame: &mut Frame) {
-    let block = theme::popup_block("Name this macro").title(
-        Title::from(Span::styled(
+    let block = theme::popup_block("Name this macro").title_bottom(
+        Line::from(Span::styled(
             " ⏎ save · Esc discard ",
             Style::default().fg(theme::text_dim()),
         ))
-        .position(Position::Bottom)
-        .alignment(Alignment::Center),
+        .centered(),
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);

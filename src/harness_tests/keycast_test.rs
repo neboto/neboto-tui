@@ -47,7 +47,7 @@ fn screen(app: &App) -> String {
     terminal.draw(|f| crate::render_app(app, f)).unwrap();
     let buf = terminal.backend().buffer().clone();
     (0..buf.area.height)
-        .map(|y| (0..buf.area.width).map(|x| buf.get(x, y).symbol().to_string()).collect::<String>())
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
         .collect::<Vec<_>>()
         .join("\n")
 }
