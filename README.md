@@ -159,7 +159,12 @@ neboto ls @ec2 -t volume --state available        # unattached EBS volumes
 neboto ls @iam -t role -f 'deploy'                # IAM roles, fuzzy-matched
 neboto ls @ecs -f 'tag:team=storefront' -o md     # a Markdown table
 neboto ls @lambda --demo -o json | jq '.resources[].name'
+neboto get @lambda orders-api                     # every detail-pane section
+neboto get @iam deploy-role --section permissions -o json
+neboto get @ec2 web-1 web-2 sg-0123abcd -o md     # several, one document
 ```
+
+`ls` flags:
 
 | Flag | Effect |
 |---|---|
@@ -170,10 +175,27 @@ neboto ls @lambda --demo -o json | jq '.resources[].name'
 | `--limit <N>` | At most N rows |
 | `-o`, `--output <FORMAT>` | `table` (default on a terminal), `json` (default when piped), `md`, `csv` |
 
-`-r`, `-p`, `--endpoint-url` and `--demo` work here too. JSON is one document,
-`{"schema": "neboto/v1", "service", "region", "count", "resources": [...]}`;
-warnings go to stderr. Exit codes: `0` success (including an empty list), `1`
-an AWS error, `2` a bad service or region. Unlike the TUI, an unknown region
+`get <@svc> <ID|NAME>...` prints what the detail pane shows — every section,
+the lazily-fetched ones included — for up to 50 resources. A resource is
+matched by exact id (or ARN, where that's its id), then exact name.
+
+| Flag | Effect |
+|---|---|
+| `-t`, `--type <TYPE>` | Pick between resources that share a name (an ECS service and its task definition), as in `ls` |
+| `--section <NAME>` | Only this section, any case; repeatable. The other sections' data isn't fetched |
+| `--wait <SECS>` | How long to wait for slow sections (default 60); anything still loading prints as not loaded, with a note on stderr |
+
+`-r`, `-p`, `--endpoint-url`, `--demo` and `-o` work on every subcommand.
+JSON is one document carrying `"schema": "neboto/v1"`: `ls` prints `{schema,
+service, region, count, resources: [...]}`; `get` prints `{schema, service,
+region, resource, sections, tags}` for one resource, and `{…, count,
+resources: [...]}` for several. Section rows are the pane's `key: value`
+rows — readable labels and formatted values, not raw API fields — and a
+section that never loaded is `null`. `get -o csv` is one `ID,Section,Key,Value`
+row per detail row. Secret values are never fetched: the `x`/`Y` reveal has no
+CLI equivalent. Warnings go to stderr. Exit codes: `0` success (including an
+empty list), `1` an AWS error, `2` a bad service, region or section, or a
+resource that isn't there or is ambiguous. Unlike the TUI, an unknown region
 or profile is an error rather than a fallback, so a script never gets another
 account's answer.
 

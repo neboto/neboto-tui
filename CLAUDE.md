@@ -1109,21 +1109,33 @@ and the approaches you rejected are the part nobody can recover from your code.
   (Control Tower parameters + landing-zone manifest, AgentCore agent cards and
   memory event blobs).
 
-### Headless subcommands (`neboto ls …`, `src/headless.rs`)
+### Headless subcommands (`neboto ls` / `get`, `src/headless.rs`)
 
-`neboto services` / `neboto ls <@svc>` run once and print (table / json /
-md / csv) instead of starting the TUI — the read-only guarantee is the point,
-for scripts and agents (#65 has the roadmap: `get`, `search`, lenses, MCP).
-`main` dispatches on `cli.command` before the TUI is built. `ls` builds the
-same services via `App::build_services` and drains
+`neboto services` / `ls <@svc>` / `get <@svc> <id|name>...` run once and
+print (table / json / md / csv) instead of starting the TUI — the read-only
+guarantee is the point, for scripts and agents (#65 has the roadmap:
+`search`, lenses, MCP). `main` dispatches on `cli.command` before the TUI is
+built. `ls` builds the same services via `App::build_services` and drains
 `list_resources_streaming`'s events (`list_all`), then applies the TUI's
-filters as flags. Rules: stdout carries only the result (warnings to stderr,
-so `| jq` holds); JSON carries `"schema": "neboto/v1"`; exit 0/1/2 =
-ok/AWS error/usage; a bad region or profile **fails** (the TUI falls back,
-which in a script would answer from the wrong account). Tests run against the
+filters as flags. **`get` runs a terminal-less `App`** (`App::new_headless`):
+it loads the list the way the main loop does, selects each resource like a
+jump (`headless_select` → `align_view_to_resource_type`), then repeats the
+deep-export walk (`headless_capture`: list-nav side effects + every
+section's on-enter hook) and pumps `handle_event` until no section reads
+`Loading…` or `--wait` runs out. So every split pane works with zero
+per-service code — **don't add per-type `get` handling**; a pane that
+doesn't settle is a trigger bug the TUI has too. It never calls
+`handle_key`, which is where the secret reveal lives (a test holds that
+line). Exports strip the panes' key hints (`press t to tail`, `x reveal ·
+Y copy` — `export_rows`), so write hints in that shape. Rules: stdout carries
+only the result (warnings to stderr, so `| jq` holds); JSON carries
+`"schema": "neboto/v1"`; exit 0/1/2 = ok/AWS error/usage (incl. not found
+or ambiguous); a bad region or profile **fails** (the TUI falls back, which
+in a script would answer from the wrong account). Tests run against the
 demo account through `AwsClients::new_demo_for_test()` — never
 `demo::enable()` in a test, it's process-wide and would move every other
-test's dead-endpoint clients onto fixtures.
+test's dead-endpoint clients onto fixtures. To prove a call *didn't* happen,
+read `demo::TEST_LOG` (every demo request in the test process).
 
 ### Local emulator (floci / LocalStack)
 
@@ -1167,7 +1179,9 @@ Fixtures live in `src/demo/fixtures/<service>/` and are registered in
   search finds the same lines.
 - **No fixture:** an unmatched operation returns a protocol-correct *empty*
   success, so the service lists empty and `resource_list.rs` says "Not in the
-  demo dataset yet".
+  demo dataset yet". Except restXml (S3, Route 53, CloudFront): an empty
+  body works for some operations, but most check a per-operation root
+  element, so those calls need an empty-list fixture (see S3 `ListBuckets`).
 - **Finding what to add:** `NEBOTO_DEMO_TRACE=<file>` logs every request with
   `fixture` / `generated` / `EMPTY` — open a view and read which calls it made.
 

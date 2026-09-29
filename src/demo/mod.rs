@@ -65,6 +65,12 @@ pub enum Protocol {
     Rest,
 }
 
+/// Services whose REST protocol is restXml rather than restJson, by endpoint
+/// host label.
+fn is_rest_xml(service: &str) -> bool {
+    matches!(service, "s3" | "route53" | "cloudfront")
+}
+
 /// What the connector learned from a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DemoRequest {
@@ -135,6 +141,7 @@ impl DemoRequest {
         let content_type = match self.protocol {
             Protocol::Json => "application/x-amz-json-1.1",
             Protocol::Cbor => "application/cbor",
+            Protocol::Rest if is_rest_xml(&self.service) => "application/xml",
             Protocol::Rest => "application/json",
             Protocol::Ec2Query | Protocol::Query => "text/xml",
         };
@@ -153,6 +160,9 @@ impl DemoRequest {
     fn empty(&self) -> String {
         let op = &self.operation;
         match self.protocol {
+            // restXml (S3, Route 53, CloudFront) can't parse `{}`; an empty
+            // body deserializes as an output with nothing in it.
+            Protocol::Rest if is_rest_xml(&self.service) => String::new(),
             Protocol::Json | Protocol::Rest => "{}".to_string(),
             // An empty CBOR map.
             Protocol::Cbor => "\u{a0}".to_string(),
@@ -214,8 +224,19 @@ fn error_type(body: &str) -> Option<String> {
 /// `NEBOTO_DEMO_TRACE=<file>` appends one line per request — how a new
 /// fixture's author finds out which calls a view makes and which of them
 /// are still answered empty.
+/// Every request the demo connector answered in this test process, as
+/// `(service, operation, body)` — how a test proves a call never happened
+/// (`NEBOTO_DEMO_TRACE` is a file, shared by every test running at once).
+#[cfg(test)]
+pub(crate) static TEST_LOG: std::sync::Mutex<Vec<(String, String, String)>> =
+    std::sync::Mutex::new(Vec::new());
+
 fn trace(req: &DemoRequest, source: &str) {
     use std::io::Write;
+    #[cfg(test)]
+    if let Ok(mut log) = TEST_LOG.lock() {
+        log.push((req.service.clone(), req.operation.clone(), req.body.clone()));
+    }
     let Some(path) = std::env::var_os("NEBOTO_DEMO_TRACE") else {
         return;
     };

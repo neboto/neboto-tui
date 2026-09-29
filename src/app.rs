@@ -2604,6 +2604,7 @@ impl App {
             }
         }
         let mut app = Self::from_parts(config, aws_clients)?;
+        app.clipboard = arboard::Clipboard::new().ok();
         // Applied after construction, not through `apply_to` — resolving the
         // name needs the saved macros, which `from_parts` loads.
         if let Some(name) = &cli.macro_name {
@@ -3043,7 +3044,9 @@ impl App {
             cache: ResourceCache::new(cache_base_ttl, cache_ttl_overrides.clone()),
             cache_base_ttl,
             cache_ttl_overrides,
-            clipboard: arboard::Clipboard::new().ok()})
+            // Created by `new` (and on first copy): a headless `neboto get`
+            // has no use for one, and on Linux it dials the display server.
+            clipboard: None})
     }
 
     /// Fresh cache with the configured TTL windows — used wherever a region or
@@ -30053,6 +30056,100 @@ impl App {
                 ));
             }
         }
+    }
+
+    // ── headless (`neboto get`) ─────────────────────────────────────────────
+
+    /// Headless constructor for `neboto get`: the TUI's `App` with no
+    /// terminal, built from an already-resolved config + client set so the
+    /// detail sections come from exactly the code the panes run.
+    pub(crate) fn new_headless(
+        config: crate::config::Config,
+        aws_clients: AwsClients,
+    ) -> Result<Self> {
+        Self::from_parts(config, aws_clients)
+    }
+
+    /// Point the app at `service` and arm its list load (the caller's pump
+    /// runs `load_resources_async` like the main loop does).
+    pub(crate) fn headless_open_service(&mut self, service: ServiceType) {
+        self.current_service = Some(service);
+        self.load_service_resources();
+    }
+
+    /// Indices into `resources` matching `query`: exact id first, then exact
+    /// name — the order `resolve_pending_jump` uses, so an id can't be
+    /// shadowed by a same-named row.
+    pub(crate) fn headless_find(&self, query: &str) -> Vec<usize> {
+        let by = |f: &dyn Fn(&dyn Resource) -> bool| -> Vec<usize> {
+            self.resources
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| f(r.as_ref()))
+                .map(|(i, _)| i)
+                .collect()
+        };
+        let ids = by(&|r| r.id() == query);
+        if !ids.is_empty() {
+            return ids;
+        }
+        by(&|r| r.name() == query)
+    }
+
+    /// Select `resources[ri]` the way a jump does: land on the sub-tab that
+    /// lists its type, clear any filter, and put the cursor on it. False if
+    /// the row isn't visible afterwards.
+    pub(crate) fn headless_select(&mut self, ri: usize) -> bool {
+        let Some(rtype) = self.resources.get(ri).map(|r| r.resource_type().to_string()) else {
+            return false;
+        };
+        self.align_view_to_resource_type(&rtype);
+        self.search_query.clear();
+        self.list_state_filter = None;
+        self.update_search();
+        let Some(pos) = self.filtered_resources.iter().position(|&i| i == ri) else {
+            return false;
+        };
+        self.selected_index = Some(pos);
+        self.resource_list_state.borrow_mut().select(Some(pos));
+        true
+    }
+
+    /// The selected resource's section labels, in pane order (`["Details"]`
+    /// for a flat resource) — what `neboto get --section` matches against.
+    pub(crate) fn headless_section_labels(&self) -> Vec<String> {
+        match self.selected_descriptor() {
+            Some(desc) => desc.sections.iter().map(|s| s.label.to_string()).collect(),
+            None => vec!["Details".to_string()],
+        }
+    }
+
+    /// One pass of the deep-export walk over the selected resource: fire the
+    /// list-nav side effects and the on-enter hook of every wanted section
+    /// (all of them when `only` is None; idempotent — LazyMap's
+    /// contains-guard), then snapshot those sections. The caller pumps events
+    /// and repeats until nothing reads `Loading…`. Sections outside `only`
+    /// are never entered, so their fetches never happen.
+    pub(crate) fn headless_capture(
+        &mut self,
+        only: Option<&[usize]>,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> crate::export::DetailSections {
+        self.list_selection_side_effects(event_tx);
+        let count = self.selected_descriptor().map(|d| d.len()).unwrap_or(0);
+        let wanted: Vec<usize> = match only {
+            Some(idx) => idx.to_vec(),
+            None => (0..count.max(1)).collect(),
+        };
+        for &i in &wanted {
+            self.set_detail_section(i, event_tx);
+        }
+        self.detail_sections_snapshot()
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| wanted.contains(i))
+            .map(|(_, s)| s)
+            .collect()
     }
 
     pub fn is_selected_asg_group(&self) -> bool {
