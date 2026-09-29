@@ -382,3 +382,27 @@ fn shell_words(s: &str) -> Vec<String> {
     }
     out
 }
+
+#[tokio::test]
+async fn get_iam_policies_carries_the_documents() {
+    // Permissions only names the policies; Policies is what they allow.
+    let v = demo_get_json(GetArgs {
+        sections: vec!["permissions".into(), "policies".into()],
+        ..get_args("iam", &["github-actions-deploy"])
+    })
+    .await;
+    let perms = &v["sections"]["Permissions"];
+    assert!(perms["Managed Policies"]["AdministratorAccess"].as_str().unwrap().ends_with("/AdministratorAccess"));
+    let admin = &v["sections"]["Policies"]["AdministratorAccess"];
+    assert_eq!(admin["Type"], "AWS managed");
+    let doc: serde_json::Value = serde_json::from_str(
+        &admin["content"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect::<Vec<_>>().join("\n"),
+    )
+    .unwrap();
+    assert_eq!(doc["Statement"][0]["Action"], "*");
+
+    let v = demo_get_json(GetArgs { sections: vec!["policies".into()], ..get_args("iam", &["orders-worker-task"]) }).await;
+    assert_eq!(v["sections"]["Policies"]["sqs-consume-orders"]["Type"], "Inline");
+    let text = v["sections"]["Policies"]["orders-dynamodb"]["content"].to_string();
+    assert!(text.contains("123456789012"), "placeholders filled: {text}");
+}

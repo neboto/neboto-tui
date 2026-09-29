@@ -50,6 +50,9 @@ events / template / drift, ECS deployments, …). Up to 50 ids per call.
   skips the other sections' API calls**. Prefer it: smaller output, faster.
   An unknown name fails and lists the real section names, so a first
   `get` without `--section` (or a wrong guess) tells you what exists.
+- For **what an IAM role / user / group can do**, ask for `--section policies`:
+  every attached and inline policy document (up to 20), where
+  `permissions` only lists their names.
 - `-t TYPE` picks one when a name matches several resources (an ECS service
   and its task definition share a name).
 - `--wait SECS` (default 60): sections still loading after that come back

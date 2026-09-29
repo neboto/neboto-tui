@@ -18978,6 +18978,36 @@ impl App {
         }
     }
 
+    /// Lazy-load the Policies section of a role / user / group: every
+    /// attached and inline policy document, keyed by principal.
+    pub(crate) fn trigger_iam_policy_docs_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::iam::{IamGroup, IamPrincipalKind, IamRole, IamUser};
+        let Some(resource) = self.get_selected_resource() else {
+            return;
+        };
+        let any = resource.as_any();
+        let (kind, name) = if let Some(r) = any.downcast_ref::<IamRole>() {
+            (IamPrincipalKind::Role, r.role_name.clone())
+        } else if let Some(u) = any.downcast_ref::<IamUser>() {
+            (IamPrincipalKind::User, u.user_name.clone())
+        } else if let Some(g) = any.downcast_ref::<IamGroup>() {
+            (IamPrincipalKind::Group, g.group_name.clone())
+        } else {
+            return;
+        };
+        let client = self.aws_clients.iam_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.iam_policy_docs,
+            kind.docs_key(&name),
+            event_tx,
+            async move {
+                crate::aws::services::iam::fetch_principal_policy_documents(client, kind, name)
+                    .await
+                    .map_err(|e| format!("Policy documents unavailable: {}", e))
+            },
+        );
+    }
+
     /// Lazy-load a user's access keys / MFA / groups / policies, keyed by name.
     pub(crate) fn trigger_iam_user_details_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if let Some(user) = self
@@ -19210,14 +19240,23 @@ impl App {
         {
             return true;
         }
-        // Otherwise, fetch (will insert on arrival). Show loading state.
-        let loading_key = if value.is_empty() { inline_key } else { managed_key };
+        // Otherwise, fetch (will insert on arrival) and show a loading state —
+        // but only once the fetch has started: it refuses rows outside a
+        // Permissions section (a group's Members, the Policies section's ARN
+        // row), and a placeholder recorded first would be stranded there.
+        let loading_key = match target {
+            Some(crate::ui::widgets::details_pane::IamPermissionsRowTarget::Inline { .. }) => inline_key,
+            _ => managed_key,
+        };
+        if !self.trigger_iam_permissions_document_fetch(event_tx, false) {
+            return false;
+        }
         self.iam_expanded_docs.insert(loading_key, "Loading…".to_string());
-        self.trigger_iam_permissions_document_fetch(event_tx, false)
+        true
     }
 
     /// Inject expanded policy document lines after matching policy rows.
-    /// A policy row looks like `("  PolicyName", "arn:...")` or `("  PolicyName", "")`.
+    /// A policy row looks like `("  PolicyName", "arn:...")` or `("  PolicyName", "inline")`.
     fn inject_expanded_policy_docs(
         &self,
         lines: Vec<(String, String)>,
@@ -26199,10 +26238,14 @@ impl App {
                 .downcast_ref::<crate::aws::services::iam::IamRole>()
             {
                 let details_state = self.lazy.iam_role_details.get(&role.role_name);
+                let docs_state = self.lazy.iam_policy_docs.get(
+                    &crate::aws::services::iam::IamPrincipalKind::Role.docs_key(&role.role_name),
+                );
                 let mut lines = crate::ui::widgets::details_pane::iam_role_section_lines(
                     role,
                     crate::aws::services::iam::IamRoleDetailSection::from_index(self.detail_section_idx),
                     details_state,
+                    docs_state,
                 );
                 if crate::aws::services::iam::IamRoleDetailSection::from_index(self.detail_section_idx) == IamRoleDetailSection::Permissions {
                     lines = self.inject_expanded_policy_docs(lines);
@@ -26254,10 +26297,14 @@ impl App {
                 .downcast_ref::<crate::aws::services::iam::IamUser>()
             {
                 let details_state = self.lazy.iam_user_details.get(&user.user_name);
+                let docs_state = self.lazy.iam_policy_docs.get(
+                    &crate::aws::services::iam::IamPrincipalKind::User.docs_key(&user.user_name),
+                );
                 let mut lines = crate::ui::widgets::details_pane::iam_user_section_lines(
                     user,
                     crate::aws::services::iam::IamUserDetailSection::from_index(self.detail_section_idx),
                     details_state,
+                    docs_state,
                 );
                 if crate::aws::services::iam::IamUserDetailSection::from_index(self.detail_section_idx) == IamUserDetailSection::Permissions {
                     lines = self.inject_expanded_policy_docs(lines);
@@ -26269,10 +26316,14 @@ impl App {
                 .downcast_ref::<crate::aws::services::iam::IamGroup>()
             {
                 let details_state = self.lazy.iam_group_details.get(&group.group_name);
+                let docs_state = self.lazy.iam_policy_docs.get(
+                    &crate::aws::services::iam::IamPrincipalKind::Group.docs_key(&group.group_name),
+                );
                 let mut lines = crate::ui::widgets::details_pane::iam_group_section_lines(
                     group,
                     crate::aws::services::iam::IamGroupDetailSection::from_index(self.detail_section_idx),
                     details_state,
+                    docs_state,
                 );
                 if crate::aws::services::iam::IamGroupDetailSection::from_index(self.detail_section_idx) == IamGroupDetailSection::Permissions {
                     lines = self.inject_expanded_policy_docs(lines);

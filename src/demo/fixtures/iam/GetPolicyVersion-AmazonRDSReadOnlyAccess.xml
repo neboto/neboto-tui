@@ -1,0 +1,6 @@
+<GetPolicyVersionResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetPolicyVersionResult>
+    <PolicyVersion><Document>%7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%7B%22Effect%22%3A%22Allow%22%2C%22Action%22%3A%5B%22rds%3ADescribe%2A%22%2C%22rds%3AListTagsForResource%22%2C%22ec2%3ADescribeAccountAttributes%22%2C%22ec2%3ADescribeAvailabilityZones%22%2C%22ec2%3ADescribeInternetGateways%22%2C%22ec2%3ADescribeSecurityGroups%22%2C%22ec2%3ADescribeSubnets%22%2C%22ec2%3ADescribeVpcAttribute%22%2C%22ec2%3ADescribeVpcs%22%5D%2C%22Resource%22%3A%22%2A%22%7D%2C%7B%22Effect%22%3A%22Allow%22%2C%22Action%22%3A%5B%22cloudwatch%3AGetMetricStatistics%22%2C%22cloudwatch%3AListMetrics%22%2C%22cloudwatch%3AGetMetricData%22%2C%22logs%3ADescribeLogStreams%22%2C%22logs%3AGetLogEvents%22%2C%22devops-guru%3AGetResourceCollection%22%5D%2C%22Resource%22%3A%22%2A%22%7D%5D%7D</Document><VersionId>v5</VersionId><IsDefaultVersion>true</IsDefaultVersion><CreateDate>{{iso:now-700d}}</CreateDate></PolicyVersion>
+  </GetPolicyVersionResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetPolicyVersionResponse>

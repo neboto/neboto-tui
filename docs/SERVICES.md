@@ -1529,6 +1529,15 @@ the service you're touching.
   roles/users/policies, since eager per-entity Gets would be N extra calls per
   load. Don't "fix" a blank Tags section by reading the list output; it's
   empty by API design. Groups genuinely have no tags at all.
+  **Permissions vs Policies**: Permissions *names* what's attached (managed
+  rows `("  name", arn)`, inline rows `("  name", "inline")` — the shape
+  `iam_permissions_row_target` keys Enter-to-expand on, so change them
+  together); the **Policies** section fetches every document (own list calls,
+  so it doesn't wait on Permissions; `MAX_POLICY_DOCS` = 20, `buffered(5)`
+  because IAM throttles a burst). Policies is the section-hook path that the
+  flat view, `X` and `neboto get` can reach — the per-row expand is cursor
+  state (`iam_expanded_docs`) they can't. Headers carry no count (`Managed
+  Policies`, not `… (3)`) so export keys stay stable.
 - **IAM Identity Providers** (Providers sub-tab, key 6) — SAML + OIDC in one
   list; both list calls are unpaginated, and the OIDC one returns **only
   ARNs**, so everything else rides the lazy `Get*Provider` bundle. A
