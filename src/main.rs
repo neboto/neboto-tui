@@ -8,6 +8,7 @@ mod editor;
 mod error;
 mod export;
 mod event;
+mod headless;
 mod html;
 mod keycast;
 mod lazy;
@@ -68,12 +69,18 @@ fn main() -> Result<()> {
     // generated deserializer builds stack frames that overflow tokio's default
     // ~2 MB worker stack ("thread tokio-runtime-worker has overflowed its
     // stack"). 16 MB is ample headroom and stacks are lazily committed.
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(16 * 1024 * 1024)
         .build()
-        .expect("failed to build tokio runtime")
-        .block_on(run(cli))
+        .expect("failed to build tokio runtime");
+
+    // A subcommand (`neboto ls @ec2 …`) runs once and prints — no TUI.
+    if cli.command.is_some() {
+        let code = runtime.block_on(headless::run(cli));
+        std::process::exit(code);
+    }
+    runtime.block_on(run(cli))
 }
 
 async fn run(cli: cli::Cli) -> Result<()> {

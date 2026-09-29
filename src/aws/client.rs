@@ -170,6 +170,26 @@ impl AwsClients {
         .expect("offline client build")
     }
 
+    /// Test-only demo clients: the replay HTTP client of `--demo`, without
+    /// flipping the process-wide `demo::enable()` flag — that would move every
+    /// other test's dead-endpoint clients onto fixture data too.
+    #[cfg(test)]
+    pub(crate) async fn new_demo_for_test() -> Self {
+        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .region(Region::UsEast1.to_sdk_region())
+            .http_client(crate::demo::http_client())
+            .credentials_provider(mock_credentials())
+            .load()
+            .await;
+        Self {
+            config,
+            region: Region::UsEast1,
+            profile: None,
+            endpoint_url: None,
+            assumed_role: None,
+        }
+    }
+
     /// Get the current region
     pub fn current_region(&self) -> Region {
         self.region

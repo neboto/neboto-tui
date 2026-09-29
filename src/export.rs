@@ -45,7 +45,7 @@ fn tags_sorted(resource: &dyn Resource) -> Vec<(String, String)> {
 }
 
 /// JSON object for one resource: core fields + details + nested tags.
-fn resource_object(resource: &dyn Resource) -> Value {
+pub(crate) fn resource_object(resource: &dyn Resource) -> Value {
     let mut obj = Map::new();
     obj.insert("type".into(), json!(resource.resource_type()));
     obj.insert("id".into(), json!(resource.id()));
@@ -565,7 +565,7 @@ pub fn export_list(
 
 /// The list export's CSV: core columns + union of detail keys (first-seen
 /// order) + Tags.
-fn list_csv(resources: &[&dyn Resource]) -> String {
+pub(crate) fn list_csv(resources: &[&dyn Resource]) -> String {
     let mut columns: Vec<String> = vec![
         "Type".into(),
         "ID".into(),

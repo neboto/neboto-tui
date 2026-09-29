@@ -2683,27 +2683,12 @@ impl App {
         // Candidate roles for the member-account switch: the list wins over
         // the single value; both default to the org-created role. Always
         // non-empty (org_access_roles[0] below relies on it).
-        let org_access_roles: Vec<String> = match &config.org_access_roles {
-            Some(roles) if !roles.is_empty() => roles.clone(),
-            _ => vec![config
-                .org_access_role
-                .clone()
-                .unwrap_or_else(|| "OrganizationAccountAccessRole".to_string())]};
+        let org_access_roles = config.org_access_roles_resolved();
 
         let cache_base_ttl = Duration::from_secs(config.cache_ttl.unwrap_or(300));
         let cache_ttl_overrides = config.cache_ttl_overrides();
 
-        // The audit-account hop reuses the member-switch role unless told
-        // otherwise — a Control Tower org already has one that works.
-        let controltower_audit = config.controltower_audit_account.clone().map(|account| {
-            (
-                account,
-                config
-                    .controltower_audit_role
-                    .clone()
-                    .unwrap_or_else(|| org_access_roles[0].clone()),
-            )
-        });
+        let controltower_audit = config.controltower_audit_target(&org_access_roles);
 
         // Initialize services (single source of truth — see build_services).
         // After the audit target: Control Tower's service captures it.
@@ -9698,7 +9683,7 @@ impl App {
     /// Build the full service registry. Single source of truth shared by
     /// `App::new` and `recreate_services` so the two can never drift — a missing
     /// entry here means that service silently never loads (infinite spinner).
-    fn build_services(
+    pub(crate) fn build_services(
         aws_clients: &AwsClients,
         controltower_audit: Option<(String, String)>,
         org_access_roles: &[String],
