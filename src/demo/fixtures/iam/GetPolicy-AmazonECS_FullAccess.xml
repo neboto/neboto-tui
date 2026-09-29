@@ -1,0 +1,6 @@
+<GetPolicyResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetPolicyResult>
+    <Policy><PolicyName>AmazonECS_FullAccess</PolicyName><PolicyId>ANPADEMOAMAZONECS_FU</PolicyId><Arn>arn:aws:iam::aws:policy/AmazonECS_FullAccess</Arn><Path>/</Path><DefaultVersionId>v30</DefaultVersionId><AttachmentCount>1</AttachmentCount><IsAttachable>true</IsAttachable><Description>Provides administrative access to Amazon ECS resources (abridged in the demo).</Description><CreateDate>{{iso:now-3000d}}</CreateDate><UpdateDate>{{iso:now-700d}}</UpdateDate></Policy>
+  </GetPolicyResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetPolicyResponse>

@@ -1,0 +1,6 @@
+<GetPolicyResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetPolicyResult>
+    <Policy><PolicyName>AdministratorAccess</PolicyName><PolicyId>ANPADEMOADMINISTRATO</PolicyId><Arn>arn:aws:iam::aws:policy/AdministratorAccess</Arn><Path>/</Path><DefaultVersionId>v1</DefaultVersionId><AttachmentCount>1</AttachmentCount><IsAttachable>true</IsAttachable><Description>Provides full access to AWS services and resources.</Description><CreateDate>{{iso:now-3000d}}</CreateDate><UpdateDate>{{iso:now-700d}}</UpdateDate></Policy>
+  </GetPolicyResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetPolicyResponse>

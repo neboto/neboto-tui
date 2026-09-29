@@ -427,6 +427,7 @@ crate::sections! {
         Overview "Overview" => crate::app::App::trigger_iam_role_details_load,
         TrustPolicy "Trust Policy",
         Permissions "Permissions" => crate::app::App::trigger_iam_role_details_load,
+        Policies "Policies" => crate::app::App::trigger_iam_policy_docs_load,
         Tags "Tags" => crate::app::App::trigger_iam_role_details_load,
     ]
 }
@@ -643,6 +644,7 @@ crate::sections! {
     pub static IAM_USER_SECTIONS = [
         Access "Access" => crate::app::App::trigger_iam_user_details_load,
         Permissions "Permissions" => crate::app::App::trigger_iam_user_details_load,
+        Policies "Policies" => crate::app::App::trigger_iam_policy_docs_load,
         Groups "Groups" => crate::app::App::trigger_iam_user_details_load,
         Tags "Tags" => crate::app::App::trigger_iam_user_details_load,
     ]
@@ -753,6 +755,7 @@ crate::sections! {
         Overview "Overview",
         Members "Members" => crate::app::App::trigger_iam_group_details_load,
         Permissions "Permissions" => crate::app::App::trigger_iam_group_details_load,
+        Policies "Policies" => crate::app::App::trigger_iam_policy_docs_load,
     ]
 }
 
@@ -1233,6 +1236,122 @@ pub async fn fetch_group_inline_policy_document(
         .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
 
     Ok(pretty_policy_document(resp.policy_document()))
+}
+
+// ── Policies section: every attached + inline document ─────────────────────
+
+/// Whose policies — the three IAM principals that carry them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IamPrincipalKind {
+    Role,
+    User,
+    Group,
+}
+
+impl IamPrincipalKind {
+    /// `LazyStore.iam_policy_docs` key: a role, a user and a group may share
+    /// a name.
+    pub fn docs_key(self, name: &str) -> String {
+        let kind = match self {
+            IamPrincipalKind::Role => "role",
+            IamPrincipalKind::User => "user",
+            IamPrincipalKind::Group => "group",
+        };
+        format!("{kind}:{name}")
+    }
+}
+
+/// One policy's document, or why it couldn't be read. `arn` is set for a
+/// managed policy, `None` for an inline one.
+#[derive(Debug, Clone)]
+pub struct IamPolicyDoc {
+    pub name: String,
+    pub arn: Option<String>,
+    pub document: std::result::Result<String, String>,
+}
+
+/// The Policies section: documents in Permissions order (managed, then
+/// inline), and how many past the cap weren't fetched.
+#[derive(Debug, Clone)]
+pub struct IamPolicyDocs {
+    pub docs: Vec<IamPolicyDoc>,
+    pub omitted: usize,
+}
+
+/// Most documents one Policies section fetches. IAM allows 20 managed
+/// policies per principal by default (more with a quota increase) plus any
+/// number of inline ones; past this, Enter on a Permissions row still opens
+/// any single one.
+pub const MAX_POLICY_DOCS: usize = 20;
+
+/// Every policy document attached to a principal: lists its managed and
+/// inline policies itself (so the section doesn't depend on Permissions
+/// having loaded), then reads each document concurrently. A document that
+/// can't be read is an error on that entry, not on the section.
+pub async fn fetch_principal_policy_documents(
+    client: IamClient,
+    kind: IamPrincipalKind,
+    name: String,
+) -> Result<IamPolicyDocs> {
+    use futures::{FutureExt, StreamExt};
+    let err = |e: String| crate::error::Error::AwsSdk(e);
+    let mut managed: Vec<(String, String)> = Vec::new();
+    let mut inline: Vec<String> = Vec::new();
+    macro_rules! list {
+        ($attached:ident, $inline:ident, $param:ident) => {{
+            let mut pages = client.$attached().$param(&name).into_paginator().send();
+            while let Some(page) = pages.next().await {
+                let page = page.map_err(|e| err(crate::error::sdk_error_message(&e)))?;
+                for p in page.attached_policies() {
+                    managed.push((
+                        p.policy_name().unwrap_or_default().to_string(),
+                        p.policy_arn().unwrap_or_default().to_string(),
+                    ));
+                }
+            }
+            let mut pages = client.$inline().$param(&name).into_paginator().send();
+            while let Some(page) = pages.next().await {
+                let page = page.map_err(|e| err(crate::error::sdk_error_message(&e)))?;
+                inline.extend(page.policy_names().iter().cloned());
+            }
+        }};
+    }
+    match kind {
+        IamPrincipalKind::Role => list!(list_attached_role_policies, list_role_policies, role_name),
+        IamPrincipalKind::User => list!(list_attached_user_policies, list_user_policies, user_name),
+        IamPrincipalKind::Group => list!(list_attached_group_policies, list_group_policies, group_name),
+    }
+
+    let total = managed.len() + inline.len();
+    let managed_futs = managed.into_iter().map(|(policy, arn)| {
+        let client = client.clone();
+        async move {
+            let document = fetch_managed_policy_document(client, arn.clone())
+                .await
+                .map_err(|e| e.to_string());
+            IamPolicyDoc { name: policy, arn: Some(arn), document }
+        }
+        .boxed()
+    });
+    let inline_futs = inline.into_iter().map(|policy| {
+        let client = client.clone();
+        let principal = name.clone();
+        async move {
+            let document = match kind {
+                IamPrincipalKind::Role => fetch_inline_policy_document(client, principal, policy.clone()).await,
+                IamPrincipalKind::User => fetch_user_inline_policy_document(client, principal, policy.clone()).await,
+                IamPrincipalKind::Group => fetch_group_inline_policy_document(client, principal, policy.clone()).await,
+            }
+            .map_err(|e| e.to_string());
+            IamPolicyDoc { name: policy, arn: None, document }
+        }
+        .boxed()
+    });
+    let wanted: Vec<_> = managed_futs.chain(inline_futs).take(MAX_POLICY_DOCS).collect();
+    // `buffered` keeps Permissions order while a few run at once; IAM
+    // throttles a burst of twenty.
+    let docs: Vec<IamPolicyDoc> = futures::stream::iter(wanted).buffered(5).collect().await;
+    Ok(IamPolicyDocs { omitted: total - docs.len(), docs })
 }
 
 // ── Timestamp helpers ─────────────────────────────────────────────────────────

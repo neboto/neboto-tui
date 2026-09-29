@@ -38667,11 +38667,13 @@ pub fn iam_role_section_lines(
     role: &IamRole,
     section: IamRoleDetailSection,
     details_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamRoleDetails>>,
+    docs_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamPolicyDocs>>,
 ) -> Vec<(String, String)> {
     match section {
         IamRoleDetailSection::Overview => iam_role_overview_lines(role, details_state),
         IamRoleDetailSection::TrustPolicy => iam_role_trust_policy_lines(role),
         IamRoleDetailSection::Permissions => iam_role_permissions_lines(details_state),
+        IamRoleDetailSection::Policies => iam_policy_docs_lines(docs_state),
         IamRoleDetailSection::Tags => lazy_tag_lines(details_state, |d| &d.tags),
     }
 }
@@ -38774,7 +38776,7 @@ fn iam_role_trust_policy_lines(role: &IamRole) -> Vec<(String, String)> {
 }
 
 /// What a selected row in the Permissions section refers to, so the caller
-/// can fetch that specific policy's document on demand (`v`/`e`).
+/// can fetch that specific policy's document on demand (`⏎`/`e`).
 pub enum IamPermissionsRowTarget {
     Managed { name: String, arn: String },
     Inline { name: String },
@@ -38782,8 +38784,9 @@ pub enum IamPermissionsRowTarget {
 
 /// Classify a Permissions-section row by its key/value shape:
 /// managed policy rows are `("  {name}", "{arn}")`, inline rows are
-/// `("  {name}", "")`. Group headers and blank spacers don't start with
-/// two spaces, so they're naturally excluded.
+/// `("  {name}", "inline")` (`iam_policy_attachment_rows` — change the two
+/// together). Group headers and blank spacers don't start with two spaces,
+/// so they're naturally excluded.
 pub fn iam_permissions_row_target(key: &str, value: &str) -> Option<IamPermissionsRowTarget> {
     if !key.starts_with("  ") {
         return None;
@@ -38797,7 +38800,7 @@ pub fn iam_permissions_row_target(key: &str, value: &str) -> Option<IamPermissio
             name,
             arn: value.to_string(),
         })
-    } else if value.is_empty() {
+    } else if value == "inline" {
         Some(IamPermissionsRowTarget::Inline { name })
     } else {
         None
@@ -38813,30 +38816,7 @@ fn iam_role_permissions_lines(
         }
         Some(crate::lazy::Lazy::Error(e)) => error_rows(e),
         Some(crate::lazy::Lazy::Loaded(d)) => {
-            let mut rows = vec![];
-            if d.managed_policies.is_empty() {
-                rows.push(("Managed Policies".to_string(), "None".to_string()));
-            } else {
-                rows.push((
-                    "Managed Policies".to_string(),
-                    format!("({} attached)", d.managed_policies.len()),
-                ));
-                for (name, arn) in &d.managed_policies {
-                    rows.push((format!("  {}", name), arn.clone()));
-                }
-            }
-            rows.push(("".to_string(), "".to_string()));
-            if d.inline_policy_names.is_empty() {
-                rows.push(("Inline Policies".to_string(), "None".to_string()));
-            } else {
-                rows.push((
-                    "Inline Policies".to_string(),
-                    format!("({})", d.inline_policy_names.len()),
-                ));
-                for name in &d.inline_policy_names {
-                    rows.push((format!("  {}", name), "".to_string()));
-                }
-            }
+            let mut rows = iam_policy_attachment_rows(&d.managed_policies, &d.inline_policy_names);
             rows.push(("".to_string(), "".to_string()));
             if let Some(boundary) = &d.permissions_boundary {
                 rows.push(("Permissions Boundary".to_string(), "".to_string()));
@@ -39107,25 +39087,83 @@ fn iam_policy_attachment_rows(
     managed: &[(String, String)],
     inline: &[String],
 ) -> Vec<(String, String)> {
+    // Group headers without a count in the label, so an export's keys don't
+    // change with the number of policies (`"Managed Policies": {…}`); a
+    // principal with none gets a plain `Managed Policies: None` row instead.
+    // Inline rows say `inline` — `iam_permissions_row_target` keys on it.
     let mut rows = vec![];
-    rows.push((format!("Managed policies ({})", managed.len()), "".to_string()));
-    rows.push(("".to_string(), "".to_string()));
     if managed.is_empty() {
-        rows.push(("  (none)".to_string(), "".to_string()));
+        rows.push(("Managed Policies".to_string(), "None".to_string()));
     } else {
+        rows.push(("Managed Policies".to_string(), "".to_string()));
         for (name, arn) in managed {
             rows.push((format!("  {}", name), arn.clone()));
         }
     }
     rows.push(("".to_string(), "".to_string()));
-    rows.push((format!("Inline policies ({})", inline.len()), "".to_string()));
-    rows.push(("".to_string(), "".to_string()));
     if inline.is_empty() {
-        rows.push(("  (none)".to_string(), "".to_string()));
+        rows.push(("Inline Policies".to_string(), "None".to_string()));
     } else {
+        rows.push(("Inline Policies".to_string(), "".to_string()));
         for name in inline {
-            rows.push((format!("  {}", name), "".to_string()));
+            rows.push((format!("  {}", name), "inline".to_string()));
         }
+    }
+    rows
+}
+
+/// The Policies section: each attached and inline policy under its own
+/// header, with its type, ARN and the document itself — what the principal
+/// can actually do, which Permissions only names.
+fn iam_policy_docs_lines(
+    state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamPolicyDocs>>,
+) -> Vec<(String, String)> {
+    let mut rows = vec![("".to_string(), "".to_string())];
+    let docs = match state {
+        None | Some(crate::lazy::Lazy::Loading) => {
+            rows.push(("".to_string(), "Loading policy documents…".to_string()));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Error(e)) => {
+            rows.extend(error_rows(e));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Loaded(d)) => d,
+    };
+    if docs.docs.is_empty() {
+        rows.push(("".to_string(), "No policies attached".to_string()));
+        return rows;
+    }
+    for doc in &docs.docs {
+        rows.push((doc.name.clone(), "".to_string()));
+        match &doc.arn {
+            Some(arn) => {
+                let kind = if arn.contains(":aws:policy/") { "AWS managed" } else { "Customer managed" };
+                rows.push(("  Type".to_string(), kind.to_string()));
+                rows.push(("  ARN".to_string(), arn.clone()));
+            }
+            None => rows.push(("  Type".to_string(), "Inline".to_string())),
+        }
+        match &doc.document {
+            Ok(body) => {
+                rows.push(("".to_string(), "".to_string()));
+                for line in body.lines() {
+                    rows.push((format!("  {}", line), "".to_string()));
+                }
+            }
+            Err(e) => rows.extend(error_rows(e)),
+        }
+        rows.push(("".to_string(), "".to_string()));
+    }
+    if docs.omitted > 0 {
+        rows.push((
+            "".to_string(),
+            format!(
+                "· {} more not fetched (first {} shown) — see Permissions for the full list",
+                docs.omitted,
+                crate::aws::services::iam::MAX_POLICY_DOCS
+            ),
+        ));
     }
     rows
 }
@@ -39134,7 +39172,11 @@ pub fn iam_user_section_lines(
     user: &IamUser,
     section: IamUserDetailSection,
     details_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamUserDetails>>,
+    docs_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamPolicyDocs>>,
 ) -> Vec<(String, String)> {
+    if section == IamUserDetailSection::Policies {
+        return iam_policy_docs_lines(docs_state);
+    }
     let mut rows = vec![("".to_string(), "".to_string())];
     match section {
         IamUserDetailSection::Access => {
@@ -39224,6 +39266,8 @@ pub fn iam_user_section_lines(
                 }
             }
         },
+        // Handled by the early return above.
+        IamUserDetailSection::Policies => {}
         IamUserDetailSection::Groups => match details_state {
             None | Some(crate::lazy::Lazy::Loading) => {
                 rows.push(("".to_string(), "Loading…".to_string()));
@@ -39309,11 +39353,15 @@ pub fn iam_group_section_lines(
     group: &IamGroup,
     section: IamGroupDetailSection,
     details_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamGroupDetails>>,
+    docs_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamPolicyDocs>>,
 ) -> Vec<(String, String)> {
     // Overview is eager (no fetch) — handle it before the load-state arms so it
-    // never shows a spurious "Loading…".
+    // never shows a spurious "Loading…". Policies has its own fetch.
     if section == IamGroupDetailSection::Overview {
         return iam_group_overview_lines(group);
+    }
+    if section == IamGroupDetailSection::Policies {
+        return iam_policy_docs_lines(docs_state);
     }
     let mut rows = vec![("".to_string(), "".to_string())];
     match (section, details_state) {
@@ -39337,8 +39385,8 @@ pub fn iam_group_section_lines(
         (IamGroupDetailSection::Permissions, Some(crate::lazy::Lazy::Loaded(d))) => {
             rows.extend(iam_policy_attachment_rows(&d.managed_policies, &d.inline_policy_names));
         }
-        // Overview is handled by the early return above.
-        (IamGroupDetailSection::Overview, _) => {}
+        // Overview and Policies are handled by the early returns above.
+        (IamGroupDetailSection::Overview | IamGroupDetailSection::Policies, _) => {}
     }
     rows.push(("".to_string(), "".to_string()));
     rows
@@ -44228,5 +44276,60 @@ mod key_col_tests {
         assert_eq!(text, "  No tags");
         let w = style_detail_row("", "⚠ not enrolled", None, KEY_COL_MIN);
         assert_eq!(w.style.fg, Some(theme::warning()));
+    }
+}
+
+#[cfg(test)]
+mod iam_permissions_tests {
+    use super::*;
+    use crate::aws::services::iam::{IamPolicyDoc, IamPolicyDocs};
+
+    #[test]
+    fn classifier_finds_exactly_the_policy_rows() {
+        // The Permissions rows and the Enter-to-expand classifier are keyed
+        // on each other's shape; this is the contract between them.
+        let rows = iam_policy_attachment_rows(
+            &[("orders-dynamodb".into(), "arn:aws:iam::1:policy/orders-dynamodb".into())],
+            &["sqs-consume-orders".into()],
+        );
+        let hits: Vec<String> = rows
+            .iter()
+            .filter_map(|(k, v)| match iam_permissions_row_target(k, v)? {
+                IamPermissionsRowTarget::Managed { name, .. } => Some(format!("managed {name}")),
+                IamPermissionsRowTarget::Inline { name } => Some(format!("inline {name}")),
+            })
+            .collect();
+        assert_eq!(hits, ["managed orders-dynamodb", "inline sqs-consume-orders"]);
+        // Headers carry no count, so export keys are stable.
+        assert!(rows.contains(&("Managed Policies".into(), "".into())));
+        assert!(rows.contains(&("Inline Policies".into(), "".into())));
+
+        let none = iam_policy_attachment_rows(&[], &[]);
+        assert!(none.contains(&("Managed Policies".into(), "None".into())));
+        assert!(none.iter().all(|(k, v)| iam_permissions_row_target(k, v).is_none()));
+        // A group's Members rows (`("  alice", "")`) aren't inline policies.
+        assert!(iam_permissions_row_target("  alice", "").is_none());
+    }
+
+    #[test]
+    fn policies_section_nests_each_document_under_its_name() {
+        let docs = IamPolicyDocs {
+            docs: vec![
+                IamPolicyDoc {
+                    name: "AdministratorAccess".into(),
+                    arn: Some("arn:aws:iam::aws:policy/AdministratorAccess".into()),
+                    document: Ok("{\n  \"Statement\": []\n}".into()),
+                },
+                IamPolicyDoc { name: "broken".into(), arn: None, document: Err("AccessDenied".into()) },
+            ],
+            omitted: 3,
+        };
+        let rows = iam_policy_docs_lines(Some(&crate::lazy::Lazy::Loaded(docs)));
+        let v = crate::export::detail_value_for_test(&rows);
+        assert_eq!(v["AdministratorAccess"]["Type"], "AWS managed");
+        assert_eq!(v["AdministratorAccess"]["content"][0], "{");
+        assert_eq!(v["broken"]["Type"], "Inline");
+        assert!(rows.iter().any(|(k, val)| k.contains("AccessDenied") || val.contains("AccessDenied")));
+        assert!(rows.iter().any(|(_, val)| val.contains("3 more not fetched")));
     }
 }

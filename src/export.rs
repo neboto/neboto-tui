@@ -351,6 +351,7 @@ fn insert_unique(map: &mut Map<String, Value>, key: &str, value: Value) {
 /// `style_detail_row` conventions:
 /// - group header (`("X", "")`)    → a nested object under that name
 /// - key/value row                 → a string field (duplicates suffixed)
+/// - empty-key note (`("", "No tags")`) → a `"note"` field
 /// - plain content line (`(" …", "")`) → collected into a `"content"` array
 ///   (verbatim, so fixed-width tables keep their alignment)
 /// - blank spacer                  → dropped
@@ -389,13 +390,22 @@ fn lines_to_json(lines: &[(String, String)]) -> Value {
             push_content(target, k.trim_end());
         } else {
             let target = group.as_mut().map(|(_, m)| m).unwrap_or(&mut root);
-            insert_unique(target, k.trim(), json!(strip_status_glyph(v)));
+            // An empty-key note ("No tags", "No policies attached") would
+            // otherwise land under the key "".
+            let key = if k.trim().is_empty() { "note" } else { k.trim() };
+            insert_unique(target, key, json!(strip_status_glyph(v)));
         }
     }
     flush(&mut group, &mut root);
     let mut root = Value::Object(root);
     dedent_content(&mut root);
     root
+}
+
+/// `lines_to_json` for other modules' tests: one section's rows as JSON.
+#[cfg(test)]
+pub(crate) fn detail_value_for_test(lines: &[(String, String)]) -> Value {
+    lines_to_json(lines)
 }
 
 /// Dedent every `"content"` array in a section value (see `dedent`).

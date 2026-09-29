@@ -1,0 +1,6 @@
+<GetPolicyResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetPolicyResult>
+    <Policy><PolicyName>AmazonS3FullAccess</PolicyName><PolicyId>ANPADEMOAMAZONS3FULL</PolicyId><Arn>arn:aws:iam::aws:policy/AmazonS3FullAccess</Arn><Path>/</Path><DefaultVersionId>v2</DefaultVersionId><AttachmentCount>1</AttachmentCount><IsAttachable>true</IsAttachable><Description>Provides full access to all buckets via the AWS Management Console.</Description><CreateDate>{{iso:now-3000d}}</CreateDate><UpdateDate>{{iso:now-700d}}</UpdateDate></Policy>
+  </GetPolicyResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetPolicyResponse>

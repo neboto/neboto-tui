@@ -1,0 +1,6 @@
+<GetPolicyVersionResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetPolicyVersionResult>
+    <PolicyVersion><Document>%7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%7B%22Sid%22%3A%22ECSIntegrationsPermissions%22%2C%22Effect%22%3A%22Allow%22%2C%22Action%22%3A%5B%22application-autoscaling%3A%2A%22%2C%22ecs%3A%2A%22%2C%22elasticloadbalancing%3A%2A%22%2C%22events%3A%2A%22%2C%22servicediscovery%3A%2A%22%2C%22logs%3ACreateLogGroup%22%2C%22logs%3ADescribeLogGroups%22%2C%22logs%3AFilterLogEvents%22%2C%22ec2%3ADescribe%2A%22%2C%22iam%3AListRoles%22%2C%22iam%3AListInstanceProfiles%22%5D%2C%22Resource%22%3A%22%2A%22%7D%2C%7B%22Sid%22%3A%22PassRoleToEcs%22%2C%22Effect%22%3A%22Allow%22%2C%22Action%22%3A%22iam%3APassRole%22%2C%22Resource%22%3A%22%2A%22%2C%22Condition%22%3A%7B%22StringLike%22%3A%7B%22iam%3APassedToService%22%3A%22ecs-tasks.amazonaws.com%22%7D%7D%7D%5D%7D</Document><VersionId>v30</VersionId><IsDefaultVersion>true</IsDefaultVersion><CreateDate>{{iso:now-700d}}</CreateDate></PolicyVersion>
+  </GetPolicyVersionResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetPolicyVersionResponse>
