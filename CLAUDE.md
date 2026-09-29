@@ -1136,6 +1136,9 @@ demo account through `AwsClients::new_demo_for_test()` — never
 `demo::enable()` in a test, it's process-wide and would move every other
 test's dead-endpoint clients onto fixtures. To prove a call *didn't* happen,
 read `demo::TEST_LOG` (every demo request in the test process).
+**`skills/neboto/SKILL.md`** is the agent-facing guide to these commands —
+change it with the CLI (its `neboto …` examples are parse-checked by
+`skill_examples_parse`, but prose about output shapes and exit codes isn't).
 
 ### Local emulator (floci / LocalStack)
 

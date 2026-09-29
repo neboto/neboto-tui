@@ -321,3 +321,64 @@ fn get_parses_ids_and_repeatable_sections() {
     assert_eq!(a.wait, 5);
     assert!(Cli::try_parse_from(["neboto", "get", "@ec2"]).is_err(), "an id is required");
 }
+
+#[test]
+fn skill_examples_parse() {
+    // skills/neboto/SKILL.md teaches agents the CLI; every `neboto …` line in
+    // its code blocks must still parse, so a renamed flag fails here rather
+    // than leaving agents a broken recipe.
+    let skill = include_str!("../../skills/neboto/SKILL.md");
+    assert!(skill.starts_with("---\nname: neboto\ndescription: "), "frontmatter");
+    let mut in_code = false;
+    let mut checked = 0;
+    for line in skill.lines() {
+        if line.starts_with("```") {
+            in_code = !in_code;
+            continue;
+        }
+        if !in_code || !line.starts_with("neboto ") {
+            continue;
+        }
+        let command = line.split(" | ").next().unwrap();
+        let argv = shell_words(command);
+        if let Err(e) = Cli::try_parse_from(&argv) {
+            panic!("SKILL.md example doesn't parse: {line}\n{e}");
+        }
+        assert!(Cli::try_parse_from(&argv).unwrap().command.is_some(), "{line}");
+        checked += 1;
+    }
+    assert!(checked >= 5, "found only {checked} examples");
+}
+
+/// Split a command line the way a POSIX shell does for these examples:
+/// whitespace-separated, single or double quotes group.
+fn shell_words(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut in_word = false;
+    for c in s.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => cur.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                in_word = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if in_word {
+                    out.push(std::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            (None, c) => {
+                cur.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if in_word {
+        out.push(cur);
+    }
+    out
+}

@@ -185,6 +185,16 @@ matched by exact id (or ARN, where that's its id), then exact name.
 | `--section <NAME>` | Only this section, any case; repeatable. The other sections' data isn't fetched |
 | `--wait <SECS>` | How long to wait for slow sections (default 60); anything still loading prints as not loaded, with a note on stderr |
 
+**For AI agents:** [`skills/neboto/SKILL.md`](skills/neboto/SKILL.md) teaches
+an agent the commands, output shapes and exit codes. For Claude Code, copy it
+to `~/.claude/skills/neboto/SKILL.md`:
+
+```sh
+mkdir -p ~/.claude/skills/neboto
+curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/skills/neboto/SKILL.md \
+  -o ~/.claude/skills/neboto/SKILL.md
+```
+
 `-r`, `-p`, `--endpoint-url`, `--demo` and `-o` work on every subcommand.
 JSON is one document carrying `"schema": "neboto/v1"`: `ls` prints `{schema,
 service, region, count, resources: [...]}`; `get` prints `{schema, service,
