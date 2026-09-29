@@ -1,4 +1,4 @@
-//! Headless subcommands (`neboto services`, `neboto ls …`): run once, print,
+//! Headless subcommands (`neboto services`, `ls`, `get`): run once, print,
 //! exit — no terminal UI. They build the same service objects and make the
 //! same read-only calls the TUI does, so `scripts/check-readonly.py` covers
 //! them like everything else under `src/`.
@@ -6,14 +6,15 @@
 //! Output goes to stdout in the chosen format; warnings (partial loads,
 //! config problems) go to stderr, so `-o json | jq` stays parseable. Exit
 //! codes: 0 success (an empty list included), 1 an AWS or runtime error,
-//! 2 bad usage (unknown service or region).
+//! 2 bad usage (unknown service, region, section, or a resource that isn't
+//! there or is ambiguous).
 
 use crate::app::App;
 use crate::aws::client::AwsClients;
 use crate::aws::region::Region;
 use crate::aws::resource::Resource;
 use crate::aws::service::{AwsService, ServiceType};
-use crate::cli::{Cli, Command, LsArgs, OutputFormat};
+use crate::cli::{Cli, Command, GetArgs, LsArgs, OutputFormat};
 use crate::config::Config;
 use crate::event::Event;
 use serde_json::json;
@@ -55,6 +56,10 @@ pub async fn run(cli: Cli) -> i32 {
         Some(Command::Services) => services(format),
         Some(Command::Ls(args)) => match setup(&cli).await {
             Ok((config, clients)) => ls(&config, &clients, args, format).await,
+            Err(f) => Err(f),
+        },
+        Some(Command::Get(args)) => match setup(&cli).await {
+            Ok((config, clients)) => get(config, clients, args, format).await,
             Err(f) => Err(f),
         },
         None => Ok(String::new()),
@@ -198,7 +203,7 @@ async fn ls(
             types_present.join(", ")
         );
     }
-    let region = if svc.is_global() { "global".to_string() } else { clients.current_region().as_str().to_string() };
+    let region = region_label(svc, clients);
     Ok(render_list(svc, &region, &rows, format))
 }
 
@@ -333,6 +338,251 @@ fn render_list(svc: ServiceType, region: &str, rows: &[Box<dyn Resource>], forma
                 .collect();
             table(&["TYPE", "ID", "NAME", "STATE"], &body)
         }
+    }
+}
+
+// ── get ─────────────────────────────────────────────────────────────────────
+
+/// Most resources one `get` may ask for — the TUI's deep-export cap, for the
+/// same reason: each one fans out into every section's fetches.
+const MAX_GET: usize = 50;
+
+/// A list load that hasn't finished by now is stuck, not slow.
+const LIST_LOAD_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// `neboto get`: the detail pane, headless. A terminal-less `App` loads the
+/// service's list, selects each resource the way a jump does, and fires its
+/// sections' on-enter hooks — the TUI's deep-export walk — until nothing is
+/// still loading. So every split pane works with no per-service code, and
+/// the output can't drift from what the pane shows.
+async fn get(
+    config: Config,
+    clients: AwsClients,
+    args: &GetArgs,
+    format: OutputFormat,
+) -> Result<String, Failure> {
+    use std::time::{Duration, Instant};
+    let svc = resolve_service(&args.service)?;
+    let mut ids: Vec<&str> = Vec::new();
+    for id in &args.ids {
+        if !ids.contains(&id.as_str()) {
+            ids.push(id);
+        }
+    }
+    if ids.len() > MAX_GET {
+        return Err(Failure::Usage(format!(
+            "at most {MAX_GET} resources per get ({} given)",
+            ids.len()
+        )));
+    }
+    let region = region_label(svc, &clients);
+    let mut app = App::new_headless(config, clients)
+        .map_err(|e| Failure::Error(format!("starting: {e}")))?;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
+    // The list first: the pane reads its resource (and, for some types, its
+    // siblings — a VPC's subnets) from it.
+    app.headless_open_service(svc);
+    let list_deadline = Instant::now() + LIST_LOAD_LIMIT;
+    loop {
+        if app.should_load_resources() {
+            app.load_resources_async(&tx);
+        }
+        if !app.loading {
+            break;
+        }
+        if Instant::now() >= list_deadline {
+            return Err(Failure::Error(format!("{} list load timed out", svc.name())));
+        }
+        pump(&mut app, &tx, &mut rx, list_deadline).await?;
+    }
+    for w in &app.load_warnings {
+        eprintln!("neboto: warning: {w}");
+    }
+    if app.resources.is_empty() {
+        if let Some(e) = &app.error_message {
+            return Err(Failure::Error(e.clone()));
+        }
+    }
+
+    // Resolve every id (and its sections) before fetching anything, so a
+    // typo fails fast instead of after a minute of detail loads.
+    let mut plans: Vec<(usize, Option<Vec<usize>>)> = Vec::with_capacity(ids.len());
+    for id in &ids {
+        let ri = resolve_target(&app, svc, id, args.resource_type.as_deref())?;
+        if !app.headless_select(ri) {
+            return Err(Failure::Error(format!("{id} is listed but can't be selected")));
+        }
+        let only = if args.sections.is_empty() {
+            None
+        } else {
+            Some(resolve_sections(&app.headless_section_labels(), &args.sections, id)?)
+        };
+        plans.push((ri, only));
+    }
+
+    let settle = Instant::now() + Duration::from_secs(args.wait);
+    let snapshots = loop {
+        let mut snaps = Vec::with_capacity(plans.len());
+        for (ri, only) in &plans {
+            app.headless_select(*ri);
+            snaps.push(app.headless_capture(only.as_deref(), &tx));
+        }
+        let waiting = snaps.iter().any(|s| crate::export::any_section_unloaded(s));
+        if !waiting || Instant::now() >= settle {
+            break snaps;
+        }
+        pump(&mut app, &tx, &mut rx, settle).await?;
+    };
+
+    let items: Vec<(&dyn Resource, crate::export::DetailSections)> = plans
+        .iter()
+        .zip(snapshots)
+        .filter_map(|((ri, _), sections)| app.resources.get(*ri).map(|r| (r.as_ref(), sections)))
+        .collect();
+    for (r, sections) in &items {
+        let unloaded = crate::export::unloaded_sections(sections);
+        if !unloaded.is_empty() {
+            eprintln!(
+                "neboto: {} still loading after {}s, printed as not loaded: {}",
+                r.id(),
+                args.wait,
+                unloaded.join(", ")
+            );
+        }
+    }
+    Ok(render_detail(svc, &region, &items, format))
+}
+
+/// The one resource `query` names: exact id, else exact name (the TUI's jump
+/// rule), narrowed by `--type`. Nothing or several → a usage error that says
+/// what to pass instead.
+fn resolve_target(app: &App, svc: ServiceType, query: &str, rtype: Option<&str>) -> Result<usize, Failure> {
+    let hits: Vec<usize> = app
+        .headless_find(query)
+        .into_iter()
+        .filter(|&i| {
+            rtype.is_none_or(|t| app.resources.get(i).is_some_and(|r| type_matches(t, r.resource_type())))
+        })
+        .collect();
+    match hits.as_slice() {
+        [one] => Ok(*one),
+        [] => Err(Failure::Usage(match rtype {
+            Some(t) => format!("no {} resource of type {t:?} with id or name {query:?}", svc.name()),
+            None => format!(
+                "no {} resource with id or name {query:?} — `neboto ls {}` lists them",
+                svc.name(),
+                svc.prefix()
+            ),
+        })),
+        many => {
+            let list: Vec<String> = many
+                .iter()
+                .filter_map(|&i| app.resources.get(i))
+                .map(|r| format!("{} ({})", r.id(), r.resource_type()))
+                .collect();
+            Err(Failure::Usage(format!(
+                "{query:?} names {} resources — pass an id or --type: {}",
+                many.len(),
+                list.join(", ")
+            )))
+        }
+    }
+}
+
+/// `--section` names → section indices, any case. An unknown name lists the
+/// resource's real sections.
+fn resolve_sections(labels: &[String], wanted: &[String], id: &str) -> Result<Vec<usize>, Failure> {
+    let mut out = Vec::new();
+    for w in wanted {
+        let i = labels
+            .iter()
+            .position(|l| l.trim().eq_ignore_ascii_case(w.trim()))
+            .ok_or_else(|| {
+                Failure::Usage(format!("{id} has no section {w:?} — sections: {}", labels.join(", ")))
+            })?;
+        if !out.contains(&i) {
+            out.push(i);
+        }
+    }
+    Ok(out)
+}
+
+/// Handle the next event (waiting at most 200ms, never past `deadline`),
+/// then everything else already queued — one capture pass per burst rather
+/// than per event.
+async fn pump(
+    app: &mut App,
+    tx: &mpsc::UnboundedSender<Event>,
+    rx: &mut mpsc::UnboundedReceiver<Event>,
+    deadline: std::time::Instant,
+) -> Result<(), Failure> {
+    let left = deadline.saturating_duration_since(std::time::Instant::now());
+    let wait = left.min(std::time::Duration::from_millis(200));
+    let Ok(Some(first)) = tokio::time::timeout(wait, rx.recv()).await else {
+        return Ok(());
+    };
+    let mut next = Some(first);
+    while let Some(ev) = next {
+        app.handle_event(ev, tx)
+            .await
+            .map_err(|e| Failure::Error(e.to_string()))?;
+        next = rx.try_recv().ok();
+    }
+    Ok(())
+}
+
+fn render_detail(
+    svc: ServiceType,
+    region: &str,
+    items: &[(&dyn Resource, crate::export::DetailSections)],
+    format: OutputFormat,
+) -> String {
+    match format {
+        OutputFormat::Json => {
+            let service = svc.prefix().trim_start_matches('@');
+            let values: Vec<serde_json::Value> = items
+                .iter()
+                .map(|(r, s)| crate::export::detail_value(*r, s))
+                .collect();
+            let doc = match values.as_slice() {
+                // One id → the object itself, so `.sections.Code` works.
+                [one] => {
+                    let mut doc = json!({"schema": SCHEMA, "service": service, "region": region});
+                    if let (Some(d), Some(o)) = (doc.as_object_mut(), one.as_object()) {
+                        d.extend(o.clone());
+                    }
+                    doc
+                }
+                _ => json!({
+                    "schema": SCHEMA,
+                    "service": service,
+                    "region": region,
+                    "count": values.len(),
+                    "resources": values,
+                }),
+            };
+            pretty(&doc)
+        }
+        OutputFormat::Md => match items {
+            [(r, s)] => crate::export::detail_markdown(*r, s),
+            _ => crate::export::detail_markdown_multi(items, svc.name()),
+        },
+        OutputFormat::Csv => crate::export::multi_detail_csv(items),
+        OutputFormat::Table => items
+            .iter()
+            .map(|(r, s)| crate::export::detail_text(*r, s))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+/// `global` for a global service, else the region the clients point at.
+fn region_label(svc: ServiceType, clients: &AwsClients) -> String {
+    if svc.is_global() {
+        "global".to_string()
+    } else {
+        clients.current_region().as_str().to_string()
     }
 }
 

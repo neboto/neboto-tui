@@ -1,0 +1,25 @@
+{
+  "Parameters": [
+    {
+      "Name": "/orders/db/password",
+      "ARN": "arn:aws:ssm:{{region}}:{{account}}:parameter/orders/db/password",
+      "Type": "SecureString",
+      "KeyId": "alias/aws/ssm",
+      "LastModifiedDate": {{epoch:now-40d}},
+      "LastModifiedUser": "arn:aws:iam::{{account}}:user/jsmith",
+      "Version": 3,
+      "Tier": "Standard",
+      "DataType": "text"
+    },
+    {
+      "Name": "/orders/log-level",
+      "ARN": "arn:aws:ssm:{{region}}:{{account}}:parameter/orders/log-level",
+      "Type": "String",
+      "LastModifiedDate": {{epoch:now-12d}},
+      "LastModifiedUser": "arn:aws:iam::{{account}}:user/jsmith",
+      "Version": 1,
+      "Tier": "Standard",
+      "DataType": "text"
+    }
+  ]
+}

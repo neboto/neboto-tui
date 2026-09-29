@@ -1,0 +1,63 @@
+<GetTemplateResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <GetTemplateResult>
+    <TemplateBody>AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Shared VPC, subnets and NAT for acme-prod'
+Parameters:
+  CidrBlock: {Type: String, Default: 10.20.0.0/16}
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref CidrBlock
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags: [{Key: Name, Value: acme-prod}]
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [0, !Cidr [!Ref CidrBlock, 4, 12]]
+      MapPublicIpOnLaunch: true
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Select [1, !Cidr [!Ref CidrBlock, 4, 12]]
+      MapPublicIpOnLaunch: true
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [2, !Cidr [!Ref CidrBlock, 4, 12]]
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Select [3, !Cidr [!Ref CidrBlock, 4, 12]]
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      AllocationId: eipalloc-0acme0000000nat1a
+Outputs:
+  VpcId:
+    Description: Shared VPC
+    Value: !Ref Vpc
+    Export: {Name: !Sub '${AWS::StackName}-VpcId'}
+  PrivateSubnets:
+    Description: Private subnets
+    Value: !Join [',', [!Ref PrivateSubnetA, !Ref PrivateSubnetB]]
+    Export: {Name: !Sub '${AWS::StackName}-PrivateSubnets'}
+  PublicSubnets:
+    Description: Public subnets
+    Value: !Join [',', [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+    Export: {Name: !Sub '${AWS::StackName}-PublicSubnets'}
+</TemplateBody>
+    <StagesAvailable><member>Original</member><member>Processed</member></StagesAvailable>
+  </GetTemplateResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetTemplateResponse>

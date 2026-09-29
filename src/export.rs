@@ -159,6 +159,118 @@ fn is_unloaded(lines: &[(String, String)]) -> bool {
     saw_content
 }
 
+/// Where a TUI key hint starts in `s`, if it has one: `press <key> …` at the
+/// start of the text or after a separator (`—`, `·`, `│`, `→`, `(`). The
+/// renderers write hints like "press t to tail" into the rows because the
+/// pane is where the key works; an export or `neboto get` has no keys, so
+/// the hint is noise there. Hints are always trailing, so everything from the
+/// separator on goes. The key token is short (`t`, `2`, `⏎`, `Enter`), which
+/// keeps prose like "Express" or "press release" out of it.
+fn key_hint_start(s: &str) -> Option<usize> {
+    if is_key_chip_run(s) {
+        return Some(0);
+    }
+    let lower = s.to_ascii_lowercase();
+    for (i, _) in lower.match_indices("press ") {
+        if i > 0 && lower.as_bytes()[i - 1].is_ascii_alphanumeric() {
+            continue;
+        }
+        let token = s[i + 6..].split_whitespace().next().unwrap_or("");
+        let token = token.trim_end_matches([',', '.', ')']);
+        if token.is_empty() || !(token.chars().count() <= 2 || token.eq_ignore_ascii_case("enter")) {
+            continue;
+        }
+        let before = s[..i].trim_end();
+        if before.is_empty() {
+            return Some(0);
+        }
+        for sep in ['(', '—', '·', '│', '→'] {
+            if before.ends_with(sep) {
+                return Some(before.len() - sep.len_utf8());
+            }
+        }
+    }
+    None
+}
+
+/// A row that is nothing but key chips — `x reveal · Y copy`, the secret
+/// panes' Value row: two or more `<key> <verb>` chunks joined by ` · `,
+/// each a single non-digit key and one or two lowercase words.
+fn is_key_chip_run(s: &str) -> bool {
+    let chunks: Vec<&str> = s.trim().split(" · ").collect();
+    chunks.len() >= 2
+        && chunks.iter().all(|chunk| {
+            let mut words = chunk.split(' ');
+            let key = words.next().unwrap_or("");
+            let rest: Vec<&str> = words.collect();
+            key.chars().count() == 1
+                && !key.starts_with(|c: char| c.is_ascii_digit())
+                && (1..=2).contains(&rest.len())
+                && rest.iter().all(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase()))
+        })
+}
+
+/// `s` with a trailing key hint removed (see `key_hint_start`).
+fn strip_key_hint(s: &str) -> &str {
+    match key_hint_start(s) {
+        Some(at) => s[..at].trim_end(),
+        None => s,
+    }
+}
+
+/// The rows as an export writes them: key hints stripped, and a row that was
+/// nothing but a hint dropped (rather than left as an empty key/value, which
+/// would read as a spacer or, worse, a group header).
+fn export_rows(lines: &[(String, String)]) -> Vec<(String, String)> {
+    let mut out = Vec::with_capacity(lines.len());
+    for (k, v) in lines {
+        if k.is_empty() && v.is_empty() {
+            out.push((String::new(), String::new()));
+            continue;
+        }
+        let key = strip_key_hint(k);
+        let value = strip_key_hint(v);
+        let key_hinted = key.len() != k.len();
+        let value_hinted = value.len() != v.len();
+        if (key_hinted && key.trim().is_empty() && value.is_empty())
+            || (value_hinted && value.trim().is_empty())
+        {
+            continue;
+        }
+        out.push((key.to_string(), value.to_string()));
+    }
+    out
+}
+
+/// A status glyph leading a value (`✓ UPDATE_COMPLETE`) is how the pane
+/// colours it; in JSON it's noise a consumer would have to strip before
+/// comparing. A bare glyph (`✓` meaning "yes") is the whole value, so kept.
+fn strip_status_glyph(v: &str) -> &str {
+    for g in ["✓ ", "✗ ", "● ", "○ "] {
+        if let Some(rest) = v.strip_prefix(g) {
+            if !rest.trim().is_empty() {
+                return rest;
+            }
+        }
+    }
+    v
+}
+
+/// Remove the indent every line in a plain-content run shares — the pane's
+/// two-space body margin, plus any a code preview carried — keeping the
+/// relative indentation a template or fixed-width table needs.
+fn dedent(lines: &mut [String]) {
+    let indent = lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start_matches(' ').len())
+        .min()
+        .unwrap_or(0);
+    for l in lines.iter_mut() {
+        *l = l.get(indent..).map(str::to_string).unwrap_or_default();
+    }
+}
+
 /// Render detail (key, value) rows — the same tuples the UI styles — into
 /// Markdown, honouring the conventions in `style_detail_row`:
 /// - group header (`("X", "")`)            → bold line
@@ -184,6 +296,7 @@ fn lines_to_markdown(lines: &[(String, String)]) -> String {
         if code.is_empty() {
             return;
         }
+        dedent(code);
         out.push_str("```\n");
         for line in code.drain(..) {
             out.push_str(&line);
@@ -192,7 +305,7 @@ fn lines_to_markdown(lines: &[(String, String)]) -> String {
         out.push_str("```\n\n");
     }
 
-    for (k, v) in lines {
+    for (k, v) in &export_rows(lines) {
         let blank = k.is_empty() && v.is_empty();
         let plain = v.is_empty() && k.starts_with(' ');
         let header = v.is_empty() && !k.is_empty() && !k.starts_with(' ');
@@ -261,7 +374,7 @@ fn lines_to_json(lines: &[(String, String)]) -> Value {
         }
     }
 
-    for (k, v) in lines {
+    for (k, v) in &export_rows(lines) {
         let blank = k.trim().is_empty() && v.is_empty();
         let plain = v.is_empty() && k.starts_with(' ');
         let header = v.is_empty() && !k.is_empty() && !k.starts_with(' ');
@@ -276,18 +389,38 @@ fn lines_to_json(lines: &[(String, String)]) -> Value {
             push_content(target, k.trim_end());
         } else {
             let target = group.as_mut().map(|(_, m)| m).unwrap_or(&mut root);
-            insert_unique(target, k.trim(), json!(v));
+            insert_unique(target, k.trim(), json!(strip_status_glyph(v)));
         }
     }
     flush(&mut group, &mut root);
-    Value::Object(root)
+    let mut root = Value::Object(root);
+    dedent_content(&mut root);
+    root
+}
+
+/// Dedent every `"content"` array in a section value (see `dedent`).
+fn dedent_content(v: &mut Value) {
+    if let Value::Object(map) = v {
+        for (k, child) in map.iter_mut() {
+            match child {
+                Value::Array(arr) if k == "content" => {
+                    let mut lines: Vec<String> =
+                        arr.iter().map(|l| l.as_str().unwrap_or_default().to_string()).collect();
+                    dedent(&mut lines);
+                    *arr = lines.into_iter().map(Value::String).collect();
+                }
+                Value::Object(_) => dedent_content(child),
+                _ => {}
+            }
+        }
+    }
 }
 
 /// The whole detail pane as pretty-printed JSON: identity + one entry per
 /// section (as captured from `get_detail_lines`) + tags. This is what `e`
 /// opens in `$EDITOR` when no richer content (template, policy, raw finding
 /// JSON…) applies — full split-pane fidelity, unlike the thin `details()`
-/// fallback. Lazy sections not yet fetched become a "not loaded" note.
+/// fallback. Lazy sections not yet fetched are `null`.
 pub fn detail_json(
     resource: &dyn Resource,
     sections: &[(String, Vec<(String, String)>)],
@@ -298,7 +431,7 @@ pub fn detail_json(
 
 /// The `detail_json` object as a `Value` — shared by the single-resource
 /// string form above and the multi-resource array export.
-fn detail_value(
+pub(crate) fn detail_value(
     resource: &dyn Resource,
     sections: &[(String, Vec<(String, String)>)],
 ) -> Value {
@@ -313,7 +446,9 @@ fn detail_value(
     let mut secs = Map::new();
     for (name, lines) in sections {
         let value = if is_unloaded(lines) {
-            json!("(not loaded — open this section in the UI to capture it)")
+            // Still fetching when captured: null, so a consumer can test for
+            // it rather than match a sentence.
+            Value::Null
         } else {
             lines_to_json(lines)
         };
@@ -330,9 +465,18 @@ fn detail_value(
     Value::Object(root)
 }
 
+/// Names of the captured sections still showing a lazy-load placeholder.
+pub(crate) fn unloaded_sections(sections: &[(String, Vec<(String, String)>)]) -> Vec<String> {
+    sections
+        .iter()
+        .filter(|(_, lines)| is_unloaded(lines))
+        .map(|(name, _)| name.trim().to_string())
+        .collect()
+}
+
 /// True when any captured section is still a lazy-load placeholder — the
-/// signal that a deep export fired triggers and should be pressed again once
-/// they land, rather than exporting "not loaded" notes.
+/// signal that a deep export fired triggers and should wait for them to
+/// land, rather than exporting "not loaded" notes.
 pub fn any_section_unloaded(sections: &[(String, Vec<(String, String)>)]) -> bool {
     sections.iter().any(|(_, lines)| is_unloaded(lines))
 }
@@ -360,7 +504,7 @@ fn detail_markdown_at(
     for (name, lines) in sections {
         md.push_str(&format!("{} {}\n\n", h_section, name));
         if is_unloaded(lines) {
-            md.push_str("_Not loaded — open this section in the UI to capture it._\n\n");
+            md.push_str("_Not loaded — still fetching when this was captured._\n\n");
             continue;
         }
         let body = lines_to_markdown(lines);
@@ -392,7 +536,7 @@ fn detail_markdown_at(
     md
 }
 
-fn detail_markdown(resource: &dyn Resource, sections: &[(String, Vec<(String, String)>)]) -> String {
+pub(crate) fn detail_markdown(resource: &dyn Resource, sections: &[(String, Vec<(String, String)>)]) -> String {
     detail_markdown_at(resource, sections, 1)
 }
 
@@ -680,15 +824,106 @@ pub fn export_detail_multi(
             Ok(serde_json::to_string_pretty(&Value::Array(arr))?)
         },
         || multi_detail_csv(items),
-        || {
-            let mut md = format!("# {} ({})\n\n", label, items.len());
-            for (r, sections) in items {
-                md.push_str(&detail_markdown_at(*r, sections, 2));
-                md.push('\n');
-            }
-            md
-        },
+        || detail_markdown_multi(items, label),
     )
+}
+
+/// Several resources as one Markdown document: `# <label> (N)`, then a `##`
+/// chapter per resource mirroring its detail pane (sections nest at `###`).
+pub(crate) fn detail_markdown_multi(items: &[(&dyn Resource, DetailSections)], label: &str) -> String {
+    let mut md = format!("# {} ({})\n\n", label, items.len());
+    for (r, sections) in items {
+        md.push_str(&detail_markdown_at(*r, sections, 2));
+        md.push('\n');
+    }
+    md
+}
+
+/// One resource's detail as plain aligned text — `neboto get` on a terminal.
+/// Same rows as the Markdown (key hints stripped), laid out like the pane:
+/// a heading per section, group headers as sub-headings, keys aligned per
+/// run, plain content indented under them.
+pub(crate) fn detail_text(resource: &dyn Resource, sections: &[(String, Vec<(String, String)>)]) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let mut out = format!(
+        "{}: {}\n{}{}\n",
+        resource.resource_type(),
+        resource.name(),
+        resource.id(),
+        match resource.state_label() {
+            s if s.is_empty() => String::new(),
+            s => format!(" · {s}"),
+        }
+    );
+    for (name, lines) in sections {
+        out.push_str(&format!("\n── {} ──\n", name.trim()));
+        if is_unloaded(lines) {
+            out.push_str("  (not loaded — still fetching when this was captured)\n");
+            continue;
+        }
+        let rows = export_rows(lines);
+        let mut body = String::new();
+        let key_w = rows
+            .iter()
+            .filter(|(k, v)| !v.is_empty() && !k.trim().is_empty())
+            .map(|(k, _)| k.trim().width())
+            .max()
+            .unwrap_or(0);
+        let mut code: Vec<String> = Vec::new();
+        let flush = |code: &mut Vec<String>, out: &mut String| {
+            dedent(code);
+            for l in code.drain(..) {
+                out.push_str(&format!("  {}\n", l.replace('\t', "  — ").trim_end()));
+            }
+        };
+        for (k, v) in &rows {
+            let plain = v.is_empty() && k.starts_with(' ');
+            if plain {
+                code.push(k.clone());
+                continue;
+            }
+            flush(&mut code, &mut body);
+            if k.is_empty() && v.is_empty() {
+                body.push('\n');
+            } else if v.is_empty() {
+                body.push_str(&format!("{}\n", k.trim()));
+            } else if k.trim().is_empty() {
+                body.push_str(&format!("  {}\n", v));
+            } else {
+                let k = k.trim();
+                body.push_str(&format!("  {}{}  {}\n", k, " ".repeat(key_w - k.width()), v));
+            }
+        }
+        flush(&mut code, &mut body);
+        // Spacers pile up where a hint row was dropped or a section opens
+        // with one; one blank line between blocks reads the same.
+        let mut blank_run = true;
+        for line in body.lines() {
+            if line.trim().is_empty() {
+                if !blank_run {
+                    out.push('\n');
+                }
+                blank_run = true;
+            } else {
+                out.push_str(line);
+                out.push('\n');
+                blank_run = false;
+            }
+        }
+        if out.ends_with("\n\n") {
+            out.pop();
+        }
+    }
+    let has_tags = sections.iter().any(|(n, _)| n.trim().eq_ignore_ascii_case("tags"));
+    let tags = tags_sorted(resource);
+    if !has_tags && !tags.is_empty() {
+        out.push_str("\n── Tags ──\n");
+        let w = tags.iter().map(|(k, _)| k.width()).max().unwrap_or(0);
+        for (k, v) in tags {
+            out.push_str(&format!("  {}{}  {}\n", k, " ".repeat(w - k.width()), v));
+        }
+    }
+    out
 }
 
 /// The multi-resource deep export's CSV: long format (`ID, Section, Key,
@@ -696,14 +931,14 @@ pub fn export_detail_multi(
 /// content lines (leading-space key, empty value) carry their text in the
 /// Value column so fixed-width tables and code previews survive; unloaded
 /// lazy sections are skipped (the export gate means there normally are none).
-fn multi_detail_csv(items: &[(&dyn Resource, DetailSections)]) -> String {
+pub(crate) fn multi_detail_csv(items: &[(&dyn Resource, DetailSections)]) -> String {
     let mut csv = String::from("ID,Section,Key,Value\n");
     for (r, sections) in items {
         for (section, lines) in sections {
             if is_unloaded(lines) {
                 continue;
             }
-            for (k, v) in lines {
+            for (k, v) in &export_rows(lines) {
                 if k.trim().is_empty() && v.is_empty() {
                     continue;
                 }
@@ -855,8 +1090,8 @@ mod tests {
         assert_eq!(v["resource"]["id"], "mock-1");
         assert_eq!(v["resource"]["type"], "Mock");
         assert_eq!(v["sections"]["Overview"]["Name"], "mock");
-        // Unloaded lazy section becomes a note, not a spinner dump.
-        assert!(v["sections"]["Breakdown"].as_str().unwrap().contains("not loaded"));
+        // Unloaded lazy section becomes null, not a spinner dump.
+        assert!(v["sections"]["Breakdown"].is_null());
         assert_eq!(v["tags"]["env"], "prod");
         // preserve_order: sections and fields appear in on-screen order.
         assert!(out.find("Overview").unwrap() < out.find("Breakdown").unwrap());
@@ -1008,5 +1243,58 @@ mod tests {
         if let Some(home) = std::env::var_os("HOME") {
             assert_eq!(expand_home("~/exports"), PathBuf::from(home).join("exports"));
         }
+    }
+    #[test]
+    fn key_hints_are_stripped_from_exports() {
+        let cases = [
+            ("press t to tail", ""),
+            ("  Press d to download & extract the source package", ""),
+            ("  (press e for the raw policy JSON)", ""),
+            ("Period: 7d │ press m for full chart overlay", "Period: 7d"),
+            ("2026-01-01 → now    (press m for full chart)", "2026-01-01 → now"),
+            ("  … +12 more lines — press e for the full JSON", "  … +12 more lines"),
+            ("inline → press 2", "inline"),
+            ("x reveal · Y copy", ""),
+            // Not hints: prose, a long "key", no separator before it.
+            ("Express checkout", "Express checkout"),
+            ("the press release", "the press release"),
+            ("Press Enterprise", "Press Enterprise"),
+            ("Rotation · 30 days", "Rotation · 30 days"),
+        ];
+        for (input, want) in cases {
+            assert_eq!(strip_key_hint(input), want, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn hint_only_rows_are_dropped_not_left_as_headers() {
+        let rows = export_rows(&[
+            ("Log Group".into(), "/aws/lambda/x".into()),
+            ("".into(), "press t to tail".into()),
+            ("Value".into(), "x reveal · Y copy".into()),
+            ("  Press 2 to load live status".into(), "".into()),
+            ("".into(), "".into()),
+        ]);
+        assert_eq!(
+            rows,
+            vec![
+                ("Log Group".to_string(), "/aws/lambda/x".to_string()),
+                (String::new(), String::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn json_values_drop_status_glyphs_and_content_is_dedented() {
+        let v = lines_to_json(&[
+            ("Status".into(), "✓ UPDATE_COMPLETE".into()),
+            ("Encrypted".into(), "✓".into()),
+            ("Template".into(), "".into()),
+            ("  Resources:".into(), "".into()),
+            ("    Bucket: {}".into(), "".into()),
+        ]);
+        assert_eq!(v["Status"], "UPDATE_COMPLETE");
+        assert_eq!(v["Encrypted"], "✓");
+        assert_eq!(v["Template"]["content"], json!(["Resources:", "  Bucket: {}"]));
     }
 }

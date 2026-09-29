@@ -14,12 +14,16 @@
 //!   `web-sg` is the Enter-to-follow chain; everything on it is owned by
 //!   the `storefront-prod` stack, which has drifted (the target group's
 //!   health-check interval, changed in the console — `W` says by whom)
-//! - `orders-pipeline` stack is in UPDATE_ROLLBACK_COMPLETE (a DLQ rename)
+//! - `orders-pipeline` stack is in UPDATE_ROLLBACK_COMPLETE (a DLQ rename):
+//!   its template builds the redrive ARN from the `DlqName` parameter while
+//!   the DLQ itself keeps a hardcoded name
 //! - `github-actions-deploy` got AdministratorAccess three days ago
 //! - `orders-api` (Lambda) tails live logs with occasional DynamoDB
 //!   throttles, and its errors alarm is firing; `nightly-report` runs on a deprecated runtime and its log
 //!   group never expires (45 GB)
 //! - `legacy-admin-alb` has no targets; IAM has a stale `legacy-reporting-role`
+//! - a Secrets Manager secret `prod/orders/db` and a SecureString parameter
+//!   `/orders/db/password` — metadata only, for proving no value is fetched
 //!
 //! Order matters: the first entry whose `when` substrings all appear in the
 //! request body wins, so put narrow matches before the catch-all. (Batch
@@ -158,6 +162,8 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("cloudformation", "DescribeStackEvents", when ["orders-pipeline"], "DescribeStackEvents-orders-pipeline.xml"),
     fx!("cloudformation", "DescribeStackEvents", when ["acme-network"], "DescribeStackEvents-acme-network.xml"),
     fx!("cloudformation", "GetTemplate", when ["storefront-prod"], "GetTemplate-storefront-prod.xml"),
+    fx!("cloudformation", "GetTemplate", when ["orders-pipeline"], "GetTemplate-orders-pipeline.xml"),
+    fx!("cloudformation", "GetTemplate", when ["acme-network"], "GetTemplate-acme-network.xml"),
     fx!("cloudformation", "DescribeStackResourceDrifts", when ["storefront-prod"], "DescribeStackResourceDrifts-storefront-prod.xml"),
     fx!("cloudformation", "ListExports", "ListExports.xml"),
     fx!("cloudformation", "ListImports", when ["acme-network"], "ListImports-network.xml"),
@@ -190,6 +196,17 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("logs", "DescribeMetricFilters", when ["/aws/lambda/orders-api"], "DescribeMetricFilters-orders-api.json"),
     fx!("logs", "GetLogEvents", when ["5d1e0c7a"], "GetLogEvents-orders-worker-crash.json"),
     fx!("logs", "GetLogEvents", when ["6e2f1d8b"], "GetLogEvents-orders-worker-crash.json"),
+    // ── Secrets Manager / SSM Parameter Store ───────────────────────────────
+    // Metadata only: there is deliberately no GetSecretValue / GetParameter
+    // fixture — `neboto get`'s guard test asserts neither is ever called.
+    fx!("secretsmanager", "ListSecrets", "ListSecrets.json"),
+    fx!("ssm", "DescribeParameters", "DescribeParameters.json"),
+    // ── S3 / Route 53 (restXml) ──────────────────────────────────────────────
+    // Not in the dataset yet, but their list calls need a root element the
+    // empty-success reply can't supply (it varies per operation).
+    fx!("s3", "GET /", "ListBuckets.xml"),
+    fx!("route53", "GET /2013-04-01/hostedzone", "ListHostedZones.xml"),
+    fx!("route53", "GET /2013-04-01/healthcheck", "ListHealthChecks.xml"),
 ];
 
 /// The body of the first fixture matching `service` / `operation` whose

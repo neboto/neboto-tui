@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ListHealthChecksResponse xmlns="https://route53.amazonaws.com/doc/2013-04-01/"><HealthChecks></HealthChecks><Marker></Marker><IsTruncated>false</IsTruncated><MaxItems>100</MaxItems></ListHealthChecksResponse>

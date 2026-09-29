@@ -82,6 +82,36 @@ pub enum Command {
     /// List a service's resources, filtered like the TUI's search.
     #[command(visible_alias = "list")]
     Ls(LsArgs),
+    /// Show resources' full detail — every detail-pane section, lazy ones
+    /// included.
+    Get(GetArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct GetArgs {
+    /// Service prefix or alias, with or without the @.
+    #[arg(value_name = "SERVICE")]
+    pub service: String,
+
+    /// Resource ids (or ARNs, where that is the id) or exact names — up to
+    /// 50. An id wins over a same-named resource.
+    #[arg(value_name = "ID", required = true, num_args = 1..)]
+    pub ids: Vec<String>,
+
+    /// Pick among resources that share a name, like `ls --type`: the type or
+    /// its last word(s), any case, e.g. service, "task definition".
+    #[arg(short = 't', long = "type", value_name = "TYPE")]
+    pub resource_type: Option<String>,
+
+    /// Only this detail section (repeatable, any case), e.g. --section
+    /// permissions. Only its data is fetched.
+    #[arg(long = "section", value_name = "NAME")]
+    pub sections: Vec<String>,
+
+    /// Seconds to wait for lazily-loaded sections; anything still loading
+    /// after that prints as "not loaded".
+    #[arg(long, value_name = "SECS", default_value_t = 60)]
+    pub wait: u64,
 }
 
 #[derive(Debug, clap::Args)]
@@ -118,13 +148,13 @@ pub struct LsArgs {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutputFormat {
-    /// Aligned columns for reading in a terminal.
+    /// Aligned text for reading in a terminal.
     Table,
-    /// One JSON object: `{schema, service, region, count, resources: [...]}`.
+    /// One JSON document carrying `"schema": "neboto/v1"`.
     Json,
-    /// A Markdown table.
+    /// Markdown: a table for lists, a document for `get`.
     Md,
-    /// CSV with every field as a column.
+    /// CSV: one row per resource for `ls`, one per detail row for `get`.
     Csv,
 }
 
