@@ -63,7 +63,13 @@ AWS.
   each keystroke so background loads show up) with a parallel
   `all_search_sources: Vec<ServiceType>` feeding the per-row service badge;
   `active_type_filter` returns None; Enter = `jump_to_all_result` (exit mode →
-  `switch_service` → exact-id pending jump, detail-focused). Guards: the
+  `switch_service` → exact-id pending jump, detail-focused) while `l`/`→`
+  **peek** — `focus_details_panel` over the results, as a click does (panes
+  render from the resource, not the service on screen; an other-region S3
+  stub jumps instead). Under @all the sub-tab keys (digits/`Tab`/`H`/`L`) are
+  inert and the tab strip is hidden (they'd switch the hidden service's
+  view), and `r` refreshes the peeked sections + rebuilds from the caches
+  instead of reloading the service underneath. Guards: the
   stream handlers drop batches and **skip the cache insert** while the mode
   holds foreign rows in `resources` (else a completing load would poison that
   service's cache), watch mode holds off, and `prepare_service_view`

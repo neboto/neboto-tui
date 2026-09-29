@@ -3847,6 +3847,7 @@ impl App {
             && self.macro_name_input.is_none()
             && !self.any_selector_visible()
             && !self.any_pane_overlay_active()
+            && !self.all_search_mode // no tabs on the @all list; see the digit guard
             && self.current_service.is_some_and(has_sub_tabs);
         free.then_some(tab)
     }
@@ -5700,6 +5701,19 @@ impl App {
             return Ok(());
         }
 
+        // @all rows span services and the list has no tabs, so a digit or Tab
+        // here would switch a sub-tab of the service underneath — invisibly,
+        // until you left @all and landed on a tab you never picked.
+        if self.all_search_mode
+            && !self.search_active
+            && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
+            && matches!(key.code, KeyCode::Char('0'..='9') | KeyCode::Tab | KeyCode::BackTab)
+        {
+            self.success_message =
+                Some("@all results have no sub-tabs — ⏎ opens a result in its service".to_string());
+            self.success_message_time = Some(Instant::now());
+            return Ok(());
+        }
 
         // EC2 sub-tab switching (only when EC2 is active and NOT in search mode)
         if !self.search_active && self.current_service == Some(ServiceType::EC2) {
@@ -8124,10 +8138,19 @@ impl App {
             // the detail pane.
             (KeyCode::Enter, KeyModifiers::NONE)
             | (KeyCode::Char('l') | KeyCode::Right, KeyModifiers::NONE) => {
-                // An @all result jumps into its owning service (full-fidelity
-                // detail there) instead of drilling a detached preview here.
+                // An @all result: Enter commits — jump into the owning service,
+                // leaving the results (Ctrl-O comes back). l / → peek — open the
+                // detail pane in place over the results, as a click does, so h
+                // returns to the same list. Detail panes render from the
+                // resource itself, not the service on screen, so the peek is
+                // full-fidelity. An other-region S3 stub has no detail to peek
+                // at, so it always jumps.
                 if self.all_search_mode {
-                    self.jump_to_all_result(event_tx);
+                    if key.code == KeyCode::Enter || self.selected_is_s3_stub() {
+                        self.jump_to_all_result(event_tx);
+                    } else {
+                        self.focus_details_panel(event_tx);
+                    }
                 }
                 // An out-of-region S3 bucket switches region instead of drilling
                 // into a detail-less stub.
@@ -10213,6 +10236,33 @@ impl App {
     }
 
     fn refresh_current_service(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        // @all lists other services' cached rows. Reloading the service
+        // underneath would be discarded uncached (the stream handlers can't
+        // write under @all) — a wasted load, and an emptied lazy store with
+        // nothing re-triggered. Refresh what @all can: the detail sections of
+        // a peeked result, and the flattened rows from the current caches.
+        if self.all_search_mode {
+            self.lazy = crate::lazy::LazyStore::new(self.lazy.epoch() + 1);
+            self.cancel_pending_deep_export();
+            self.flat_triggered_for = None;
+            if self.details_focused {
+                let saved_cursor = self.details_selected_index;
+                self.set_detail_section(self.detail_section_index(), event_tx);
+                self.details_selected_index = saved_cursor;
+            } else {
+                let keep = self.get_selected_resource_id();
+                self.update_search();
+                if let Some(id) = keep {
+                    self.restore_selection_by_id(&id);
+                }
+            }
+            self.success_message = Some(
+                "Refreshed detail sections — @all rows come from the cache; ⏎ opens a result in its service to reload it"
+                    .to_string(),
+            );
+            self.success_message_time = Some(Instant::now());
+            return;
+        }
         if let Some(service) = self.current_service {
             // Remember where the user was so the reload can restore it once the
             // same resource streams back in (load_service_resources clears the
@@ -23119,6 +23169,14 @@ impl App {
     /// with full details), instead of drilling into a detail-less stub. Returns
     /// `true` when it handled the key. Mirrors the Resource Explorer cross-region
     /// jump machinery (`pending_jump` + `pending_jump_region`).
+    /// The selected row is an S3 bucket from another region — a detail-less
+    /// stub that only a region switch can fill in.
+    fn selected_is_s3_stub(&self) -> bool {
+        self.get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::s3::S3Bucket>())
+            .is_some_and(|b| b.region != self.current_region.as_str())
+    }
+
     fn try_s3_cross_region_drill(&mut self, event_tx: &mpsc::UnboundedSender<Event>) -> bool {
         if self.current_service != Some(ServiceType::S3) {
             return false;
