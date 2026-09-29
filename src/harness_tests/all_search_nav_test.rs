@@ -5,30 +5,35 @@
 
 use super::*;
 
-#[tokio::test]
-async fn ctrl_o_back_to_all_results_stays_put_and_loads_nothing() {
-    let (mut app, tx, _rx) = test_app().await;
+/// `@all <name>` typed over IAM (nothing cached there), with one EC2
+/// security group warm in the cache and selected in the results.
+async fn all_over_iam() -> (App, mpsc::UnboundedSender<Event>, mpsc::UnboundedReceiver<Event>, String) {
+    let (mut app, tx, rx) = test_app().await;
     let group = all_mocks()
         .into_iter()
         .find(|(s, l, _)| *s == ServiceType::EC2 && *l == "SecurityGroup")
         .map(|(_, _, r)| r)
         .unwrap();
     let (id, name) = (group.id().to_string(), group.name().to_string());
-
-    // EC2 is warm; IAM, the service on screen, has nothing cached.
     let region = app.current_region;
     app.cache.insert(ServiceType::EC2, region, None, vec![group]);
     select_mock(&mut app, ServiceType::IAM, all_mocks().remove(0).2);
     app.resources.clear();
     app.filtered_resources.clear();
     app.selected_index = None;
-
-    // `@all <name>` over IAM, then ⏎ to the EC2 result.
     app.search_query = format!("@all {name}");
     app.update_search();
+    app.search_active = false;
     assert!(app.all_search_mode);
     assert_eq!(app.get_selected_resource_id().as_deref(), Some(id.as_str()));
-    app.search_active = false;
+    (app, tx, rx, id)
+}
+
+#[tokio::test]
+async fn ctrl_o_back_to_all_results_stays_put_and_loads_nothing() {
+    let (mut app, tx, _rx, id) = all_over_iam().await;
+
+    // ⏎ commits: jump to the EC2 result.
     app.handle_key(key(KeyCode::Enter), &tx).await.unwrap();
     assert_eq!(app.current_service, Some(ServiceType::EC2));
     assert!(!app.all_search_mode);
@@ -42,4 +47,52 @@ async fn ctrl_o_back_to_all_results_stays_put_and_loads_nothing() {
     assert_eq!(app.get_selected_resource_id().as_deref(), Some(id.as_str()));
     assert_eq!(app.current_service, Some(ServiceType::EC2), "didn't switch back to IAM");
     assert!(!app.loading, "nothing was fetched");
+}
+
+#[tokio::test]
+async fn l_peeks_in_place_and_h_returns_to_the_same_results() {
+    let (mut app, tx, _rx, id) = all_over_iam().await;
+    app.handle_key(key(KeyCode::Char('l')), &tx).await.unwrap();
+    assert!(app.details_focused, "l opens the detail pane");
+    assert!(app.all_search_mode, "…over the @all results, not in EC2");
+    assert_eq!(app.current_service, Some(ServiceType::IAM));
+    assert_eq!(app.get_selected_resource_id().as_deref(), Some(id.as_str()));
+    assert!(!app.loading, "a peek fetches no list");
+
+    app.handle_key(key(KeyCode::Char('h')), &tx).await.unwrap();
+    assert!(!app.details_focused);
+    assert!(app.all_search_mode);
+    assert_eq!(app.get_selected_resource_id().as_deref(), Some(id.as_str()));
+}
+
+#[tokio::test]
+async fn sub_tab_keys_do_nothing_to_the_service_underneath() {
+    let (mut app, tx, _rx, _) = all_over_iam().await;
+    let before = format!("{:?}", app.iam_view);
+    for k in [KeyCode::Char('2'), KeyCode::Tab, KeyCode::BackTab] {
+        app.handle_key(key(k), &tx).await.unwrap();
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Char('L'), KeyModifiers::SHIFT), &tx).await.unwrap();
+    assert_eq!(format!("{:?}", app.iam_view), before, "IAM's tab untouched");
+    assert!(app.all_search_mode);
+    assert_eq!(app.current_service, Some(ServiceType::IAM));
+}
+
+#[tokio::test]
+async fn r_under_all_reloads_sections_not_the_hidden_service() {
+    let (mut app, tx, _rx, id) = all_over_iam().await;
+    app.handle_key(key(KeyCode::Char('l')), &tx).await.unwrap();
+    let epoch = app.lazy.epoch();
+    app.handle_key(key(KeyCode::Char('r')), &tx).await.unwrap();
+    assert!(app.lazy.epoch() > epoch, "section data dropped for a refetch");
+    assert!(!app.loading, "IAM, underneath, wasn't reloaded");
+    assert!(app.all_search_mode && app.details_focused);
+    assert_eq!(app.get_selected_resource_id().as_deref(), Some(id.as_str()));
+
+    // From the list too: the rows are rebuilt from the caches, nothing fetched.
+    app.handle_key(key(KeyCode::Char('h')), &tx).await.unwrap();
+    app.handle_key(key(KeyCode::Char('r')), &tx).await.unwrap();
+    assert!(!app.loading);
+    assert!(app.all_search_mode);
+    assert_eq!(app.get_selected_resource_id().as_deref(), Some(id.as_str()));
 }

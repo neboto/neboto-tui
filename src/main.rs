@@ -277,7 +277,10 @@ async fn run(cli: cli::Cli) -> Result<()> {
 /// the draw closure so the layer-2 harness tests can render to a
 /// `TestBackend` without a real terminal.
 fn render_app(app: &App, frame: &mut ratatui::Frame) {
-    let show_sub_tabs = app.current_service.is_some_and(crate::app::has_sub_tabs);
+    // Not under @all: its rows span services, and the tabs of the service
+    // underneath would suggest keys that deliberately do nothing there.
+    let show_sub_tabs =
+        !app.all_search_mode && app.current_service.is_some_and(crate::app::has_sub_tabs);
     // Hide the top banner on the welcome splash — it has its own logo.
     let show_banner = app.banner_visible && app.current_service.is_some();
     let layout = AppLayout::new(frame.area(), show_banner, show_sub_tabs, app.layout_mode);
@@ -692,13 +695,18 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
             hints.extend_from_slice(&[("Esc", "back"), ("?", "help")]);
             theme::hint_line(&hints)
         } else {
-            let mut hints: Vec<(&str, &str)> = vec![
-                ("j/k", "move"),
-                ("H/L", "sub-tab"),
-                ("/", "search"),
-                ("⏎", "details"),
-                ("y", "copy id"),
-            ];
+            // @all results: no sub-tabs, and ⏎ / l part ways (jump vs peek).
+            let mut hints: Vec<(&str, &str)> = if app.all_search_mode {
+                vec![("j/k", "move"), ("⏎", "open"), ("l", "peek"), ("/", "search"), ("y", "copy id")]
+            } else {
+                vec![
+                    ("j/k", "move"),
+                    ("H/L", "sub-tab"),
+                    ("/", "search"),
+                    ("⏎", "details"),
+                    ("y", "copy id"),
+                ]
+            };
             if app.supports_metrics_overlay() {
                 hints.push(("m", "metrics"));
             }
