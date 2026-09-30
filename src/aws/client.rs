@@ -75,7 +75,7 @@ impl AwsClients {
         endpoint: Option<String>,
         assumed_role: Option<AssumedOrgRole>,
     ) -> Result<Self> {
-        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
+        let mut loader = sdk_defaults();
         if let Some(r) = region {
             loader = loader.region(r.to_sdk_region());
         }
@@ -175,7 +175,7 @@ impl AwsClients {
     /// other test's dead-endpoint clients onto fixture data too.
     #[cfg(test)]
     pub(crate) async fn new_demo_for_test() -> Self {
-        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        let config = sdk_defaults()
             .region(Region::UsEast1.to_sdk_region())
             .http_client(crate::demo::http_client())
             .credentials_provider(mock_credentials())
@@ -831,6 +831,16 @@ impl AwsClients {
 }
 
 /// Build a CloudWatch client for `region` off an already-resolved base config.
+/// The SDK loader every client starts from. The app name puts `app/neboto`
+/// in each request's User-Agent, so CloudTrail's `userAgent` field shows
+/// which calls neboto made — anyone can audit the read-only claim from their
+/// own trail. Configs derived with `into_builder` (profile pinning, assumed
+/// roles) keep it.
+fn sdk_defaults() -> aws_config::ConfigLoader {
+    aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .app_name(aws_config::AppName::new("neboto").expect("valid app name"))
+}
+
 /// Free-standing so a spawned fetch can call it with a cloned `SdkConfig`.
 pub fn cloudwatch_client_for(config: &SdkConfig, region: &str) -> aws_sdk_cloudwatch::Client {
     let cfg = aws_sdk_cloudwatch::config::Builder::from(config)
@@ -942,6 +952,18 @@ mod tests {
     use super::*;
     use aws_credential_types::provider::ProvideCredentials;
     use std::io::Write;
+
+    /// Every config carries the app name (CloudTrail's `userAgent` shows
+    /// `app/neboto`), including one re-pointed at another account.
+    #[tokio::test]
+    async fn every_config_names_the_app() {
+        let clients = AwsClients::new_for_test().await;
+        assert_eq!(clients.sdk_config().app_name().map(|a| a.as_ref()), Some("neboto"));
+        let other = AwsClients::assume_config_for_account(clients.sdk_config(), "111122223333", "Audit").await;
+        assert_eq!(other.app_name().map(|a| a.as_ref()), Some("neboto"));
+        let demo = AwsClients::new_demo_for_test().await;
+        assert_eq!(demo.sdk_config().app_name().map(|a| a.as_ref()), Some("neboto"));
+    }
 
     /// An explicit profile must beat `AWS_ACCESS_KEY_ID` in the environment.
     /// The SDK's default chain tries the environment first, which made a `P`

@@ -490,6 +490,13 @@ stays that way:
    asset — security teams can approve neboto precisely *because* it cannot
    mutate. One gated write action changes that conversation permanently.
 
+**Check it yourself in CloudTrail.** Every request neboto makes carries
+`app/neboto` in its user agent, so your own trail shows exactly what it
+called. In CloudTrail Lake or Athena, filter on `userAgent LIKE '%app/neboto%'`
+and every row should be `readOnly = true`. (Event history can't filter on the
+user agent; look up an event name, e.g. Lambda's `ListFunctions20150331`,
+and check its `userAgent`.)
+
 Where a mutation is genuinely what you want, **`C`** copies the ready-to-run AWS
 CLI command for the selected resource, with the region, profile and ids filled
 in: stop an instance, force an ECS redeployment, set an Auto Scaling group's
