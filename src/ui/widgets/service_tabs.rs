@@ -160,9 +160,12 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
             }
         })
         .collect();
-    // The window centres on the active chip; under `@all` on the service
-    // with the most matches.
-    let active_idx = if all_mode {
+    // The window centres on the active chip; under `@all` on the picked
+    // service, else the one with the most matches.
+    let picked = if all_mode { app.all_search_service_filter } else { None };
+    let active_idx = if let Some(p) = picked.and_then(|p| visible.iter().position(|s| *s == p)) {
+        p
+    } else if all_mode {
         visible
             .iter()
             .enumerate()
@@ -221,7 +224,18 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
         spans.push(Span::styled(" │ ", Style::default().fg(theme::text_dim())));
     }
     if all_mode {
-        spans.push(Span::styled(format!(" {ALL_LABEL} "), active_chip_style()));
+        // Clicking `@all` shows every service's results again.
+        let x = area.x + prefix_w - all_chip_w;
+        app.push_click_region(
+            Rect { x, y: area.y, width: chip_width(ALL_LABEL), height: 1 },
+            crate::app::ClickAction::AllSearchFilter(None),
+        );
+        let style = if picked.is_none() {
+            active_chip_style()
+        } else {
+            Style::default().fg(theme::text_primary())
+        };
+        spans.push(Span::styled(format!(" {ALL_LABEL} "), style));
         spans.push(Span::styled(" │ ", Style::default().fg(theme::text_dim())));
     }
     let mut chip_x = area.x + prefix_w;
@@ -240,18 +254,34 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
         }
 
         let chip_w = chip_width(label);
-        app.push_click_region(
-            Rect {
-                x: chip_x,
-                y: area.y,
-                width: chip_w,
-                height: 1,
-            },
-            crate::app::ClickAction::Service(*service),
-        );
+        // Under `@all` a chip narrows the results to its service (a chip it
+        // didn't search has nothing to show, so it isn't clickable);
+        // otherwise it switches service.
+        let action = if !all_mode {
+            Some(crate::app::ClickAction::Service(*service))
+        } else if app.all_search_searched.contains(service) {
+            Some(crate::app::ClickAction::AllSearchFilter(Some(*service)))
+        } else {
+            None
+        };
+        if let Some(action) = action {
+            app.push_click_region(
+                Rect {
+                    x: chip_x,
+                    y: area.y,
+                    width: chip_w,
+                    height: 1,
+                },
+                action,
+            );
+        }
         chip_x += chip_w;
 
-        let is_active = !all_mode && app.current_service == Some(*service);
+        let is_active = if all_mode {
+            picked == Some(*service)
+        } else {
+            app.current_service == Some(*service)
+        };
         if is_active {
             spans.push(Span::styled(format!(" {} ", label), active_chip_style()));
         } else if all_mode && counts.get(service).copied().unwrap_or(0) == 0 {

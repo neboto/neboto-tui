@@ -130,6 +130,9 @@ fn point_in(area: Rect, col: u16, row: u16) -> bool {
 #[derive(Debug, Clone, Copy)]
 pub enum ClickAction {
     Service(ServiceType),
+    /// A service-strip chip under `@all`: show only that service's results
+    /// (`None` — the `@all` chip — shows them all again).
+    AllSearchFilter(Option<ServiceType>),
     Key(char),
     /// A detail-pane section tab: focus the detail pane (if needed) and replay
     /// the section's number key, so the click reuses the keyboard section logic.
@@ -354,16 +357,20 @@ pub enum ListSort {
     Default,
     NameAsc,
     NameDesc,
-    State}
+    State,
+    /// `@all` only: group the results by service.
+    Service}
 
 impl ListSort {
-    /// Cycle Default → name ↑ → name ↓ → state → Default.
-    pub fn next(self) -> Self {
+    /// Cycle Default → name ↑ → name ↓ → state → (service, under `@all`) →
+    /// Default.
+    pub fn next(self, all_search: bool) -> Self {
         match self {
             ListSort::Default => ListSort::NameAsc,
             ListSort::NameAsc => ListSort::NameDesc,
             ListSort::NameDesc => ListSort::State,
-            ListSort::State => ListSort::Default}
+            ListSort::State if all_search => ListSort::Service,
+            ListSort::State | ListSort::Service => ListSort::Default}
     }
 
     /// Corner-chip label; `None` when inactive (default order).
@@ -372,7 +379,8 @@ impl ListSort {
             ListSort::Default => None,
             ListSort::NameAsc => Some("name ↑"),
             ListSort::NameDesc => Some("name ↓"),
-            ListSort::State => Some("state")}
+            ListSort::State => Some("state"),
+            ListSort::Service => Some("service")}
     }
 }
 
@@ -1715,6 +1723,11 @@ pub struct App {
     /// entry, possibly empty). The service strip marks the rest `–`, so
     /// "no match" never reads the same as "not searched" (an expired cache).
     pub all_search_searched: Vec<ServiceType>,
+    /// `@all` results narrowed to one service (a service-strip chip click).
+    pub all_search_service_filter: Option<ServiceType>,
+    /// `@all` matches per service, counted before that narrowing so every
+    /// chip keeps its number while one is picked.
+    pub all_search_counts: std::collections::HashMap<ServiceType, usize>,
     pub selected_index: Option<usize>,
     pub resource_list_state: RefCell<ListState>, // State for scrolling the resource list (RefCell for interior mutability)
     // Last-rendered geometry for mouse hit-testing, written during draw (Cell
@@ -2717,6 +2730,8 @@ impl App {
             all_search_mode: false,
             all_search_sources: Vec::new(),
             all_search_searched: Vec::new(),
+            all_search_service_filter: None,
+            all_search_counts: std::collections::HashMap::new(),
             selected_index: None,
             resource_list_state: RefCell::new(ListState::default()),
             mouse_geom: Cell::new(MouseGeometry::default()),
@@ -7890,7 +7905,7 @@ impl App {
         // list-pane only, like `a` below.
         if !self.search_active && !self.details_focused {
             if key.code == KeyCode::Char('z') && key.modifiers == KeyModifiers::NONE {
-                self.list_sort = self.list_sort.next();
+                self.list_sort = self.list_sort.next(self.all_search_mode);
                 self.update_search();
                 return Ok(());
             }
@@ -8996,13 +9011,7 @@ impl App {
 
     /// `@all` matches per source service — what the service strip counts.
     pub(crate) fn all_search_match_counts(&self) -> std::collections::HashMap<ServiceType, usize> {
-        let mut counts = std::collections::HashMap::new();
-        for &ri in &self.filtered_resources {
-            if let Some(&svc) = self.all_search_sources.get(ri) {
-                *counts.entry(svc).or_insert(0) += 1;
-            }
-        }
-        counts
+        self.all_search_counts.clone()
     }
 
     /// Enter on an `@all` result: leave @all mode and jump into the owning
@@ -9032,6 +9041,7 @@ impl App {
         self.all_search_mode = false;
         self.all_search_sources.clear();
         self.all_search_searched.clear();
+        self.all_search_service_filter = None;
         // Same service: the flattened rows are still on screen, so the
         // service's own list has to be restored under the jump.
         self.jump_to_cached_resource(svc, id, &rtype, true, event_tx);
@@ -9107,6 +9117,10 @@ impl App {
             self.all_search_mode = false;
             self.all_search_sources.clear();
             self.all_search_searched.clear();
+            self.all_search_service_filter = None;
+            if self.list_sort == ListSort::Service {
+                self.list_sort = ListSort::Default;
+            }
             self.load_service_resources();
             if self.loading {
                 // Nothing to filter until the reload streams in.
@@ -9207,6 +9221,8 @@ impl App {
         let mut filtered = Vec::new();
         let mut hidden_noise_count = 0usize;
         let mut noise_in_view = false;
+        let mut all_counts: std::collections::HashMap<ServiceType, usize> =
+            std::collections::HashMap::new();
         for (idx, _score) in matches {
             if let Some(t) = type_filter {
                 if !type_filter_matches(t, self.resources[idx].resource_type()) {
@@ -9294,12 +9310,24 @@ impl App {
                     continue;
                 }
             }
+            // `@all`: count per service first, then narrow to a picked chip.
+            if self.all_search_mode {
+                let src = self.all_search_sources.get(idx).copied();
+                if let Some(src) = src {
+                    *all_counts.entry(src).or_insert(0) += 1;
+                }
+                if self.all_search_service_filter.is_some() && src != self.all_search_service_filter {
+                    continue;
+                }
+            }
             filtered.push(idx);
         }
-        // Generic sort (`z`) — only when no fuzzy text is active (match-score
-        // order wins while searching). Stable, so the service's curated load
-        // order survives within equal keys.
-        if fuzzy_text.is_empty() {
+        self.all_search_counts = all_counts;
+        // Generic sort (`z`). With fuzzy text, the default keeps match-score
+        // order; a sort the user picked with `z` wins over it (`@all` always
+        // has text, so otherwise it couldn't be sorted at all). Stable, so
+        // the load / match order survives within equal keys.
+        if fuzzy_text.is_empty() || self.list_sort != ListSort::Default {
             match self.list_sort {
                 ListSort::Default => {
                     // An Executions sub-tab spans every pipeline / state
@@ -9326,7 +9354,10 @@ impl App {
                     rb.name().to_lowercase().cmp(&ra.name().to_lowercase())
                 }),
                 ListSort::State => filtered
-                    .sort_by_key(|&i| state_sort_rank(&self.resources[i].state()))}
+                    .sort_by_key(|&i| state_sort_rank(&self.resources[i].state())),
+                ListSort::Service => filtered.sort_by_key(|&i| {
+                    self.all_search_sources.get(i).map(|s| s.name())
+                })}
         }
         self.filtered_resources = filtered;
         self.hidden_noise_count = hidden_noise_count;
@@ -10128,6 +10159,7 @@ impl App {
         self.all_search_mode = false;
         self.all_search_sources.clear();
         self.all_search_searched.clear();
+        self.all_search_service_filter = None;
         // An armed deep export names rows in the service we're leaving.
         self.cancel_pending_deep_export();
         self.current_service = Some(service);
@@ -23139,6 +23171,15 @@ impl App {
         event_tx: &mpsc::UnboundedSender<Event>,
     ) -> Result<()> {
         match action {
+            ClickAction::AllSearchFilter(filter) => {
+                // Only while the results are on screen; a stale region from
+                // the frame before @all ended does nothing.
+                if self.all_search_mode {
+                    self.all_search_service_filter =
+                        if self.all_search_service_filter == filter { None } else { filter };
+                    self.update_search();
+                }
+            }
             ClickAction::Service(service) => {
                 if self.current_service != Some(service) {
                     self.record_location();
