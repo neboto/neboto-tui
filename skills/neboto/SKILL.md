@@ -76,6 +76,14 @@ repeated keys get ` (2)`, ` (3)` suffixes, and verbatim text (templates,
 policies, rule tables) is a `"content"` array of lines. A section that is
 `null` didn't load.
 
+**What's stable.** The envelopes above, the `type`/`id`/`name`/`state`/`tags`
+keys, section names, type names, service prefixes, flags and exit codes only
+change with a new schema version. What's *inside* a section follows the TUI
+and can change in any release. Reading it to answer a question is exactly
+what it's for; but if you're writing a script someone will keep, don't
+hard-code paths into section bodies — select on the stable keys, or use the
+`aws` CLI for the one field the script needs.
+
 stdout carries only the result; warnings (e.g. a partial load) go to stderr.
 
 ## Exit codes

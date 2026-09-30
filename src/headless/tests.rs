@@ -15,7 +15,7 @@ fn args(service: &str) -> LsArgs {
     }
 }
 
-async fn demo_list(svc: ServiceType) -> Result<(Vec<Box<dyn Resource>>, Vec<String>), Failure> {
+pub(super) async fn demo_list(svc: ServiceType) -> Result<(Vec<Box<dyn Resource>>, Vec<String>), Failure> {
     let clients = AwsClients::new_demo_for_test().await;
     let roles = vec!["OrganizationAccountAccessRole".to_string()];
     let services = App::build_services(&clients, None, &roles);
@@ -127,7 +127,7 @@ fn services_lists_every_service_once() {
 
 // ── get ─────────────────────────────────────────────────────────────────────
 
-fn get_args(service: &str, ids: &[&str]) -> GetArgs {
+pub(super) fn get_args(service: &str, ids: &[&str]) -> GetArgs {
     GetArgs {
         service: service.to_string(),
         ids: ids.iter().map(|s| s.to_string()).collect(),
@@ -137,12 +137,12 @@ fn get_args(service: &str, ids: &[&str]) -> GetArgs {
     }
 }
 
-async fn demo_get(args: GetArgs, format: OutputFormat) -> Result<String, Failure> {
+pub(super) async fn demo_get(args: GetArgs, format: OutputFormat) -> Result<String, Failure> {
     let clients = AwsClients::new_demo_for_test().await;
     get(Config::default(), clients, &args, format).await
 }
 
-async fn demo_get_json(args: GetArgs) -> serde_json::Value {
+pub(super) async fn demo_get_json(args: GetArgs) -> serde_json::Value {
     let out = demo_get(args, OutputFormat::Json).await.unwrap();
     serde_json::from_str(&out).unwrap()
 }
