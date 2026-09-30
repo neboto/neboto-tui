@@ -635,3 +635,5 @@ fn csv_cell(s: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod contract_tests;

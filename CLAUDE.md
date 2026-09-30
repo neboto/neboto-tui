@@ -1131,7 +1131,14 @@ Y copy` — `export_rows`), so write hints in that shape. Rules: stdout carries
 only the result (warnings to stderr, so `| jq` holds); JSON carries
 `"schema": "neboto/v1"`; exit 0/1/2 = ok/AWS error/usage (incl. not found
 or ambiguous); a bad region or profile **fails** (the TUI falls back, which
-in a script would answer from the wrong account). Tests run against the
+in a script would answer from the wrong account). **Output contract**: the stable half (flags,
+envelopes, core keys, section/type names, prefixes, CSV headers) is pinned
+by `contract_tests.rs` against `src/headless/contract.json`. Section
+*bodies* are deliberately outside it, so pane work never needs a schema
+change — but renaming a section label or a resource type **is** a breaking
+change for scripts: the test fails, and the fix is to keep the old name or
+bump `SCHEMA`, not to re-bless. Additions: `NEBOTO_BLESS=1 cargo test
+contract`. Tests run against the
 demo account through `AwsClients::new_demo_for_test()` — never
 `demo::enable()` in a test, it's process-wide and would move every other
 test's dead-endpoint clients onto fixtures. To prove a call *didn't* happen,

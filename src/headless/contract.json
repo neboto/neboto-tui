@@ -1,0 +1,1376 @@
+{
+  "schema": "neboto/v1",
+  "flags": {
+    "": [
+      "--banner",
+      "--demo",
+      "--endpoint-url",
+      "--macro",
+      "--no-banner",
+      "--output",
+      "--profile",
+      "--region",
+      "--service",
+      "--show-keys",
+      "--theme",
+      "--watch"
+    ],
+    "services": [],
+    "ls": [
+      "--filter",
+      "--hide-noise",
+      "--limit",
+      "--state",
+      "--type"
+    ],
+    "get": [
+      "--section",
+      "--type",
+      "--wait"
+    ]
+  },
+  "services": {
+    "envelope": [
+      "schema",
+      "count",
+      "services"
+    ],
+    "service": [
+      "prefix",
+      "name",
+      "global"
+    ]
+  },
+  "ls": {
+    "envelope": [
+      "schema",
+      "service",
+      "region",
+      "count",
+      "resources"
+    ],
+    "resource": [
+      "type",
+      "id",
+      "name",
+      "state",
+      "tags"
+    ],
+    "csv": [
+      "Type",
+      "ID",
+      "Name",
+      "State"
+    ]
+  },
+  "get": {
+    "one": [
+      "schema",
+      "service",
+      "region",
+      "resource",
+      "sections",
+      "tags"
+    ],
+    "several": [
+      "schema",
+      "service",
+      "region",
+      "count",
+      "resources"
+    ],
+    "item": [
+      "resource",
+      "sections",
+      "tags"
+    ],
+    "resource": [
+      "type",
+      "id",
+      "name",
+      "state"
+    ],
+    "csv": [
+      "ID",
+      "Section",
+      "Key",
+      "Value"
+    ]
+  },
+  "prefixes": [
+    "@acm",
+    "@agentcore",
+    "@anfw",
+    "@apigw",
+    "@asg",
+    "@athena",
+    "@backup",
+    "@batch",
+    "@bedrock",
+    "@budgets",
+    "@cfn",
+    "@cloudfront",
+    "@cloudtrail",
+    "@code",
+    "@cognito",
+    "@config",
+    "@controltower",
+    "@cost",
+    "@cw",
+    "@ddb",
+    "@dms",
+    "@dx",
+    "@ec2",
+    "@ecr",
+    "@ecs",
+    "@efs",
+    "@eks",
+    "@elasticache",
+    "@elb",
+    "@events",
+    "@explorer",
+    "@fms",
+    "@fsx",
+    "@ga",
+    "@gd",
+    "@glue",
+    "@health",
+    "@iam",
+    "@idc",
+    "@inspector",
+    "@invoices",
+    "@kinesis",
+    "@kms",
+    "@lambda",
+    "@msk",
+    "@opensearch",
+    "@orgs",
+    "@profiles",
+    "@quotas",
+    "@r53",
+    "@ram",
+    "@rds",
+    "@redshift",
+    "@resolver",
+    "@resourcegroups",
+    "@s3",
+    "@s3files",
+    "@s3tables",
+    "@sc",
+    "@secrets",
+    "@ses",
+    "@sfn",
+    "@sh",
+    "@sqs",
+    "@ssm",
+    "@ta",
+    "@tgw",
+    "@transfer",
+    "@vpc",
+    "@waf",
+    "@workspaces",
+    "@xray"
+  ],
+  "sections": {
+    "ACM Certificate": [
+      "Details",
+      "Domains",
+      "Validation",
+      "Tags"
+    ],
+    "AMI": [
+      "Details",
+      "Block Devices",
+      "Permissions",
+      "Tags"
+    ],
+    "API Custom Domain": [
+      "Details",
+      "Mappings",
+      "Tags"
+    ],
+    "API Usage Plan": [
+      "Overview",
+      "API Stages",
+      "Keys"
+    ],
+    "Access Analyzer Finding": [
+      "Details",
+      "Access"
+    ],
+    "AgentCore API Key Provider": [
+      "Overview",
+      "Secret",
+      "Tags"
+    ],
+    "AgentCore Browser": [
+      "Overview",
+      "Config",
+      "Sessions",
+      "Tags"
+    ],
+    "AgentCore Browser Profile": [
+      "Details"
+    ],
+    "AgentCore Code Interpreter": [
+      "Overview",
+      "Config",
+      "Sessions",
+      "Tags"
+    ],
+    "AgentCore Config Bundle": [
+      "Overview",
+      "Components",
+      "Versions",
+      "Tags"
+    ],
+    "AgentCore Dataset": [
+      "Details"
+    ],
+    "AgentCore Evaluator": [
+      "Details"
+    ],
+    "AgentCore Gateway": [
+      "Overview",
+      "Auth",
+      "Resource Policy",
+      "Targets",
+      "Rules",
+      "Security",
+      "Interceptors",
+      "Tags"
+    ],
+    "AgentCore Harness": [
+      "Overview",
+      "Model",
+      "Prompt",
+      "Tools",
+      "Skills",
+      "Memory",
+      "Environment",
+      "Endpoints",
+      "Versions",
+      "Tags"
+    ],
+    "AgentCore Memory": [
+      "Overview",
+      "Strategies",
+      "Indexing",
+      "Actors",
+      "Sessions",
+      "Tags"
+    ],
+    "AgentCore OAuth2 Provider": [
+      "Overview",
+      "Provider",
+      "Secret",
+      "Tags"
+    ],
+    "AgentCore Online Evaluation": [
+      "Details"
+    ],
+    "AgentCore Payment Credentials": [
+      "Overview",
+      "Vendor",
+      "Tags"
+    ],
+    "AgentCore Payment Manager": [
+      "Overview",
+      "Auth",
+      "Connectors",
+      "Tags"
+    ],
+    "AgentCore Policy": [
+      "Overview",
+      "Definition",
+      "Tags"
+    ],
+    "AgentCore Policy Engine": [
+      "Overview",
+      "Policies",
+      "Generations",
+      "Tags"
+    ],
+    "AgentCore Registry": [
+      "Overview",
+      "Records",
+      "Tags"
+    ],
+    "AgentCore Runtime": [
+      "Overview",
+      "Artifact",
+      "Network",
+      "Auth",
+      "Resource Policy",
+      "Env",
+      "Endpoints",
+      "Versions",
+      "Agent Card",
+      "Tags"
+    ],
+    "AgentCore Workload Identity": [
+      "Overview",
+      "Return URLs",
+      "Tags"
+    ],
+    "Athena Database": [
+      "Overview",
+      "Tables"
+    ],
+    "Athena Query": [
+      "Overview",
+      "Query",
+      "Statistics"
+    ],
+    "Athena Saved Query": [
+      "Overview",
+      "Query"
+    ],
+    "Athena Workgroup": [
+      "Overview",
+      "Configuration",
+      "Tags"
+    ],
+    "Auto Scaling Group": [
+      "Capacity",
+      "Instances",
+      "Activities",
+      "Tags",
+      "Optimizer"
+    ],
+    "Backup Plan": [
+      "Rules",
+      "Selections",
+      "Tags"
+    ],
+    "Backup Vault": [
+      "Details",
+      "Recovery Points",
+      "Tags"
+    ],
+    "Batch Compute Environment": [
+      "Overview",
+      "Compute",
+      "Network",
+      "Queues",
+      "Tags"
+    ],
+    "Batch Job": [
+      "Overview",
+      "Container",
+      "Attempts",
+      "Array & Deps",
+      "Tags"
+    ],
+    "Batch Job Definition": [
+      "Overview",
+      "Container",
+      "Tags"
+    ],
+    "Batch Job Queue": [
+      "Overview",
+      "Compute Environments",
+      "Jobs",
+      "Tags"
+    ],
+    "Budget": [
+      "Overview",
+      "Filters",
+      "Notifications",
+      "Tags"
+    ],
+    "CFN Deleted Stack": [
+      "Overview",
+      "Resources",
+      "Events",
+      "Template"
+    ],
+    "CFN Export": [
+      "Details",
+      "Imports"
+    ],
+    "CFN Stack": [
+      "Overview",
+      "Resources",
+      "Outputs",
+      "Parameters",
+      "Tags",
+      "Events",
+      "Template",
+      "Drift",
+      "Changes"
+    ],
+    "CFN StackSet": [
+      "Config",
+      "Instances",
+      "Operations",
+      "Tags"
+    ],
+    "CW Account Policy": [
+      "Details",
+      "Document"
+    ],
+    "CW Alarm": [
+      "Config",
+      "Actions",
+      "History"
+    ],
+    "CW Anomaly Detector": [
+      "Details"
+    ],
+    "CW Dashboard": [
+      "JSON"
+    ],
+    "CW Insight Rule": [
+      "Details",
+      "Definition"
+    ],
+    "CW Log Group": [
+      "Details",
+      "Streams",
+      "Filters"
+    ],
+    "CW Metric Stream": [
+      "Details",
+      "Filters"
+    ],
+    "Catalog Control": [
+      "Details"
+    ],
+    "CloudFront Distribution": [
+      "Details",
+      "Origins",
+      "Behaviors",
+      "Errors",
+      "Restrictions",
+      "Invalidations",
+      "Tags"
+    ],
+    "CloudFront Function": [
+      "Overview",
+      "Code"
+    ],
+    "CloudTrail Event": [
+      "Overview",
+      "Identity",
+      "Request",
+      "Response",
+      "Resources"
+    ],
+    "CloudTrail Trail": [
+      "Overview",
+      "Status",
+      "Selectors"
+    ],
+    "CodeArtifact Repository": [
+      "Overview",
+      "Packages"
+    ],
+    "CodeBuild Project": [
+      "Details",
+      "Buildspec",
+      "Builds",
+      "Environment",
+      "Tags"
+    ],
+    "CodeCommit Repository": [
+      "Details",
+      "Branches",
+      "Commits",
+      "Pull Requests",
+      "Triggers",
+      "README"
+    ],
+    "CodeDeploy Group": [
+      "Overview",
+      "Targets",
+      "Deployments"
+    ],
+    "CodePipeline": [
+      "Stages",
+      "Executions",
+      "Tags"
+    ],
+    "Cognito User Pool": [
+      "Details",
+      "App Clients",
+      "Policies",
+      "Tags"
+    ],
+    "Compliance": [
+      "Overview",
+      "Resources"
+    ],
+    "Config Rule": [
+      "Details",
+      "Non-Compliant",
+      "Parameters"
+    ],
+    "Control Tower Operation": [
+      "Details"
+    ],
+    "Cost": [
+      "Breakdown",
+      "Regions",
+      "Trend",
+      "Forecast"
+    ],
+    "DHCP Options": [
+      "Overview",
+      "VPCs",
+      "Tags"
+    ],
+    "DMS Endpoint": [
+      "Overview",
+      "Connections",
+      "Used by",
+      "Tags"
+    ],
+    "DMS Replication Instance": [
+      "Overview",
+      "Network",
+      "Tasks",
+      "Tags"
+    ],
+    "DMS Serverless Replication": [
+      "Overview",
+      "Capacity",
+      "Tables",
+      "Settings",
+      "Tags"
+    ],
+    "DMS Task": [
+      "Overview",
+      "Tables",
+      "Assessments",
+      "Settings",
+      "Tags"
+    ],
+    "DX Connection": [
+      "Details",
+      "Virtual Interfaces",
+      "Tags"
+    ],
+    "DX Gateway": [
+      "Overview",
+      "Associations",
+      "Attachments"
+    ],
+    "DX LAG": [
+      "Overview",
+      "Connections",
+      "Tags"
+    ],
+    "DX Virtual Interface": [
+      "Details",
+      "BGP",
+      "Tags"
+    ],
+    "DynamoDB Table": [
+      "Details",
+      "Indexes",
+      "Capacity",
+      "Tags"
+    ],
+    "EBS Snapshot": [
+      "Details",
+      "Tags"
+    ],
+    "EBS Volume": [
+      "Details",
+      "Attachments",
+      "Snapshots",
+      "Tags",
+      "Optimizer"
+    ],
+    "EC2 Instance": [
+      "Details",
+      "Security",
+      "Networking",
+      "Load Balancing",
+      "Storage",
+      "User Data",
+      "Console",
+      "Tags",
+      "Optimizer"
+    ],
+    "ECR Repository": [
+      "Details",
+      "Images",
+      "Lifecycle",
+      "Tags"
+    ],
+    "ECS Cluster": [
+      "Overview",
+      "Settings",
+      "Tags"
+    ],
+    "ECS Service": [
+      "Overview",
+      "Deployments",
+      "Tasks",
+      "Networking",
+      "Events",
+      "Tags",
+      "Optimizer"
+    ],
+    "ECS Task": [
+      "Overview",
+      "Containers",
+      "Networking",
+      "Tags"
+    ],
+    "EFS File System": [
+      "Details",
+      "Mount Targets",
+      "Access Points",
+      "Tags"
+    ],
+    "EKS Cluster": [
+      "Details",
+      "Networking",
+      "Compute",
+      "Fargate",
+      "Add-ons",
+      "Access",
+      "Insights",
+      "Tags"
+    ],
+    "ElastiCache Cluster": [
+      "Details",
+      "Nodes",
+      "Network",
+      "Tags"
+    ],
+    "Enabled Baseline": [
+      "Overview",
+      "Parameters",
+      "Tags"
+    ],
+    "Enabled Control": [
+      "Overview",
+      "Parameters",
+      "Tags"
+    ],
+    "Enrolled Account": [
+      "Overview",
+      "Controls",
+      "Compliance"
+    ],
+    "Event Bus": [
+      "Overview",
+      "Permissions",
+      "Tags"
+    ],
+    "EventBridge Rule": [
+      "Trigger",
+      "Targets",
+      "Tags"
+    ],
+    "FMS Policy": [
+      "Overview",
+      "Scope",
+      "Config",
+      "Compliance",
+      "Tags"
+    ],
+    "FMS Resource Set": [
+      "Overview",
+      "Members"
+    ],
+    "FSx File System": [
+      "Details",
+      "Volumes",
+      "Backups",
+      "Network",
+      "Configuration",
+      "Tags"
+    ],
+    "FSx Volume": [
+      "Overview",
+      "Live",
+      "Tags"
+    ],
+    "Firehose Delivery Stream": [
+      "Overview",
+      "Destination",
+      "Processing",
+      "Tags"
+    ],
+    "Firewall": [
+      "Details",
+      "Subnets",
+      "Policy",
+      "Logging",
+      "Tags"
+    ],
+    "Firewall Policy": [
+      "Stateful",
+      "Stateless",
+      "Tags"
+    ],
+    "Global Accelerator": [
+      "Details",
+      "Listeners",
+      "Endpoint Groups",
+      "Tags"
+    ],
+    "Glue Crawler": [
+      "Overview",
+      "Targets",
+      "Configuration"
+    ],
+    "Glue Job": [
+      "Overview",
+      "Command",
+      "Arguments"
+    ],
+    "Glue Job Run": [
+      "Overview",
+      "Arguments"
+    ],
+    "Glue Table": [
+      "Overview",
+      "Schema",
+      "Storage"
+    ],
+    "GuardDuty Coverage": [
+      "Details"
+    ],
+    "GuardDuty Detector": [
+      "Overview",
+      "Features",
+      "Tags"
+    ],
+    "GuardDuty Filter": [
+      "Overview",
+      "Criteria",
+      "Tags"
+    ],
+    "GuardDuty Finding": [
+      "Details",
+      "Resource",
+      "Actor",
+      "Sequence",
+      "Runtime",
+      "Remediation"
+    ],
+    "GuardDuty List": [
+      "Details"
+    ],
+    "GuardDuty Malware Plan": [
+      "Details"
+    ],
+    "GuardDuty Malware Scan": [
+      "Overview",
+      "Volumes"
+    ],
+    "GuardDuty Member": [
+      "Overview",
+      "Features"
+    ],
+    "GuardDuty Summary": [
+      "Overview",
+      "Finding Types",
+      "Resources",
+      "Accounts",
+      "Coverage"
+    ],
+    "HTTP API": [
+      "Overview",
+      "Routes",
+      "Stages",
+      "Authorizers",
+      "Tags"
+    ],
+    "Health Event": [
+      "Details",
+      "Description",
+      "Affected"
+    ],
+    "IAM Account Settings": [
+      "Overview",
+      "Password Policy",
+      "Usage"
+    ],
+    "IAM Group": [
+      "Overview",
+      "Members",
+      "Permissions",
+      "Policies"
+    ],
+    "IAM Policy": [
+      "Overview",
+      "Document",
+      "Attached To",
+      "Tags"
+    ],
+    "IAM Role": [
+      "Overview",
+      "Trust Policy",
+      "Permissions",
+      "Policies",
+      "Tags"
+    ],
+    "IAM User": [
+      "Access",
+      "Permissions",
+      "Policies",
+      "Groups",
+      "Tags"
+    ],
+    "IC Application": [
+      "Overview",
+      "Assignments"
+    ],
+    "IC Group": [
+      "Details",
+      "Members",
+      "Access"
+    ],
+    "IC Instance": [
+      "Overview",
+      "ABAC",
+      "Trusted Issuers",
+      "Summary"
+    ],
+    "IC User": [
+      "Details",
+      "Groups",
+      "Access"
+    ],
+    "Identity Provider": [
+      "Overview",
+      "Tags"
+    ],
+    "Inspector Finding": [
+      "Details",
+      "Vulnerability",
+      "Resource",
+      "Remediation"
+    ],
+    "Invoice": [
+      "Details"
+    ],
+    "KMS Key": [
+      "Details",
+      "Policy",
+      "Grants",
+      "Tags"
+    ],
+    "Kinesis Stream": [
+      "Details",
+      "Consumers",
+      "Tags"
+    ],
+    "Lambda Function": [
+      "Config",
+      "Code",
+      "Triggers",
+      "Environment",
+      "Tags",
+      "Optimizer"
+    ],
+    "Landing Zone": [
+      "Overview",
+      "Manifest",
+      "Operations",
+      "Tags"
+    ],
+    "Launch Template": [
+      "Details",
+      "Versions",
+      "Data",
+      "Tags"
+    ],
+    "Load Balancer": [
+      "Details",
+      "Listeners",
+      "Attributes",
+      "Tags"
+    ],
+    "MSK Cluster": [
+      "Overview",
+      "Networking",
+      "Monitoring",
+      "Config",
+      "Tags"
+    ],
+    "NFW Rule Group": [
+      "Rules",
+      "Tags"
+    ],
+    "NatGateway": [
+      "Overview",
+      "Network",
+      "Tags"
+    ],
+    "Network Interface": [
+      "Overview",
+      "Addresses",
+      "Attachment",
+      "Tags"
+    ],
+    "NetworkAcl": [
+      "Inbound",
+      "Outbound",
+      "Associations",
+      "Tags"
+    ],
+    "OAM Link": [
+      "Details",
+      "Configuration"
+    ],
+    "OAM Sink": [
+      "Details",
+      "Policy",
+      "Attached Links"
+    ],
+    "OpenSearch Domain": [
+      "Details",
+      "Cluster",
+      "Network",
+      "Security",
+      "Tags"
+    ],
+    "Organizations Account": [
+      "Details",
+      "OU Path",
+      "Policies"
+    ],
+    "Organizations OU": [
+      "Overview",
+      "Children",
+      "Policies",
+      "Tags"
+    ],
+    "Organizations Policy": [
+      "Document",
+      "Attached Targets"
+    ],
+    "Peering Connection": [
+      "Overview",
+      "Tags"
+    ],
+    "Permission Set": [
+      "Details",
+      "Policies",
+      "Assignments",
+      "Tags"
+    ],
+    "Pipe": [
+      "Overview",
+      "Configuration",
+      "Tags"
+    ],
+    "Pipeline Execution": [
+      "Overview",
+      "Actions",
+      "Artifacts"
+    ],
+    "Prefix List": [
+      "Overview",
+      "Entries",
+      "Tags"
+    ],
+    "Pull Request": [
+      "Overview",
+      "Activity",
+      "Comments",
+      "Changes"
+    ],
+    "R53 Health Check": [
+      "Overview",
+      "Status",
+      "Tags"
+    ],
+    "R53 Hosted Zone": [
+      "Records",
+      "Sharing",
+      "Info",
+      "Tags"
+    ],
+    "R53 Record": [
+      "Details"
+    ],
+    "RAM Resource Share": [
+      "Details",
+      "Resources",
+      "Principals",
+      "Tags"
+    ],
+    "RDS Cluster": [
+      "Config",
+      "Endpoints",
+      "Members",
+      "Backups",
+      "Maintenance",
+      "Events",
+      "Tags"
+    ],
+    "RDS Instance": [
+      "Config",
+      "Storage",
+      "Network",
+      "Perf Insights",
+      "Backups",
+      "Maintenance",
+      "Events",
+      "Logs",
+      "Tags"
+    ],
+    "RDS Option Group": [
+      "Details"
+    ],
+    "RDS Parameter Group": [
+      "Overview",
+      "Parameters"
+    ],
+    "RDS Snapshot": [
+      "Overview",
+      "Encryption",
+      "Tags"
+    ],
+    "RDS Subnet Group": [
+      "Details"
+    ],
+    "REST API": [
+      "Overview",
+      "Resources",
+      "Stages",
+      "Authorizers",
+      "Deployments",
+      "Tags"
+    ],
+    "Redshift Cluster": [
+      "Overview",
+      "Network",
+      "Config",
+      "Tags"
+    ],
+    "Redshift Workgroup": [
+      "Overview",
+      "Namespace",
+      "Network"
+    ],
+    "Resolver Endpoint": [
+      "Details",
+      "IP Addresses",
+      "Rules",
+      "Tags"
+    ],
+    "Resolver Rule": [
+      "Details",
+      "Targets",
+      "Associations",
+      "Tags"
+    ],
+    "Resource Group": [
+      "Details",
+      "Query",
+      "Resources",
+      "Tags"
+    ],
+    "Route53 Profile": [
+      "Overview",
+      "VPCs",
+      "Resources",
+      "Tags"
+    ],
+    "RouteTable": [
+      "Routes",
+      "Associations",
+      "Tags"
+    ],
+    "S3 File System": [
+      "Details",
+      "Mount Targets",
+      "Access Points",
+      "Sync",
+      "Policy",
+      "Tags"
+    ],
+    "S3 Table": [
+      "Details",
+      "Maintenance",
+      "Policy",
+      "Tags"
+    ],
+    "S3 Table Bucket": [
+      "Details",
+      "Namespaces",
+      "Maintenance",
+      "Policy",
+      "Tags"
+    ],
+    "SC Portfolio": [
+      "Details",
+      "Products",
+      "Principals",
+      "Constraints",
+      "Shares",
+      "Tags"
+    ],
+    "SC Product": [
+      "Details",
+      "Versions",
+      "Portfolios",
+      "Tags"
+    ],
+    "SC Provisioned Product": [
+      "Details",
+      "Outputs",
+      "History",
+      "Tags"
+    ],
+    "SES Configuration Set": [
+      "Overview",
+      "Event Destinations",
+      "Tags"
+    ],
+    "SES Identity": [
+      "Overview",
+      "DKIM",
+      "MAIL FROM",
+      "Tags"
+    ],
+    "SNS Topic": [
+      "Config",
+      "Subscriptions",
+      "Permissions",
+      "Tags"
+    ],
+    "SQS Queue": [
+      "Attributes",
+      "Redrive",
+      "Permissions",
+      "Tags"
+    ],
+    "SSM Association": [
+      "Overview",
+      "Targets",
+      "Executions",
+      "Tags"
+    ],
+    "SSM Automation": [
+      "Overview",
+      "Steps"
+    ],
+    "SSM Command": [
+      "Overview",
+      "Invocations"
+    ],
+    "SSM Document": [
+      "Details",
+      "Content",
+      "Tags"
+    ],
+    "SSM Maintenance Window": [
+      "Overview",
+      "Targets",
+      "Tasks",
+      "History"
+    ],
+    "SSM Managed Instance": [
+      "Overview",
+      "Associations",
+      "Inventory",
+      "Patches"
+    ],
+    "SSM OpsItem": [
+      "Overview",
+      "Detail"
+    ],
+    "SSM Parameter": [
+      "Details",
+      "Value",
+      "History",
+      "Tags"
+    ],
+    "SSM Patch Baseline": [
+      "Overview",
+      "Rules"
+    ],
+    "Schedule": [
+      "Overview",
+      "Target"
+    ],
+    "Secret": [
+      "Details",
+      "Rotation",
+      "Tags"
+    ],
+    "Security Control": [
+      "Overview",
+      "Standards",
+      "Parameters",
+      "Failing"
+    ],
+    "Security Group": [
+      "Inbound",
+      "Outbound",
+      "Used By",
+      "Tags"
+    ],
+    "Security Hub Automation Rule": [
+      "Overview",
+      "Criteria",
+      "Actions"
+    ],
+    "Security Hub Config Policy": [
+      "Overview",
+      "Controls",
+      "Targets"
+    ],
+    "Security Hub Custom Action": [
+      "Details"
+    ],
+    "Security Hub Finding": [
+      "Details",
+      "Resources",
+      "Compliance",
+      "Vulns",
+      "Context",
+      "Remediation",
+      "History"
+    ],
+    "Security Hub Integration": [
+      "Details"
+    ],
+    "Security Hub Member": [
+      "Details"
+    ],
+    "Security Hub Overview": [
+      "Score",
+      "Findings",
+      "Controls",
+      "Coverage"
+    ],
+    "Security Hub Settings": [
+      "Overview",
+      "Regions",
+      "Organization"
+    ],
+    "Security Insight": [
+      "Results",
+      "Filters"
+    ],
+    "SecurityGroup": [
+      "Inbound",
+      "Outbound",
+      "Used By",
+      "Tags"
+    ],
+    "State Machine": [
+      "Details",
+      "Definition",
+      "Executions",
+      "Tags"
+    ],
+    "State Machine Execution": [
+      "Overview",
+      "Input",
+      "Output",
+      "History"
+    ],
+    "Subnet": [
+      "Details",
+      "Network",
+      "Routes",
+      "Tags"
+    ],
+    "TA Recommendation": [
+      "Overview",
+      "Accounts",
+      "Resources"
+    ],
+    "TGW Attachment": [
+      "Overview",
+      "Association",
+      "Tags"
+    ],
+    "TGW Route Table": [
+      "Routes",
+      "Tags"
+    ],
+    "Target Group": [
+      "Health",
+      "Config",
+      "Attributes",
+      "Tags"
+    ],
+    "Task Definition": [
+      "Overview",
+      "Containers",
+      "Volumes",
+      "Tags"
+    ],
+    "Transfer Server": [
+      "Details",
+      "Users",
+      "Tags"
+    ],
+    "Transit Gateway": [
+      "Details",
+      "Attachments",
+      "Route Tables",
+      "Tags"
+    ],
+    "Trusted Advisor Check": [
+      "Summary",
+      "Resources"
+    ],
+    "VPC": [
+      "Overview",
+      "Subnets",
+      "Gateways",
+      "Flow Logs",
+      "Tags"
+    ],
+    "VPC Endpoint": [
+      "Details",
+      "Network",
+      "Policy",
+      "Tags"
+    ],
+    "VPN Connection": [
+      "Tunnels",
+      "Routes",
+      "Details",
+      "Tags"
+    ],
+    "WAF IP Set": [
+      "Details",
+      "Addresses",
+      "Tags"
+    ],
+    "WAF Rule Group": [
+      "Details",
+      "Rules",
+      "Tags"
+    ],
+    "WAF Web ACL": [
+      "Details",
+      "Rules",
+      "Associated",
+      "Logging",
+      "Traffic",
+      "Insights"
+    ],
+    "WorkSpace": [
+      "Details",
+      "Connection",
+      "Tags"
+    ],
+    "X-Ray Service": [
+      "Overview",
+      "Downstream",
+      "Upstream"
+    ],
+    "X-Ray Trace": [
+      "Overview",
+      "Root Cause",
+      "Segments"
+    ]
+  }
+}
