@@ -478,6 +478,47 @@ IAM action names don't match the `s3:GetBucket*` wildcard, and the
 
 ---
 
+## Why not the Console, the CLI, or another TUI?
+
+**The AWS Console** does everything, including the things neboto
+deliberately won't: creating, editing and deleting. Use it for those. For
+*looking*, it costs you a tab per service and a click per hop, and a
+production session there can change anything. neboto follows the links for
+you (<kbd>Enter</kbd> on an ARN or id), puts any resource's change history
+(<kbd>W</kbd>) and what references it (<kbd>U</kbd>) one key away — plus its
+effective network access (<kbd>N</kbd>) when it has security groups — and
+cannot change what it shows.
+
+**The AWS CLI** is complete, scriptable and has a stable, typed output.
+When a script needs one field, use it. What it doesn't do is put things
+together: answering "why is this ECS service unhealthy?" is a dozen
+`describe` calls you have to know to make and join by hand. neboto makes
+those calls for you, and `neboto get` prints the same assembled view for a
+script or an AI agent, with the same read-only guarantee (see
+[Scripts and agents](#scripts-and-agents)).
+
+**Other AWS terminal UIs.** There are good ones:
+[taws](https://github.com/huseyinbabal/taws) (Rust, the closest to k9s) and
+[claws](https://github.com/clawscli/claws) (Go, 70 services) both browse
+*and* act: start, stop, delete, with a read-only flag to switch that off.
+If you want to manage resources from the terminal, pick one of them. neboto
+makes a different trade:
+
+- **No write code at all, rather than a flag.** There is no code path that
+  mutates, and `scripts/check-readonly.py` fails CI if one appears. A flag
+  protects you when it's set; this protects you when you forget.
+  [`PERMISSIONS.md`](./PERMISSIONS.md) is the complete, read-only IAM
+  policy, and member-account sessions are pinned to `ReadOnlyAccess`, so
+  a security team can approve it without reading the source. Every call
+  carries `app/neboto` in its user agent, so your own CloudTrail can confirm
+  it.
+- **Depth over a table of fields.** About 160 resource types have a
+  console-style detail pane with sections that load on first view: an ECS
+  service's deployments and events, a stack's drift, a role's policy
+  documents, CloudWatch charts (<kbd>m</kbd>) and live logs (<kbd>t</kbd>).
+- **A CLI and an agent skill built on the same panes**, and a `--demo`
+  account to try all of it without credentials.
+
 ## Why read-only
 
 This is a design constraint, not a missing feature. Two concrete reasons it
