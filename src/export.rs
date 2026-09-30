@@ -44,6 +44,9 @@ fn tags_sorted(resource: &dyn Resource) -> Vec<(String, String)> {
     tags
 }
 
+/// The keys every `resource_object` carries, whatever the type.
+pub(crate) const CORE_KEYS: [&str; 5] = ["type", "id", "name", "state", "tags"];
+
 /// JSON object for one resource: core fields + details + nested tags.
 pub(crate) fn resource_object(resource: &dyn Resource) -> Value {
     let mut obj = Map::new();
@@ -51,8 +54,12 @@ pub(crate) fn resource_object(resource: &dyn Resource) -> Value {
     obj.insert("id".into(), json!(resource.id()));
     obj.insert("name".into(), json!(resource.name()));
     obj.insert("state".into(), json!(resource.state_label()));
+    // The core keys are the stable contract (`neboto ls` documents them);
+    // a list-level field that happens to share a name must not replace one.
     for (k, v) in resource_fields(resource) {
-        obj.insert(k, json!(v));
+        if !CORE_KEYS.contains(&k.as_str()) {
+            obj.insert(k, json!(v));
+        }
     }
     let mut tags = Map::new();
     for (k, v) in tags_sorted(resource) {
