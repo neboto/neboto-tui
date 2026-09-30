@@ -1861,7 +1861,15 @@ the service you're touching.
   "everything this user did" style queries; applying returns focus to the
   Events list. Applied via `apply_ct_query` (rebuild + variant-cache per
   `ct_query.variant()`); `ct_tabs.rs` shows the active query chip. List stays
-  capped at 500 events per query. **Trails** stream as a best-effort phase-1
+  capped at `CT_MAX_EVENTS` (500) per query, newest first — `LookupEvents` is
+  2 TPS × 50/page, so raising it costs seconds per load. The cap is why a
+  local `/` search can miss an event that exists (neboto's own browsing fills
+  500 read events fast): a capped list shows `newest 500 only` in the tab
+  strip, a no-match search says it only searched those, and `f` then opens
+  pre-filled from the search text (`ct_search_seed`: CamelCase → Event name,
+  a known service prefix / `*.amazonaws.com` → Event source, else Resource
+  name). CloudTrail's Event name lookup is **exact** (Lambda's carry an API
+  version suffix: `ListFunctions20150331`), so the hint says so. **Trails** stream as a best-effort phase-1
   batch (`DescribeTrails` + N+1 `GetTrailStatus`/`GetEventSelectors`, failures
   land per-row or as a load warning — never break the events view): 3-section
   eager split pane Overview (flags, destinations — `s3://` row jumps) /

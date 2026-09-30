@@ -50,6 +50,14 @@ pub fn render_ct_tabs(app: &App, area: Rect, frame: &mut Frame) {
             },
             crate::app::ClickAction::Key('f'),
         );
+
+        // The list stopped short of the range: `/` only sees these rows.
+        if app.ct_events_capped() {
+            spans.push(Span::styled(
+                format!("  newest {} only", crate::aws::services::cloudtrail::CT_MAX_EVENTS),
+                Style::default().fg(theme::text_dim()),
+            ));
+        }
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);

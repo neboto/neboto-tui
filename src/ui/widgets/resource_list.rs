@@ -536,6 +536,17 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                     .unwrap_or_else(|| "No resources in view".to_string());
                 (subject, "F cycle state filter · a show all".to_string())
             }
+        } else if app.ct_events_capped() && app.ct_query.filter.is_none() {
+            // Only the newest events are loaded, so "no match" here isn't
+            // "no such event" — point at the server-side search.
+            (
+                format!(
+                    "No match for “{}” in the {} newest events",
+                    app.search_query,
+                    crate::aws::services::cloudtrail::CT_MAX_EVENTS
+                ),
+                "f search all of CloudTrail (exact names) · Esc clear search".to_string(),
+            )
         } else {
             let hint = if app.search_query.contains("tag:") {
                 "Esc clear search".to_string()
