@@ -209,6 +209,28 @@ resource that isn't there or is ambiguous. Unlike the TUI, an unknown region
 or profile is an error rather than a fallback, so a script never gets another
 account's answer.
 
+#### Output contract
+
+What a script can rely on, and what it can't:
+
+- **Stable:** the flags; the JSON envelopes above; each `ls` row's `type`,
+  `id`, `name`, `state` and `tags`; `get`'s `resource` object and `tags`; the
+  section *names* (`.sections.Permissions`); the resource type names; the
+  service prefixes; the first four CSV columns; the exit codes. Removing or
+  renaming any of these is a breaking change: the schema moves to
+  `neboto/v2` and the release notes say so. Additions (a new section, type,
+  service or flag) can come in any release.
+- **Descriptive:** everything *inside* a section, and the extra per-type
+  columns an `ls` row carries (`"Runtime"`, `"Memory"`, …). These are the
+  pane, serialized: labels, units and grouping follow the TUI and can change
+  in any release. Read them, don't hard-code paths into them. For
+  field-level stability, the AWS API itself (`aws …` / an SDK) is the
+  contract.
+- **For people only:** `-o table` and `-o md`. Don't parse them.
+
+The stable half is pinned by a test over [`src/headless/contract.json`](src/headless/contract.json),
+so it can't change by accident.
+
 ---
 
 ## Layout
@@ -467,6 +489,13 @@ stays that way:
 2. A `PERMISSIONS.md` that documents a purely read-only footprint is a trust
    asset — security teams can approve neboto precisely *because* it cannot
    mutate. One gated write action changes that conversation permanently.
+
+**Check it yourself in CloudTrail.** Every request neboto makes carries
+`app/neboto` in its user agent, so your own trail shows exactly what it
+called. In CloudTrail Lake or Athena, filter on `userAgent LIKE '%app/neboto%'`
+and every row should be `readOnly = true`. (Event history can't filter on the
+user agent; look up an event name, e.g. Lambda's `ListFunctions20150331`,
+and check its `userAgent`.)
 
 Where a mutation is genuinely what you want, **`C`** copies the ready-to-run AWS
 CLI command for the selected resource, with the region, profile and ids filled

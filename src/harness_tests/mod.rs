@@ -53,7 +53,7 @@ mod mocks_security;
 /// (owning service, concrete-type label for failure messages, the resource)
 pub(crate) type Mock = (ServiceType, &'static str, Box<dyn Resource>);
 
-fn all_mocks() -> Vec<Mock> {
+pub(crate) fn all_mocks() -> Vec<Mock> {
     let mut out = Vec::new();
     out.extend(mocks_compute::mocks());
     out.extend(mocks_containers::mocks());

@@ -31607,4 +31607,4 @@ fn write_download(key: &str, bytes: &[u8]) -> std::io::Result<std::path::PathBuf
 
 #[cfg(test)]
 #[path = "harness_tests/mod.rs"]
-mod harness_tests;
+pub(crate) mod harness_tests;
