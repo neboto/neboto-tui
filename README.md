@@ -355,8 +355,11 @@ like every secondary private IP on an ENI or every resource id in a GuardDuty
 finding.
 
 `@all` searches only what is already cached, and says how many services that
-was — it never fires fetches. On a result, `Enter` opens it in its own
-service; `l` peeks at it in place, and `h` comes back to the same results.
+was — it never fires fetches. The service strip shows what it covered:
+each service you've opened this session carries its match count
+(`ECS 7 │ λ 1`), and `–` marks one whose cache has expired, so it wasn't
+searched. On a result, `Enter` opens it in its own service; `l` peeks at it
+in place, and `h` comes back to the same results.
 
 ---
 

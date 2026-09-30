@@ -68,7 +68,10 @@ AWS.
   render from the resource, not the service on screen; an other-region S3
   stub jumps instead). Under @all the sub-tab keys (digits/`Tab`/`H`/`L`) are
   inert and the tab strip is hidden (they'd switch the hidden service's
-  view), and `r` refreshes the peeked sections + rebuilds from the caches
+  view); the **service strip** leads with an active `@all` chip and counts
+  each chip's matches (`all_search_match_counts`), `–` for a visited
+  service with no warm cache (`all_search_searched` — so "no match" never
+  reads as "not searched"), and `r` refreshes the peeked sections + rebuilds from the caches
   instead of reloading the service underneath. Guards: the
   stream handlers drop batches and **skip the cache insert** while the mode
   holds foreign rows in `resources` (else a completing load would poison that

@@ -14,6 +14,16 @@ fn chip_width(label: &str) -> u16 {
     label.chars().count() as u16 + 2
 }
 
+/// The leading chip while an `@all` search holds the list.
+const ALL_LABEL: &str = "@all";
+
+fn active_chip_style() -> Style {
+    Style::default()
+        .fg(Color::Black)
+        .bg(theme::aws_orange())
+        .add_modifier(Modifier::BOLD)
+}
+
 /// `" │ "` separator between chips.
 const SEP: u16 = 3;
 /// `"‹ "` / `" ›"` overflow markers.
@@ -121,23 +131,53 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
     };
 
     // ── Left side: brand prefix + visited-service chips ───────────────────
+    // Under `@all` the list is every warm cache, not one service: an active
+    // `@all` chip leads, no service chip is active, and each chip counts its
+    // matches — `–` for a service this pass didn't search (its cache
+    // expired), so an empty result never reads as "looked, found nothing".
+    let all_mode = app.all_search_mode;
+    let counts = if all_mode { app.all_search_match_counts() } else { Default::default() };
     let visible: Vec<ServiceType> = ServiceType::all()
         .iter()
         .copied()
-        .filter(|s| app.visited_services.contains(s) || app.current_service == Some(*s))
+        .filter(|s| {
+            app.visited_services.contains(s)
+                || app.current_service == Some(*s)
+                || (all_mode && app.all_search_searched.contains(s))
+        })
         .collect();
     // Chip labels, built once so every width computation (reservation,
     // windowing, render, click regions) agrees.
     let labels: Vec<String> = visible
         .iter()
-        .map(|s| s.short_name().to_string())
+        .map(|s| {
+            if !all_mode {
+                s.short_name().to_string()
+            } else if app.all_search_searched.contains(s) {
+                format!("{} {}", s.short_name(), counts.get(s).copied().unwrap_or(0))
+            } else {
+                format!("{} –", s.short_name())
+            }
+        })
         .collect();
-    let active_idx = visible
-        .iter()
-        .position(|s| app.current_service == Some(*s))
-        .unwrap_or(0);
+    // The window centres on the active chip; under `@all` on the service
+    // with the most matches.
+    let active_idx = if all_mode {
+        visible
+            .iter()
+            .enumerate()
+            .max_by_key(|(i, s)| (counts.get(*s).copied().unwrap_or(0), std::cmp::Reverse(*i)))
+            .map(|(i, _)| i)
+            .unwrap_or(0)
+    } else {
+        visible
+            .iter()
+            .position(|s| app.current_service == Some(*s))
+            .unwrap_or(0)
+    };
 
-    let prefix_w: u16 = 1 + if app.banner_visible { 0 } else { 9 }; // " " + "neboto │ "
+    let all_chip_w: u16 = if all_mode { chip_width(ALL_LABEL) + SEP } else { 0 };
+    let prefix_w: u16 = 1 + if app.banner_visible { 0 } else { 9 } + all_chip_w; // " " + "neboto │ " + " @all  │ "
 
     // Reserve enough left space for at least the active chip + both markers;
     // pick the widest badge set that still allows that.
@@ -180,6 +220,10 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
         ));
         spans.push(Span::styled(" │ ", Style::default().fg(theme::text_dim())));
     }
+    if all_mode {
+        spans.push(Span::styled(format!(" {ALL_LABEL} "), active_chip_style()));
+        spans.push(Span::styled(" │ ", Style::default().fg(theme::text_dim())));
+    }
     let mut chip_x = area.x + prefix_w;
 
     if left_marker {
@@ -207,14 +251,19 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
         );
         chip_x += chip_w;
 
-        let is_active = app.current_service == Some(*service);
+        let is_active = !all_mode && app.current_service == Some(*service);
         if is_active {
+            spans.push(Span::styled(format!(" {} ", label), active_chip_style()));
+        } else if all_mode && counts.get(service).copied().unwrap_or(0) == 0 {
+            // Searched with no match, or not searched at all: dim.
             spans.push(Span::styled(
                 format!(" {} ", label),
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(theme::aws_orange())
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(theme::text_dim()),
+            ));
+        } else if all_mode {
+            spans.push(Span::styled(
+                format!(" {} ", label),
+                Style::default().fg(theme::text_primary()),
             ));
         } else {
             spans.push(Span::styled(
