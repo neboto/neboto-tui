@@ -93,7 +93,7 @@ impl CtLookupAttr {
     /// Example value shown as a placeholder in the filter modal's input line.
     pub fn hint(self) -> &'static str {
         match self {
-            CtLookupAttr::EventName => "e.g. ConsoleLogin, DeleteBucket",
+            CtLookupAttr::EventName => "exact · e.g. ConsoleLogin, DeleteBucket",
             CtLookupAttr::Username => "e.g. alice, my-role-session",
             CtLookupAttr::ResourceName => "e.g. my-bucket, i-0abc123",
             CtLookupAttr::ResourceType => "e.g. AWS::S3::Bucket",
@@ -127,6 +127,35 @@ impl CtLookupAttr {
             CtLookupAttr::EventId => LookupAttributeKey::EventId,
         }
     }
+}
+
+/// How many events one query loads, newest first. `LookupEvents` allows 2
+/// requests/s at 50 events a page, so 500 is ~5s; past it the local `/`
+/// search can't see older events and the list says so (`f` asks CloudTrail).
+pub const CT_MAX_EVENTS: usize = 500;
+
+/// A guess at the server-side filter a local search meant, so `f` after a
+/// search that ran out of loaded events opens pre-filled: `ListFunctions` →
+/// Event name, `lambda` or `lambda.amazonaws.com` → Event source, anything
+/// else single-word (`orders-api`, `i-0abc`, an ARN) → Resource name. The
+/// modal stays editable (Esc goes back to the attribute list).
+pub fn ct_search_seed(text: &str) -> Option<(CtLookupAttr, String)> {
+    let t = text.trim();
+    if t.is_empty() || t.contains(char::is_whitespace) {
+        return None;
+    }
+    if t.ends_with(".amazonaws.com") {
+        return Some((CtLookupAttr::EventSource, t.to_string()));
+    }
+    if t.starts_with(|c: char| c.is_ascii_uppercase()) && t.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Some((CtLookupAttr::EventName, t.to_string()));
+    }
+    if t.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && crate::aws::service::ServiceType::from_prefix(t).is_some()
+    {
+        return Some((CtLookupAttr::EventSource, format!("{t}.amazonaws.com")));
+    }
+    Some((CtLookupAttr::ResourceName, t.to_string()))
 }
 
 /// Time-range presets for the event list. `LookupEvents` retains 90 days.
@@ -927,7 +956,7 @@ impl AwsService for CloudTrailService {
         let mut resources: Vec<Box<dyn Resource>> = self.fetch_trails().await.unwrap_or_default();
         resources.extend(self.fetch_insights().await.unwrap_or_default());
 
-        const MAX_EVENTS: usize = 500; // Cap at 500 events for TUI performance
+        const MAX_EVENTS: usize = CT_MAX_EVENTS;
 
         // Lookup recent events with pagination (removed the 50 event hard limit)
         let mut paginator = self.lookup_request().into_paginator().items().send();
@@ -955,7 +984,7 @@ impl AwsService for CloudTrailService {
         event_tx: mpsc::UnboundedSender<Event>,
         service_type: ServiceType,
     ) -> Result<()> {
-        const MAX_EVENTS: usize = 500; // Cap at 500 events for TUI performance
+        const MAX_EVENTS: usize = CT_MAX_EVENTS;
 
         // Phase 1: trails (small, fast) — best-effort so a permission gap on
         // DescribeTrails/GetTrailStatus never breaks the events view. Per the
@@ -1393,6 +1422,18 @@ impl Resource for CloudTrailEvent {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_search_seeds_the_likeliest_filter() {
+        use super::{ct_search_seed, CtLookupAttr::*};
+        assert_eq!(ct_search_seed("ListFunc"), Some((EventName, "ListFunc".into())));
+        assert_eq!(ct_search_seed(" lambda "), Some((EventSource, "lambda.amazonaws.com".into())));
+        assert_eq!(ct_search_seed("s3.amazonaws.com"), Some((EventSource, "s3.amazonaws.com".into())));
+        assert_eq!(ct_search_seed("orders-api"), Some((ResourceName, "orders-api".into())));
+        assert_eq!(ct_search_seed("web"), Some((ResourceName, "web".into())), "not a service");
+        assert_eq!(ct_search_seed("two words"), None);
+        assert_eq!(ct_search_seed(""), None);
+    }
+
     use super::*;
 
     #[test]

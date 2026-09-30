@@ -6028,7 +6028,18 @@ impl App {
             && self.cloudtrail_view == CloudTrailView::Events
             && key.code == KeyCode::Char('f')
         {
-            self.ct_filter_modal.show(&self.ct_query);
+            // A local search that ran out of loaded events carries over: the
+            // modal opens pre-filled with the likeliest attribute for it.
+            let seed = if self.ct_query.filter.is_none() {
+                self.ct_search_text()
+                    .and_then(|t| crate::aws::services::cloudtrail::ct_search_seed(&t))
+            } else {
+                None
+            };
+            match seed {
+                Some((attr, value)) => self.ct_filter_modal.show_seeded(&self.ct_query, attr, value),
+                None => self.ct_filter_modal.show(&self.ct_query),
+            }
             return Ok(());
         }
 
@@ -14184,6 +14195,28 @@ impl App {
                     .downcast_ref::<crate::aws::services::network_firewall::NfwFirewall>()
             })
             .is_some()
+    }
+
+    /// The CloudTrail Events list stopped at `CT_MAX_EVENTS`: older events
+    /// in the range exist that a local `/` search can't see.
+    pub(crate) fn ct_events_capped(&self) -> bool {
+        self.current_service == Some(ServiceType::CloudTrail)
+            && self.cloudtrail_view == CloudTrailView::Events
+            && self
+                .resources
+                .iter()
+                .filter(|r| r.resource_type() == "CloudTrail Event")
+                .count()
+                >= crate::aws::services::cloudtrail::CT_MAX_EVENTS
+    }
+
+    /// The fuzzy text of the list search, minus any `@service` prefix and
+    /// `tag:` terms — what `f` pre-fills the server-side filter from.
+    pub(crate) fn ct_search_text(&self) -> Option<String> {
+        let parsed = crate::search::query_parser::parse_query(&self.search_query);
+        let (_, text) = crate::search::query_parser::split_tag_filters(&parsed.search_text);
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_string())
     }
 
     fn is_selected_cloudtrail_event(&self) -> bool {
