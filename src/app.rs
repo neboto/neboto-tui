@@ -1711,6 +1711,10 @@ pub struct App {
     /// Source service per `resources` row while in @all mode (parallel Vec);
     /// empty otherwise.
     pub all_search_sources: Vec<ServiceType>,
+    /// Services the current `@all` pass actually searched (a warm cache
+    /// entry, possibly empty). The service strip marks the rest `–`, so
+    /// "no match" never reads the same as "not searched" (an expired cache).
+    pub all_search_searched: Vec<ServiceType>,
     pub selected_index: Option<usize>,
     pub resource_list_state: RefCell<ListState>, // State for scrolling the resource list (RefCell for interior mutability)
     // Last-rendered geometry for mouse hit-testing, written during draw (Cell
@@ -2705,11 +2709,14 @@ impl App {
             account_info_generation: 0,
             services,
             current_service,
-            visited_services: [ServiceType::EC2].into_iter().collect(),
+            // The service opened at startup (none on the splash) — not a
+            // fixed EC2, which showed a chip for a service never opened.
+            visited_services: current_service.into_iter().collect(),
             resources: Vec::new(),
             filtered_resources: Vec::new(),
             all_search_mode: false,
             all_search_sources: Vec::new(),
+            all_search_searched: Vec::new(),
             selected_index: None,
             resource_list_state: RefCell::new(ListState::default()),
             mouse_geom: Cell::new(MouseGeometry::default()),
@@ -8971,17 +8978,31 @@ impl App {
     fn rebuild_all_search_resources(&mut self) {
         let mut resources: Vec<Box<dyn Resource>> = Vec::new();
         let mut sources: Vec<ServiceType> = Vec::new();
+        let mut searched: Vec<ServiceType> = Vec::new();
         for svc in ServiceType::all() {
             let variant = self.cache_variant(svc);
             if let Some(list) =
                 self.cache.get_ref(&svc, &self.current_region, variant.as_deref())
             {
+                searched.push(svc);
                 sources.extend(std::iter::repeat_n(svc, list.len()));
                 resources.extend(list.iter().cloned());
             }
         }
         self.resources = resources;
         self.all_search_sources = sources;
+        self.all_search_searched = searched;
+    }
+
+    /// `@all` matches per source service — what the service strip counts.
+    pub(crate) fn all_search_match_counts(&self) -> std::collections::HashMap<ServiceType, usize> {
+        let mut counts = std::collections::HashMap::new();
+        for &ri in &self.filtered_resources {
+            if let Some(&svc) = self.all_search_sources.get(ri) {
+                *counts.entry(svc).or_insert(0) += 1;
+            }
+        }
+        counts
     }
 
     /// Enter on an `@all` result: leave @all mode and jump into the owning
@@ -9010,6 +9031,7 @@ impl App {
         self.search_active = false;
         self.all_search_mode = false;
         self.all_search_sources.clear();
+        self.all_search_searched.clear();
         // Same service: the flattened rows are still on screen, so the
         // service's own list has to be restored under the jump.
         self.jump_to_cached_resource(svc, id, &rtype, true, event_tx);
@@ -9084,6 +9106,7 @@ impl App {
             // current service (cache hit → instant; miss → normal reload).
             self.all_search_mode = false;
             self.all_search_sources.clear();
+            self.all_search_searched.clear();
             self.load_service_resources();
             if self.loading {
                 // Nothing to filter until the reload streams in.
@@ -10104,6 +10127,7 @@ impl App {
         // leaves @all search — the incoming load owns `resources` again.
         self.all_search_mode = false;
         self.all_search_sources.clear();
+        self.all_search_searched.clear();
         // An armed deep export names rows in the service we're leaving.
         self.cancel_pending_deep_export();
         self.current_service = Some(service);

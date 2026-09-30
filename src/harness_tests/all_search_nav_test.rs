@@ -96,3 +96,51 @@ async fn r_under_all_reloads_sections_not_the_hidden_service() {
     assert!(app.all_search_mode);
     assert_eq!(app.get_selected_resource_id().as_deref(), Some(id.as_str()));
 }
+
+const ALL_CHIP: &str = " @all  │ ";
+
+fn top_row(app: &App) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(200, 30)).unwrap();
+    terminal.draw(|f| crate::render_app(app, f)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+    // The service strip: the row carrying the `@all` chip, if any.
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .find(|row| row.contains(ALL_CHIP))
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn service_strip_counts_matches_and_marks_what_wasnt_searched() {
+    let (mut app, _tx, _rx, _) = all_over_iam().await;
+    // S3: warm but empty — searched, no match. Lambda: visited, cache gone.
+    let region = app.current_region;
+    app.cache.insert(ServiceType::S3, region, None, Vec::new());
+    app.visited_services.insert(ServiceType::Lambda);
+    let query = app.search_query.clone();
+    app.search_query = query;
+    app.update_search();
+
+    let counts = app.all_search_match_counts();
+    assert_eq!(counts.get(&ServiceType::EC2), Some(&1));
+    assert!(app.all_search_searched.contains(&ServiceType::S3));
+    assert!(!app.all_search_searched.contains(&ServiceType::Lambda));
+
+    let row = top_row(&app);
+    assert!(row.contains(ALL_CHIP), "{row}");
+    for (svc, label) in [
+        (ServiceType::EC2, "1"),
+        (ServiceType::S3, "0"),
+        (ServiceType::Lambda, "–"),
+        (ServiceType::IAM, "–"),
+    ] {
+        let chip = format!(" {} {} ", svc.short_name(), label);
+        assert!(row.contains(&chip), "missing {chip:?} in {row}");
+    }
+
+    // Leaving @all restores the plain strip.
+    app.search_query.clear();
+    app.update_search();
+    assert!(!app.all_search_mode);
+    assert!(top_row(&app).is_empty(), "the @all chip is gone");
+}
