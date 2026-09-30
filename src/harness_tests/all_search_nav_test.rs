@@ -256,3 +256,37 @@ async fn z_sorts_all_results_and_can_group_them_by_service() {
     app.handle_key(key(KeyCode::Char('z')), &tx).await.unwrap();
     assert_eq!(app.list_sort, ListSort::Default);
 }
+
+#[tokio::test]
+async fn tab_and_h_l_step_through_the_strip_chips() {
+    let (mut app, tx, _rx) = all_over_two_services().await;
+    // Strip order is ServiceType order; only services with matches are stops.
+    let stops: Vec<Option<ServiceType>> = std::iter::once(None)
+        .chain(
+            ServiceType::all()
+                .into_iter()
+                .filter(|s| matches!(s, ServiceType::EC2 | ServiceType::IAM))
+                .map(Some),
+        )
+        .collect();
+
+    for want in stops.iter().skip(1).chain(std::iter::once(&None)) {
+        app.handle_key(key(KeyCode::Tab), &tx).await.unwrap();
+        assert_eq!(app.all_search_service_filter, *want, "Tab walks forward and wraps");
+    }
+    app.handle_key(key(KeyCode::BackTab), &tx).await.unwrap();
+    assert_eq!(app.all_search_service_filter, stops[2], "Shift-Tab wraps backward");
+    let shift = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT);
+    app.handle_key(shift('H'), &tx).await.unwrap();
+    assert_eq!(app.all_search_service_filter, stops[1]);
+    app.handle_key(shift('L'), &tx).await.unwrap();
+    assert_eq!(app.all_search_service_filter, stops[2]);
+    assert_eq!(app.current_service, Some(ServiceType::Lambda), "never a service switch");
+    assert!(sources(&app).iter().all(|s| Some(*s) == stops[2]));
+
+    // In a peeked detail pane, Tab still means the next section.
+    app.handle_key(key(KeyCode::Char('l')), &tx).await.unwrap();
+    assert!(app.details_focused);
+    app.handle_key(key(KeyCode::Tab), &tx).await.unwrap();
+    assert_eq!(app.all_search_service_filter, stops[2], "the pick is left alone");
+}

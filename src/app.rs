@@ -5711,18 +5711,34 @@ impl App {
             return Ok(());
         }
 
-        // @all rows span services and the list has no tabs, so a digit or Tab
-        // here would switch a sub-tab of the service underneath — invisibly,
-        // until you left @all and landed on a tab you never picked.
+        // @all rows span services and the list has no sub-tabs: the
+        // service strip is the tab row. `Tab`/`L` and `Shift-Tab`/`H` step
+        // through its chips (all → each service with matches → all), as a
+        // chip click does. They must never reach a sub-tab handler, which
+        // would switch a tab of the service underneath — invisibly, until
+        // you left @all and landed on a tab you never picked. Digits have no
+        // fixed chip to mean, so they only hint.
         if self.all_search_mode
             && !self.search_active
             && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
-            && matches!(key.code, KeyCode::Char('0'..='9') | KeyCode::Tab | KeyCode::BackTab)
         {
-            self.success_message =
-                Some("@all results have no sub-tabs — ⏎ opens a result in its service".to_string());
-            self.success_message_time = Some(Instant::now());
-            return Ok(());
+            match key.code {
+                KeyCode::Tab | KeyCode::Char('L') => {
+                    self.step_all_search_filter(true);
+                    return Ok(());
+                }
+                KeyCode::BackTab | KeyCode::Char('H') => {
+                    self.step_all_search_filter(false);
+                    return Ok(());
+                }
+                KeyCode::Char('0'..='9') => {
+                    self.success_message =
+                        Some("@all results have no sub-tabs — ⇥ steps through the services".to_string());
+                    self.success_message_time = Some(Instant::now());
+                    return Ok(());
+                }
+                _ => {}
+            }
         }
 
         // EC2 sub-tab switching (only when EC2 is active and NOT in search mode)
@@ -9007,6 +9023,28 @@ impl App {
         self.resources = resources;
         self.all_search_sources = sources;
         self.all_search_searched = searched;
+    }
+
+    /// `Tab`/`Shift-Tab` under `@all`: move the service-strip pick to the
+    /// next / previous chip that has matches, through "all" (`None`), in
+    /// strip order. Services with no match, or not searched, are skipped —
+    /// narrowing to them would show an empty list.
+    fn step_all_search_filter(&mut self, forward: bool) {
+        let mut stops: Vec<Option<ServiceType>> = vec![None];
+        stops.extend(
+            ServiceType::all()
+                .into_iter()
+                .filter(|s| self.all_search_counts.get(s).copied().unwrap_or(0) > 0)
+                .map(Some),
+        );
+        let at = stops
+            .iter()
+            .position(|s| *s == self.all_search_service_filter)
+            .unwrap_or(0);
+        let n = stops.len();
+        let next = if forward { (at + 1) % n } else { (at + n - 1) % n };
+        self.all_search_service_filter = stops[next];
+        self.update_search();
     }
 
     /// `@all` matches per source service — what the service strip counts.

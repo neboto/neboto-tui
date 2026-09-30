@@ -66,9 +66,11 @@ AWS.
   `switch_service` → exact-id pending jump, detail-focused) while `l`/`→`
   **peek** — `focus_details_panel` over the results, as a click does (panes
   render from the resource, not the service on screen; an other-region S3
-  stub jumps instead). Under @all the sub-tab keys (digits/`Tab`/`H`/`L`) are
-  inert and the tab strip is hidden (they'd switch the hidden service's
-  view); the **service strip** leads with an active `@all` chip and counts
+  stub jumps instead). Under @all the sub-tab row is hidden and the list
+  pane's `Tab`/`Shift-Tab`/`H`/`L` step the **service-strip pick** instead
+  (`step_all_search_filter`: all → each service with matches → all; digits
+  only hint) — never the sub-tab handlers, which would switch the hidden
+  service's view; the **service strip** leads with an active `@all` chip and counts
   each chip's matches (`all_search_match_counts`), `–` for a visited
   service with no warm cache (`all_search_searched` — so "no match" never
   reads as "not searched"); clicking a searched chip narrows the results to

@@ -89,7 +89,7 @@ const RIGHT_SECTIONS: &[Section] = &[
         entries: &[
             ("/", "fuzzy search"),
             ("@svc text", "switch service + search"),
-            ("@all text", "search all cached services"),
+            ("@all text", "search all cached services (⇥ steps through them)"),
             ("tag:k=v", "exact tag filter"),
             ("Tab", "complete @prefix"),
         ],
