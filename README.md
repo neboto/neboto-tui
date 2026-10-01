@@ -358,7 +358,10 @@ finding.
 was — it never fires fetches. The service strip shows what it covered:
 each service you've opened this session carries its match count
 (`ECS 7 │ λ 1`), and `–` marks one whose cache has expired, so it wasn't
-searched. On a result, `Enter` opens it in its own service; `l` peeks at it
+searched. Click a chip — or step through them with `Tab`/`Shift-Tab`
+(`H`/`L`) — to show only that service's results, and `@all` to show them
+all again; `z` sorts the results (name, state, or grouped by
+service). On a result, `Enter` opens it in its own service; `l` peeks at it
 in place, and `h` comes back to the same results.
 
 ---

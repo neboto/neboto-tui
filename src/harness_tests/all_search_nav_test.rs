@@ -144,3 +144,149 @@ async fn service_strip_counts_matches_and_marks_what_wasnt_searched() {
     assert!(!app.all_search_mode);
     assert!(top_row(&app).is_empty(), "the @all chip is gone");
 }
+
+
+/// `@all mock` over Lambda, with every EC2 and IAM mock warm in the cache —
+/// two services with several matches each.
+async fn all_over_two_services() -> (App, mpsc::UnboundedSender<Event>, mpsc::UnboundedReceiver<Event>) {
+    let (mut app, tx, rx) = test_app().await;
+    let region = app.current_region;
+    for svc in [ServiceType::EC2, ServiceType::IAM] {
+        let rows: Vec<Box<dyn Resource>> =
+            all_mocks().into_iter().filter(|(s, _, _)| *s == svc).map(|(_, _, r)| r).collect();
+        app.cache.insert(svc, region, None, rows);
+    }
+    let lambda = all_mocks().into_iter().find(|(s, _, _)| *s == ServiceType::Lambda).unwrap().2;
+    select_mock(&mut app, ServiceType::Lambda, lambda);
+    app.search_query = "@all mock".to_string();
+    app.update_search();
+    app.search_active = false;
+    assert!(app.all_search_mode);
+    (app, tx, rx)
+}
+
+fn screen_rows(app: &App) -> Vec<Vec<String>> {
+    let mut terminal = Terminal::new(TestBackend::new(200, 30)).unwrap();
+    terminal.draw(|f| crate::render_app(app, f)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect())
+        .collect()
+}
+
+/// The strip's click target for `@all` chip `filter`, and the text drawn
+/// under it.
+fn chip_under_click(app: &App, filter: Option<ServiceType>) -> (ClickAction, String) {
+    let rows = screen_rows(app);
+    let regions = app.click_regions.borrow();
+    let r = regions
+        .iter()
+        .find(|r| matches!(r.action, ClickAction::AllSearchFilter(f) if f == filter))
+        .unwrap_or_else(|| panic!("no click region for {filter:?}"));
+    let row = &rows[r.rect.y as usize];
+    let text: String = row[r.rect.x as usize..(r.rect.x + r.rect.width) as usize].concat();
+    (r.action, text)
+}
+
+fn sources(app: &App) -> Vec<ServiceType> {
+    app.filtered_resources.iter().map(|&i| app.all_search_sources[i]).collect()
+}
+
+#[tokio::test]
+async fn a_strip_chip_click_shows_only_that_service() {
+    let (mut app, tx, _rx) = all_over_two_services().await;
+    let counts = app.all_search_match_counts();
+    let (ec2, iam) = (counts[&ServiceType::EC2], counts[&ServiceType::IAM]);
+    assert!(ec2 > 0 && iam > 0, "{counts:?}");
+
+    // Each click target sits exactly on its chip.
+    let (action, text) = chip_under_click(&app, Some(ServiceType::IAM));
+    assert_eq!(text, format!(" {} {} ", ServiceType::IAM.short_name(), iam));
+    assert_eq!(chip_under_click(&app, None).1, " @all ");
+
+    app.apply_click_action(action, &tx).await.unwrap();
+    assert_eq!(app.current_service, Some(ServiceType::Lambda), "no service switch underneath");
+    assert!(app.all_search_mode);
+    assert_eq!(app.filtered_resources.len(), iam);
+    assert!(sources(&app).iter().all(|s| *s == ServiceType::IAM));
+    assert_eq!(app.all_search_match_counts()[&ServiceType::EC2], ec2, "other chips keep their counts");
+    let title = screen_rows(&app).iter().map(|r| r.concat()).find(|r| r.contains("All services")).unwrap();
+    assert!(title.contains(&format!("{} only", ServiceType::IAM.short_name())), "{title}");
+
+    // The same chip again, or `@all`, shows everything.
+    let (action, _) = chip_under_click(&app, Some(ServiceType::IAM));
+    app.apply_click_action(action, &tx).await.unwrap();
+    assert_eq!(app.filtered_resources.len(), ec2 + iam);
+    app.apply_click_action(ClickAction::AllSearchFilter(Some(ServiceType::EC2)), &tx).await.unwrap();
+    let (action, _) = chip_under_click(&app, None);
+    app.apply_click_action(action, &tx).await.unwrap();
+    assert_eq!(app.filtered_resources.len(), ec2 + iam);
+
+    // Leaving @all forgets the pick.
+    app.apply_click_action(ClickAction::AllSearchFilter(Some(ServiceType::EC2)), &tx).await.unwrap();
+    app.search_query.clear();
+    app.update_search();
+    assert_eq!(app.all_search_service_filter, None);
+}
+
+#[tokio::test]
+async fn z_sorts_all_results_and_can_group_them_by_service() {
+    let (mut app, tx, _rx) = all_over_two_services().await;
+    let names = |app: &App| -> Vec<String> {
+        app.filtered_resources.iter().map(|&i| app.resources[i].name().to_lowercase()).collect()
+    };
+
+    app.handle_key(key(KeyCode::Char('z')), &tx).await.unwrap();
+    assert_eq!(app.list_sort, ListSort::NameAsc);
+    let got = names(&app);
+    let mut want = got.clone();
+    want.sort();
+    assert_eq!(got, want, "name ↑ applies over the @all query");
+
+    for _ in 0..2 {
+        app.handle_key(key(KeyCode::Char('z')), &tx).await.unwrap();
+    }
+    app.handle_key(key(KeyCode::Char('z')), &tx).await.unwrap();
+    assert_eq!(app.list_sort, ListSort::Service);
+    let got: Vec<String> = sources(&app).iter().map(|s| s.name().to_string()).collect();
+    let mut want = got.clone();
+    want.sort();
+    assert_eq!(got, want, "grouped by service");
+
+    app.handle_key(key(KeyCode::Char('z')), &tx).await.unwrap();
+    assert_eq!(app.list_sort, ListSort::Default);
+}
+
+#[tokio::test]
+async fn tab_and_h_l_step_through_the_strip_chips() {
+    let (mut app, tx, _rx) = all_over_two_services().await;
+    // Strip order is ServiceType order; only services with matches are stops.
+    let stops: Vec<Option<ServiceType>> = std::iter::once(None)
+        .chain(
+            ServiceType::all()
+                .into_iter()
+                .filter(|s| matches!(s, ServiceType::EC2 | ServiceType::IAM))
+                .map(Some),
+        )
+        .collect();
+
+    for want in stops.iter().skip(1).chain(std::iter::once(&None)) {
+        app.handle_key(key(KeyCode::Tab), &tx).await.unwrap();
+        assert_eq!(app.all_search_service_filter, *want, "Tab walks forward and wraps");
+    }
+    app.handle_key(key(KeyCode::BackTab), &tx).await.unwrap();
+    assert_eq!(app.all_search_service_filter, stops[2], "Shift-Tab wraps backward");
+    let shift = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT);
+    app.handle_key(shift('H'), &tx).await.unwrap();
+    assert_eq!(app.all_search_service_filter, stops[1]);
+    app.handle_key(shift('L'), &tx).await.unwrap();
+    assert_eq!(app.all_search_service_filter, stops[2]);
+    assert_eq!(app.current_service, Some(ServiceType::Lambda), "never a service switch");
+    assert!(sources(&app).iter().all(|s| Some(*s) == stops[2]));
+
+    // In a peeked detail pane, Tab still means the next section.
+    app.handle_key(key(KeyCode::Char('l')), &tx).await.unwrap();
+    assert!(app.details_focused);
+    app.handle_key(key(KeyCode::Tab), &tx).await.unwrap();
+    assert_eq!(app.all_search_service_filter, stops[2], "the pick is left alone");
+}

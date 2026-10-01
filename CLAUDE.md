@@ -66,12 +66,18 @@ AWS.
   `switch_service` → exact-id pending jump, detail-focused) while `l`/`→`
   **peek** — `focus_details_panel` over the results, as a click does (panes
   render from the resource, not the service on screen; an other-region S3
-  stub jumps instead). Under @all the sub-tab keys (digits/`Tab`/`H`/`L`) are
-  inert and the tab strip is hidden (they'd switch the hidden service's
-  view); the **service strip** leads with an active `@all` chip and counts
+  stub jumps instead). Under @all the sub-tab row is hidden and the list
+  pane's `Tab`/`Shift-Tab`/`H`/`L` step the **service-strip pick** instead
+  (`step_all_search_filter`: all → each service with matches → all; digits
+  only hint) — never the sub-tab handlers, which would switch the hidden
+  service's view; the **service strip** leads with an active `@all` chip and counts
   each chip's matches (`all_search_match_counts`), `–` for a visited
   service with no warm cache (`all_search_searched` — so "no match" never
-  reads as "not searched"), and `r` refreshes the peeked sections + rebuilds from the caches
+  reads as "not searched"); clicking a searched chip narrows the results to
+  that service (`all_search_service_filter`, `ClickAction::AllSearchFilter`
+  — never a service switch, which would change the hidden service under
+  the still-held `@all` query), counts are taken **before** that narrowing
+  (`all_search_counts`), and `z` gains a `service` sort, and `r` refreshes the peeked sections + rebuilds from the caches
   instead of reloading the service underneath. Guards: the
   stream handlers drop batches and **skip the cache insert** while the mode
   holds foreign rows in `resources` (else a completing load would poison that
@@ -951,8 +957,9 @@ and the approaches you rejected are the part nobody can recover from your code.
   must check for **no modifier**, or it eats `Ctrl-A` select-all on every
   screen that has noise rows),
   `z` (cycle list sort: load order → name ↑ → name ↓ → state,
-  severity-ranked; skipped while a fuzzy query is active; reset on service
-  switch). **Exception to "load order"**: the two Executions sub-tabs
+  severity-ranked, plus `service` under `@all`; with a fuzzy query the
+  default keeps match order, but a sort picked with `z` wins — `@all`
+  always has query text; reset on service switch). **Exception to "load order"**: the two Executions sub-tabs
   (`"Pipeline Execution"` / `"State Machine Execution"`) default to
   **newest-first** via `execution_start_ms` — their rows span every
   pipeline / state machine and the batches arrive in `buffer_unordered`

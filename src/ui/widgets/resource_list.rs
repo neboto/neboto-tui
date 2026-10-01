@@ -92,7 +92,10 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
     let focused = !app.details_focused;
 
     let title = if app.all_search_mode {
-        "All services (cached)".to_string()
+        match app.all_search_service_filter {
+            Some(svc) => format!("All services (cached) · {} only", svc.short_name()),
+            None => "All services (cached)".to_string(),
+        }
     } else {
         match app.current_service {
             Some(service) => service.description().to_string(),

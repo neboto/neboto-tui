@@ -704,7 +704,7 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
         } else {
             // @all results: no sub-tabs, and ⏎ / l part ways (jump vs peek).
             let mut hints: Vec<(&str, &str)> = if app.all_search_mode {
-                vec![("j/k", "move"), ("⏎", "open"), ("l", "peek"), ("/", "search"), ("y", "copy id")]
+                vec![("j/k", "move"), ("⇥", "service"), ("⏎", "open"), ("l", "peek"), ("/", "search"), ("y", "copy id")]
             } else {
                 vec![
                     ("j/k", "move"),
