@@ -41,6 +41,7 @@ mod state_filter_test;
 mod subtab_keys_test;
 mod all_search_nav_test;
 mod ct_cap_test;
+mod session_role_test;
 mod mocks_compute;
 mod mocks_containers;
 mod mocks_ai;
