@@ -217,6 +217,12 @@ impl AwsClients {
         self.assumed_role.as_ref()
     }
 
+    /// Test-only: mark a member-account role as assumed without the STS call.
+    #[cfg(test)]
+    pub(crate) fn set_assumed_role_for_test(&mut self, role: AssumedOrgRole) {
+        self.assumed_role = Some(role);
+    }
+
     /// Switch to a different region, keeping the active profile + endpoint
     /// (and, when browsing a member account, the assumed role).
     pub async fn switch_region(&self, new_region: Region) -> Result<Self> {
