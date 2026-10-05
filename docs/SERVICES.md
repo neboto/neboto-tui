@@ -387,6 +387,8 @@ the service you're touching.
       (Overview / Vendor). `ListPaymentConnectors` is scoped by
       `paymentManagerId` — there is no account-wide connector listing — so
       connectors are a lazy section on the manager's pane, not a third type.
+      If AWS ever adds an account-wide listing, connectors could become
+      their own type. The instrument APIs never could.
       Each connector is deepened with `GetPaymentConnector` for its credential
       wiring, capped at `MAX_PAYMENT_CONNECTORS = 25` like gateway targets.
     - `PaymentProviderConfigurationOutput` (Coinbase CDP / Stripe-Privy)
@@ -484,9 +486,20 @@ the service you're touching.
       ahead of the AgentCore arms. Two renderers cross clippy's argument limit
       as a result and carry an explicit `allow` — each parameter is one lazy
       map the pane reads, and a struct no other pane uses would hide that.
-  - **Not built**: nothing from the deferred families remains — see
-    `docs/BACKLOG.md` for what's still open (console deep links, deeper
-    evaluation panes, a few flat types with a `Get*` behind them).
+  - **Not built**: nothing from the deferred families remains. What's still
+    open is depth on the shipped surface: console deep links, deeper
+    evaluation panes, and a few flat types with a `Get*` behind them (#97).
+    This is a preview SDK whose shape still moves between minor versions, so
+    check `aws-sdk-bedrockagentcorecontrol` before starting any of it.
+  - **Four policy ops look like gaps and are NOT.** This was checked field by
+    field. `PolicySummary` / `PolicyEngineSummary` (from
+    `ListPolicySummaries` / `ListPolicyEngineSummaries`) are strict subsets of
+    what `ListPolicies` / `ListPolicyEngines` already return.
+    `GetPolicyGeneration` returns exactly the `PolicyGeneration` that
+    `ListPolicyGenerations` already hands us, and
+    `GetPolicyGenerationSummary` returns the same minus `statusReasons`. So
+    the Generations section needs no per-row deepening. Don't re-add any of
+    them.
   - **`console_url()` is the service home, not a deep link.** AWS documents
     exactly one console URL for AgentCore
     (`https://console.aws.amazon.com/bedrock-agentcore/home#`) and every
@@ -502,7 +515,9 @@ the service you're touching.
   `bedrock-agent`); load is error-tolerant per resource type. Foundation
   Models / Inference Profiles, plus **Prompts / Flows / Custom Models / Imported
   Models** (sub-tabs 6–9, plain streaming lists off `List*` summaries), are flat
-  `details()`. Foundation Models + Inference Profiles support `m` metrics
+  `details()`. Of tabs 6–9, only Custom Models earns a split pane
+  (`GetCustomModel` adds hyperparameters and training/validation metrics,
+  #99). Prompts, Flows and Imported Models stay flat deliberately. Foundation Models + Inference Profiles support `m` metrics
   (`AWS/Bedrock`, dim `ModelId` = the model/profile id;
   `MetricsKind::BedrockModel`). The three list APIs that return only thin
   summaries — **Guardrails**, **Knowledge Bases**, **Agents** — deepen via lazy
@@ -1529,6 +1544,10 @@ the service you're touching.
   roles/users/policies, since eager per-entity Gets would be N extra calls per
   load. Don't "fix" a blank Tags section by reading the list output; it's
   empty by API design. Groups genuinely have no tags at all.
+  **Credential report**: `iam:GenerateCredentialReport` is a **mutation**
+  (it creates the report), so the read-only guard rejects it. A credential
+  report view may only call `GetCredentialReport`, and must degrade to "no
+  report generated" when none exists.
   **Permissions vs Policies**: Permissions *names* what's attached (managed
   rows `("  name", arn)`, inline rows `("  name", "inline")` — the shape
   `iam_permissions_row_target` keys Enter-to-expand on, so change them
