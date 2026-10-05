@@ -17,7 +17,7 @@ the AWS SDK for Rust).
 | Per-service IAM actions | [`PERMISSIONS.md`](PERMISSIONS.md) |
 | The project's own vocabulary (Lazy, LazyStore, epoch, deep export…) | [`CONTEXT.md`](CONTEXT.md) |
 | Why a design is the way it is | [`docs/adr/`](docs/adr) |
-| What's still unbuilt | [`docs/BACKLOG.md`](docs/BACKLOG.md) |
+| What's still unbuilt | GitHub Issues: `gh issue list --label area:<platform\|new-service\|service-depth\|ux\|security\|testing>`. Rejected ideas are closed `wontfix` issues linking an ADR. Not a doc: if someone could close it, it's an issue |
 | How a release is cut / how users install | [`docs/RELEASING.md`](docs/RELEASING.md) — the workflow, `install.sh` and the binstall table share the archive name |
 
 A note on counts: descriptive numbers ("~60 types do X") rot silently here —

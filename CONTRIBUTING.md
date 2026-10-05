@@ -33,6 +33,9 @@ Then walk this checklist — it's also the PR template:
   `sections!` macro. Then add the service's entry to `docs/SERVICES.md`: the
   API quirks you hit, the caps you chose and why, the approaches you
   rejected. That entry is the part nobody can recover from your code.
+- **Reading a new SDK field?** Check the accessor name against the crate
+  source (`grep -r fn_name ~/.cargo/registry/src/*/aws-sdk-<svc>-*`). SDK
+  field names often differ from the API docs.
 - **Touched a detail pane?** Keep the row conventions in `CLAUDE.md`
   (`style_detail_row`) — some jump classifiers key on exact row labels.
 - **Colors** go through `src/ui/theme.rs` accessors, never `Color::` literals,
@@ -58,6 +61,22 @@ Welcome, with the same bar as any other PR. The things a tool won't know are
 exactly the things reviewers look for: the `docs/SERVICES.md` entry, the IAM
 actions, and whether the calls are actually read-only. A PR that adds a
 service without those will be sent back for them, not reviewed around them.
+
+## Where work is tracked
+
+Open work lives in [GitHub Issues](https://github.com/neboto/neboto-tui/issues),
+labelled by area (`area:platform`, `area:new-service`, `area:service-depth`,
+`area:ux`, `area:security`, `area:testing`). `docs/` is for knowledge only.
+The test for where something goes: if someone could close it, it's an issue.
+If it stays true after the work ships, or explains why something will never
+be built, it goes in `docs/`:
+
+- per-service quirks and "this looks like a gap but isn't" go in
+  `docs/SERVICES.md`
+- settled decisions go in `docs/adr/`
+
+Rejected ideas also get a closed `wontfix` issue linking the ADR, so a search
+of the issues finds the answer.
 
 ## Reporting bugs and requesting features
 
