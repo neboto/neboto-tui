@@ -12,7 +12,9 @@ calls (README "Why read-only", PERMISSIONS.md). This makes that mechanical:
    parked in variables and paginators, all of which a `.send()`-based walk
    missed.
 3. The op's verb must be on READ_VERBS, or the op must be in ALLOW_OPS with a
-   written reason. Anything else fails.
+   written reason. Anything else fails. A verb matches only as a whole word
+   (`check` / `check_…`, never `checkpoint_…`), and DENY_OPS overrides it
+   for the few ops whose read-sounding verb starts work in the account.
 
 Also checks PERMISSIONS.md the same way: every IAM action it grants must have
 a read-only verb or be in ALLOW_ACTIONS.
@@ -32,6 +34,23 @@ READ_VERBS = (
     "view", "preview", "simulate", "validate", "decode", "detect", "evaluate",
     "download", "is_", "read",
 )
+# Operations that start with a read verb but aren't reads: CloudTrail logs
+# them readOnly=false, or they start work you pay for. Wins over READ_VERBS.
+DENY_OPS = {
+    "detect_stack_drift": "starts a CloudFormation drift-detection run",
+    "detect_stack_resource_drift": "starts a CloudFormation drift-detection run",
+    "detect_stack_set_drift": "starts a StackSet drift-detection operation",
+    "preview_portal": "API Gateway: creates a portal preview",
+    "evaluate": "AgentCore: runs a (billable) evaluation",
+}
+
+def is_read_op(op):
+    if op in DENY_OPS:
+        return False
+    if op in ALLOW_OPS:
+        return True
+    return any(op == v or op.startswith(v if v.endswith("_") else v + "_") for v in READ_VERBS)
+
 # Operations whose name doesn't start with a read verb but which mutate
 # nothing in the account. Each needs a reason; PRs adding here get a hard look.
 ALLOW_OPS = {
@@ -41,8 +60,14 @@ ALLOW_OPS = {
 }
 
 READ_ACTIONS_RE = re.compile(
-    r"^(Describe|List|Get|Lookup|Search|Select|Filter|Query|Scan|Head|BatchGet|Check|Estimate|Retrieve|Count|View|Preview|Simulate|Validate|Decode|Detect|Read|Evaluate|Test|Download)"
+    r"^(Describe|List|Get|Lookup|Search|Select|Filter|Query|Scan|Head|BatchGet|Check|Estimate|Retrieve|Count|View|Preview|Simulate|Validate|Decode|Detect|Read|Evaluate|Test|Download)(?=[A-Z]|$)"
 )
+# The IAM-action side of DENY_OPS.
+DENY_ACTIONS = {
+    "cloudformation:DetectStackDrift", "cloudformation:DetectStackResourceDrift",
+    "cloudformation:DetectStackSetDrift", "apigateway:PreviewPortal",
+    "bedrock-agentcore:Evaluate",
+}
 ALLOW_ACTIONS = {
     "sts:AssumeRole": "member-account switch, ReadOnlyAccess session policy",
     "sts:GetCallerIdentity": "read",
@@ -50,6 +75,7 @@ ALLOW_ACTIONS = {
     "logs:StopQuery": "stops our own Insights query",
     "logs:StartLiveTail": "live tail (read)",
     "ssm:StartSession": "opens an interactive session via the aws CLI — user-initiated, changes no resource",
+    "ecs:ExecuteCommand": "ECS Exec (`s` on a task) via the aws CLI — user-initiated, changes no resource",
     "ssm:TerminateSession": "ends our own session",
 }
 
@@ -101,7 +127,7 @@ def main():
             if op not in universe:
                 continue
             where = f"{path.relative_to(ROOT)}:{text.count(chr(10), 0, m.start()) + 1}"
-            if op.startswith(READ_VERBS) or op in ALLOW_OPS:
+            if is_read_op(op):
                 found.setdefault(op, []).append(where)
             elif is_client_call(text, m.start(), m.end()):
                 found.setdefault(op, []).append(where)
@@ -112,13 +138,13 @@ def main():
     perm = (ROOT / "PERMISSIONS.md").read_text(encoding="utf-8")
     bad_actions = []
     for act in sorted(set(re.findall(r'"([a-z0-9-]+:[A-Z][A-Za-z0-9]+)"', perm))):
-        if READ_ACTIONS_RE.match(act.split(":", 1)[1]) or act in ALLOW_ACTIONS:
+        if act not in DENY_ACTIONS and (READ_ACTIONS_RE.match(act.split(":", 1)[1]) or act in ALLOW_ACTIONS):
             continue
         bad_actions.append(act)
 
     if list_mode:
         for op in sorted(found):
-            tag = "" if (op.startswith(READ_VERBS) or op in ALLOW_OPS) else "  <-- NOT READ-ONLY"
+            tag = "" if is_read_op(op) else "  <-- NOT READ-ONLY"
             print(f"{op:45} {len(found[op]):3} call sites  ({', '.join(sorted(universe[op]))}){tag}")
         print(f"\n{len(found)} distinct SDK operations at {sum(map(len, found.values()))} call sites "
               f"(universe: {len(universe)} ops across the pinned aws-sdk-* crates)")

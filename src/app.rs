@@ -21698,6 +21698,9 @@ impl App {
             }
             None => return false};
 
+        if self.session_blocked_by_assumed_role() {
+            return true;
+        }
         // Warn (but don't block) if we know the instance isn't SSM-online.
         if connectable == Some(false) {
             self.error_message = Some(format!(
@@ -21759,6 +21762,24 @@ impl App {
                 KeyCode::Char(c) if !ctrl => self.ssm_session_modal.push_char(c),
                 _ => {}
             }}
+    }
+
+    /// Shell sessions (SSM, ECS Exec) are the one thing neboto opens that isn't
+    /// a read, and they run through the `aws` CLI on the *base* profile: no
+    /// flag reproduces an assumed org-role session (the `C` picker gates its
+    /// Change rows for the same reason), and that session's ReadOnlyAccess
+    /// policy wouldn't allow one anyway. So while a role is assumed, `s`
+    /// says so instead of opening a session against the wrong account (#85).
+    fn session_blocked_by_assumed_role(&mut self) -> bool {
+        if self.aws_clients.current_assumed_role().is_none() {
+            return false;
+        }
+        self.error_message = Some(
+            "Sessions are off while an org role is assumed (it's read-only, and the aws CLI \
+             would use your base profile). Exit the role from the profile picker (P) first"
+                .to_string(),
+        );
+        true
     }
 
     /// Launch an `aws ssm start-session` command (plain shell or a
@@ -21823,6 +21844,9 @@ impl App {
                 }
                 None => return false};
 
+        if self.session_blocked_by_assumed_role() {
+            return true;
+        }
         let region = self.aws_clients.current_region();
         let args: Vec<String> = vec![
             "ecs".to_string(),
@@ -21856,6 +21880,9 @@ impl App {
     /// terminal window, else suspend the TUI and run inline (via the main loop).
     /// Copies the command to the clipboard when the `aws` CLI isn't on PATH.
     fn spawn_aws_session(&mut self, mut args: Vec<String>, win_name: String, what: String) {
+        if self.session_blocked_by_assumed_role() {
+            return;
+        }
         // Use the profile currently selected *in the app*, not whatever neboto
         // was launched with. Switching profiles rebuilds the SDK clients but
         // leaves the process's AWS_* env untouched — so forwarding that env (as
