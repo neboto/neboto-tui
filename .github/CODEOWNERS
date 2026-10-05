@@ -1,0 +1,6 @@
+# Every path needs the maintainer's review. With "Require review from Code
+# Owners" on in the main ruleset, only an approval from @sneboto satisfies the
+# required review. An approval from a bot with write access (hermes-neboto,
+# or any future one) is advisory and can't unlock a merge on its own.
+# This file is covered by the rule below, so changing it needs that review too.
+*       @sneboto
