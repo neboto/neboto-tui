@@ -23082,6 +23082,8 @@ impl App {
             || self.jump_list_visible
             || self.bookmarks_visible
             || self.macro_picker_visible
+            || self.message_history_visible
+            || self.cli_picker.is_some()
     }
 
     /// Lazy-load triggers that must fire whenever the list selection changes
