@@ -145,6 +145,16 @@ pub struct ClickRegion {
     pub rect: Rect,
     pub action: ClickAction}
 
+/// Where the open popup picker (`C` commands, `M` messages) drew itself this
+/// frame: the popup's outer rect, for click-outside-to-close, and each row's
+/// rect with its index. Recorded by the renderer like `cw_dashboard_regions`,
+/// so the hit targets always match what's on screen.
+#[derive(Debug, Default, Clone)]
+pub struct PopupHits {
+    pub area: Option<Rect>,
+    pub rows: Vec<(usize, Rect)>,
+}
+
 /// Sub-tab view for EC2 resources
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Ec2View {
@@ -2141,6 +2151,9 @@ pub struct App {
     /// recomputing the grid's chrome offsets in the mouse handler, which is the
     /// kind of duplicated geometry that silently drifts.
     pub cw_dashboard_regions: RefCell<Vec<(usize, Rect)>>,
+    /// Hit targets of the open `C` / `M` popup. Only one is ever open, so they
+    /// share this; each renderer overwrites it every frame it draws.
+    pub popup_hits: RefCell<PopupHits>,
     pub cw_dashboard_zoomed: bool,
     /// Cleared once the user steps the range themselves, so a refresh stops
     /// re-adopting the dashboard body's own `start`.
@@ -2933,6 +2946,7 @@ impl App {
             cw_dashboard_scroll: 0,
             cw_dashboard_cursor: None,
             cw_dashboard_regions: RefCell::new(Vec::new()),
+            popup_hits: RefCell::new(PopupHits::default()),
             cw_dashboard_zoomed: false,
             cw_dashboard_range_from_body: true,
             eb_rule_metrics: HashMap::new(),
@@ -23118,6 +23132,11 @@ impl App {
     ) -> Result<()> {
         let (col, row) = (mouse.column, mouse.row);
 
+        // The `C` / `M` popups float above everything, the dashboard included.
+        if self.handle_popup_picker_mouse(mouse) {
+            return Ok(());
+        }
+
         // The charted dashboard is the one overlay with clickable content of its
         // own, so it gets first refusal before the blanket overlay gate below.
         if self.metrics_in_pane == Some(MetricsKind::CwDashboard)
@@ -23166,13 +23185,7 @@ impl App {
                 // Double-click (a second press on the same cell within the window)
                 // acts as Enter: drill into the detail pane from the list, or
                 // follow a jump link in the detail body.
-                const DOUBLE_CLICK_MS: u128 = 400;
-                let now = std::time::Instant::now();
-                let double = self.last_left_click.is_some_and(|(t, c, r)| {
-                    c == col && r == row && now.duration_since(t).as_millis() < DOUBLE_CLICK_MS
-                });
-                // Reset after a double so a third click starts a fresh pair.
-                self.last_left_click = if double { None } else { Some((now, col, row)) };
+                let double = self.note_left_click(col, row);
 
                 if in_list {
                     self.click_select_list_row(geom, row, event_tx);
@@ -30898,6 +30911,82 @@ impl App {
         }
     }
 
+    /// Record a left press and report whether it completes a double-click: a
+    /// second press on the same cell within the window. A double resets the
+    /// pair, so a third click starts fresh.
+    fn note_left_click(&mut self, col: u16, row: u16) -> bool {
+        const DOUBLE_CLICK_MS: u128 = 400;
+        let now = std::time::Instant::now();
+        let double = self.last_left_click.is_some_and(|(t, c, r)| {
+            c == col && r == row && now.duration_since(t).as_millis() < DOUBLE_CLICK_MS
+        });
+        self.last_left_click = if double { None } else { Some((now, col, row)) };
+        double
+    }
+
+    /// Mouse on the `C` command picker or the `M` message history. The wheel
+    /// moves the highlight, a click highlights the row under it, a double-click
+    /// acts on that row (`C` copies the command, as `⏎` does; `M` copies the
+    /// message, as `y` does), and a click outside the popup or a right-click
+    /// closes it, as `Esc` does. Returns whether either popup was open. When
+    /// one is, it owns every mouse event, so nothing reaches the panes beneath.
+    fn handle_popup_picker_mouse(&mut self, mouse: MouseEvent) -> bool {
+        let cli = self.cli_picker.is_some();
+        if !cli && !self.message_history_visible {
+            return false;
+        }
+        let close = |app: &mut Self| {
+            app.cli_picker = None;
+            app.message_history_visible = false;
+        };
+        match mouse.kind {
+            MouseEventKind::ScrollDown => match self.cli_picker.as_mut() {
+                Some(p) => p.next(),
+                None => self.message_history_next(),
+            },
+            MouseEventKind::ScrollUp => match self.cli_picker.as_mut() {
+                Some(p) => p.prev(),
+                None => self.message_history_prev(),
+            },
+            MouseEventKind::Down(MouseButton::Left) => {
+                let (col, row) = (mouse.column, mouse.row);
+                let (inside, hit) = {
+                    let hits = self.popup_hits.borrow();
+                    (
+                        hits.area.is_some_and(|a| point_in(a, col, row)),
+                        hits.rows.iter().find(|(_, r)| point_in(*r, col, row)).map(|(i, _)| *i),
+                    )
+                };
+                if !inside {
+                    close(self);
+                    return true;
+                }
+                let Some(idx) = hit else { return true };
+                let double = self.note_left_click(col, row);
+                if cli {
+                    if let Some(p) = self.cli_picker.as_mut() {
+                        p.selected = idx;
+                    }
+                    if double {
+                        // The keyboard path, so a disabled row stays open with
+                        // its reason, exactly as `⏎` does.
+                        self.handle_cli_picker_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                    }
+                } else {
+                    self.message_history_selected = idx;
+                    if double {
+                        if let Some(entry) = self.message_history.get(idx).cloned() {
+                            self.copy_to_clipboard(&entry.text, "message");
+                        }
+                    }
+                }
+            }
+            MouseEventKind::Down(MouseButton::Right) => close(self),
+            _ => {}
+        }
+        true
+    }
+
     /// Mouse on the charted dashboard: click a widget to put the cursor on it,
     /// double-click to zoom (and again to come back), wheel to scroll the grid.
     /// Returns whether the event was consumed.
@@ -30925,14 +31014,9 @@ impl App {
                     .map(|(i, _)| *i);
                 let Some(idx) = hit else { return false };
 
-                // Same double-click window as everywhere else, and it shares
-                // `last_left_click` so a double never straddles two widgets.
-                const DOUBLE_CLICK_MS: u128 = 400;
-                let now = std::time::Instant::now();
-                let double = self.last_left_click.is_some_and(|(t, c, r)| {
-                    c == col && r == row && now.duration_since(t).as_millis() < DOUBLE_CLICK_MS
-                });
-                self.last_left_click = if double { None } else { Some((now, col, row)) };
+                // Shares `last_left_click` with every other click target, so a
+                // double never straddles two widgets.
+                let double = self.note_left_click(col, row);
 
                 self.cw_dashboard_cursor = Some(idx);
                 if double {

@@ -745,6 +745,49 @@ async fn mouse_does_not_pass_through_message_history_or_cli_picker() {
 }
 
 
+/// The mouse on the `M` message history (#127): a click highlights the row it
+/// lands on, the wheel moves the highlight, and a click outside closes it.
+#[tokio::test]
+async fn mouse_selects_message_history_rows_and_outside_closes() {
+    use crate::app::{MessageEntry, MessageLevel};
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mouse = |kind, column, row| {
+        crate::event::Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
+    };
+    let left = MouseEventKind::Down(MouseButton::Left);
+
+    let (mut app, tx, _rx) = test_app().await;
+    let (service, _l, mock) = all_mocks().into_iter().next().expect("a mock");
+    select_mock(&mut app, service, mock);
+    for text in ["first", "second", "third"] {
+        app.message_history.push_back(MessageEntry {
+            level: MessageLevel::Success,
+            text: text.to_string(),
+            at: std::time::Instant::now(),
+        });
+    }
+    app.message_history_visible = true;
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|f| crate::render_app(&app, f)).unwrap();
+
+    let hits = app.popup_hits.borrow().clone();
+    let third = hits.rows.iter().find(|(i, _)| *i == 2).expect("row 2 has a target").1;
+    let line: String = (third.x..third.x + third.width)
+        .map(|x| terminal.backend().buffer()[(x, third.y)].symbol().to_string())
+        .collect();
+    assert!(line.contains("third"), "row 2's target is on {line:?}");
+
+    app.handle_event(mouse(left, third.x + 4, third.y), &tx).await.unwrap();
+    assert_eq!(app.message_history_selected, 2);
+    app.handle_event(mouse(MouseEventKind::ScrollUp, third.x, third.y), &tx).await.unwrap();
+    assert_eq!(app.message_history_selected, 1);
+
+    let area = hits.area.unwrap();
+    app.handle_event(mouse(left, area.x + area.width + 1, area.y), &tx).await.unwrap();
+    assert!(!app.message_history_visible, "a click outside closes");
+}
+
+
 /// Clicking a widget beats tabbing to it on any dashboard bigger than a handful,
 /// and the mouse is otherwise blanket-gated while an overlay is up — so the
 /// charted dashboard has to claim the event before that gate. Text panels are
