@@ -597,7 +597,7 @@ COUNT=200 ./scripts/seed-floci.sh
 AWS_ENDPOINT_URL=http://localhost:4566 cargo run
 ```
 
-Open work is tracked in [`docs/BACKLOG.md`](./docs/BACKLOG.md).
+Open work is tracked in [GitHub Issues](https://github.com/neboto/neboto-tui/issues); settled design decisions are in [`docs/adr/`](./docs/adr).
 
 ---
 
