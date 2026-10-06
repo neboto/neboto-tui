@@ -87,7 +87,12 @@ the service you're touching.
   session modal on an EC2/Fleet instance (shell/port-forward/remote-host); ECS
   Exec is `s` on an ECS task — all share the tiered `spawn_aws_session` launcher
   (tmux window → new OS window → suspend-TUI inline; clipboard fallback when
-  `aws` isn't on PATH).
+  `aws` isn't on PATH). A new window gets neboto's `AWS_*` env as an
+  `export …;` prefix on its command, **minus every credential**
+  (`is_secret_aws_var`: the key id, `*SECRET*`, `AWS_*_TOKEN`), because that
+  command reaches shell history, `ps -E` and scrollback (#120). So a session
+  running on static env keys (and no named profile) skips the window tiers
+  and runs inline, where the child inherits them unwritten.
 - **Lambda** — Config/Code/**Triggers**/Environment/Tags(+Optimizer). Two lazy
   sections: **Code** (`GetFunction`; `d` (only there) downloads + unzips the
   deployment package (zip-slip-safe) to `~/.cache/neboto/lambda/<fn>/<timestamp>`
@@ -1661,6 +1666,14 @@ the service you're touching.
   `.yaml` / `.txt` sniffed from line 1, no header — `#!` and `#cloud-config`
   must stay first) via `editor_override_content`, not the snapshot JSON.
   `GetConsoleScreenshot` (a JPEG) is deliberately not offered.
+- **EC2 user data** (instance User Data section + launch-template `UserData`)
+  goes through `ec2::decode_user_data`: base64, then **gunzip** when the
+  bytes start `1f 8b`. Terraform's `cloudinit_config` gzips by default
+  (`H4sI…` encoded) and cloud-init accepts it, so this is common, not exotic
+  (#133). The gunzip is capped at 1 MiB (16 KB encoded can expand a
+  thousandfold), and anything still not UTF-8 falls back to the raw base64,
+  never an empty row. A gzipped MIME multipart is shown as the MIME text;
+  its parts aren't split out.
 - **EC2 instance Load Balancing section** (key 4,
   `elb::fetch_instance_lb_membership`) — "is this instance behind a load
   balancer?". **There is no reverse API** (nothing answers "which target

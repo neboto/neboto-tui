@@ -2493,22 +2493,35 @@ fn which_in_path(bin: &str) -> Option<std::path::PathBuf> {
     None
 }
 
+/// Credential-bearing `AWS_*` variables: never written into a command
+/// string. `AWS_ACCESS_KEY_ID` is useless without its secret, `*_TOKEN`
+/// covers the session / legacy security / container authorization tokens,
+/// and `*_TOKEN_FILE` (a path, e.g. web identity) is deliberately not one.
+fn is_secret_aws_var(name: &str) -> bool {
+    name == "AWS_ACCESS_KEY_ID"
+        || name.contains("SECRET")
+        || (name.ends_with("_TOKEN") && name.starts_with("AWS_"))
+}
+
 /// Build a shell `export K='V'; …` prefix that forwards neboto's own `AWS_*`
-/// environment (profile, region, static keys, `AWS_CONFIG_FILE`/
-/// `AWS_SHARED_CREDENTIALS_FILE`, SSO/container vars) into a spawned session.
+/// environment (profile, region, `AWS_CONFIG_FILE` /
+/// `AWS_SHARED_CREDENTIALS_FILE`, SSO / web-identity / container settings)
+/// into a session opened in a *new* tmux or terminal window, whose fresh login
+/// shell would otherwise fail with "unable to locate credentials".
 ///
-/// The inline launch path inherits neboto's environment automatically, but a
-/// session opened in a *new* terminal window or tmux window starts a fresh
-/// login shell that does not — so without this it fails with "unable to
-/// locate credentials" whenever neboto was run with `AWS_PROFILE`/env keys.
-/// Returns "" when no `AWS_*` vars are set (pure file/role-based creds, which
-/// the spawned `aws` resolves on its own). Values are single-quoted for the
-/// shell. Note: this does place any static secret keys into the launched
-/// command string — acceptable for an interactive session on the user's own
-/// machine, and avoided entirely when a named profile is used.
+/// **Never the secrets** (`is_secret_aws_var`): the prefix is part of the
+/// launched command, so it would land in shell history (the macOS
+/// `do script` path), `ps -E` and scrollback (#120). A session whose
+/// credentials *are* static env keys runs inline instead, where the child
+/// inherits them without their ever being written down
+/// (`env_has_static_keys`). Returns "" when nothing is left to forward.
 fn aws_env_exports() -> String {
-    let mut pairs: Vec<(String, String)> = std::env::vars()
-        .filter(|(k, _)| k.starts_with("AWS_"))
+    aws_env_exports_from(std::env::vars())
+}
+
+fn aws_env_exports_from(vars: impl Iterator<Item = (String, String)>) -> String {
+    let mut pairs: Vec<(String, String)> = vars
+        .filter(|(k, _)| k.starts_with("AWS_") && !is_secret_aws_var(k))
         .collect();
     pairs.sort();
     let mut out = String::new();
@@ -2517,6 +2530,13 @@ fn aws_env_exports() -> String {
         out.push_str(&format!("export {}='{}'; ", k, escaped));
     }
     out
+}
+
+/// Whether the ambient credentials include something `aws_env_exports` won't
+/// forward — so a session in a new window couldn't authenticate, and has to
+/// run inline (inheriting the environment) instead.
+fn env_has_static_keys(mut vars: impl Iterator<Item = (String, String)>) -> bool {
+    vars.any(|(k, v)| k.starts_with("AWS_") && is_secret_aws_var(&k) && !v.is_empty())
 }
 
 fn parse_port(s: &str) -> std::result::Result<u16, String> {
@@ -21992,7 +22012,8 @@ impl App {
         //   `--profile` we pass is authoritative (handles SSO / assume-role /
         //   credential_process freshly from ~/.aws);
         // - otherwise (ambient chain: env creds / instance profile) → forward
-        //   neboto's AWS_* env so the session uses the same credentials.
+        //   neboto's non-secret AWS_* env so the session resolves the same
+        //   credentials; static keys force the inline path below instead.
         let env_prefix = if profile.is_some() {
             "unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
              AWS_PROFILE AWS_DEFAULT_PROFILE; "
@@ -22004,8 +22025,12 @@ impl App {
         // Hold the window open if the command fails so the error is legible.
         let launch_cmd = hold_shell_on_error(&full_cmd);
 
+        // Static env keys can't go to a new window without writing them into
+        // its command (#120), so such a session runs inline, inheriting them.
+        let inline_only = profile.is_none() && env_has_static_keys(std::env::vars());
+
         // 1. Inside tmux → open the session in a fresh tmux window.
-        if std::env::var("TMUX").is_ok() && which_in_path("tmux").is_some() {
+        if !inline_only && std::env::var("TMUX").is_ok() && which_in_path("tmux").is_some() {
             match std::process::Command::new("tmux")
                 .args(["new-window", "-n", &win_name, &launch_cmd])
                 .spawn()
@@ -22023,7 +22048,9 @@ impl App {
         }
 
         // 2. A graphical terminal is available → open a new OS window.
-        if let Some((prog, spawn_args)) = new_terminal_window_command(&launch_cmd) {
+        if let Some((prog, spawn_args)) =
+            new_terminal_window_command(&launch_cmd).filter(|_| !inline_only)
+        {
             if std::process::Command::new(&prog)
                 .args(&spawn_args)
                 .spawn()
@@ -32291,3 +32318,57 @@ fn write_download(key: &str, bytes: &[u8]) -> std::io::Result<std::path::PathBuf
 #[cfg(test)]
 #[path = "harness_tests/mod.rs"]
 pub(crate) mod harness_tests;
+
+#[cfg(test)]
+mod session_env_tests {
+    use super::{aws_env_exports_from, env_has_static_keys};
+
+    fn vars(pairs: &[(&str, &str)]) -> impl Iterator<Item = (String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn exports_never_carry_credentials() {
+        // #120: these would land in shell history, `ps -E` and scrollback.
+        let env = [
+            ("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE"),
+            ("AWS_SECRET_ACCESS_KEY", "s3cr3t"),
+            ("AWS_SESSION_TOKEN", "tok"),
+            ("AWS_SECURITY_TOKEN", "legacy"),
+            ("AWS_CONTAINER_AUTHORIZATION_TOKEN", "ecs"),
+            ("AWS_REGION", "eu-west-1"),
+            ("AWS_WEB_IDENTITY_TOKEN_FILE", "/var/run/token"),
+            ("AWS_CONFIG_FILE", "/home/me/.aws/config"),
+            ("HOME", "/home/me"),
+        ];
+        let out = aws_env_exports_from(vars(&env));
+        for secret in ["AKIAEXAMPLE", "s3cr3t", "tok", "legacy", "ecs"] {
+            assert!(!out.contains(&format!("'{secret}'")), "{secret} leaked: {out}");
+        }
+        assert_eq!(
+            out,
+            "export AWS_CONFIG_FILE='/home/me/.aws/config'; \
+             export AWS_REGION='eu-west-1'; \
+             export AWS_WEB_IDENTITY_TOKEN_FILE='/var/run/token'; "
+        );
+    }
+
+    #[test]
+    fn exports_quote_values_for_the_shell() {
+        let out = aws_env_exports_from(vars(&[("AWS_PROFILE", "it's")]));
+        assert_eq!(out, "export AWS_PROFILE='it'\\''s'; ");
+    }
+
+    #[test]
+    fn static_keys_force_the_inline_path() {
+        assert!(env_has_static_keys(vars(&[("AWS_SECRET_ACCESS_KEY", "x")])));
+        assert!(env_has_static_keys(vars(&[("AWS_SESSION_TOKEN", "x")])));
+        assert!(!env_has_static_keys(vars(&[("AWS_PROFILE", "dev"), ("AWS_REGION", "us-east-1")])));
+        assert!(!env_has_static_keys(vars(&[("AWS_WEB_IDENTITY_TOKEN_FILE", "/t")])));
+        assert!(!env_has_static_keys(vars(&[("AWS_SESSION_TOKEN", "")])));
+    }
+}
