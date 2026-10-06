@@ -1,5 +1,8 @@
+use crate::app::{App, ClickAction};
+use crate::aws::service::ServiceType;
 use crate::ui::theme;
 use crate::ui::widgets::banner::BANNER_ART;
+use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
@@ -22,14 +25,39 @@ const MENU: [(&str, &str); 7] = [
 
 const MENU_W: u16 = 60;
 
+/// One-click starting points for a first session: the service strip lists
+/// only visited services, so on the splash it's empty, and without these a
+/// mouse user has nothing to click but `S`.
+const POPULAR: [ServiceType; 8] = [
+    ServiceType::EC2,
+    ServiceType::S3,
+    ServiceType::Lambda,
+    ServiceType::IAM,
+    ServiceType::VPC,
+    ServiceType::RDS,
+    ServiceType::ECS,
+    ServiceType::CloudWatch,
+];
+
+/// The menu rows a click can press. `@ec2` and `/` need typing afterwards and
+/// `q` would end the session on a stray click, so those stay keyboard-only.
+fn menu_click_key(key: &str) -> Option<KeyCode> {
+    match key {
+        "S" | "R" | "P" | "?" => key.chars().next().map(KeyCode::Char),
+        _ => None,
+    }
+}
+
 /// Welcome / getting-started dashboard shown in the main content area when no
 /// service is loaded yet. A centered logo over a left-aligned menu block —
-/// loads nothing until the user picks a service (`@prefix` or `S`).
-pub fn render_splash(area: Rect, frame: &mut Frame) {
+/// loads nothing until the user picks a service (`@prefix`, `S`, or a click
+/// on a popular service). The service chips and the `S`/`R`/`P`/`?` rows
+/// record click regions as they draw.
+pub fn render_splash(app: &App, area: Rect, frame: &mut Frame) {
     let logo_h = BANNER_ART.len() as u16; // 6
     let menu_h = MENU.len() as u16; // 7
-    // logo + subtitle + gap + menu + gap + footer
-    let total_h = logo_h + 1 + 1 + menu_h + 1 + 1;
+    // logo + subtitle + gap + chips + gap + menu + gap + footer
+    let total_h = logo_h + 1 + 1 + 1 + 1 + menu_h + 1 + 1;
     let top = area.y + area.height.saturating_sub(total_h) / 2;
 
     // ── Logo (centered across the full width) ──
@@ -45,7 +73,7 @@ pub fn render_splash(area: Rect, frame: &mut Frame) {
     // ── Subtitle (centered) ──
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "Nothing loaded — pick a service to begin",
+            "Nothing loaded — pick a service to begin (click one, or press S)",
             Style::default()
                 .fg(theme::text_dim())
                 .add_modifier(Modifier::ITALIC),
@@ -54,9 +82,57 @@ pub fn render_splash(area: Rect, frame: &mut Frame) {
         Rect { x: area.x, y: top + logo_h, width: area.width, height: 1 },
     );
 
+    // ── Popular services (centered chips, each a click target) ──
+    let chips_y = top + logo_h + 2;
+    let chip_w = |s: &ServiceType| s.prefix().chars().count() as u16;
+    const GAP: u16 = 2;
+    let chips_w: u16 =
+        POPULAR.iter().map(chip_w).sum::<u16>() + GAP * (POPULAR.len() as u16 - 1);
+    let mut x = area.x + area.width.saturating_sub(chips_w) / 2;
+    let mut spans = Vec::new();
+    for (i, service) in POPULAR.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" ".repeat(GAP as usize)));
+            x += GAP;
+        }
+        let w = chip_w(service);
+        if x + w <= area.x + area.width && chips_y < area.y + area.height {
+            app.push_click_region(
+                Rect { x, y: chips_y, width: w, height: 1 },
+                ClickAction::Service(*service),
+            );
+        }
+        spans.push(Span::styled(
+            service.prefix().to_string(),
+            Style::default()
+                .fg(theme::aws_orange())
+                .add_modifier(Modifier::BOLD),
+        ));
+        x += w;
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)),
+        Rect {
+            x: area.x + area.width.saturating_sub(chips_w) / 2,
+            y: chips_y,
+            width: chips_w.min(area.width),
+            height: 1,
+        }
+        .intersection(area),
+    );
+
     // ── Menu (centered block; label left, shortcut right) ──
     let menu_x = area.x + area.width.saturating_sub(MENU_W) / 2;
-    let menu_y = top + logo_h + 2;
+    let menu_y = chips_y + 2;
+    for (i, (key, _)) in MENU.iter().enumerate() {
+        let y = menu_y + i as u16;
+        if let (Some(code), true) = (menu_click_key(key), y < area.y + area.height) {
+            app.push_click_region(
+                Rect { x: menu_x, y, width: MENU_W.min(area.width), height: 1 },
+                ClickAction::Press(code),
+            );
+        }
+    }
     let menu_lines: Vec<Line> = MENU
         .iter()
         .map(|(key, label)| {
@@ -76,7 +152,7 @@ pub fn render_splash(area: Rect, frame: &mut Frame) {
         .collect();
     frame.render_widget(
         Paragraph::new(menu_lines).alignment(Alignment::Left),
-        Rect { x: menu_x, y: menu_y, width: MENU_W, height: menu_h },
+        Rect { x: menu_x, y: menu_y, width: MENU_W, height: menu_h }.intersection(area),
     );
 
     // ── Footer tip (centered) ──
@@ -88,6 +164,6 @@ pub fn render_splash(area: Rect, frame: &mut Frame) {
                 .add_modifier(Modifier::ITALIC),
         )))
         .alignment(Alignment::Center),
-        Rect { x: area.x, y: menu_y + menu_h + 1, width: area.width, height: 1 },
+        Rect { x: area.x, y: menu_y + menu_h + 1, width: area.width, height: 1 }.intersection(area),
     );
 }

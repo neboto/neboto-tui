@@ -43,6 +43,7 @@ mod all_search_nav_test;
 mod ct_cap_test;
 mod session_role_test;
 mod mouse_hints_test;
+mod mouse_first_run_test;
 mod mocks_compute;
 mod mocks_containers;
 mod mocks_ai;
