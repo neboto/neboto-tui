@@ -146,3 +146,61 @@ async fn read_only_type_copies_without_a_picker() {
     press(&mut app, &tx, KeyCode::Char('C'), KeyModifiers::SHIFT).await;
     assert!(app.cli_picker.is_none(), "one row copies straight away, as C always has");
 }
+
+/// The mouse on the picker (#127): the hit targets come from the renderer, so
+/// each row's rect must land on the line that shows that row's label. A click
+/// highlights, a double-click copies that row (not whichever was highlighted),
+/// the wheel moves the highlight, and a click outside closes it. None of it
+/// reaches the list beneath (#131).
+#[tokio::test]
+async fn mouse_clicks_rows_double_click_copies_and_outside_closes() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mouse = |kind, column, row| {
+        Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
+    };
+    let left = MouseEventKind::Down(MouseButton::Left);
+
+    let (mut app, tx, _rx) = test_app().await;
+    select_mock(&mut app, ServiceType::EC2, instance("i-0aaa"));
+    app.details_focused = true;
+    press(&mut app, &tx, KeyCode::Char('C'), KeyModifiers::SHIFT).await;
+
+    let screen = screen_of(&app);
+    let screen_rows: Vec<&str> = screen.lines().collect();
+    let hits = app.popup_hits.borrow().clone();
+    let labels: Vec<String> = app.cli_picker.as_ref().unwrap().rows.iter().map(|r| r.label.clone()).collect();
+    assert_eq!(hits.rows.len(), labels.len(), "every row is a target");
+    for (idx, rect) in &hits.rows {
+        let line = screen_rows[rect.y as usize];
+        assert!(line.contains(&labels[*idx]), "row {idx}'s target is on {line:?}");
+    }
+
+    // Click "stop-instances" (row 4): highlighted, still open.
+    let stop = hits.rows.iter().find(|(i, _)| *i == 4).unwrap().1;
+    let (x, y) = (stop.x + 6, stop.y);
+    app.handle_event(mouse(left, x, y), &tx).await.unwrap();
+    assert_eq!(app.cli_picker.as_ref().map(|p| p.selected), Some(4));
+
+    // The wheel moves the highlight, not the list underneath.
+    app.handle_event(mouse(MouseEventKind::ScrollDown, x, y), &tx).await.unwrap();
+    assert_eq!(app.cli_picker.as_ref().map(|p| p.selected), Some(5));
+    assert!(app.details_focused, "the wheel leaked through to the list");
+
+    // A double-click on row 4 copies row 4, though row 5 was highlighted.
+    app.handle_event(mouse(left, x, y), &tx).await.unwrap();
+    app.handle_event(mouse(left, x, y), &tx).await.unwrap();
+    assert!(app.cli_picker.is_none(), "a double-click copies and closes");
+    let msg = app.success_message.clone().or(app.error_message.clone()).unwrap_or_default();
+    assert!(
+        msg.contains("aws ec2 stop-instances") || msg.contains("Clipboard") || msg.contains("copy"),
+        "unexpected message {msg:?}"
+    );
+
+    // Reopen; a click outside the popup closes it and changes nothing beneath.
+    press(&mut app, &tx, KeyCode::Char('C'), KeyModifiers::SHIFT).await;
+    screen_of(&app);
+    let area = app.popup_hits.borrow().area.unwrap();
+    app.handle_event(mouse(left, area.x.saturating_sub(2), area.y), &tx).await.unwrap();
+    assert!(app.cli_picker.is_none(), "a click outside closes");
+    assert!(app.details_focused, "the closing click leaked through to the list");
+}

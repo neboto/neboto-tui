@@ -1,4 +1,4 @@
-use crate::app::{App, MessageLevel};
+use crate::app::{App, MessageLevel, PopupHits};
 use crate::ui::theme;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -19,7 +19,7 @@ pub fn render_message_log(app: &App, frame: &mut Frame) {
 
     let block = theme::popup_block("Messages").title_bottom(
         Line::from(Span::styled(
-            " ↑↓ move · y copy · Esc close ",
+            " ↑↓ move · y copy · double-click copy · Esc close ",
             Style::default().fg(theme::text_dim()),
         ))
         .centered(),
@@ -28,6 +28,18 @@ pub fn render_message_log(app: &App, frame: &mut Frame) {
     frame.render_widget(block, area);
 
     let total = app.message_history.len();
+    let height = inner.height as usize;
+    let selected = app.message_history_selected.min(total.saturating_sub(1));
+    let offset = selected.saturating_sub(height.saturating_sub(1));
+    // One row per message, from `offset` down: the mouse's hit targets
+    // (`App::handle_popup_picker_mouse`).
+    let rows = (offset..total)
+        .take(height)
+        .enumerate()
+        .map(|(n, i)| (i, Rect { x: inner.x, y: inner.y + n as u16, width: inner.width, height: 1 }))
+        .collect();
+    *app.popup_hits.borrow_mut() = PopupHits { area: Some(area), rows };
+
     if total == 0 {
         frame.render_widget(
             Paragraph::new(Line::styled(
@@ -40,9 +52,6 @@ pub fn render_message_log(app: &App, frame: &mut Frame) {
         return;
     }
 
-    let height = inner.height as usize;
-    let selected = app.message_history_selected.min(total - 1);
-    let offset = selected.saturating_sub(height.saturating_sub(1));
 
     // Right-aligned relative-age column width ("12m ago" = 7).
     const AGE_W: usize = 8;
