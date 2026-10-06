@@ -120,3 +120,28 @@ async fn search_hints_confirm_but_letters_are_not_typed() {
     click(&mut app, &tx, enter).await;
     assert!(!app.search_active, "clicking `⏎ confirm` confirms the search");
 }
+
+/// A first session started by mouse, with no profile and no account resolved,
+/// still has something on the right of the strip to click: a `no profile`
+/// placeholder that opens the profile picker. Once an account resolves, it
+/// takes the slot and the placeholder goes.
+#[tokio::test]
+async fn no_profile_placeholder_opens_the_profile_picker() {
+    let (mut app, tx, _rx) = test_app().await;
+    // No profile, no endpoint badge (the test app's dead endpoint would show one).
+    app.aws_clients = crate::aws::client::AwsClients::new_demo_for_test().await;
+    app.account_id = None;
+    app.account_alias = None;
+    select_mock(&mut app, ServiceType::EC2, instance("i-0aaa"));
+
+    let screen = draw(&app);
+    let p = target(&app, &screen, KeyCode::Char('P'), "no profile");
+    click(&mut app, &tx, p).await;
+    assert!(app.profile_selector.visible, "the placeholder opens the profile picker");
+
+    app.profile_selector.visible = false;
+    app.account_id = Some("123456789012".into());
+    let screen = draw(&app);
+    assert!(!screen[0].contains("no profile"), "a resolved account replaces it");
+    target(&app, &screen, KeyCode::Char('P'), "123456789012");
+}
