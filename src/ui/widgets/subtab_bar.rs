@@ -79,8 +79,14 @@ pub fn subtab_bar_spans(
     let mut spans: Vec<Span> = vec![Span::raw(" ".repeat(LEADING as usize))];
     let mut x = area.x + LEADING;
 
+    // A marker steps one chip past the window's edge on its side, which
+    // scrolls the window there (the active chip is always kept in view).
     if left_marker {
         spans.push(Span::styled("‹ ", Style::default().fg(theme::text_dim())));
+        app.push_click_region(
+            Rect { x, y: area.y, width: MARKER_W, height: 1 },
+            ClickAction::Key(tabs[lo - 1].0),
+        );
         x += MARKER_W;
     }
 
@@ -119,6 +125,10 @@ pub fn subtab_bar_spans(
 
     if right_marker {
         spans.push(Span::styled(" ›", Style::default().fg(theme::text_dim())));
+        app.push_click_region(
+            Rect { x, y: area.y, width: MARKER_W, height: 1 },
+            ClickAction::Key(tabs[hi + 1].0),
+        );
     }
 
     spans

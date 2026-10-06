@@ -249,8 +249,29 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
     }
     let mut chip_x = area.x + prefix_w;
 
+    // Under `@all` a chip narrows the results to its service (a chip it
+    // didn't search has nothing to show, so it isn't clickable); otherwise it
+    // switches service.
+    let chip_action = |service: &ServiceType| {
+        if !all_mode {
+            Some(crate::app::ClickAction::Service(*service))
+        } else if app.all_search_searched.contains(service) {
+            Some(crate::app::ClickAction::AllSearchFilter(Some(*service)))
+        } else {
+            None
+        }
+    };
+    // A marker acts as the first hidden chip on its side, which scrolls the
+    // window there.
+    let marker_region = |x: u16, i: usize| {
+        if let Some(action) = visible.get(i).and_then(chip_action) {
+            app.push_click_region(Rect { x, y: area.y, width: MARKER_W, height: 1 }, action);
+        }
+    };
+
     if left_marker {
         spans.push(Span::styled("‹ ", Style::default().fg(theme::text_dim())));
+        marker_region(chip_x, lo - 1);
         chip_x += MARKER_W;
     }
 
@@ -263,17 +284,7 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
         }
 
         let chip_w = chip_width(label);
-        // Under `@all` a chip narrows the results to its service (a chip it
-        // didn't search has nothing to show, so it isn't clickable);
-        // otherwise it switches service.
-        let action = if !all_mode {
-            Some(crate::app::ClickAction::Service(*service))
-        } else if app.all_search_searched.contains(service) {
-            Some(crate::app::ClickAction::AllSearchFilter(Some(*service)))
-        } else {
-            None
-        };
-        if let Some(action) = action {
+        if let Some(action) = chip_action(service) {
             app.push_click_region(
                 Rect {
                     x: chip_x,
@@ -314,6 +325,7 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
 
     if right_marker {
         spans.push(Span::styled(" ›", Style::default().fg(theme::text_dim())));
+        marker_region(chip_x, hi + 1);
     }
 
     // ── Compose: left chips, pad, badges (always rendered) ────────────────
