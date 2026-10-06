@@ -313,7 +313,27 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
     if pad > 0 {
         spans.push(Span::raw(" ".repeat(pad as usize)));
     }
+    // The profile and account badges open the profile picker, and the
+    // `S: services` hint opens the service picker: the mouse route to both.
+    let mut badge_x = area.x + left_width + pad;
     for (text, style) in right_parts {
+        let w = text.chars().count() as u16;
+        let key = if *text == profile_text || *text == account_text {
+            Some('P')
+        } else if text == hint_text {
+            Some('S')
+        } else {
+            None
+        };
+        if let Some(c) = key {
+            if badge_x + w <= area.x + area.width {
+                app.push_click_region(
+                    Rect { x: badge_x, y: area.y, width: w, height: 1 },
+                    crate::app::ClickAction::Press(crossterm::event::KeyCode::Char(c)),
+                );
+            }
+        }
+        badge_x += w;
         spans.push(Span::styled(text.clone(), *style));
     }
 
