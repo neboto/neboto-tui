@@ -69,6 +69,9 @@ tempfile = "3.8"
 # HTTP download (Lambda deployment packages from presigned URLs) + unzip
 ureq = "3"
 zip = { version = "8", default-features = false, features = ["deflate"] }
+# Gzip-compressed EC2 user data (Terraform cloudinit_config's default). Already
+# in the tree via zip's deflate feature.
+flate2 = "1"
 
 # For number formatting
 thousands = "0.2"

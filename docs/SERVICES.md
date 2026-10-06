@@ -1661,6 +1661,14 @@ the service you're touching.
   `.yaml` / `.txt` sniffed from line 1, no header — `#!` and `#cloud-config`
   must stay first) via `editor_override_content`, not the snapshot JSON.
   `GetConsoleScreenshot` (a JPEG) is deliberately not offered.
+- **EC2 user data** (instance User Data section + launch-template `UserData`)
+  goes through `ec2::decode_user_data`: base64, then **gunzip** when the
+  bytes start `1f 8b`. Terraform's `cloudinit_config` gzips by default
+  (`H4sI…` encoded) and cloud-init accepts it, so this is common, not exotic
+  (#133). The gunzip is capped at 1 MiB (16 KB encoded can expand a
+  thousandfold), and anything still not UTF-8 falls back to the raw base64,
+  never an empty row. A gzipped MIME multipart is shown as the MIME text;
+  its parts aren't split out.
 - **EC2 instance Load Balancing section** (key 4,
   `elb::fetch_instance_lb_membership`) — "is this instance behind a load
   balancer?". **There is no reverse API** (nothing answers "which target

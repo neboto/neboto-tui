@@ -47,9 +47,9 @@ pub async fn fetch_instance_profile_roles(
 /// An instance's launch user data via `DescribeInstanceAttribute`
 /// (`Attribute=userData`) — it isn't part of `DescribeInstances`, so it's a
 /// separate lazy call. The API returns it base64-encoded; decode to the
-/// human-readable script/cloud-config, falling back to the raw value if it
-/// isn't valid base64/UTF-8 (e.g. a gzip-compressed payload). `Ok(None)` means
-/// the instance has no user data configured.
+/// human-readable script/cloud-config (gunzipping if needed, see
+/// `decode_user_data`), falling back to the raw value if it still isn't
+/// UTF-8 text. `Ok(None)` means the instance has no user data configured.
 pub async fn fetch_instance_user_data(
     client: aws_sdk_ec2::Client,
     instance_id: String,
@@ -67,12 +67,34 @@ pub async fn fetch_instance_user_data(
         .and_then(|av| av.value())
         .filter(|s| !s.is_empty());
 
-    Ok(raw.map(|b64| {
-        aws_smithy_types::base64::decode(b64)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .unwrap_or_else(|| b64.to_string())
-    }))
+    Ok(raw.map(decode_user_data))
+}
+
+/// Ceiling on gunzipped user data. AWS caps user data at 16 KB *encoded*, but
+/// gzip can expand that a thousandfold, and the result goes into the pane.
+const USER_DATA_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Base64 user data → the script / cloud-config a person wrote. Gzip payloads
+/// (`H4sI…`, the default for Terraform's `cloudinit_config`, which cloud-init
+/// accepts) are gunzipped first. Anything that still isn't UTF-8 text, or
+/// gunzips past `USER_DATA_MAX_BYTES`, comes back as the raw base64 value, so
+/// the row is never empty and never a wall of mojibake.
+pub fn decode_user_data(b64: &str) -> String {
+    use std::io::Read;
+    let text = aws_smithy_types::base64::decode(b64).ok().and_then(|bytes| {
+        if bytes.starts_with(&[0x1f, 0x8b]) {
+            let mut out = Vec::new();
+            let mut gz = flate2::read::GzDecoder::new(bytes.as_slice()).take(USER_DATA_MAX_BYTES + 1);
+            gz.read_to_end(&mut out).ok()?;
+            if out.len() as u64 > USER_DATA_MAX_BYTES {
+                return None;
+            }
+            String::from_utf8(out).ok()
+        } else {
+            String::from_utf8(bytes).ok()
+        }
+    });
+    text.unwrap_or_else(|| b64.to_string())
 }
 
 /// An instance's system console output (`GetConsoleOutput`) — the kernel /
@@ -3132,16 +3154,9 @@ fn launch_template_data_json(
         obj.insert("BlockDeviceMappings".to_string(), json!(bdms));
     }
     if let Some(ud) = data.user_data() {
-        // The SDK returns user data base64-encoded; decode to the human-readable
-        // script/cloud-config for display. Fall back to the raw value if it isn't
-        // valid base64 or valid UTF-8 (e.g. a gzip-compressed payload).
-        let decoded = aws_smithy_types::base64::decode(ud)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok());
-        obj.insert(
-            "UserData".to_string(),
-            json!(decoded.as_deref().unwrap_or(ud)),
-        );
+        // The SDK returns user data base64-encoded (and often gzipped); decode
+        // to the human-readable script/cloud-config for display.
+        obj.insert("UserData".to_string(), json!(decode_user_data(ud)));
     }
     serde_json::to_string_pretty(&Value::Object(obj)).unwrap_or_else(|_| "{}".to_string())
 }
@@ -3219,5 +3234,55 @@ mod console_output_tests {
         );
         assert_eq!(sanitize_console_line("a\tb"), "a    b");
         assert_eq!(sanitize_console_line("\u{1b}(Bplain"), "plain");
+    }
+}
+
+#[cfg(test)]
+mod user_data_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn b64(bytes: &[u8]) -> String {
+        aws_smithy_types::base64::encode(bytes)
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(bytes).unwrap();
+        gz.finish().unwrap()
+    }
+
+    #[test]
+    fn plain_user_data_decodes() {
+        assert_eq!(decode_user_data(&b64(b"#!/bin/bash\necho hi\n")), "#!/bin/bash\necho hi\n");
+    }
+
+    #[test]
+    fn gzipped_user_data_is_gunzipped() {
+        // #133: Terraform's cloudinit_config gzips by default; the encoded
+        // value starts `H4sI`.
+        let script = "#cloud-config\npackages:\n  - nginx\n";
+        let encoded = b64(&gzip(script.as_bytes()));
+        assert!(encoded.starts_with("H4sI"));
+        assert_eq!(decode_user_data(&encoded), script);
+    }
+
+    #[test]
+    fn undecodable_user_data_falls_back_to_the_raw_value() {
+        // Not base64, binary after decoding, a truncated gzip stream.
+        assert_eq!(decode_user_data("not base64!"), "not base64!");
+        let binary = b64(&[0xff, 0xfe, 0x00]);
+        assert_eq!(decode_user_data(&binary), binary);
+        let mut gz = gzip(b"hello world");
+        gz.truncate(8);
+        let truncated = b64(&gz);
+        assert_eq!(decode_user_data(&truncated), truncated);
+    }
+
+    #[test]
+    fn a_gzip_bomb_is_not_expanded() {
+        let big = vec![b'a'; (USER_DATA_MAX_BYTES + 1) as usize];
+        let encoded = b64(&gzip(&big));
+        assert_eq!(decode_user_data(&encoded), encoded);
     }
 }
