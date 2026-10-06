@@ -1037,7 +1037,10 @@ and the approaches you rejected are the part nobody can recover from your code.
   `S: services` badges are click targets too (`ClickAction::Press`, which,
   unlike a sub-tab's `Key`, presses the key where focus already is). A new
   status-bar hint is clickable for free if its key is one key (see
-  `hint_click_key`; `q` is deliberately excluded).
+  `hint_click_key`; `q` is deliberately excluded). The welcome splash's
+  popular-service chips and `S`/`R`/`P`/`?` rows are targets too, and the `S`
+  picker records its rows into `popup_hits` like `C`/`M` (click selects;
+  double-click, or a click on the highlighted row, opens).
   **Double-click** (second left press on the same cell within 400ms, tracked by
   `App.last_left_click`) replays `Enter` — drill into detail from the list,
   follow a jump link in the detail body. **Right-click** = nav-back

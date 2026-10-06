@@ -1,3 +1,4 @@
+use crate::app::PopupHits;
 use crate::aws::service::ServiceType;
 use crate::ui::theme;
 use ratatui::{
@@ -145,6 +146,16 @@ impl ServiceSelectorState {
         }
     }
 
+    /// Move the highlight to display row `idx` (a mouse click). Headers and
+    /// out-of-range rows are ignored; returns whether the highlight landed.
+    pub fn select_row(&mut self, idx: usize) -> bool {
+        let ok = matches!(self.rows.get(idx), Some(SelectorRow::Service(_)));
+        if ok {
+            self.selected_index = idx;
+        }
+        ok
+    }
+
     pub fn selected_service(&self) -> Option<ServiceType> {
         match self.rows.get(self.selected_index) {
             Some(SelectorRow::Service(s)) => Some(*s),
@@ -251,6 +262,7 @@ impl ServiceSelectorState {
 pub fn render_service_selector(
     state: &ServiceSelectorState,
     current: Option<ServiceType>,
+    hits: &std::cell::RefCell<PopupHits>,
     frame: &mut Frame,
 ) {
     if !state.visible {
@@ -366,6 +378,32 @@ pub fn render_service_selector(
     });
 
     frame.render_stateful_widget(list, chunks[1], &mut list_state);
+
+    // Mouse targets: the popup (a click outside closes it) and each visible
+    // service row. The list scrolled to keep the highlight in view, so rows
+    // start at the offset it settled on. Headers aren't targets.
+    let list_top = chunks[1].y;
+    let visible = chunks[1].height.saturating_sub(1) as usize; // bottom border
+    let mut h = hits.borrow_mut();
+    h.area = Some(area);
+    h.rows = state
+        .rows
+        .iter()
+        .enumerate()
+        .skip(list_state.offset())
+        .take(visible)
+        .enumerate()
+        .filter(|(_, (_, row))| matches!(row, SelectorRow::Service(_)))
+        .map(|(line, (idx, _))| {
+            let rect = Rect {
+                x: chunks[1].x + 1,
+                y: list_top + line as u16,
+                width: chunks[1].width.saturating_sub(2),
+                height: 1,
+            };
+            (idx, rect)
+        })
+        .collect();
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

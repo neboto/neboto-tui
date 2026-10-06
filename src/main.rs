@@ -476,7 +476,7 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
             width: (d.x + d.width).saturating_sub(rl.x),
             height: rl.height,
         };
-        splash::render_splash(content, frame);
+        splash::render_splash(app, content, frame);
     } else {
         // Render resource list
         resource_list::render_resource_list(app, layout.resource_list_area, frame);
@@ -539,6 +539,7 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
         service_selector::render_service_selector(
             &app.service_selector,
             app.current_service,
+            &app.popup_hits,
             frame,
         );
     }

@@ -23140,6 +23140,9 @@ impl App {
         if self.handle_popup_picker_mouse(mouse) {
             return Ok(());
         }
+        if self.handle_service_picker_mouse(mouse, event_tx).await? {
+            return Ok(());
+        }
 
         // The charted dashboard is the one overlay with clickable content of its
         // own, so it gets first refusal before the blanket overlay gate below.
@@ -31003,6 +31006,51 @@ impl App {
             _ => {}
         }
         true
+    }
+
+    /// Mouse on the `S` service picker: the wheel moves the highlight, a click
+    /// highlights the row under it, and a double-click (or a click on the row
+    /// already highlighted) opens that service, as `⏎` does. A click outside or
+    /// a right-click closes it, as `Esc` does. Returns whether the picker was
+    /// open; when it is, it owns every mouse event.
+    async fn handle_service_picker_mouse(
+        &mut self,
+        mouse: MouseEvent,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> Result<bool> {
+        if !self.service_selector.visible {
+            return Ok(false);
+        }
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        match mouse.kind {
+            MouseEventKind::ScrollDown => self.service_selector.next(),
+            MouseEventKind::ScrollUp => self.service_selector.previous(),
+            MouseEventKind::Down(MouseButton::Left) => {
+                let (col, row) = (mouse.column, mouse.row);
+                let (inside, hit) = {
+                    let hits = self.popup_hits.borrow();
+                    (
+                        hits.area.is_some_and(|a| point_in(a, col, row)),
+                        hits.rows.iter().find(|(_, r)| point_in(*r, col, row)).map(|(i, _)| *i),
+                    )
+                };
+                if !inside {
+                    self.handle_key(press(KeyCode::Esc), event_tx).await?;
+                    return Ok(true);
+                }
+                let Some(idx) = hit else { return Ok(true) };
+                let double = self.note_left_click(col, row);
+                let already = self.service_selector.selected_index == idx;
+                if self.service_selector.select_row(idx) && (double || already) {
+                    self.handle_key(press(KeyCode::Enter), event_tx).await?;
+                }
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                self.handle_key(press(KeyCode::Esc), event_tx).await?;
+            }
+            _ => {}
+        }
+        Ok(true)
     }
 
     /// Mouse on the charted dashboard: click a widget to put the cursor on it,
