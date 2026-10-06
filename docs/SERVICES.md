@@ -1502,6 +1502,24 @@ the service you're touching.
   once run) — **both best-effort**; accounts without hooks or the IAM actions
   silently render without those rows, so don't "fix" their absence with a
   load warning.
+- **CloudFormation stack policy (Policy section)** — `GetStackPolicy` by
+  stack ID; an absent/empty body is `None` and renders "No stack policy"
+  (every resource updatable), never an empty pane. The parsed view lists
+  every statement (`Action`/`NotAction`, `Resource`/`NotResource`, every
+  `Condition` operator — flatten all, not first-match); an unparseable body
+  falls back to raw lines. `e` opens the pretty-printed document. Live
+  stacks only — the deleted-stack descriptor doesn't get it (the API needs
+  a live stack).
+- **CloudFormation StackSet operation results** — `⏎` on an operation in
+  the Operations section (its action header, `Operation ID` or `Results`
+  row — `cfn_op_results_row_target`, keyed on those labels) toggles
+  `ListStackSetOperationResults` inline under it: per account/region
+  status, reason, a non-SUCCEEDED account gate, OU. Row-keyed LazyMap
+  (`cfn_op_results_key(stack_set, op_id)`, the IAM-permissions toggle
+  shape); collapsing invalidates the entry, so re-expanding refetches.
+  Deliberately **no on-enter hook** — one call per operation, and a stack
+  set can have a long history. Capped at `CFN_OP_RESULTS_CAP` (500),
+  sorted failures-first so the cap never hides the answer.
 - **CloudFormation progress rollup** (`f` on the Events section, both
   descriptors) — flips the body from the chronological stream to a
   per-resource "what's left" rollup (`cfn_progress_rollup`, unit-tested):

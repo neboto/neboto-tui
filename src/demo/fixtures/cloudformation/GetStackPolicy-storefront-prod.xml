@@ -1,0 +1,6 @@
+<GetStackPolicyResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <GetStackPolicyResult>
+    <StackPolicyBody>{"Statement":[{"Effect":"Allow","Action":"Update:*","Principal":"*","Resource":"*"},{"Effect":"Deny","Action":["Update:Replace","Update:Delete"],"Principal":"*","Resource":"LogicalResourceId/PublicLoadBalancer"}]}</StackPolicyBody>
+  </GetStackPolicyResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetStackPolicyResponse>

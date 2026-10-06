@@ -5271,6 +5271,7 @@ pub fn cfn_stack_section_lines(
     template_state: Option<&Lazy<String>>,
     drift_state: Option<&Lazy<Vec<crate::aws::services::cloudformation::CfnResourceDrift>>>,
     changesets_state: Option<&Lazy<Vec<crate::aws::services::cloudformation::CfnChangeSet>>>,
+    policy_state: Option<&Lazy<Option<String>>>,
     events_progress: bool,
 ) -> Vec<(String, String)> {
     match section {
@@ -5286,7 +5287,81 @@ pub fn cfn_stack_section_lines(
         CfnStackDetailSection::Template => cfn_template_lines(template_state),
         CfnStackDetailSection::Drift => cfn_drift_lines(stack, drift_state),
         CfnStackDetailSection::Changes => cfn_changes_lines(changesets_state),
+        CfnStackDetailSection::Policy => cfn_policy_lines(policy_state),
     }
+}
+
+/// Stack policy section: which resources are update-protected. No policy
+/// means every resource is updatable — said so, rather than an empty body
+/// that reads like a failed fetch.
+fn cfn_policy_lines(policy_state: Option<&Lazy<Option<String>>>) -> Vec<(String, String)> {
+    let mut rows = vec![(String::new(), String::new())];
+    match policy_state {
+        None | Some(Lazy::Loading) => {
+            rows.push(("  Loading stack policy…".to_string(), String::new()));
+        }
+        Some(Lazy::Error(e)) => rows.extend(error_rows(e)),
+        Some(Lazy::Loaded(None)) => {
+            rows.push(("  No stack policy".to_string(), String::new()));
+            rows.push((
+                "  · every resource can be updated or replaced (no update protection)".to_string(),
+                String::new(),
+            ));
+        }
+        Some(Lazy::Loaded(Some(body))) => {
+            match crate::aws::services::cloudformation::parse_stack_policy(body) {
+                Some(stmts) => {
+                    let denies = stmts.iter().filter(|s| s.effect == "Deny").count();
+                    rows.push((
+                        "Summary".to_string(),
+                        String::new(),
+                    ));
+                    rows.push((
+                        "  Statements".to_string(),
+                        format!("{} ({} deny)", stmts.len(), denies),
+                    ));
+                    rows.push((
+                        "  Protection".to_string(),
+                        if denies == 0 {
+                            "none — no Deny statement".to_string()
+                        } else {
+                            "⚠ some updates are denied".to_string()
+                        },
+                    ));
+                    for (i, st) in stmts.iter().enumerate() {
+                        rows.push((String::new(), String::new()));
+                        rows.push((format!("Statement {}", i + 1), String::new()));
+                        rows.push(("  Effect".to_string(), st.effect.clone()));
+                        if st.principal != "*" {
+                            rows.push(("  Principal".to_string(), st.principal.clone()));
+                        }
+                        rows.push((format!("  {}", st.actions.0), st.actions.1.join(", ")));
+                        let (rk, rv) = &st.resources;
+                        if rv.len() <= 1 {
+                            rows.push((format!("  {}", rk), rv.join("")));
+                        } else {
+                            rows.push((format!("  {}", rk), format!("{} resources", rv.len())));
+                            for r in rv {
+                                rows.push((format!("      {}", r), String::new()));
+                            }
+                        }
+                        for c in &st.conditions {
+                            rows.push(("  Condition".to_string(), c.clone()));
+                        }
+                    }
+                }
+                None => {
+                    for line in body.lines() {
+                        rows.push((format!("  {}", line), String::new()));
+                    }
+                }
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("  · press e to open the policy document".to_string(), String::new()));
+        }
+    }
+    rows.push((String::new(), String::new()));
+    rows
 }
 
 /// Same, for the reduced deleted-stack pane — the shared renderers behave
@@ -6253,11 +6328,14 @@ pub fn cfn_stackset_section_lines(
     detail_state: Option<&Lazy<crate::aws::services::cloudformation::CfnStackSetDetailData>>,
     instances_state: Option<&Lazy<Vec<crate::aws::services::cloudformation::CfnStackInstance>>>,
     operations_state: Option<&Lazy<Vec<crate::aws::services::cloudformation::CfnStackSetOperation>>>,
+    op_results: &crate::lazy::LazyMap<Vec<crate::aws::services::cloudformation::CfnStackSetOpResult>>,
 ) -> Vec<(String, String)> {
     match section {
         CfnStackSetDetailSection::Config => cfn_stackset_config_lines(ss, detail_state),
         CfnStackSetDetailSection::Instances => cfn_stackset_instances_lines(instances_state),
-        CfnStackSetDetailSection::Operations => cfn_stackset_operations_lines(operations_state),
+        CfnStackSetDetailSection::Operations => {
+            cfn_stackset_operations_lines(&ss.stack_set_name, operations_state, op_results)
+        }
         CfnStackSetDetailSection::Tags => cfn_stackset_tags_lines(detail_state),
     }
 }
@@ -6388,7 +6466,9 @@ fn cfn_stackset_instances_lines(
 }
 
 fn cfn_stackset_operations_lines(
+    stack_set: &str,
     operations_state: Option<&Lazy<Vec<crate::aws::services::cloudformation::CfnStackSetOperation>>>,
+    op_results: &crate::lazy::LazyMap<Vec<crate::aws::services::cloudformation::CfnStackSetOpResult>>,
 ) -> Vec<(String, String)> {
     let mut rows = vec![("".to_string(), "".to_string())];
     match operations_state {
@@ -6410,6 +6490,11 @@ fn cfn_stackset_operations_lines(
                         rows.push(("    Reason".to_string(), reason.clone()));
                     }
                     rows.push(("    Operation ID".to_string(), op.operation_id.clone()));
+                    let key = crate::aws::services::cloudformation::cfn_op_results_key(
+                        stack_set,
+                        &op.operation_id,
+                    );
+                    rows.extend(cfn_op_results_rows(op_results.get(&key)));
                     rows.push(("".to_string(), "".to_string()));
                 }
             }
@@ -6417,6 +6502,114 @@ fn cfn_stackset_operations_lines(
     }
     rows.push(("".to_string(), "".to_string()));
     rows
+}
+
+/// The per-account/region outcome rows under one operation. Collapsed (no
+/// entry) = a hint row; `⏎` on the operation toggles it. The `Results` key
+/// is load-bearing — `cfn_op_results_row_target` keys on it.
+fn cfn_op_results_rows(
+    state: Option<&Lazy<Vec<crate::aws::services::cloudformation::CfnStackSetOpResult>>>,
+) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    match state {
+        None => rows.push((
+            "    Results".to_string(),
+            "· press ⏎ for per-account/region outcomes".to_string(),
+        )),
+        Some(Lazy::Loading) => rows.push(("    Results".to_string(), "Loading…".to_string())),
+        Some(Lazy::Error(e)) => {
+            rows.push(("    Results".to_string(), format!("⚠ {}", e)));
+        }
+        Some(Lazy::Loaded(results)) => {
+            let failed = results
+                .iter()
+                .filter(|r| r.status == "FAILED" || r.status == "CANCELLED")
+                .count();
+            let capped = results.len() >= crate::aws::services::cloudformation::CFN_OP_RESULTS_CAP;
+            rows.push((
+                "    Results".to_string(),
+                format!(
+                    "{}{} account/region{} · {} failed",
+                    results.len(),
+                    if capped { "+" } else { "" },
+                    if results.len() == 1 { "" } else { "s" },
+                    failed
+                ),
+            ));
+            if results.is_empty() {
+                rows.push(("      No per-account results".to_string(), String::new()));
+            }
+            for r in results {
+                let status = match r.status.as_str() {
+                    "SUCCEEDED" => format!("✓ {}", r.status),
+                    "FAILED" | "CANCELLED" => format!("✗ {}", r.status),
+                    "RUNNING" | "PENDING" => format!("⚠ {}", r.status),
+                    _ => r.status.clone(),
+                };
+                rows.push((format!("      {} {}", r.account, r.region), status));
+                if let Some(reason) = &r.status_reason {
+                    rows.push(("        Reason".to_string(), reason.clone()));
+                }
+                if let Some((gate, why)) = &r.account_gate {
+                    if gate != "SUCCEEDED" {
+                        let v = match why {
+                            Some(w) => format!("{} — {}", gate, w),
+                            None => gate.clone(),
+                        };
+                        rows.push(("        Account gate".to_string(), v));
+                    }
+                }
+                if let Some(ou) = &r.ou_id {
+                    rows.push(("        OU".to_string(), ou.clone()));
+                }
+            }
+            if capped {
+                rows.push((
+                    format!(
+                        "      · showing the first {} (failures first)",
+                        crate::aws::services::cloudformation::CFN_OP_RESULTS_CAP
+                    ),
+                    String::new(),
+                ));
+            }
+        }
+    }
+    rows
+}
+
+/// Which stack-set operation a row in the Operations section belongs to,
+/// for the `⏎` results toggle. Matches the operation's action header
+/// (`("  CREATE", status)`), its `Operation ID` row, and its `Results` row;
+/// anything else (a result row, a timestamp) is `None` so `⏎` falls through
+/// to the normal jump.
+pub fn cfn_op_results_row_target(rows: &[(String, String)], idx: usize) -> Option<String> {
+    let (key, value) = rows.get(idx)?;
+    let is_header = |k: &str, v: &str| {
+        k.starts_with("  ") && !k[2..].starts_with(' ') && !k.trim().is_empty() && !v.is_empty()
+    };
+    let trimmed = key.trim();
+    let op_id_at = |i: usize| -> Option<String> {
+        let (k, v) = rows.get(i)?;
+        (k.trim() == "Operation ID" && k.starts_with("    ")).then(|| v.clone())
+    };
+    if trimmed == "Operation ID" {
+        return op_id_at(idx);
+    }
+    if trimmed == "Results" && key.starts_with("    ") && !key.starts_with("     ") {
+        // The Results row sits directly under the Operation ID row.
+        return idx.checked_sub(1).and_then(op_id_at);
+    }
+    if is_header(key, value) {
+        for (k, v) in &rows[idx + 1..] {
+            if k.trim() == "Operation ID" && k.starts_with("    ") {
+                return Some(v.clone());
+            }
+            if (k.is_empty() && v.is_empty()) || is_header(k, v) {
+                return None;
+            }
+        }
+    }
+    None
 }
 
 fn cfn_stackset_tags_lines(
@@ -44331,5 +44524,56 @@ mod iam_permissions_tests {
         assert_eq!(v["broken"]["Type"], "Inline");
         assert!(rows.iter().any(|(k, val)| k.contains("AccessDenied") || val.contains("AccessDenied")));
         assert!(rows.iter().any(|(_, val)| val.contains("3 more not fetched")));
+    }
+}
+
+#[cfg(test)]
+mod cfn_op_results_tests {
+    use super::*;
+
+    fn r(k: &str, v: &str) -> (String, String) {
+        (k.to_string(), v.to_string())
+    }
+
+    #[test]
+    fn row_target_resolves_header_id_and_results_rows() {
+        let rows = vec![
+            r("", ""),
+            r("  CREATE", "FAILED"),
+            r("    Started", "2026-10-01"),
+            r("    Operation ID", "op-1"),
+            r("    Results", "· press ⏎ for per-account/region outcomes"),
+            r("", ""),
+            r("  UPDATE", "SUCCEEDED"),
+            r("    Started", "2026-10-02"),
+            r("    Operation ID", "op-2"),
+            r("    Results", "2 account/regions · 1 failed"),
+            r("      111111111111 us-east-1", "✗ FAILED"),
+            r("        Reason", "boom"),
+            r("", ""),
+        ];
+        let t = |i| cfn_op_results_row_target(&rows, i);
+        assert_eq!(t(1).as_deref(), Some("op-1"));
+        assert_eq!(t(3).as_deref(), Some("op-1"));
+        assert_eq!(t(4).as_deref(), Some("op-1"));
+        assert_eq!(t(6).as_deref(), Some("op-2"));
+        assert_eq!(t(9).as_deref(), Some("op-2"));
+        // Timestamp, result and spacer rows don't toggle.
+        assert_eq!(t(2), None);
+        assert_eq!(t(10), None);
+        assert_eq!(t(11), None);
+        assert_eq!(t(0), None);
+    }
+
+    #[test]
+    fn policy_lines_cover_all_states() {
+        let none = cfn_policy_lines(Some(&Lazy::Loaded(None)));
+        assert!(none.iter().any(|(k, _)| k.contains("No stack policy")));
+        let body = r#"{"Statement":[{"Effect":"Deny","Action":"Update:*","Principal":"*","Resource":"LogicalResourceId/Db"}]}"#;
+        let some = cfn_policy_lines(Some(&Lazy::Loaded(Some(body.to_string()))));
+        assert!(some.iter().any(|(k, v)| k == "  Resource" && v == "LogicalResourceId/Db"));
+        assert!(some.iter().any(|(k, v)| k == "  Statements" && v == "1 (1 deny)"));
+        let err = cfn_policy_lines(Some(&Lazy::Error("denied".into())));
+        assert!(err.iter().any(|(k, _)| k.contains("⚠ denied")));
     }
 }

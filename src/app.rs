@@ -5612,6 +5612,7 @@ impl App {
                     if self.selected_log_stream_name().is_some() {
                         self.open_log_tail(event_tx);
                     } else if !self.try_toggle_iam_expanded(event_tx)
+                        && !self.try_toggle_cfn_op_results(event_tx)
                         && !self.try_cc_branch_commits(event_tx)
                         && !self.trigger_s3_bucket_policy_open()
                         && !self.trigger_s3_objects_row_open(event_tx)
@@ -22805,6 +22806,14 @@ impl App {
                         },
                     );
                 }
+                CfnStackDetailSection::Policy => {
+                    self.trigger_lazy(
+                        |app| &mut app.lazy.cfn_stack_policy,
+                        stack_id.clone(),
+                        event_tx,
+                        crate::aws::services::cloudformation::fetch_stack_policy(client, stack_id),
+                    );
+                }
                 CfnStackDetailSection::Changes => {
                     self.trigger_lazy(
                         |app| &mut app.lazy.cfn_stack_changesets,
@@ -23024,6 +23033,46 @@ impl App {
             Del::Template => CfnStackDetailSection::Template,
         };
         self.trigger_cfn_section_if_needed(mapped, event_tx);
+    }
+
+    /// `⏎` on a stack-set operation (its action header, Operation ID or
+    /// Results row) in the Operations section: expand its per-account/region
+    /// results (`ListStackSetOperationResults`), or collapse them if already
+    /// shown. Row-keyed like the IAM permissions toggle. Returns `false` when
+    /// the row isn't an operation row, so `⏎` falls through to the jump.
+    fn try_toggle_cfn_op_results(&mut self, event_tx: &mpsc::UnboundedSender<Event>) -> bool {
+        use crate::aws::services::cloudformation as cfn;
+        let Some(stack_set) = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<cfn::CfnStackSet>())
+            .map(|ss| ss.stack_set_name.clone())
+        else {
+            return false;
+        };
+        if CfnStackSetDetailSection::from_index(self.detail_section_idx)
+            != CfnStackSetDetailSection::Operations
+        {
+            return false;
+        }
+        let rows = self.get_detail_lines_filtered();
+        let Some(op_id) = self.details_selected_index.and_then(|i| {
+            crate::ui::widgets::details_pane::cfn_op_results_row_target(&rows, i)
+        }) else {
+            return false;
+        };
+        let key = cfn::cfn_op_results_key(&stack_set, &op_id);
+        if self.lazy.cfn_stackset_op_results.contains(&key) {
+            self.lazy.cfn_stackset_op_results.invalidate(&key);
+            return true;
+        }
+        let client = self.aws_clients.cloudformation_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.cfn_stackset_op_results,
+            key,
+            event_tx,
+            cfn::fetch_stackset_op_results(client, stack_set, op_id),
+        );
+        true
     }
 
     /// Descriptor on-enter hook: same, for the CFN stack-set pane.
@@ -24129,6 +24178,7 @@ impl App {
                 }
                 let drift_state = self.lazy.cfn_stack_drift.get(&stack.stack_id);
                 let changesets_state = self.lazy.cfn_stack_changesets.get(&stack.stack_id);
+                let policy_state = self.lazy.cfn_stack_policy.get(&stack.stack_id);
                 return crate::ui::widgets::details_pane::cfn_stack_section_lines(
                     stack,
                     crate::aws::services::cloudformation::CfnStackDetailSection::from_index(self.detail_section_idx),
@@ -24137,6 +24187,7 @@ impl App {
                     template_state,
                     drift_state,
                     changesets_state,
+                    policy_state,
                     self.cfn_events_progress,
                 );
             }
@@ -24163,6 +24214,7 @@ impl App {
                     detail_state,
                     instances_state,
                     operations_state,
+                    &self.lazy.cfn_stackset_op_results,
                 );
             }
             if let Some(func) = resource
@@ -27271,11 +27323,12 @@ impl App {
         // deleted stacks use different section enums, so resolve which
         // section this index means per descriptor.
         if let Some(stack) = any.downcast_ref::<crate::aws::services::cloudformation::CfnStack>() {
-            let (on_events, on_template, on_changes) = if stack.deleted {
+            let (on_events, on_template, on_changes, on_policy) = if stack.deleted {
                 let s = crate::aws::services::cloudformation::CfnDeletedStackDetailSection::from_index(self.detail_section_idx);
                 (
                     s == crate::aws::services::cloudformation::CfnDeletedStackDetailSection::Events,
                     s == crate::aws::services::cloudformation::CfnDeletedStackDetailSection::Template,
+                    false,
                     false,
                 )
             } else {
@@ -27284,8 +27337,22 @@ impl App {
                     s == CfnStackDetailSection::Events,
                     s == CfnStackDetailSection::Template,
                     s == CfnStackDetailSection::Changes,
+                    s == CfnStackDetailSection::Policy,
                 )
             };
+            // Policy: the stack policy document itself (pretty-printed when
+            // it parses). No policy falls through to the snapshot.
+            if on_policy {
+                if let Some(crate::lazy::Lazy::Loaded(Some(body))) =
+                    self.lazy.cfn_stack_policy.get(&stack.stack_id)
+                {
+                    let pretty = serde_json::from_str::<serde_json::Value>(body)
+                        .ok()
+                        .and_then(|v| serde_json::to_string_pretty(&v).ok())
+                        .unwrap_or_else(|| body.clone());
+                    return Some((pretty, ".json"));
+                }
+            }
             if on_events {
                 if let Some(crate::lazy::Lazy::Loaded(events)) =
                     self.lazy.cfn_stack_events.get(&stack.stack_id)

@@ -398,7 +398,8 @@
       "Events",
       "Template",
       "Drift",
-      "Changes"
+      "Changes",
+      "Policy"
     ],
     "CFN StackSet": [
       "Config",
