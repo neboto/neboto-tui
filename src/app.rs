@@ -23766,11 +23766,19 @@ impl App {
     /// lose context — e.g. searching for a Lambda name still shows which API
     /// resource path it belongs to, and searching for a path shows its backends.
     pub fn get_detail_lines_filtered(&self) -> Vec<(String, String)> {
-        let lines = self.get_detail_lines();
-        if self.detail_search_query.is_empty() {
+        Self::filter_detail_rows(self.get_detail_lines(), &self.detail_search_query)
+    }
+
+    /// The pure body of `get_detail_lines_filtered` (see there). In the flat
+    /// view a `━━ Section ━━` header also outranks the group headers inside
+    /// it: whenever any of its rows survive, the section header is kept too,
+    /// so the cursor's section (`flat_cursor_section`) — and the synced chip —
+    /// still resolves under a filter.
+    fn filter_detail_rows(lines: Vec<(String, String)>, query: &str) -> Vec<(String, String)> {
+        if query.is_empty() {
             return lines;
         }
-        let q = self.detail_search_query.to_lowercase();
+        let q = query.to_lowercase();
 
         let is_group_header =
             |k: &str, v: &str| -> bool { !k.is_empty() && v.is_empty() && !k.starts_with(' ') };
@@ -23818,6 +23826,13 @@ impl App {
         let any_group_included = groups.iter().any(|g| g.header_matches || g.any_child_matches);
 
         let mut result = Vec::new();
+        // Flat view: a section header is a group of its own (it owns only the
+        // rows up to the section's first subgroup header), so a match inside
+        // a subgroup kept the subgroup but dropped the section header — and
+        // the cursor resolved to the previous section (#119). Hold the latest
+        // unemitted section header and emit it before the first included
+        // subgroup.
+        let mut pending_section: Option<usize> = None;
 
         // Include preamble if any group matched (structural context like "Resources (N)")
         if any_group_included && preamble_end > 0 {
@@ -23825,6 +23840,15 @@ impl App {
         }
 
         for g in &groups {
+            let included = g.header_matches || g.any_child_matches;
+            if Self::flat_header_name(&lines[g.start].0).is_some() {
+                // Emitted below when its own group is included.
+                pending_section = (!included).then_some(g.start);
+            } else if included {
+                if let Some(h) = pending_section.take() {
+                    result.push(lines[h].clone());
+                }
+            }
             if g.header_matches {
                 // Header matches → include the whole group (header + all children)
                 result.extend(lines[g.start..g.end].iter().cloned());
@@ -31733,6 +31757,51 @@ mod flat_view_tests {
         assert_eq!(offsets[1].1, 3);
         assert_eq!(lines[4], (s("env"), s("prod")));
         assert_eq!(lines.len(), 5);
+    }
+
+    #[test]
+    fn body_filter_keeps_the_section_header_of_a_subgroup_match() {
+        // #119: a match under a subgroup inside "Security" must keep the
+        // `━━ Security` header, or the cursor resolves to another section.
+        let sections = vec![
+            (s("Overview"), vec![(s("Name"), s("web-1"))]),
+            (
+                s("Security"),
+                vec![
+                    (s("Role"), s("app-role")),
+                    (s("Encryption"), s("")),
+                    (s("KMS key"), s("alias/needle")),
+                ],
+            ),
+        ];
+        let (lines, _) = App::assemble_flat_detail(&sections);
+        let filtered = App::filter_detail_rows(lines, "needle");
+        let names: Vec<_> = filtered
+            .iter()
+            .filter_map(|(k, _)| App::flat_header_name(k))
+            .collect();
+        assert_eq!(names, vec!["Security"]);
+        assert_eq!(App::flat_header_name(&filtered[0].0), Some("Security"));
+        assert_eq!(filtered[1], (s("Encryption"), s("")));
+        assert_eq!(filtered[2], (s("KMS key"), s("alias/needle")));
+    }
+
+    #[test]
+    fn body_filter_does_not_duplicate_a_matching_section_header() {
+        let sections = vec![
+            (s("Overview"), vec![(s("Name"), s("web-1"))]),
+            (
+                s("Security"),
+                vec![(s("Encryption"), s("")), (s("KMS key"), s("alias/security"))],
+            ),
+        ];
+        let (lines, _) = App::assemble_flat_detail(&sections);
+        let filtered = App::filter_detail_rows(lines, "security");
+        let headers = filtered
+            .iter()
+            .filter(|(k, _)| App::flat_header_name(k) == Some("Security"))
+            .count();
+        assert_eq!(headers, 1);
     }
 }
 
