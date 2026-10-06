@@ -446,6 +446,14 @@ pub struct LazyStore {
     pub cfn_stack_drift: LazyMap<Vec<crate::aws::services::cloudformation::CfnResourceDrift>>,
     /// A stack's change sets, keyed by stack name.
     pub cfn_stack_changesets: LazyMap<Vec<crate::aws::services::cloudformation::CfnChangeSet>>,
+    /// A stack's stack policy body (`None` = no policy), keyed by stack ID.
+    pub cfn_stack_policy: LazyMap<Option<String>>,
+    /// One stack-set operation's per-account/region results, keyed by
+    /// `cfn_op_results_key(stack_set, operation_id)`. Row-keyed: fetched by
+    /// `⏎` on an operation in the Operations section, collapsed by
+    /// invalidating the entry.
+    pub cfn_stackset_op_results:
+        LazyMap<Vec<crate::aws::services::cloudformation::CfnStackSetOpResult>>,
     /// A stack set's config detail (Config + Tags sections), keyed by
     /// stack-set name.
     pub cfn_stackset_detail: LazyMap<crate::aws::services::cloudformation::CfnStackSetDetailData>,
