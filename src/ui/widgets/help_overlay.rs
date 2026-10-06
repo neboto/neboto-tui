@@ -103,6 +103,17 @@ const RIGHT_SECTIONS: &[Section] = &[
         ],
     },
     Section {
+        title: "Mouse",
+        entries: &[
+            ("click", "select · tabs · hints · badges"),
+            ("double-click", "⏎ (open · follow · confirm)"),
+            ("click → · title bar", "follow link · full width"),
+            ("wheel · drag", "scroll · select rows"),
+            ("right-click", "back · close a popup"),
+            ("Shift-drag", "terminal text select (iTerm: ⌥)"),
+        ],
+    },
+    Section {
         title: "Toggles",
         entries: &[
             ("1–4 · t", "cost group-by · period"),

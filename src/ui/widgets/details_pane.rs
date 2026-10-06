@@ -185,6 +185,14 @@ use ratatui::{
 pub fn render_details_pane(app: &App, area: Rect, frame: &mut Frame) {
     render_details_pane_inner(app, area, frame);
     render_ownership_ribbon(app, area, frame);
+    // The pane's top border (its title bar) toggles full width, as `Z` does:
+    // the mouse route to the one layout key with no visible control.
+    if area.height > 0 {
+        app.push_click_region(
+            Rect { height: 1, ..area },
+            crate::app::ClickAction::Press(crossterm::event::KeyCode::Char('Z')),
+        );
+    }
 }
 
 /// Ownership ribbon: a dim one-liner on the pane's bottom border, left side
@@ -1518,6 +1526,7 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
             }
         })
         .collect();
+    record_jump_arrows(app, content_area, scroll_offset, &lines);
 
     frame.render_widget(Paragraph::new(lines), content_area);
 
@@ -3660,6 +3669,29 @@ fn cfn_service_fallback_jump_target(
 
 /// Indicator state for a jumpable row: `Some(true)` = cross-service (needs
 /// `gd`), `Some(false)` = same-service (`Enter` or `gd`), `None` = not jumpable.
+/// Make each drawn `→` jump arrow a click target that follows its row's link,
+/// as a double-click (or `⏎` on the row) does. Only while the pane has focus:
+/// the unfocused preview may show another section than focusing would, so a
+/// row index recorded there could follow the wrong link.
+fn record_jump_arrows(app: &App, area: Rect, first: usize, lines: &[Line]) {
+    if !app.details_focused {
+        return;
+    }
+    for (i, line) in lines.iter().enumerate() {
+        if line.spans.last().is_none_or(|s| s.content != "  →") {
+            continue;
+        }
+        let w = line.width() as u16;
+        if w > area.width {
+            continue; // clipped: the arrow isn't on screen
+        }
+        app.push_click_region(
+            Rect { x: area.x + w - 2, y: area.y + i as u16, width: 2, height: 1 },
+            crate::app::ClickAction::FollowJump(first + i),
+        );
+    }
+}
+
 fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
     let current = app.current_service?;
     let target = app
@@ -3989,6 +4021,7 @@ fn render_ec2_section_body(app: &App, area: Rect, frame: &mut Frame) {
             }
         })
         .collect();
+    record_jump_arrows(app, content_area, scroll_offset, &lines);
 
     frame.render_widget(Paragraph::new(lines), content_area);
 
@@ -4579,6 +4612,7 @@ fn render_split_section_body(app: &App, area: Rect, frame: &mut Frame) {
             }
         })
         .collect();
+    record_jump_arrows(app, content_area, scroll_offset, &lines);
 
     frame.render_widget(Paragraph::new(lines), content_area);
 

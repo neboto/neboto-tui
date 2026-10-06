@@ -1048,6 +1048,13 @@ and the approaches you rejected are the part nobody can recover from your code.
   `App::open_modal` (in `handle_key`'s priority order) and
   `select_modal_row`, plus a `record_*` call in its renderer, or it ignores
   the mouse. `C`/`M` keep their own handler (`M`'s double-click copies).
+  Also clickable: the tab bars' `‹`/`›` markers (act as the first hidden
+  chip on that side), the search bar (`Key('/')`), the detail pane's top
+  border (`Z`), and a drawn `→` (`ClickAction::FollowJump(row)`, recorded by
+  `record_jump_arrows` only while the pane is focused). The README's Mouse
+  table and the `?` help's Mouse section list the gestures; keep them in
+  step. `mouse_smash_never_panics` clicks every recorded region over every
+  mock.
   **Double-click** (second left press on the same cell within 400ms, tracked by
   `App.last_left_click`) replays `Enter` — drill into detail from the list,
   follow a jump link in the detail body. **Right-click** = nav-back

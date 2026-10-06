@@ -140,7 +140,10 @@ pub enum ClickAction {
     /// A status-bar key hint or a service-strip badge: press the key exactly
     /// where focus already is, so a detail-pane `y` copies the body line and a
     /// list `y` copies the id. (Unlike `Key`, which returns focus to the list.)
-    Press(KeyCode)}
+    Press(KeyCode),
+    /// The `→` on a detail-body row: put the cursor on that row and follow
+    /// its link, as `⏎` does. One click, since the arrow says "go there".
+    FollowJump(usize)}
 
 /// A clickable region in the service/sub-tab bars, recorded each frame by the
 /// (read-only) tab widgets so `handle_mouse` can map a click to an action.
@@ -23387,6 +23390,15 @@ impl App {
                 }
                 let synthetic = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
                 self.handle_key(synthetic, event_tx).await?;
+            }
+            ClickAction::FollowJump(idx) => {
+                if self.search_active || !self.details_focused {
+                    return Ok(());
+                }
+                self.clear_detail_visual();
+                self.details_selected_index = Some(idx);
+                let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+                self.handle_key(enter, event_tx).await?;
             }
             ClickAction::Press(code) => {
                 // While typing in the search bar only its own ⏎ / Esc hints
