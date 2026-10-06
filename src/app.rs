@@ -136,7 +136,11 @@ pub enum ClickAction {
     Key(char),
     /// A detail-pane section tab: focus the detail pane (if needed) and replay
     /// the section's number key, so the click reuses the keyboard section logic.
-    DetailSection(char)}
+    DetailSection(char),
+    /// A status-bar key hint or a service-strip badge: press the key exactly
+    /// where focus already is, so a detail-pane `y` copies the body line and a
+    /// list `y` copies the id. (Unlike `Key`, which returns focus to the list.)
+    Press(KeyCode)}
 
 /// A clickable region in the service/sub-tab bars, recorded each frame by the
 /// (read-only) tab widgets so `handle_mouse` can map a click to an action.
@@ -23185,6 +23189,9 @@ impl App {
         if self.handle_popup_picker_mouse(mouse) {
             return Ok(());
         }
+        if self.handle_service_picker_mouse(mouse, event_tx).await? {
+            return Ok(());
+        }
 
         // The charted dashboard is the one overlay with clickable content of its
         // own, so it gets first refusal before the blanket overlay gate below.
@@ -23340,6 +23347,20 @@ impl App {
                 }
                 let synthetic = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
                 self.handle_key(synthetic, event_tx).await?;
+            }
+            ClickAction::Press(code) => {
+                // While typing in the search bar only its own ⏎ / Esc hints
+                // apply; a letter would be typed into the query.
+                if self.search_active && matches!(code, KeyCode::Char(_)) {
+                    return Ok(());
+                }
+                // Terminals report an uppercase letter with SHIFT, and the
+                // list-pane arms match on it (`(Char('W'), SHIFT)`).
+                let mods = match code {
+                    KeyCode::Char(c) if c.is_ascii_uppercase() => KeyModifiers::SHIFT,
+                    _ => KeyModifiers::NONE,
+                };
+                self.handle_key(KeyEvent::new(code, mods), event_tx).await?;
             }
         }
         Ok(())
@@ -31052,6 +31073,51 @@ impl App {
             _ => {}
         }
         true
+    }
+
+    /// Mouse on the `S` service picker: the wheel moves the highlight, a click
+    /// highlights the row under it, and a double-click (or a click on the row
+    /// already highlighted) opens that service, as `⏎` does. A click outside or
+    /// a right-click closes it, as `Esc` does. Returns whether the picker was
+    /// open; when it is, it owns every mouse event.
+    async fn handle_service_picker_mouse(
+        &mut self,
+        mouse: MouseEvent,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> Result<bool> {
+        if !self.service_selector.visible {
+            return Ok(false);
+        }
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        match mouse.kind {
+            MouseEventKind::ScrollDown => self.service_selector.next(),
+            MouseEventKind::ScrollUp => self.service_selector.previous(),
+            MouseEventKind::Down(MouseButton::Left) => {
+                let (col, row) = (mouse.column, mouse.row);
+                let (inside, hit) = {
+                    let hits = self.popup_hits.borrow();
+                    (
+                        hits.area.is_some_and(|a| point_in(a, col, row)),
+                        hits.rows.iter().find(|(_, r)| point_in(*r, col, row)).map(|(i, _)| *i),
+                    )
+                };
+                if !inside {
+                    self.handle_key(press(KeyCode::Esc), event_tx).await?;
+                    return Ok(true);
+                }
+                let Some(idx) = hit else { return Ok(true) };
+                let double = self.note_left_click(col, row);
+                let already = self.service_selector.selected_index == idx;
+                if self.service_selector.select_row(idx) && (double || already) {
+                    self.handle_key(press(KeyCode::Enter), event_tx).await?;
+                }
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                self.handle_key(press(KeyCode::Esc), event_tx).await?;
+            }
+            _ => {}
+        }
+        Ok(true)
     }
 
     /// Mouse on the charted dashboard: click a widget to put the cursor on it,

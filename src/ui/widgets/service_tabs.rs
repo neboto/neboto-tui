@@ -69,14 +69,23 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
         }
         None => (String::new(), String::new()),
     };
-    let profile_text = match app.aws_clients.current_profile() {
-        Some(p) => format!(" ⦿ {} ", p),
-        None => String::new(),
-    };
     let account_text = match (&app.account_alias, &app.account_id) {
         (Some(alias), Some(id)) => format!(" {} ({}) ", alias, id),
         (None, Some(id)) => format!(" {} ", id),
         _ => String::new(),
+    };
+    // No profile and no account means nothing on the right to click, and a
+    // first session started by mouse (a splash chip, no profile set) usually
+    // lands here with a credentials error. A placeholder keeps the profile
+    // picker one click away. Once an account resolves (env credentials, an
+    // instance role) it takes the slot instead.
+    let no_profile = app.aws_clients.current_profile().is_none()
+        && account_text.is_empty()
+        && endpoint_text.is_empty();
+    let profile_text = match app.aws_clients.current_profile() {
+        Some(p) => format!(" ⦿ {} ", p),
+        None if no_profile => " ⦿ no profile ".to_string(),
+        None => String::new(),
     };
     let hint_text = " S: services  @: prefix ";
 
@@ -89,7 +98,7 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
         .bg(theme::aws_orange())
         .add_modifier(Modifier::BOLD);
     let profile_style = Style::default()
-        .fg(crate::ui::theme::text_primary())
+        .fg(if no_profile { theme::warning() } else { theme::text_primary() })
         .add_modifier(Modifier::BOLD);
     let account_style = Style::default().fg(theme::aws_orange());
     let hint_style = Style::default().fg(theme::text_dim());
@@ -313,7 +322,27 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
     if pad > 0 {
         spans.push(Span::raw(" ".repeat(pad as usize)));
     }
+    // The profile and account badges open the profile picker, and the
+    // `S: services` hint opens the service picker: the mouse route to both.
+    let mut badge_x = area.x + left_width + pad;
     for (text, style) in right_parts {
+        let w = text.chars().count() as u16;
+        let key = if *text == profile_text || *text == account_text {
+            Some('P')
+        } else if text == hint_text {
+            Some('S')
+        } else {
+            None
+        };
+        if let Some(c) = key {
+            if badge_x + w <= area.x + area.width {
+                app.push_click_region(
+                    Rect { x: badge_x, y: area.y, width: w, height: 1 },
+                    crate::app::ClickAction::Press(crossterm::event::KeyCode::Char(c)),
+                );
+            }
+        }
+        badge_x += w;
         spans.push(Span::styled(text.clone(), *style));
     }
 
