@@ -109,7 +109,7 @@ const RIGHT_SECTIONS: &[Section] = &[
             ("double-click", "⏎ (open · follow · confirm)"),
             ("click → · title bar", "follow link · full width"),
             ("wheel · drag", "scroll · select rows"),
-            ("right-click", "back · close a popup"),
+            ("right-click", "back · close a popup or view"),
             ("Shift-drag", "terminal text select (iTerm: ⌥)"),
         ],
     },

@@ -152,6 +152,20 @@ pub struct ClickRegion {
     pub rect: Rect,
     pub action: ClickAction}
 
+/// The in-pane views `handle_pane_view_mouse` drives (see
+/// `App::open_pane_view`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaneView {
+    Memory,
+    Ddb,
+    S3,
+    LogTail,
+    Trail,
+    Refs,
+    Access,
+    Metrics,
+}
+
 /// The centered modals `handle_modal_mouse` drives (see `App::open_modal`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Modal {
@@ -184,6 +198,12 @@ impl PopupHits {
     /// rect, no borders), starting at item `offset`, out of `len` items.
     pub fn record_list(&mut self, popup: Rect, list: Rect, offset: usize, len: usize) {
         self.area = Some(popup);
+        self.record_rows(list, offset, len);
+    }
+
+    /// Just the rows half of `record_list`, for a view whose outer rect was
+    /// recorded separately (the in-pane browsers draw their list in a helper).
+    pub fn record_rows(&mut self, list: Rect, offset: usize, len: usize) {
         self.rows = (offset..len)
             .take(list.height as usize)
             .enumerate()
@@ -23244,6 +23264,10 @@ impl App {
             return Ok(());
         }
 
+        if self.handle_pane_view_mouse(mouse, event_tx).await? {
+            return Ok(());
+        }
+
         // Don't let clicks/scrolls reach the panes beneath another modal.
         if self.any_pane_overlay_active() {
             return Ok(());
@@ -31242,6 +31266,115 @@ impl App {
                     if double || already {
                         self.handle_key(press(KeyCode::Enter), event_tx).await?;
                     }
+                }
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                self.handle_key(press(KeyCode::Esc), event_tx).await?;
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    /// Which in-pane view owns the detail pane, in `handle_key`'s order.
+    fn open_pane_view(&self) -> Option<PaneView> {
+        Some(if self.memory_browser.visible {
+            PaneView::Memory
+        } else if self.ddb_browser.visible {
+            PaneView::Ddb
+        } else if self.s3_object_browser.visible {
+            PaneView::S3
+        } else if self.log_tail.visible {
+            PaneView::LogTail
+        } else if self.trail_in_pane.is_some() {
+            PaneView::Trail
+        } else if self.refs_in_pane.is_some() {
+            PaneView::Refs
+        } else if self.access_in_pane.is_some() {
+            PaneView::Access
+        } else if self.metrics_in_pane.is_some() {
+            PaneView::Metrics
+        } else {
+            return None;
+        })
+    }
+
+    /// Put the view's cursor on row `idx`, as `j`/`k` would leave it.
+    /// Returns false for a view with no selectable rows.
+    fn select_pane_view_row(&mut self, view: PaneView, idx: usize) -> bool {
+        match view {
+            PaneView::Memory => {
+                self.memory_browser.selected = idx;
+                self.memory_browser.detail_scroll = 0;
+            }
+            PaneView::Ddb => {
+                let b = &mut self.ddb_browser;
+                b.selected_row = idx;
+                b.focus = crate::ui::widgets::ddb_item_browser::BrowserFocus::Results;
+                b.detail_scroll = 0;
+            }
+            PaneView::S3 => {
+                let b = &mut self.s3_object_browser;
+                b.selected = idx;
+                b.detail_focus = false;
+                b.filtering = false;
+            }
+            PaneView::Trail => {
+                if let Some(l) = self.trail_in_pane.as_mut() {
+                    l.selected = idx;
+                }
+            }
+            PaneView::Refs => {
+                if let Some(l) = self.refs_in_pane.as_mut() {
+                    l.selected = idx;
+                }
+            }
+            PaneView::Access => {
+                if let Some(l) = self.access_in_pane.as_mut() {
+                    l.selected = idx;
+                }
+            }
+            PaneView::LogTail | PaneView::Metrics => return false,
+        }
+        true
+    }
+
+    /// Mouse on an in-pane view (the S3 / DynamoDB / memory browsers, the
+    /// log tail, the `W` / `U` / `N` lenses, metrics). Over the view, the wheel
+    /// is `↓` / `↑` (in the log tail, scrolling up pauses follow, as `k` does),
+    /// a click puts the cursor on a row and a double-click is `⏎`: drill in,
+    /// jump, or open. Like the list pane, one click never acts. Right-click
+    /// anywhere is `Esc`. Metrics only takes the right-click: a wheel that
+    /// changed the time range would be a surprise. The view stays open on any
+    /// other click, since it *is* the pane. Returns whether a view was open;
+    /// when one is, it owns every mouse event.
+    async fn handle_pane_view_mouse(
+        &mut self,
+        mouse: MouseEvent,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> Result<bool> {
+        let Some(view) = self.open_pane_view() else { return Ok(false) };
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let (col, row) = (mouse.column, mouse.row);
+        let (inside, hit) = {
+            let hits = self.popup_hits.borrow();
+            (
+                hits.area.is_some_and(|a| point_in(a, col, row)),
+                hits.rows.iter().find(|(_, r)| point_in(*r, col, row)).map(|(i, _)| *i),
+            )
+        };
+        match mouse.kind {
+            MouseEventKind::ScrollDown if inside && view != PaneView::Metrics => {
+                self.handle_key(press(KeyCode::Down), event_tx).await?;
+            }
+            MouseEventKind::ScrollUp if inside && view != PaneView::Metrics => {
+                self.handle_key(press(KeyCode::Up), event_tx).await?;
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let Some(idx) = hit else { return Ok(true) };
+                let double = self.note_left_click(col, row);
+                if self.select_pane_view_row(view, idx) && double {
+                    self.handle_key(press(KeyCode::Enter), event_tx).await?;
                 }
             }
             MouseEventKind::Down(MouseButton::Right) => {

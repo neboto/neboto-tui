@@ -173,6 +173,7 @@ pub fn render_ddb_item_browser(app: &crate::app::App, area: Rect, frame: &mut Fr
     if !st.visible {
         return;
     }
+    app.popup_hits.borrow_mut().record_area(area);
 
     let block = theme::popup_block(&format!("Items — {}", st.table)).title_bottom(
         Line::from(Span::styled(
@@ -207,11 +208,11 @@ pub fn render_ddb_item_browser(app: &crate::app::App, area: Rect, frame: &mut Fr
                 Constraint::Min(0),
             ])
             .split(chunks[3]);
-        render_results(st, split[0], frame);
+        render_results(st, split[0], &app.popup_hits, frame);
         render_hr(split[1], frame);
         render_item_detail(st, split[2], frame);
     } else {
-        render_results(st, chunks[3], frame);
+        render_results(st, chunks[3], &app.popup_hits, frame);
     }
 
     render_status(st, chunks[4], frame);
@@ -325,7 +326,7 @@ fn render_query_bar(st: &DdbBrowserState, line1: Rect, line2: Rect, frame: &mut 
     frame.render_widget(Paragraph::new(Line::from(spans2)), line2);
 }
 
-fn render_results(st: &DdbBrowserState, area: Rect, frame: &mut Frame) {
+fn render_results(st: &DdbBrowserState, area: Rect, hits: &std::cell::RefCell<crate::app::PopupHits>, frame: &mut Frame) {
     if st.loading {
         frame.render_widget(
             Paragraph::new(Line::styled("  Loading items…", Style::default().fg(theme::text_dim()))),
@@ -404,6 +405,9 @@ fn render_results(st: &DdbBrowserState, area: Rect, frame: &mut Frame) {
     }
 
     frame.render_widget(Paragraph::new(lines), area);
+    // Data rows start under the column-header row.
+    let rows = Rect { y: area.y + 1, height: area.height.saturating_sub(1), ..area };
+    hits.borrow_mut().record_rows(rows, offset, st.items.len());
 }
 
 fn render_item_detail(st: &DdbBrowserState, area: Rect, frame: &mut Frame) {

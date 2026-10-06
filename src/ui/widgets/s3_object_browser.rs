@@ -270,6 +270,7 @@ pub fn render_s3_object_browser(app: &crate::app::App, area: Rect, frame: &mut F
     if !st.visible {
         return;
     }
+    app.popup_hits.borrow_mut().record_area(area);
 
     let block = theme::popup_block(&format!("Objects — {}", st.bucket)).title_bottom(
         Line::from(Span::styled(
@@ -307,11 +308,11 @@ pub fn render_s3_object_browser(app: &crate::app::App, area: Rect, frame: &mut F
                 Constraint::Min(0),
             ])
             .split(chunks[3]);
-        render_listing(st, split[0], frame);
+        render_listing(st, split[0], &app.popup_hits, frame);
         render_hr(split[1], frame);
         render_detail_panel(app, split[2], frame);
     } else {
-        render_listing(st, chunks[3], frame);
+        render_listing(st, chunks[3], &app.popup_hits, frame);
     }
 
     render_status(st, chunks[4], frame);
@@ -477,7 +478,7 @@ fn render_header(st: &S3ObjectBrowserState, area: Rect, frame: &mut Frame) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn render_listing(st: &S3ObjectBrowserState, area: Rect, frame: &mut Frame) {
+fn render_listing(st: &S3ObjectBrowserState, area: Rect, hits: &std::cell::RefCell<crate::app::PopupHits>, frame: &mut Frame) {
     if st.loading && st.entries.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::styled("  Loading…", Style::default().fg(theme::text_dim()))),
@@ -608,6 +609,7 @@ fn render_listing(st: &S3ObjectBrowserState, area: Rect, frame: &mut Frame) {
         lines.push(line);
     }
     frame.render_widget(Paragraph::new(lines), area);
+    hits.borrow_mut().record_rows(area, offset, idxs.len());
 }
 
 fn render_status(st: &S3ObjectBrowserState, area: Rect, frame: &mut Frame) {
