@@ -46,6 +46,7 @@ mod mouse_hints_test;
 mod mouse_first_run_test;
 mod mouse_modals_test;
 mod mouse_misc_test;
+mod mouse_pane_views_test;
 mod mocks_compute;
 mod mocks_containers;
 mod mocks_ai;

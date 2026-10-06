@@ -400,9 +400,9 @@ in `any_pane_overlay_active` (which gates the mouse).
   panels) and `⏎` zooms one widget to the whole pane — the only way to read a
   chart in a split pane, where a grid unit is ~3 columns. `Esc` unwinds zoom →
   cursor → pane, so it never closes out from under a zoom. **Mouse**: click
-  selects a widget, double-click zooms, wheel scrolls the grid — the only
-  overlay with clickable content of its own, so `handle_cw_dashboard_mouse`
-  runs *before* `handle_mouse`'s blanket `any_pane_overlay_active` gate. Hit
+  selects a widget, double-click zooms, wheel scrolls the grid —
+  `handle_cw_dashboard_mouse` runs *before* `handle_mouse`'s blanket
+  `any_pane_overlay_active` gate (and before the generic in-pane handler). Hit
   targets come from `App.cw_dashboard_regions` (a `RefCell` the renderer fills
   as it draws, like `click_regions`), so they match what's on screen after
   scrolling and clipping; text panels are excluded, since `Tab` can't reach
@@ -1051,7 +1051,13 @@ and the approaches you rejected are the part nobody can recover from your code.
   Also clickable: the tab bars' `‹`/`›` markers (act as the first hidden
   chip on that side), the search bar (`Key('/')`), the detail pane's top
   border (`Z`), and a drawn `→` (`ClickAction::FollowJump(row)`, recorded by
-  `record_jump_arrows` only while the pane is focused). The README's Mouse
+  `record_jump_arrows` only while the pane is focused). **In-pane views**
+  (`m`/`t`/`o`/`i`/`W`/`U`/`N`) go through `handle_pane_view_mouse`: wheel =
+  `↓`/`↑` over the view, click moves the cursor, double-click = `⏎` (one
+  click never acts, as in the list), right-click = `Esc`, anything else is
+  swallowed. Their renderers record the view rect + visible rows into the
+  same `popup_hits`; a new in-pane view needs `open_pane_view` /
+  `select_pane_view_row` arms. Metrics takes only the right-click. The README's Mouse
   table and the `?` help's Mouse section list the gestures; keep them in
   step. `mouse_smash_never_panics` clicks every recorded region over every
   mock.
