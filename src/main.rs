@@ -285,6 +285,9 @@ async fn run(cli: cli::Cli) -> Result<()> {
 /// the draw closure so the layer-2 harness tests can render to a
 /// `TestBackend` without a real terminal.
 fn render_app(app: &App, frame: &mut ratatui::Frame) {
+    // Each popup records its own hit targets as it draws; start every frame
+    // empty so a closed popup's rows can never take a click.
+    *app.popup_hits.borrow_mut() = Default::default();
     // Not under @all: its rows span services, and the tabs of the service
     // underneath would suggest keys that deliberately do nothing there.
     let show_sub_tabs =
@@ -502,6 +505,7 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
         region_selector::render_region_selector(
             &app.region_selector,
             app.current_region,
+            &app.popup_hits,
             frame,
         );
     }
@@ -511,13 +515,14 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
         profile_selector::render_profile_selector(
             &app.profile_selector,
             app.aws_clients.current_profile(),
+            &app.popup_hits,
             frame,
         );
     }
 
     // Render the org role picker if visible
     if app.org_role_selector.visible {
-        org_role_selector::render_org_role_selector(&app.org_role_selector, frame);
+        org_role_selector::render_org_role_selector(&app.org_role_selector, &app.popup_hits, frame);
     }
 
     // Render the quota service picker if visible
@@ -525,13 +530,14 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
         quota_service_selector::render_quota_service_selector(
             &app.quota_service_selector,
             &app.quota_service_code,
+            &app.popup_hits,
             frame,
         );
     }
 
     // Render the CloudTrail event-filter modal if visible
     if app.ct_filter_modal.visible {
-        ct_filter_modal::render_ct_filter_modal(&app.ct_filter_modal, frame);
+        ct_filter_modal::render_ct_filter_modal(&app.ct_filter_modal, &app.popup_hits, frame);
     }
 
     // Render service selector if visible
@@ -546,7 +552,7 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
 
     // Render the SSM session action modal if visible
     if app.ssm_session_modal.visible {
-        ssm_session_modal::render_ssm_session_modal(&app.ssm_session_modal, frame);
+        ssm_session_modal::render_ssm_session_modal(&app.ssm_session_modal, &app.popup_hits, frame);
     }
     // The S3 object browser now renders inside the detail pane
     // (see render_details_pane).

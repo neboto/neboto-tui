@@ -128,7 +128,11 @@ impl CtFilterModalState {
     }
 }
 
-pub fn render_ct_filter_modal(state: &CtFilterModalState, frame: &mut Frame) {
+pub fn render_ct_filter_modal(
+    state: &CtFilterModalState,
+    hits: &std::cell::RefCell<crate::app::PopupHits>,
+    frame: &mut Frame,
+) {
     if !state.visible {
         return;
     }
@@ -136,6 +140,7 @@ pub fn render_ct_filter_modal(state: &CtFilterModalState, frame: &mut Frame) {
     // Exact height: 8 attribute rows + value line + 2 range rows + borders.
     let area = centered_rect(56, (CtLookupAttr::ALL.len() + 1 + 1 + 2 + 2) as u16, frame.area());
     frame.render_widget(Clear, area);
+    hits.borrow_mut().record_area(area);
 
     let hints: &[(&str, &str)] = match state.phase {
         CtFilterPhase::Attr => &[

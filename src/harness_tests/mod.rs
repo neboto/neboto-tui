@@ -44,6 +44,7 @@ mod ct_cap_test;
 mod session_role_test;
 mod mouse_hints_test;
 mod mouse_first_run_test;
+mod mouse_modals_test;
 mod mocks_compute;
 mod mocks_containers;
 mod mocks_ai;
