@@ -103,6 +103,17 @@ const RIGHT_SECTIONS: &[Section] = &[
         ],
     },
     Section {
+        title: "Mouse",
+        entries: &[
+            ("click", "select · tabs · hints · badges"),
+            ("double-click", "⏎ (open · follow · confirm)"),
+            ("click → · title bar", "follow link · full width"),
+            ("wheel · drag", "scroll · select rows"),
+            ("right-click", "back · close a popup or view"),
+            ("Shift-drag", "terminal text select (iTerm: ⌥)"),
+        ],
+    },
+    Section {
         title: "Toggles",
         entries: &[
             ("1–4 · t", "cost group-by · period"),
@@ -133,6 +144,7 @@ pub fn render_help_overlay(app: &App, frame: &mut Frame) {
     let viewport = height.saturating_sub(2);
     let max_scroll = content_h.saturating_sub(viewport);
     app.help_max_scroll.set(max_scroll);
+    app.popup_hits.borrow_mut().record_area(area);
     let offset = app.help_scroll.min(max_scroll);
 
     frame.render_widget(Clear, area);

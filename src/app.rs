@@ -136,7 +136,14 @@ pub enum ClickAction {
     Key(char),
     /// A detail-pane section tab: focus the detail pane (if needed) and replay
     /// the section's number key, so the click reuses the keyboard section logic.
-    DetailSection(char)}
+    DetailSection(char),
+    /// A status-bar key hint or a service-strip badge: press the key exactly
+    /// where focus already is, so a detail-pane `y` copies the body line and a
+    /// list `y` copies the id. (Unlike `Key`, which returns focus to the list.)
+    Press(KeyCode),
+    /// The `→` on a detail-body row: put the cursor on that row and follow
+    /// its link, as `⏎` does. One click, since the arrow says "go there".
+    FollowJump(usize)}
 
 /// A clickable region in the service/sub-tab bars, recorded each frame by the
 /// (read-only) tab widgets so `handle_mouse` can map a click to an action.
@@ -144,6 +151,37 @@ pub enum ClickAction {
 pub struct ClickRegion {
     pub rect: Rect,
     pub action: ClickAction}
+
+/// The in-pane views `handle_pane_view_mouse` drives (see
+/// `App::open_pane_view`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaneView {
+    Memory,
+    Ddb,
+    S3,
+    LogTail,
+    Trail,
+    Refs,
+    Access,
+    Metrics,
+}
+
+/// The centered modals `handle_modal_mouse` drives (see `App::open_modal`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Modal {
+    Service,
+    Region,
+    Profile,
+    OrgRole,
+    Quota,
+    SsmMenu,
+    SsmInput,
+    CtFilter,
+    JumpList,
+    Bookmarks,
+    Macros,
+    Help,
+}
 
 /// Where the open popup picker (`C` commands, `M` messages) drew itself this
 /// frame: the popup's outer rect, for click-outside-to-close, and each row's
@@ -153,6 +191,35 @@ pub struct ClickRegion {
 pub struct PopupHits {
     pub area: Option<Rect>,
     pub rows: Vec<(usize, Rect)>,
+}
+
+impl PopupHits {
+    /// Record a popup whose list draws one item per line in `list` (inner
+    /// rect, no borders), starting at item `offset`, out of `len` items.
+    pub fn record_list(&mut self, popup: Rect, list: Rect, offset: usize, len: usize) {
+        self.area = Some(popup);
+        self.record_rows(list, offset, len);
+    }
+
+    /// Just the rows half of `record_list`, for a view whose outer rect was
+    /// recorded separately (the in-pane browsers draw their list in a helper).
+    pub fn record_rows(&mut self, list: Rect, offset: usize, len: usize) {
+        self.rows = (offset..len)
+            .take(list.height as usize)
+            .enumerate()
+            .map(|(line, idx)| {
+                let rect = Rect { x: list.x, y: list.y + line as u16, width: list.width, height: 1 };
+                (idx, rect)
+            })
+            .collect();
+    }
+
+    /// Record a popup with no clickable rows (help, a text-input stage):
+    /// only a click outside it means anything.
+    pub fn record_area(&mut self, popup: Rect) {
+        self.area = Some(popup);
+        self.rows.clear();
+    }
 }
 
 /// Sub-tab view for EC2 resources
@@ -23185,12 +23252,19 @@ impl App {
         if self.handle_popup_picker_mouse(mouse) {
             return Ok(());
         }
+        if self.handle_modal_mouse(mouse, event_tx).await? {
+            return Ok(());
+        }
 
         // The charted dashboard is the one overlay with clickable content of its
         // own, so it gets first refusal before the blanket overlay gate below.
         if self.metrics_in_pane == Some(MetricsKind::CwDashboard)
             && self.handle_cw_dashboard_mouse(mouse)
         {
+            return Ok(());
+        }
+
+        if self.handle_pane_view_mouse(mouse, event_tx).await? {
             return Ok(());
         }
 
@@ -23340,6 +23414,29 @@ impl App {
                 }
                 let synthetic = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
                 self.handle_key(synthetic, event_tx).await?;
+            }
+            ClickAction::FollowJump(idx) => {
+                if self.search_active || !self.details_focused {
+                    return Ok(());
+                }
+                self.clear_detail_visual();
+                self.details_selected_index = Some(idx);
+                let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+                self.handle_key(enter, event_tx).await?;
+            }
+            ClickAction::Press(code) => {
+                // While typing in the search bar only its own ⏎ / Esc hints
+                // apply; a letter would be typed into the query.
+                if self.search_active && matches!(code, KeyCode::Char(_)) {
+                    return Ok(());
+                }
+                // Terminals report an uppercase letter with SHIFT, and the
+                // list-pane arms match on it (`(Char('W'), SHIFT)`).
+                let mods = match code {
+                    KeyCode::Char(c) if c.is_ascii_uppercase() => KeyModifiers::SHIFT,
+                    _ => KeyModifiers::NONE,
+                };
+                self.handle_key(KeyEvent::new(code, mods), event_tx).await?;
             }
         }
         Ok(())
@@ -31076,6 +31173,240 @@ impl App {
             _ => {}
         }
         true
+    }
+
+    /// Which centered modal owns the keyboard right now, in `handle_key`'s
+    /// own priority order, so a replayed key reaches the modal that was
+    /// clicked. `C` / `M` have their own handler (`handle_popup_picker_mouse`).
+    fn open_modal(&self) -> Option<Modal> {
+        use crate::ui::widgets::ssm_session_modal::SsmModalStage;
+        Some(if self.service_selector.visible {
+            Modal::Service
+        } else if self.jump_list_visible {
+            Modal::JumpList
+        } else if self.macro_picker_visible {
+            Modal::Macros
+        } else if self.bookmarks_visible {
+            Modal::Bookmarks
+        } else if self.region_selector.visible {
+            Modal::Region
+        } else if self.org_role_selector.visible {
+            Modal::OrgRole
+        } else if self.profile_selector.visible {
+            Modal::Profile
+        } else if self.quota_service_selector.visible {
+            Modal::Quota
+        } else if self.ct_filter_modal.visible {
+            Modal::CtFilter
+        } else if self.ssm_session_modal.visible {
+            match self.ssm_session_modal.stage {
+                SsmModalStage::Menu => Modal::SsmMenu,
+                SsmModalStage::Input(_) => Modal::SsmInput,
+            }
+        } else if self.help_visible {
+            Modal::Help
+        } else {
+            return None;
+        })
+    }
+
+    /// Put the open modal's highlight on row `idx`. Returns whether it was
+    /// already there (a click on the highlighted row confirms it), or `None`
+    /// when the row can't be selected (a category header).
+    fn select_modal_row(&mut self, modal: Modal, idx: usize) -> Option<bool> {
+        let slot = match modal {
+            Modal::Service => {
+                let already = self.service_selector.selected_index == idx;
+                return self.service_selector.select_row(idx).then_some(already);
+            }
+            Modal::Region => &mut self.region_selector.selected_index,
+            Modal::Profile => &mut self.profile_selector.selected_index,
+            Modal::OrgRole => &mut self.org_role_selector.selected_index,
+            Modal::Quota => &mut self.quota_service_selector.selected_index,
+            Modal::SsmMenu => &mut self.ssm_session_modal.menu_index,
+            Modal::JumpList => &mut self.jump_list_selected,
+            Modal::Bookmarks => &mut self.bookmarks_selected,
+            Modal::Macros => &mut self.macro_picker_selected,
+            Modal::CtFilter | Modal::SsmInput | Modal::Help => return None,
+        };
+        let already = *slot == idx;
+        *slot = idx;
+        Some(already)
+    }
+
+    /// Mouse on a centered modal: the pickers (`S`/`R`/`P`, org role, quota,
+    /// jump list, bookmarks, macros, the SSM session menu), help, and the
+    /// CloudTrail filter. The wheel moves the highlight (help: scrolls), a
+    /// click highlights a row, and a double-click or a click on the row
+    /// already highlighted confirms it, as `⏎` does. A click outside or a
+    /// right-click closes, as `Esc` does. Everything goes through `handle_key`
+    /// so the mouse can't do anything the keyboard can't. Returns whether a
+    /// modal was open; when one is, it owns every mouse event.
+    async fn handle_modal_mouse(
+        &mut self,
+        mouse: MouseEvent,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> Result<bool> {
+        let Some(modal) = self.open_modal() else { return Ok(false) };
+        // Naming a macro: `Esc` discards the whole recording, which a stray
+        // click must never do. Only the keyboard finishes the prompt.
+        if modal == Modal::Macros && self.macro_name_input.is_some() {
+            return Ok(true);
+        }
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        match mouse.kind {
+            // The filter modal's arrows cycle its time range: not a scroll.
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+                if modal != Modal::CtFilter && modal != Modal::SsmInput =>
+            {
+                let code = if matches!(mouse.kind, MouseEventKind::ScrollDown) {
+                    KeyCode::Down
+                } else {
+                    KeyCode::Up
+                };
+                // Help is prose: a notch moves three lines, as a terminal
+                // scrolls text. A picker moves one row, like the arrow keys.
+                let notches = if modal == Modal::Help { 3 } else { 1 };
+                for _ in 0..notches {
+                    self.handle_key(press(code), event_tx).await?;
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let (col, row) = (mouse.column, mouse.row);
+                let (inside, hit) = {
+                    let hits = self.popup_hits.borrow();
+                    (
+                        hits.area.is_some_and(|a| point_in(a, col, row)),
+                        hits.rows.iter().find(|(_, r)| point_in(*r, col, row)).map(|(i, _)| *i),
+                    )
+                };
+                if !inside {
+                    self.handle_key(press(KeyCode::Esc), event_tx).await?;
+                    return Ok(true);
+                }
+                let Some(idx) = hit else { return Ok(true) };
+                let double = self.note_left_click(col, row);
+                if let Some(already) = self.select_modal_row(modal, idx) {
+                    if double || already {
+                        self.handle_key(press(KeyCode::Enter), event_tx).await?;
+                    }
+                }
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                self.handle_key(press(KeyCode::Esc), event_tx).await?;
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    /// Which in-pane view owns the detail pane, in `handle_key`'s order.
+    fn open_pane_view(&self) -> Option<PaneView> {
+        Some(if self.memory_browser.visible {
+            PaneView::Memory
+        } else if self.ddb_browser.visible {
+            PaneView::Ddb
+        } else if self.s3_object_browser.visible {
+            PaneView::S3
+        } else if self.log_tail.visible {
+            PaneView::LogTail
+        } else if self.trail_in_pane.is_some() {
+            PaneView::Trail
+        } else if self.refs_in_pane.is_some() {
+            PaneView::Refs
+        } else if self.access_in_pane.is_some() {
+            PaneView::Access
+        } else if self.metrics_in_pane.is_some() {
+            PaneView::Metrics
+        } else {
+            return None;
+        })
+    }
+
+    /// Put the view's cursor on row `idx`, as `j`/`k` would leave it.
+    /// Returns false for a view with no selectable rows.
+    fn select_pane_view_row(&mut self, view: PaneView, idx: usize) -> bool {
+        match view {
+            PaneView::Memory => {
+                self.memory_browser.selected = idx;
+                self.memory_browser.detail_scroll = 0;
+            }
+            PaneView::Ddb => {
+                let b = &mut self.ddb_browser;
+                b.selected_row = idx;
+                b.focus = crate::ui::widgets::ddb_item_browser::BrowserFocus::Results;
+                b.detail_scroll = 0;
+            }
+            PaneView::S3 => {
+                let b = &mut self.s3_object_browser;
+                b.selected = idx;
+                b.detail_focus = false;
+                b.filtering = false;
+            }
+            PaneView::Trail => {
+                if let Some(l) = self.trail_in_pane.as_mut() {
+                    l.selected = idx;
+                }
+            }
+            PaneView::Refs => {
+                if let Some(l) = self.refs_in_pane.as_mut() {
+                    l.selected = idx;
+                }
+            }
+            PaneView::Access => {
+                if let Some(l) = self.access_in_pane.as_mut() {
+                    l.selected = idx;
+                }
+            }
+            PaneView::LogTail | PaneView::Metrics => return false,
+        }
+        true
+    }
+
+    /// Mouse on an in-pane view (the S3 / DynamoDB / memory browsers, the
+    /// log tail, the `W` / `U` / `N` lenses, metrics). Over the view, the wheel
+    /// is `↓` / `↑` (in the log tail, scrolling up pauses follow, as `k` does),
+    /// a click puts the cursor on a row and a double-click is `⏎`: drill in,
+    /// jump, or open. Like the list pane, one click never acts. Right-click
+    /// anywhere is `Esc`. Metrics only takes the right-click: a wheel that
+    /// changed the time range would be a surprise. The view stays open on any
+    /// other click, since it *is* the pane. Returns whether a view was open;
+    /// when one is, it owns every mouse event.
+    async fn handle_pane_view_mouse(
+        &mut self,
+        mouse: MouseEvent,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> Result<bool> {
+        let Some(view) = self.open_pane_view() else { return Ok(false) };
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let (col, row) = (mouse.column, mouse.row);
+        let (inside, hit) = {
+            let hits = self.popup_hits.borrow();
+            (
+                hits.area.is_some_and(|a| point_in(a, col, row)),
+                hits.rows.iter().find(|(_, r)| point_in(*r, col, row)).map(|(i, _)| *i),
+            )
+        };
+        match mouse.kind {
+            MouseEventKind::ScrollDown if inside && view != PaneView::Metrics => {
+                self.handle_key(press(KeyCode::Down), event_tx).await?;
+            }
+            MouseEventKind::ScrollUp if inside && view != PaneView::Metrics => {
+                self.handle_key(press(KeyCode::Up), event_tx).await?;
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let Some(idx) = hit else { return Ok(true) };
+                let double = self.note_left_click(col, row);
+                if self.select_pane_view_row(view, idx) && double {
+                    self.handle_key(press(KeyCode::Enter), event_tx).await?;
+                }
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                self.handle_key(press(KeyCode::Esc), event_tx).await?;
+            }
+            _ => {}
+        }
+        Ok(true)
     }
 
     /// Mouse on the charted dashboard: click a widget to put the cursor on it,

@@ -534,6 +534,11 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
         }
     }
     frame.render_widget(Paragraph::new(body), chunks[2]);
+    {
+        let mut hits = app.popup_hits.borrow_mut();
+        hits.record_area(area);
+        hits.record_rows(chunks[2], top, st.rows.len());
+    }
 
     // ── Footer ──
     let hint = |k: &'static str, d: &'static str| {

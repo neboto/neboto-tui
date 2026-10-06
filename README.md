@@ -335,6 +335,26 @@ Each takes over the keymap while open; `Esc` closes, `Z` goes full-width.
 | `x` / `Y` | Reveal / copy a secret or SSM parameter value (never cached) |
 | `O` | Open this resource in the AWS Console |
 
+### Mouse
+
+Everything on screen that names a key can be clicked. The keyboard is still
+the faster route, but nothing needs it.
+
+| Gesture | Does |
+|---|---|
+| Click | Select a row, switch a tab or section, open a picker from a badge, press a status-bar hint (`m metrics`, `W trail`…) |
+| Double-click | `⏎`: open the detail pane, follow a link, confirm a picker row |
+| Click a `→` | Follow that link |
+| Click the detail pane's title bar | Full width (`Z`) |
+| Wheel | Scroll the list, the detail body, a picker, or an in-pane view (the log tail pauses following, as `k` does) |
+| Drag | Select a range of rows (then `y` copies it) |
+| Right-click | Back (`Ctrl-O`); in a popup or an in-pane view (`m`, `t`, `o`, `i`, `W`, `U`, `N`), close it |
+| Click outside a popup | Close it (`Esc`) |
+
+neboto captures the mouse, so a plain drag selects rows rather than text. Hold
+**Shift** while dragging for your terminal's own text selection (**Option** in
+iTerm2).
+
 ---
 
 ## Search

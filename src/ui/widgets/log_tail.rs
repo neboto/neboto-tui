@@ -234,6 +234,8 @@ fn push_line_rows(rows: &mut Vec<Line<'static>>, l: &LogTailLine, width: usize, 
 }
 
 pub fn render_log_tail(app: &crate::app::App, area: Rect, frame: &mut Frame) {
+    // Wheel target only: log lines have no selection to click.
+    app.popup_hits.borrow_mut().record_area(area);
     let st = &app.log_tail;
 
     let block = Block::default()

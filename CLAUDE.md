@@ -400,9 +400,9 @@ in `any_pane_overlay_active` (which gates the mouse).
   panels) and `⏎` zooms one widget to the whole pane — the only way to read a
   chart in a split pane, where a grid unit is ~3 columns. `Esc` unwinds zoom →
   cursor → pane, so it never closes out from under a zoom. **Mouse**: click
-  selects a widget, double-click zooms, wheel scrolls the grid — the only
-  overlay with clickable content of its own, so `handle_cw_dashboard_mouse`
-  runs *before* `handle_mouse`'s blanket `any_pane_overlay_active` gate. Hit
+  selects a widget, double-click zooms, wheel scrolls the grid —
+  `handle_cw_dashboard_mouse` runs *before* `handle_mouse`'s blanket
+  `any_pane_overlay_active` gate (and before the generic in-pane handler). Hit
   targets come from `App.cw_dashboard_regions` (a `RefCell` the renderer fills
   as it draws, like `click_regions`), so they match what's on screen after
   scrolling and clipping; text panels are excluded, since `Tab` can't reach
@@ -1033,6 +1033,34 @@ and the approaches you rejected are the part nobody can recover from your code.
 - **Mouse**: `App::handle_mouse` maps clicks via `App.click_regions` (tab bars,
   rebuilt each frame by the tab widgets) and `App.mouse_geom` (list/detail
   rects). A sub-tab click replays the chip's key through `handle_key`.
+  Status-bar key hints, the status-bar region name and the strip's profile /
+  `S: services` badges are click targets too (`ClickAction::Press`, which,
+  unlike a sub-tab's `Key`, presses the key where focus already is). A new
+  status-bar hint is clickable for free if its key is one key (see
+  `hint_click_key`; `q` is deliberately excluded). The welcome splash's
+  popular-service chips and `S`/`R`/`P`/`?` rows are targets too.
+  **Centered modals** (every picker, help, the CloudTrail filter, the SSM
+  menu) record their rect + visible rows into `App.popup_hits` as they draw
+  (`PopupHits::record_list` / `record_area`; cleared at the top of each
+  frame), and `handle_modal_mouse` replays keys through `handle_key`: wheel =
+  `↓`/`↑`, click highlights, double-click or a click on the highlighted row
+  = `⏎`, outside / right-click = `Esc`. **A new modal** needs an arm in
+  `App::open_modal` (in `handle_key`'s priority order) and
+  `select_modal_row`, plus a `record_*` call in its renderer, or it ignores
+  the mouse. `C`/`M` keep their own handler (`M`'s double-click copies).
+  Also clickable: the tab bars' `‹`/`›` markers (act as the first hidden
+  chip on that side), the search bar (`Key('/')`), the detail pane's top
+  border (`Z`), and a drawn `→` (`ClickAction::FollowJump(row)`, recorded by
+  `record_jump_arrows` only while the pane is focused). **In-pane views**
+  (`m`/`t`/`o`/`i`/`W`/`U`/`N`) go through `handle_pane_view_mouse`: wheel =
+  `↓`/`↑` over the view, click moves the cursor, double-click = `⏎` (one
+  click never acts, as in the list), right-click = `Esc`, anything else is
+  swallowed. Their renderers record the view rect + visible rows into the
+  same `popup_hits`; a new in-pane view needs `open_pane_view` /
+  `select_pane_view_row` arms. Metrics takes only the right-click. The README's Mouse
+  table and the `?` help's Mouse section list the gestures; keep them in
+  step. `mouse_smash_never_panics` clicks every recorded region over every
+  mock.
   **Double-click** (second left press on the same cell within 400ms, tracked by
   `App.last_left_click`) replays `Enter` — drill into detail from the list,
   follow a jump link in the detail body. **Right-click** = nav-back

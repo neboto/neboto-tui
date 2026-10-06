@@ -23,7 +23,8 @@ mod terraform;
 mod tui;
 mod ui;
 
-use app::App;
+use app::{App, ClickAction};
+use crossterm::event::KeyCode;
 use aws::service::ServiceType;
 use error::Result;
 use event::{handle_terminal_events, handle_tick_events, EventHandler};
@@ -284,6 +285,9 @@ async fn run(cli: cli::Cli) -> Result<()> {
 /// the draw closure so the layer-2 harness tests can render to a
 /// `TestBackend` without a real terminal.
 fn render_app(app: &App, frame: &mut ratatui::Frame) {
+    // Each popup records its own hit targets as it draws; start every frame
+    // empty so a closed popup's rows can never take a click.
+    *app.popup_hits.borrow_mut() = Default::default();
     // Not under @all: its rows span services, and the tabs of the service
     // underneath would suggest keys that deliberately do nothing there.
     let show_sub_tabs =
@@ -475,7 +479,7 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
             width: (d.x + d.width).saturating_sub(rl.x),
             height: rl.height,
         };
-        splash::render_splash(content, frame);
+        splash::render_splash(app, content, frame);
     } else {
         // Render resource list
         resource_list::render_resource_list(app, layout.resource_list_area, frame);
@@ -501,6 +505,7 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
         region_selector::render_region_selector(
             &app.region_selector,
             app.current_region,
+            &app.popup_hits,
             frame,
         );
     }
@@ -510,13 +515,14 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
         profile_selector::render_profile_selector(
             &app.profile_selector,
             app.aws_clients.current_profile(),
+            &app.popup_hits,
             frame,
         );
     }
 
     // Render the org role picker if visible
     if app.org_role_selector.visible {
-        org_role_selector::render_org_role_selector(&app.org_role_selector, frame);
+        org_role_selector::render_org_role_selector(&app.org_role_selector, &app.popup_hits, frame);
     }
 
     // Render the quota service picker if visible
@@ -524,13 +530,14 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
         quota_service_selector::render_quota_service_selector(
             &app.quota_service_selector,
             &app.quota_service_code,
+            &app.popup_hits,
             frame,
         );
     }
 
     // Render the CloudTrail event-filter modal if visible
     if app.ct_filter_modal.visible {
-        ct_filter_modal::render_ct_filter_modal(&app.ct_filter_modal, frame);
+        ct_filter_modal::render_ct_filter_modal(&app.ct_filter_modal, &app.popup_hits, frame);
     }
 
     // Render service selector if visible
@@ -538,13 +545,14 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
         service_selector::render_service_selector(
             &app.service_selector,
             app.current_service,
+            &app.popup_hits,
             frame,
         );
     }
 
     // Render the SSM session action modal if visible
     if app.ssm_session_modal.visible {
-        ssm_session_modal::render_ssm_session_modal(&app.ssm_session_modal, frame);
+        ssm_session_modal::render_ssm_session_modal(&app.ssm_session_modal, &app.popup_hits, frame);
     }
     // The S3 object browser now renders inside the detail pane
     // (see render_details_pane).
@@ -610,6 +618,8 @@ fn fit_hint_line(mut line: Line<'static>, max_width: usize) -> Line<'static> {
 fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui::Frame) {
     // Left segment: transient message (error/success/loading) or contextual key hints
     let mut left_is_hints = false;
+    // The hints on screen, in order, so each chip can be made clickable.
+    let mut hints: Vec<(&str, &str)> = Vec::new();
     let left: Line = if let Some(error) = &app.error_message {
         Line::from(vec![
             Span::styled(
@@ -682,8 +692,8 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
         ))
     } else {
         left_is_hints = true;
-        let mut line = if app.search_active {
-            theme::hint_line(&[("⏎", "confirm"), ("Esc", "cancel"), ("@service", "switch")])
+        hints = if app.search_active {
+            vec![("⏎", "confirm"), ("Esc", "cancel"), ("@service", "switch")]
         } else if app.details_focused {
             // Kept short and stable — the detail-pane footer carries the
             // pane-specific hints, `?` has the full reference.
@@ -700,7 +710,7 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
             }
             hints.push(("r", "refresh"));
             hints.extend_from_slice(&[("Esc", "back"), ("?", "help")]);
-            theme::hint_line(&hints)
+            hints
         } else {
             // @all results: no sub-tabs, and ⏎ / l part ways (jump vs peek).
             let mut hints: Vec<(&str, &str)> = if app.all_search_mode {
@@ -746,8 +756,9 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
             }
             hints.push(("'", "bookmarks"));
             hints.extend_from_slice(&[("?", "help"), ("q", "quit")]);
-            theme::hint_line(&hints)
+            hints
         };
+        let mut line = theme::hint_line(&hints);
         line.spans.insert(0, Span::raw(" "));
         line
     };
@@ -799,10 +810,10 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
         };
         right_spans.push(Span::styled(label, Style::default().fg(theme::text_dim())));
     }
-    right_spans.push(Span::styled(
-        app.current_region.display_name().to_string(),
-        Style::default().fg(theme::aws_orange()),
-    ));
+    let region_offset = Line::from(right_spans.clone()).width() as u16;
+    let region_name = app.current_region.display_name().to_string();
+    let region_width = region_name.chars().count() as u16;
+    right_spans.push(Span::styled(region_name, Style::default().fg(theme::aws_orange())));
     right_spans.push(Span::styled(
         format!(
             "  {}/{} ",
@@ -826,6 +837,76 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
     } else {
         left
     };
+    if left_is_hints {
+        record_hint_regions(app, &left, &hints, chunks[0]);
+    }
+    // The region name opens the region picker. The segment is right-aligned,
+    // so it starts wherever its full width ends up.
+    let right_x = chunks[1].x + chunks[1].width.saturating_sub(right_width);
+    let region_x = right_x + region_offset;
+    if region_x + region_width <= chunks[1].x + chunks[1].width {
+        app.push_click_region(
+            ratatui::layout::Rect { x: region_x, y: area.y, width: region_width, height: 1 },
+            ClickAction::Press(KeyCode::Char('R')),
+        );
+    }
     frame.render_widget(Paragraph::new(left), chunks[0]);
     frame.render_widget(Paragraph::new(right).alignment(Alignment::Right), chunks[1]);
+}
+
+/// The key a click on a status-bar hint presses, or `None` for hints that
+/// aren't one key: `j/k` and `H/L` name pairs, and `@service` is something
+/// you type. `q` is left out on purpose: a stray click shouldn't quit.
+fn hint_click_key(key: &str) -> Option<KeyCode> {
+    match key {
+        "⏎" => Some(KeyCode::Enter),
+        "Esc" => Some(KeyCode::Esc),
+        "⇥" => Some(KeyCode::Tab),
+        "q" => None,
+        k => {
+            let mut chars = k.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => Some(KeyCode::Char(c)),
+                _ => None,
+            }
+        }
+    }
+}
+
+/// Record a click region over each hint chip still on screen after
+/// `fit_hint_line` trimmed the line. Chips are delimited by the `"  ·  "`
+/// separator spans `hint_line` puts between them, after one leading pad span.
+fn record_hint_regions(app: &App, line: &Line, hints: &[(&str, &str)], area: ratatui::layout::Rect) {
+    let right_edge = area.x + area.width;
+    let mut x = area.x;
+    let mut chip = 0usize;
+    let mut chip_start: Option<u16> = None;
+    let push = |chip: usize, start: u16, end: u16| {
+        let end = end.min(right_edge);
+        if let (Some(code), true) = (hints.get(chip).and_then(|(k, _)| hint_click_key(k)), end > start) {
+            app.push_click_region(
+                ratatui::layout::Rect { x: start, y: area.y, width: end - start, height: 1 },
+                ClickAction::Press(code),
+            );
+        }
+    };
+    for (i, span) in line.spans.iter().enumerate() {
+        let w = span.width() as u16;
+        if i == 0 {
+            x += w; // the leading pad
+            continue;
+        }
+        if span.content == "  ·  " {
+            if let Some(start) = chip_start.take() {
+                push(chip, start, x);
+            }
+            chip += 1;
+        } else if chip_start.is_none() {
+            chip_start = Some(x);
+        }
+        x = x.saturating_add(w);
+    }
+    if let Some(start) = chip_start {
+        push(chip, start, x);
+    }
 }

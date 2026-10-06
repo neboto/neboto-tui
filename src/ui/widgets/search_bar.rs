@@ -12,6 +12,10 @@ use ratatui::{
 };
 
 pub fn render_search_bar(app: &App, area: Rect, frame: &mut Frame) {
+    // A click on the bar opens the search, as `/` from the list does.
+    if !app.search_active {
+        app.push_click_region(area, crate::app::ClickAction::Key('/'));
+    }
     let (border_color, title_style) = if app.search_active {
         (
             theme::warning(),

@@ -134,7 +134,11 @@ impl OrgRoleSelectorState {
     }
 }
 
-pub fn render_org_role_selector(state: &OrgRoleSelectorState, frame: &mut Frame) {
+pub fn render_org_role_selector(
+    state: &OrgRoleSelectorState,
+    hits: &std::cell::RefCell<crate::app::PopupHits>,
+    frame: &mut Frame,
+) {
     if !state.visible {
         return;
     }
@@ -244,6 +248,7 @@ pub fn render_org_role_selector(state: &OrgRoleSelectorState, frame: &mut Frame)
     }
 
     frame.render_stateful_widget(list, inner, &mut list_state);
+    hits.borrow_mut().record_list(area, inner, list_state.offset(), state.roles.len());
 }
 
 fn centered_rect(width: u16, height: u16, r: Rect) -> Rect {

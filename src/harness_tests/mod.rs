@@ -42,6 +42,11 @@ mod subtab_keys_test;
 mod all_search_nav_test;
 mod ct_cap_test;
 mod session_role_test;
+mod mouse_hints_test;
+mod mouse_first_run_test;
+mod mouse_modals_test;
+mod mouse_misc_test;
+mod mouse_pane_views_test;
 mod mocks_compute;
 mod mocks_containers;
 mod mocks_ai;
@@ -368,6 +373,62 @@ async fn keymap_smash_never_panics() {
             terminal
                 .draw(|f| crate::render_app(&app, f))
                 .unwrap_or_else(|e| panic!("{label}: draw after {k:?} failed: {e}"));
+        }
+    }
+}
+
+/// The mouse half of the smash: over every mock, click the middle of each
+/// recorded click region (tabs, sections, hints, badges, `→` arrows, the
+/// title bar) and spin the wheel over both panes, drawing after each event.
+/// Nothing may panic, and every frame must still draw.
+#[tokio::test]
+async fn mouse_smash_never_panics() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let (mut app, tx, _rx) = test_app().await;
+    let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+    for (service, label, mock) in all_mocks() {
+        select_mock(&mut app, service, mock);
+        app.handle_key(key(KeyCode::Char('l')), &tx).await.unwrap();
+        terminal.draw(|f| crate::render_app(&app, f)).unwrap();
+        let regions: Vec<_> = app
+            .click_regions
+            .borrow()
+            .iter()
+            // `O` would open a real browser.
+            .filter(|r| !matches!(r.action, crate::app::ClickAction::Press(KeyCode::Char('O'))))
+            .map(|r| (r.rect.x + r.rect.width / 2, r.rect.y))
+            .collect();
+        let geom = app.mouse_geom.get();
+        let wheels = [geom.list_area, geom.detail_body_area]
+            .into_iter()
+            .flatten()
+            .map(|a| (a.x + a.width / 2, a.y + a.height / 2));
+        let mut events = Vec::new();
+        for at in regions {
+            events.push((MouseEventKind::Down(MouseButton::Left), at));
+        }
+        for at in wheels {
+            events.push((MouseEventKind::ScrollDown, at));
+            events.push((MouseEventKind::ScrollUp, at));
+            events.push((MouseEventKind::Down(MouseButton::Left), at));
+            events.push((MouseEventKind::Down(MouseButton::Left), at)); // double
+            events.push((MouseEventKind::Down(MouseButton::Right), at));
+        }
+        for (kind, (column, row)) in events {
+            let ev = MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE };
+            app.handle_event(Event::Mouse(ev), &tx)
+                .await
+                .unwrap_or_else(|e| panic!("{label}: {kind:?} at {column},{row} errored: {e}"));
+            app.flat_detail_tick(&tx);
+            terminal
+                .draw(|f| crate::render_app(&app, f))
+                .unwrap_or_else(|e| panic!("{label}: draw after {kind:?} failed: {e}"));
+            // Unwind whatever the click opened, so the next one lands on the
+            // screen its region was recorded from.
+            for _ in 0..2 {
+                app.handle_key(key(KeyCode::Esc), &tx).await.unwrap();
+            }
+            app.search_active = false;
         }
     }
 }

@@ -121,7 +121,11 @@ fn input_prompt(action: SsmSessionAction) -> &'static str {
     }
 }
 
-pub fn render_ssm_session_modal(state: &SsmSessionModalState, frame: &mut Frame) {
+pub fn render_ssm_session_modal(
+    state: &SsmSessionModalState,
+    hits: &std::cell::RefCell<crate::app::PopupHits>,
+    frame: &mut Frame,
+) {
     if !state.visible {
         return;
     }
@@ -165,8 +169,10 @@ pub fn render_ssm_session_modal(state: &SsmSessionModalState, frame: &mut Frame)
             let mut list_state = ListState::default();
             list_state.select(Some(state.menu_index));
             frame.render_stateful_widget(list, inner, &mut list_state);
+            hits.borrow_mut().record_list(area, inner, list_state.offset(), MENU.len());
         }
         SsmModalStage::Input(action) => {
+            hits.borrow_mut().record_area(area);
             let block = theme::popup_block(&title).title_bottom(
                 theme::hint_line(&[
                     ("type", "params"),

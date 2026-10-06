@@ -175,6 +175,7 @@ pub fn render_memory_browser(app: &crate::app::App, area: Rect, frame: &mut Fram
     if !st.visible {
         return;
     }
+    app.popup_hits.borrow_mut().record_area(area);
 
     let block = theme::popup_block(&format!("Memory — {}", st.level.label())).title_bottom(
         Line::from(Span::styled(
@@ -212,11 +213,11 @@ pub fn render_memory_browser(app: &crate::app::App, area: Rect, frame: &mut Fram
                 Constraint::Min(0),
             ])
             .split(chunks[2]);
-        render_listing(st, split[0], frame);
+        render_listing(st, split[0], &app.popup_hits, frame);
         render_hr(split[1], frame);
         render_payload(st, split[2], frame);
     } else {
-        render_listing(st, chunks[2], frame);
+        render_listing(st, chunks[2], &app.popup_hits, frame);
     }
 
     render_status(st, chunks[3], frame);
@@ -249,7 +250,7 @@ fn render_breadcrumb(st: &MemoryBrowserState, area: Rect, frame: &mut Frame) {
     );
 }
 
-fn render_listing(st: &MemoryBrowserState, area: Rect, frame: &mut Frame) {
+fn render_listing(st: &MemoryBrowserState, area: Rect, hits: &std::cell::RefCell<crate::app::PopupHits>, frame: &mut Frame) {
     if st.loading && st.rows.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::styled(
@@ -338,6 +339,7 @@ fn render_listing(st: &MemoryBrowserState, area: Rect, frame: &mut Frame) {
         });
     }
     frame.render_widget(Paragraph::new(lines), area);
+    hits.borrow_mut().record_rows(area, offset, idxs.len());
 }
 
 fn render_payload(st: &MemoryBrowserState, area: Rect, frame: &mut Frame) {
