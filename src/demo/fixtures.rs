@@ -178,6 +178,7 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("cloudformation", "GetTemplate", when ["orders-pipeline"], "GetTemplate-orders-pipeline.xml"),
     fx!("cloudformation", "GetTemplate", when ["acme-network"], "GetTemplate-acme-network.xml"),
     fx!("cloudformation", "DescribeStackResourceDrifts", when ["storefront-prod"], "DescribeStackResourceDrifts-storefront-prod.xml"),
+    fx!("cloudformation", "GetStackPolicy", when ["storefront-prod"], "GetStackPolicy-storefront-prod.xml"),
     fx!("cloudformation", "ListExports", "ListExports.xml"),
     fx!("cloudformation", "ListImports", when ["acme-network"], "ListImports-network.xml"),
     // ── CloudTrail ───────────────────────────────────────────────────────────

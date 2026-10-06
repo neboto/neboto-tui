@@ -1072,6 +1072,199 @@ impl CfnStackSetOperation {
     }
 }
 
+/// One account/region outcome of a stack-set operation
+/// (`ListStackSetOperationResults`) — the answer to "which account failed,
+/// and why" behind a FAILED row in the Operations section.
+#[derive(Debug, Clone)]
+pub struct CfnStackSetOpResult {
+    pub account: String,
+    pub region: String,
+    pub status: String,
+    pub status_reason: Option<String>,
+    /// Account-gate verdict (`SUCCEEDED` / `FAILED` / `SKIPPED`) + its
+    /// reason — a FAILED gate is why an account was never even attempted.
+    pub account_gate: Option<(String, Option<String>)>,
+    pub ou_id: Option<String>,
+}
+
+impl CfnStackSetOpResult {
+    pub fn from_summary(r: &aws_sdk_cloudformation::types::StackSetOperationResultSummary) -> Self {
+        Self {
+            account: r.account().unwrap_or_default().to_string(),
+            region: r.region().unwrap_or_default().to_string(),
+            status: r
+                .status()
+                .map(|s| s.as_str().to_string())
+                .unwrap_or_else(|| "UNKNOWN".to_string()),
+            status_reason: r.status_reason().map(|s| s.to_string()),
+            account_gate: r.account_gate_result().and_then(|g| {
+                g.status().map(|s| {
+                    (s.as_str().to_string(), g.status_reason().map(|r| r.to_string()))
+                })
+            }),
+            ou_id: r.organizational_unit_id().map(|s| s.to_string()),
+        }
+    }
+}
+
+/// Cap on one operation's result fetch — a service-managed stack set can
+/// target thousands of account/region pairs; the failures are what matter
+/// and they sort first.
+pub const CFN_OP_RESULTS_CAP: usize = 500;
+
+/// LazyMap key for an operation's results: stack-set name + operation id
+/// (operation ids are only unique within their stack set).
+pub fn cfn_op_results_key(stack_set: &str, operation_id: &str) -> String {
+    format!("{}\u{1}{}", stack_set, operation_id)
+}
+
+/// Rank for ordering results: failures first, then in-flight, then the rest.
+fn op_result_rank(status: &str) -> u8 {
+    match status {
+        "FAILED" | "CANCELLED" => 0,
+        "RUNNING" | "PENDING" => 1,
+        _ => 2,
+    }
+}
+
+/// Sort results failures-first, then by account + region (stable, so ties
+/// keep API order).
+pub fn sort_op_results(results: &mut [CfnStackSetOpResult]) {
+    results.sort_by(|a, b| {
+        op_result_rank(&a.status)
+            .cmp(&op_result_rank(&b.status))
+            .then_with(|| a.account.cmp(&b.account))
+            .then_with(|| a.region.cmp(&b.region))
+    });
+}
+
+/// Fetch an operation's per-account/region results, capped at
+/// [`CFN_OP_RESULTS_CAP`]. A mid-pagination failure keeps what arrived;
+/// only an empty first failure is an error.
+pub async fn fetch_stackset_op_results(
+    client: CfnClient,
+    stack_set: String,
+    operation_id: String,
+) -> std::result::Result<Vec<CfnStackSetOpResult>, String> {
+    let mut out = Vec::new();
+    let mut paginator = client
+        .list_stack_set_operation_results()
+        .stack_set_name(&stack_set)
+        .operation_id(&operation_id)
+        .into_paginator()
+        .send();
+    while let Some(page) = paginator.next().await {
+        match page {
+            Ok(page) => {
+                out.extend(page.summaries().iter().map(CfnStackSetOpResult::from_summary));
+                if out.len() >= CFN_OP_RESULTS_CAP {
+                    out.truncate(CFN_OP_RESULTS_CAP);
+                    break;
+                }
+            }
+            Err(e) => {
+                if out.is_empty() {
+                    return Err(crate::error::sdk_error_message(&e));
+                }
+                break;
+            }
+        }
+    }
+    sort_op_results(&mut out);
+    Ok(out)
+}
+
+/// Fetch a stack's stack policy body (`None` = no policy set, i.e. every
+/// resource is updatable).
+pub async fn fetch_stack_policy(
+    client: CfnClient,
+    stack_id: String,
+) -> std::result::Result<Option<String>, String> {
+    client
+        .get_stack_policy()
+        .stack_name(&stack_id)
+        .send()
+        .await
+        .map(|r| r.stack_policy_body().filter(|b| !b.trim().is_empty()).map(|b| b.to_string()))
+        .map_err(|e| crate::error::sdk_error_message(&e))
+}
+
+/// One statement of a stack policy, flattened for display.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StackPolicyStatement {
+    pub effect: String,
+    pub principal: String,
+    /// `Action` or `NotAction`, with the values.
+    pub actions: (String, Vec<String>),
+    /// `Resource` or `NotResource`, with the values.
+    pub resources: (String, Vec<String>),
+    /// Condition, compacted to one line per operator/key.
+    pub conditions: Vec<String>,
+}
+
+/// Parse a stack policy document into statements. `None` when the body
+/// isn't JSON with a `Statement` (the renderer then shows the raw body).
+/// Every populated field is read — `Action` *and* `NotAction` can't both
+/// appear in valid IAM, but a `Condition` with several operators must list
+/// all of them, never the first.
+pub fn parse_stack_policy(body: &str) -> Option<Vec<StackPolicyStatement>> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let stmts = match v.get("Statement")? {
+        serde_json::Value::Array(a) => a.clone(),
+        o @ serde_json::Value::Object(_) => vec![o.clone()],
+        _ => return None,
+    };
+    fn strs(v: Option<&serde_json::Value>) -> Vec<String> {
+        match v {
+            Some(serde_json::Value::String(s)) => vec![s.clone()],
+            Some(serde_json::Value::Array(a)) => a
+                .iter()
+                .map(|x| x.as_str().map(|s| s.to_string()).unwrap_or_else(|| x.to_string()))
+                .collect(),
+            Some(other) => vec![other.to_string()],
+            None => Vec::new(),
+        }
+    }
+    fn pick(st: &serde_json::Value, pos: &str, neg: &str) -> (String, Vec<String>) {
+        if st.get(neg).is_some() {
+            (neg.to_string(), strs(st.get(neg)))
+        } else {
+            (pos.to_string(), strs(st.get(pos)))
+        }
+    }
+    Some(
+        stmts
+            .iter()
+            .map(|st| {
+                let principal = match st.get("Principal") {
+                    Some(serde_json::Value::String(s)) => s.clone(),
+                    Some(other) => other.to_string(),
+                    None => "*".to_string(),
+                };
+                let mut conditions = Vec::new();
+                if let Some(serde_json::Value::Object(ops)) = st.get("Condition") {
+                    for (op, kv) in ops {
+                        if let serde_json::Value::Object(kv) = kv {
+                            for (k, val) in kv {
+                                conditions.push(format!("{} {} {}", op, k, strs(Some(val)).join(", ")));
+                            }
+                        } else {
+                            conditions.push(format!("{} {}", op, kv));
+                        }
+                    }
+                }
+                StackPolicyStatement {
+                    effect: st.get("Effect").and_then(|e| e.as_str()).unwrap_or("?").to_string(),
+                    principal,
+                    actions: pick(st, "Action", "NotAction"),
+                    resources: pick(st, "Resource", "NotResource"),
+                    conditions,
+                }
+            })
+            .collect(),
+    )
+}
+
 // ── Stack Resource Entry (for lazy-loaded Resources section) ──────────────────
 
 #[derive(Debug, Clone)]
@@ -1286,6 +1479,7 @@ crate::sections! {
         Template "Template" => crate::app::App::hook_cfn_stack_section,
         Drift "Drift" => crate::app::App::hook_cfn_stack_section,
         Changes "Changes" => crate::app::App::hook_cfn_stack_section,
+        Policy "Policy" => crate::app::App::hook_cfn_stack_section,
     ]
 }
 
@@ -1569,6 +1763,48 @@ impl Resource for CfnStackSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stack_policy_parses_every_statement_and_condition() {
+        let body = r#"{"Statement":[
+            {"Effect":"Allow","Action":"Update:*","Principal":"*","Resource":"*"},
+            {"Effect":"Deny","NotAction":["Update:Modify"],"Principal":"*",
+             "Resource":"LogicalResourceId/ProdDb",
+             "Condition":{"StringEquals":{"ResourceType":["AWS::RDS::DBInstance"]},
+                          "StringLike":{"ResourceType":"AWS::EC2::*"}}}]}"#;
+        let st = parse_stack_policy(body).expect("parses");
+        assert_eq!(st.len(), 2);
+        assert_eq!(st[0].effect, "Allow");
+        assert_eq!(st[0].actions, ("Action".to_string(), vec!["Update:*".to_string()]));
+        assert_eq!(st[1].actions.0, "NotAction");
+        assert_eq!(st[1].resources.1, vec!["LogicalResourceId/ProdDb".to_string()]);
+        // Both condition operators survive (flatten all, never first-match).
+        assert_eq!(st[1].conditions.len(), 2);
+        assert!(parse_stack_policy("not json").is_none());
+        // A single-object Statement is accepted too.
+        assert_eq!(parse_stack_policy(r#"{"Statement":{"Effect":"Deny"}}"#).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn op_results_sort_failures_first() {
+        let r = |a: &str, reg: &str, st: &str| CfnStackSetOpResult {
+            account: a.into(),
+            region: reg.into(),
+            status: st.into(),
+            status_reason: None,
+            account_gate: None,
+            ou_id: None,
+        };
+        let mut v = vec![
+            r("111", "us-east-1", "SUCCEEDED"),
+            r("222", "eu-west-1", "FAILED"),
+            r("111", "eu-west-1", "RUNNING"),
+            r("000", "us-east-1", "CANCELLED"),
+        ];
+        sort_op_results(&mut v);
+        let order: Vec<_> = v.iter().map(|x| x.status.as_str()).collect();
+        assert_eq!(order, ["CANCELLED", "FAILED", "RUNNING", "SUCCEEDED"]);
+    }
 
     fn ev(logical: &str, ty: &str, status: &str, reason: Option<&str>, ts: i64) -> CfnStackEvent {
         CfnStackEvent {
