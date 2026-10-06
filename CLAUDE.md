@@ -1038,9 +1038,16 @@ and the approaches you rejected are the part nobody can recover from your code.
   unlike a sub-tab's `Key`, presses the key where focus already is). A new
   status-bar hint is clickable for free if its key is one key (see
   `hint_click_key`; `q` is deliberately excluded). The welcome splash's
-  popular-service chips and `S`/`R`/`P`/`?` rows are targets too, and the `S`
-  picker records its rows into `popup_hits` like `C`/`M` (click selects;
-  double-click, or a click on the highlighted row, opens).
+  popular-service chips and `S`/`R`/`P`/`?` rows are targets too.
+  **Centered modals** (every picker, help, the CloudTrail filter, the SSM
+  menu) record their rect + visible rows into `App.popup_hits` as they draw
+  (`PopupHits::record_list` / `record_area`; cleared at the top of each
+  frame), and `handle_modal_mouse` replays keys through `handle_key`: wheel =
+  `↓`/`↑`, click highlights, double-click or a click on the highlighted row
+  = `⏎`, outside / right-click = `Esc`. **A new modal** needs an arm in
+  `App::open_modal` (in `handle_key`'s priority order) and
+  `select_modal_row`, plus a `record_*` call in its renderer, or it ignores
+  the mouse. `C`/`M` keep their own handler (`M`'s double-click copies).
   **Double-click** (second left press on the same cell within 400ms, tracked by
   `App.last_left_click`) replays `Enter` — drill into detail from the list,
   follow a jump link in the detail body. **Right-click** = nav-back

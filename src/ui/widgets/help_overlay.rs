@@ -133,6 +133,7 @@ pub fn render_help_overlay(app: &App, frame: &mut Frame) {
     let viewport = height.saturating_sub(2);
     let max_scroll = content_h.saturating_sub(viewport);
     app.help_max_scroll.set(max_scroll);
+    app.popup_hits.borrow_mut().record_area(area);
     let offset = app.help_scroll.min(max_scroll);
 
     frame.render_widget(Clear, area);

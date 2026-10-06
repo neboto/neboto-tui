@@ -33,6 +33,7 @@ pub fn render_macro_picker(app: &App, frame: &mut Frame) {
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    app.popup_hits.borrow_mut().record_area(area);
 
     let total = app.macros.len();
     if total == 0 {
@@ -63,6 +64,7 @@ pub fn render_macro_picker(app: &App, frame: &mut Frame) {
     let height = chunks[0].height as usize;
     let selected = app.macro_picker_selected.min(total - 1);
     let offset = selected.saturating_sub(height.saturating_sub(1));
+    app.popup_hits.borrow_mut().record_list(area, chunks[0], offset, total);
 
     let rows: Vec<Line> = app
         .macros

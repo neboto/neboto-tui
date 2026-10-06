@@ -149,6 +149,23 @@ pub struct ClickRegion {
     pub rect: Rect,
     pub action: ClickAction}
 
+/// The centered modals `handle_modal_mouse` drives (see `App::open_modal`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Modal {
+    Service,
+    Region,
+    Profile,
+    OrgRole,
+    Quota,
+    SsmMenu,
+    SsmInput,
+    CtFilter,
+    JumpList,
+    Bookmarks,
+    Macros,
+    Help,
+}
+
 /// Where the open popup picker (`C` commands, `M` messages) drew itself this
 /// frame: the popup's outer rect, for click-outside-to-close, and each row's
 /// rect with its index. Recorded by the renderer like `cw_dashboard_regions`,
@@ -157,6 +174,29 @@ pub struct ClickRegion {
 pub struct PopupHits {
     pub area: Option<Rect>,
     pub rows: Vec<(usize, Rect)>,
+}
+
+impl PopupHits {
+    /// Record a popup whose list draws one item per line in `list` (inner
+    /// rect, no borders), starting at item `offset`, out of `len` items.
+    pub fn record_list(&mut self, popup: Rect, list: Rect, offset: usize, len: usize) {
+        self.area = Some(popup);
+        self.rows = (offset..len)
+            .take(list.height as usize)
+            .enumerate()
+            .map(|(line, idx)| {
+                let rect = Rect { x: list.x, y: list.y + line as u16, width: list.width, height: 1 };
+                (idx, rect)
+            })
+            .collect();
+    }
+
+    /// Record a popup with no clickable rows (help, a text-input stage):
+    /// only a click outside it means anything.
+    pub fn record_area(&mut self, popup: Rect) {
+        self.area = Some(popup);
+        self.rows.clear();
+    }
 }
 
 /// Sub-tab view for EC2 resources
@@ -23189,7 +23229,7 @@ impl App {
         if self.handle_popup_picker_mouse(mouse) {
             return Ok(());
         }
-        if self.handle_service_picker_mouse(mouse, event_tx).await? {
+        if self.handle_modal_mouse(mouse, event_tx).await? {
             return Ok(());
         }
 
@@ -31075,23 +31115,102 @@ impl App {
         true
     }
 
-    /// Mouse on the `S` service picker: the wheel moves the highlight, a click
-    /// highlights the row under it, and a double-click (or a click on the row
-    /// already highlighted) opens that service, as `⏎` does. A click outside or
-    /// a right-click closes it, as `Esc` does. Returns whether the picker was
-    /// open; when it is, it owns every mouse event.
-    async fn handle_service_picker_mouse(
+    /// Which centered modal owns the keyboard right now, in `handle_key`'s
+    /// own priority order, so a replayed key reaches the modal that was
+    /// clicked. `C` / `M` have their own handler (`handle_popup_picker_mouse`).
+    fn open_modal(&self) -> Option<Modal> {
+        use crate::ui::widgets::ssm_session_modal::SsmModalStage;
+        Some(if self.service_selector.visible {
+            Modal::Service
+        } else if self.jump_list_visible {
+            Modal::JumpList
+        } else if self.macro_picker_visible {
+            Modal::Macros
+        } else if self.bookmarks_visible {
+            Modal::Bookmarks
+        } else if self.region_selector.visible {
+            Modal::Region
+        } else if self.org_role_selector.visible {
+            Modal::OrgRole
+        } else if self.profile_selector.visible {
+            Modal::Profile
+        } else if self.quota_service_selector.visible {
+            Modal::Quota
+        } else if self.ct_filter_modal.visible {
+            Modal::CtFilter
+        } else if self.ssm_session_modal.visible {
+            match self.ssm_session_modal.stage {
+                SsmModalStage::Menu => Modal::SsmMenu,
+                SsmModalStage::Input(_) => Modal::SsmInput,
+            }
+        } else if self.help_visible {
+            Modal::Help
+        } else {
+            return None;
+        })
+    }
+
+    /// Put the open modal's highlight on row `idx`. Returns whether it was
+    /// already there (a click on the highlighted row confirms it), or `None`
+    /// when the row can't be selected (a category header).
+    fn select_modal_row(&mut self, modal: Modal, idx: usize) -> Option<bool> {
+        let slot = match modal {
+            Modal::Service => {
+                let already = self.service_selector.selected_index == idx;
+                return self.service_selector.select_row(idx).then_some(already);
+            }
+            Modal::Region => &mut self.region_selector.selected_index,
+            Modal::Profile => &mut self.profile_selector.selected_index,
+            Modal::OrgRole => &mut self.org_role_selector.selected_index,
+            Modal::Quota => &mut self.quota_service_selector.selected_index,
+            Modal::SsmMenu => &mut self.ssm_session_modal.menu_index,
+            Modal::JumpList => &mut self.jump_list_selected,
+            Modal::Bookmarks => &mut self.bookmarks_selected,
+            Modal::Macros => &mut self.macro_picker_selected,
+            Modal::CtFilter | Modal::SsmInput | Modal::Help => return None,
+        };
+        let already = *slot == idx;
+        *slot = idx;
+        Some(already)
+    }
+
+    /// Mouse on a centered modal: the pickers (`S`/`R`/`P`, org role, quota,
+    /// jump list, bookmarks, macros, the SSM session menu), help, and the
+    /// CloudTrail filter. The wheel moves the highlight (help: scrolls), a
+    /// click highlights a row, and a double-click or a click on the row
+    /// already highlighted confirms it, as `⏎` does. A click outside or a
+    /// right-click closes, as `Esc` does. Everything goes through `handle_key`
+    /// so the mouse can't do anything the keyboard can't. Returns whether a
+    /// modal was open; when one is, it owns every mouse event.
+    async fn handle_modal_mouse(
         &mut self,
         mouse: MouseEvent,
         event_tx: &mpsc::UnboundedSender<Event>,
     ) -> Result<bool> {
-        if !self.service_selector.visible {
-            return Ok(false);
+        let Some(modal) = self.open_modal() else { return Ok(false) };
+        // Naming a macro: `Esc` discards the whole recording, which a stray
+        // click must never do. Only the keyboard finishes the prompt.
+        if modal == Modal::Macros && self.macro_name_input.is_some() {
+            return Ok(true);
         }
         let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
         match mouse.kind {
-            MouseEventKind::ScrollDown => self.service_selector.next(),
-            MouseEventKind::ScrollUp => self.service_selector.previous(),
+            // The filter modal's arrows cycle its time range: not a scroll.
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+                if modal != Modal::CtFilter && modal != Modal::SsmInput =>
+            {
+                let code = if matches!(mouse.kind, MouseEventKind::ScrollDown) {
+                    KeyCode::Down
+                } else {
+                    KeyCode::Up
+                };
+                // Help is prose: a notch moves three lines, as a terminal
+                // scrolls text. A picker moves one row, like the arrow keys.
+                let notches = if modal == Modal::Help { 3 } else { 1 };
+                for _ in 0..notches {
+                    self.handle_key(press(code), event_tx).await?;
+                }
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 let (col, row) = (mouse.column, mouse.row);
                 let (inside, hit) = {
@@ -31107,9 +31226,10 @@ impl App {
                 }
                 let Some(idx) = hit else { return Ok(true) };
                 let double = self.note_left_click(col, row);
-                let already = self.service_selector.selected_index == idx;
-                if self.service_selector.select_row(idx) && (double || already) {
-                    self.handle_key(press(KeyCode::Enter), event_tx).await?;
+                if let Some(already) = self.select_modal_row(modal, idx) {
+                    if double || already {
+                        self.handle_key(press(KeyCode::Enter), event_tx).await?;
+                    }
                 }
             }
             MouseEventKind::Down(MouseButton::Right) => {
