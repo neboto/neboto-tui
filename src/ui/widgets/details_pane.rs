@@ -6600,11 +6600,10 @@ pub fn cfn_op_results_row_target(rows: &[(String, String)], idx: usize) -> Optio
         return idx.checked_sub(1).and_then(op_id_at);
     }
     if is_header(key, value) {
-        for i in idx + 1..rows.len() {
-            if let Some(id) = op_id_at(i) {
-                return Some(id);
+        for (k, v) in &rows[idx + 1..] {
+            if k.trim() == "Operation ID" && k.starts_with("    ") {
+                return Some(v.clone());
             }
-            let (k, v) = &rows[i];
             if (k.is_empty() && v.is_empty()) || is_header(k, v) {
                 return None;
             }
