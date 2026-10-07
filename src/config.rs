@@ -48,6 +48,11 @@ pub struct Config {
     /// `w` toggles it at runtime either way; the toggle is sticky for the
     /// session. Default false (clip).
     pub log_wrap: Option<bool>,
+    /// Start with long detail-pane values wrapped onto hanging-indent
+    /// continuation rows under the value column instead of clipped at the
+    /// pane edge. `Ctrl-W` toggles it at runtime (sticky for the session).
+    /// Default false (clip).
+    pub detail_wrap: Option<bool>,
     /// Show each key as it's pressed, and what it did, in a box in the
     /// bottom-right corner — for screen recordings, shares and demos.
     /// `--show-keys` turns it on for one run. Default false.

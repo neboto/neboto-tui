@@ -314,6 +314,7 @@ full-width; `\` flattens all sections into one scroll.
 | `h` `←` `Esc` | Back to the list |
 | `Ctrl-O` | Back through history |
 | `/` | Filter the body text |
+| `Ctrl-W` | Wrap long values onto continuation rows (toggle) |
 | `y` / `c` | Copy the row, or the visual selection |
 | `e` | Open in `$EDITOR` |
 | `d` | Download (Lambda deployment package, invoice PDF) |
@@ -449,6 +450,7 @@ template.
 | `show_banner` | ASCII banner on startup |
 | `watch`, `watch_interval` | Start in watch mode, and its cadence in seconds |
 | `detail_flat` | Start with the flat all-sections detail view |
+| `detail_wrap` | Start with long detail values wrapped onto continuation rows (`Ctrl-W` toggles) |
 | `show_keys` | Show each key and what it did in a corner box (`--show-keys` for one run) |
 | `export_formats` | Which files exports write: any of `"json"`, `"csv"`, `"md"` (default all three) |
 | `export_dir` | Where exports go (default the working directory; `NEBOTO_EXPORT_DIR` overrides) |
