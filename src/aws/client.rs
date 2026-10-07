@@ -63,6 +63,10 @@ pub struct AwsClients {
     /// in the assumed account; a profile switch drops it (an explicit
     /// credential change supersedes the hop).
     assumed_role: Option<AssumedOrgRole>,
+    /// Set when the credentials come from a `credential_process` that may
+    /// prompt in the terminal (#151); `prime_prompting_credentials` resolves
+    /// those before the TUI starts.
+    prompting_credentials: bool,
 }
 
 impl AwsClients {
@@ -110,6 +114,26 @@ impl AwsClients {
             config = with_profile_credentials(config, name);
         }
 
+        // A `credential_process` can prompt on the tty (granted + pass → gpg
+        // pinentry). Route it through the terminal handoff so the prompt gets
+        // a clean screen instead of fighting the TUI for it (#151).
+        let prompting_credentials = endpoint.is_none()
+            && !demo
+            && credential_process_profile(profile.as_deref()).is_some();
+        if prompting_credentials {
+            let name = credential_process_profile(profile.as_deref()).unwrap_or_default();
+            if let Some(inner) = config.credentials_provider() {
+                config = config
+                    .into_builder()
+                    .credentials_provider(
+                        aws_credential_types::provider::SharedCredentialsProvider::new(
+                            TerminalCredentialProcess::new(inner, name),
+                        ),
+                    )
+                    .build();
+            }
+        }
+
         // Layer the assumed role on top of the base credentials. The provider
         // re-runs AssumeRole when the session expires (the SDK's identity
         // cache holds the temporary credentials until then), so a long-lived
@@ -144,6 +168,7 @@ impl AwsClients {
             profile,
             endpoint_url: endpoint,
             assumed_role,
+            prompting_credentials,
         })
     }
 
@@ -187,6 +212,7 @@ impl AwsClients {
             profile: None,
             endpoint_url: None,
             assumed_role: None,
+            prompting_credentials: false,
         }
     }
 
@@ -330,6 +356,21 @@ impl AwsClients {
                 aws_credential_types::provider::SharedCredentialsProvider::new(provider),
             )
             .build()
+    }
+
+    /// Resolve a prompting `credential_process` now, while the terminal is
+    /// still in normal mode, so its passphrase prompt shows before the TUI
+    /// rather than under it. The result is cached by the provider, so the
+    /// first request doesn't run the process again. A failure is left for the
+    /// first load to report, as it would be without this.
+    pub async fn prime_prompting_credentials(&self) {
+        use aws_credential_types::provider::ProvideCredentials;
+        if !self.prompting_credentials {
+            return;
+        }
+        if let Some(provider) = self.config.credentials_provider() {
+            let _ = provider.provide_credentials().await;
+        }
     }
 
     /// Drop the assumed role and return to the base profile credentials,
@@ -873,6 +914,225 @@ fn with_profile_credentials(config: SdkConfig, name: &str) -> SdkConfig {
             aws_credential_types::provider::SharedCredentialsProvider::new(provider),
         )
         .build()
+}
+
+/// A credentials provider whose `credential_process` may need the terminal.
+/// Every time it really runs the process it hands the terminal over
+/// (`tui::with_terminal`), and it keeps the result so the run before the TUI
+/// starts serves the first request, and a burst of parallel fetches runs the
+/// process once.
+#[derive(Debug)]
+struct TerminalCredentialProcess {
+    inner: aws_credential_types::provider::SharedCredentialsProvider,
+    profile: String,
+    cached: tokio::sync::Mutex<Option<aws_credential_types::Credentials>>,
+}
+
+impl TerminalCredentialProcess {
+    /// A cached result this close to expiry is refreshed instead of served.
+    const REFRESH_BEFORE: std::time::Duration = std::time::Duration::from_secs(60);
+
+    fn new(
+        inner: aws_credential_types::provider::SharedCredentialsProvider,
+        profile: String,
+    ) -> Self {
+        Self {
+            inner,
+            profile,
+            cached: tokio::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl aws_credential_types::provider::ProvideCredentials for TerminalCredentialProcess {
+    fn provide_credentials<'a>(
+        &'a self,
+    ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        aws_credential_types::provider::future::ProvideCredentials::new(async move {
+            let mut cached = self.cached.lock().await;
+            if let Some(creds) = cached.as_ref() {
+                let fresh = creds.expiry().is_none_or(|exp| {
+                    exp > std::time::SystemTime::now() + Self::REFRESH_BEFORE
+                });
+                if fresh {
+                    return Ok(creds.clone());
+                }
+            }
+            let note = format!(
+                "running credential_process for profile {} (neboto resumes when it finishes)",
+                self.profile
+            );
+            let result = crate::tui::with_terminal(&note, self.inner.provide_credentials()).await;
+            if let Ok(creds) = &result {
+                *cached = Some(creds.clone());
+            }
+            result
+        })
+    }
+}
+
+/// The profile whose credentials come from a `credential_process` — `profile`
+/// or, with none chosen, `AWS_PROFILE` / `default` — or None. Follows
+/// `source_profile` chains, since a role profile sourcing a
+/// `credential_process` one runs the process too. With no profile chosen and
+/// static keys in the environment the default chain never reaches a profile,
+/// so that is None too.
+fn credential_process_profile(profile: Option<&str>) -> Option<String> {
+    let name = match profile {
+        Some(p) => p.to_string(),
+        None => {
+            let env_keys = std::env::var("AWS_ACCESS_KEY_ID").is_ok_and(|v| !v.is_empty());
+            if env_keys {
+                return None;
+            }
+            std::env::var("AWS_PROFILE")
+                .ok()
+                .filter(|p| !p.is_empty())
+                .unwrap_or_else(|| "default".to_string())
+        }
+    };
+    let home = std::env::var("HOME").unwrap_or_default();
+    let config = std::env::var("AWS_CONFIG_FILE")
+        .unwrap_or_else(|_| format!("{}/.aws/config", home));
+    let creds = std::env::var("AWS_SHARED_CREDENTIALS_FILE")
+        .unwrap_or_else(|_| format!("{}/.aws/credentials", home));
+    let config = std::fs::read_to_string(config).unwrap_or_default();
+    let creds = std::fs::read_to_string(creds).unwrap_or_default();
+    chain_uses_credential_process(&config, &creds, &name).then_some(name)
+}
+
+/// Whether `name`'s credentials, following `source_profile` hops, come from a
+/// `credential_process`. Pure over the two files' text, for tests.
+fn chain_uses_credential_process(config: &str, creds: &str, name: &str) -> bool {
+    use std::collections::HashMap;
+
+    // profile -> key -> value; the credentials file's keys win, as in the SDK.
+    let mut profiles: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut parse = |text: &str, is_config: bool| {
+        let mut current: Option<String> = None;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                continue;
+            }
+            if let Some(section) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                let section = section.trim();
+                current = if !is_config || section == "default" {
+                    Some(section.to_string())
+                } else {
+                    section
+                        .strip_prefix("profile ")
+                        .map(|p| p.trim().to_string())
+                };
+                continue;
+            }
+            if let (Some(profile), Some((key, value))) = (&current, line.split_once('=')) {
+                profiles
+                    .entry(profile.clone())
+                    .or_default()
+                    .insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
+            }
+        }
+    };
+    parse(config, true);
+    parse(creds, false);
+
+    // The SDK's own order: a role profile hops to its `source_profile`
+    // (staying put on a self-reference); the base profile then uses web
+    // identity, SSO or a login session ahead of `credential_process`.
+    let mut name = name.to_string();
+    for _ in 0..10 {
+        let Some(keys) = profiles.get(&name) else {
+            return false;
+        };
+        if keys.contains_key("role_arn") {
+            match keys.get("source_profile") {
+                _ if keys.contains_key("credential_source") => return false,
+                Some(next) if *next != name => {
+                    name = next.clone();
+                    continue;
+                }
+                Some(_) => {}
+                None => return false,
+            }
+        }
+        let earlier = [
+            "web_identity_token_file",
+            "sso_session",
+            "sso_start_url",
+            "sso_account_id",
+            "login_session",
+        ];
+        if earlier.iter().any(|k| keys.contains_key(*k)) {
+            return false;
+        }
+        return keys.get("credential_process").is_some_and(|v| !v.is_empty());
+    }
+    false
+}
+
+#[cfg(test)]
+mod credential_process_tests {
+    use super::chain_uses_credential_process as uses;
+
+    const CONFIG: &str = "\
+[default]
+region = eu-west-1
+
+[profile granted]
+credential_process = granted credential-process --profile granted
+
+[profile admin]
+role_arn = arn:aws:iam::111111111111:role/Admin
+source_profile = granted
+
+[profile sso]
+sso_session = corp
+sso_account_id = 222222222222
+
+[sso-session corp]
+credential_process = not-a-profile
+
+[profile loop]
+role_arn = arn:aws:iam::111111111111:role/Loop
+source_profile = loop
+
+[profile ec2]
+role_arn = arn:aws:iam::111111111111:role/Admin
+credential_source = Ec2InstanceMetadata
+credential_process = ignored-with-a-credential-source
+";
+
+    #[test]
+    fn a_direct_credential_process_is_found() {
+        assert!(uses(CONFIG, "", "granted"));
+    }
+
+    #[test]
+    fn a_source_profile_chain_reaches_it() {
+        assert!(uses(CONFIG, "", "admin"));
+    }
+
+    #[test]
+    fn other_providers_are_not_flagged() {
+        assert!(!uses(CONFIG, "", "default"));
+        assert!(!uses(CONFIG, "", "sso"));
+        assert!(!uses(CONFIG, "", "corp"));
+        assert!(!uses(CONFIG, "", "missing"));
+        assert!(!uses(CONFIG, "", "loop"));
+        assert!(!uses(CONFIG, "", "ec2"));
+    }
+
+    #[test]
+    fn the_credentials_file_counts_and_source_profile_needs_a_role() {
+        // Without role_arn the SDK never reads source_profile.
+        let creds = "[default]\ncredential_process = /usr/bin/fetch-creds\n\n[keys]\naws_access_key_id = AKIDEXAMPLE\nsource_profile = granted\n";
+        assert!(uses(CONFIG, creds, "default"));
+        assert!(!uses(CONFIG, creds, "keys"));
+    }
 }
 
 /// Enumerate the named profiles configured locally, reading `~/.aws/config`

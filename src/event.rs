@@ -704,6 +704,11 @@ pub async fn handle_terminal_events(tx: mpsc::UnboundedSender<Event>) {
     loop {
         // Poll for events with a timeout
         match tokio::task::spawn_blocking(|| {
+            // A credential prompt has the terminal: leave its keys alone.
+            if crate::tui::input_paused() {
+                std::thread::sleep(Duration::from_millis(100));
+                return None;
+            }
             if poll(Duration::from_millis(100)).unwrap_or(false) {
                 read().ok()
             } else {

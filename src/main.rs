@@ -88,6 +88,10 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // Initialize app
     let mut app = App::new(cli).await?;
 
+    // A `credential_process` that prompts (granted + pass → gpg pinentry)
+    // must run before the TUI takes the screen; resolve it now (#151).
+    app.aws_clients.prime_prompting_credentials().await;
+
     // Initialize TUI (use Option to allow drop/recreate)
     let mut tui = Some(Tui::new()?);
 
@@ -252,8 +256,10 @@ async fn run(cli: cli::Cli) -> Result<()> {
         app.keycast_tick();
 
         // Draw UI first to show input immediately
+        // (Skipped while a credential prompt has the terminal — see
+        // `tui::with_terminal`.)
         if let Some(ref mut t) = tui {
-            t.terminal().draw(|frame| render_app(&app, frame))?;
+            tui::draw(t, |frame| render_app(&app, frame))?;
         }
 
         // Process any pending search updates after drawing input
