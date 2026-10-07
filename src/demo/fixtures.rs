@@ -22,6 +22,9 @@
 //!   throttles, and its errors alarm is firing; `nightly-report` runs on a deprecated runtime and its log
 //!   group never expires (45 GB)
 //! - `legacy-admin-alb` has no targets; IAM has a stale `legacy-reporting-role`
+//! - ECR: `storefront-web:v2.31.0` (running) has an unfixed HIGH openssl
+//!   finding; `orders-worker:v1.19.0`'s Used By lists the stopped tasks of
+//!   the failed deployment (matched by the digest they pinned)
 //! - a Secrets Manager secret `prod/orders/db` and a SecureString parameter
 //!   `/orders/db/password` — metadata only, for proving no value is fetched
 //!
@@ -157,6 +160,16 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("elasticloadbalancing", "DescribeRules", when ["1a2b3c4d5e6f7a8b"], "DescribeRules.xml"),
     fx!("elasticloadbalancing", "DescribeLoadBalancerAttributes", "DescribeLoadBalancerAttributes.xml"),
     fx!("elasticloadbalancing", "DescribeTargetGroupAttributes", "DescribeTargetGroupAttributes.xml"),
+    // ── ECR (awsJson; host `api.ecr.…`) ──────────────────────────────────────
+    // storefront-web's v2.31.0 (what the web tasks run) carries Inspector
+    // findings; orders-worker's v1.19.0 is the failed rev-15 image (the
+    // stopped tasks pin its digest), v1.18.2 is what's running after the
+    // rollback, plus one untagged image whose scan FAILED.
+    fx!("ecr", "DescribeRepositories", "DescribeRepositories.json"),
+    fx!("ecr", "DescribeImages", when ["storefront-web"], "DescribeImages-storefront-web.json"),
+    fx!("ecr", "DescribeImages", when ["orders-worker"], "DescribeImages-orders-worker.json"),
+    fx!("ecr", "DescribeImageScanFindings", when ["storefront-web", "a3f1c9e2b7d4058c6e91f2a7b3d8c4e5f60718293a4b5c6d7e8f9012a3b4c5d6"], "DescribeImageScanFindings-storefront-web.json"),
+    fx!("ecr", "DescribeImageScanFindings", "ScanNotFound.json"),
     // ── Lambda (restJson: the operation is `METHOD /path`) ───────────────────
     fx!("lambda", "GET /2015-03-31/functions", "ListFunctions.json"),
     fx!("lambda", "GET /2015-03-31/functions/orders-api", "GetFunction-orders-api.json"),

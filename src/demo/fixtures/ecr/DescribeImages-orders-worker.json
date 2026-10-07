@@ -1,0 +1,65 @@
+{
+ "imageDetails": [
+  {
+   "registryId": "{{account}}",
+   "repositoryName": "orders-worker",
+   "imageDigest": "sha256:c5f3e1a4d9f627ae8ab3f4c9d5fae6a7182930415c6d7e8f9012345c5d6e7f80",
+   "imageTags": [
+    "v1.19.0",
+    "latest"
+   ],
+   "imageSizeInBytes": 88080384,
+   "imagePushedAt": {{epoch:now-45m}},
+   "imageManifestMediaType": "application/vnd.docker.distribution.manifest.v2+json",
+   "artifactMediaType": "application/vnd.docker.container.image.v1+json",
+   "imageScanStatus": {
+    "status": "COMPLETE",
+    "description": "The scan was completed successfully."
+   },
+   "lastRecordedPullTime": {{epoch:now-41m}},
+   "imageScanFindingsSummary": {
+    "imageScanCompletedAt": {{epoch:now-45m}},
+    "vulnerabilitySourceUpdatedAt": {{epoch:now-6h}},
+    "findingSeverityCounts": {}
+   }
+  },
+  {
+   "registryId": "{{account}}",
+   "repositoryName": "orders-worker",
+   "imageDigest": "sha256:d6a4f2b5eaa738bf9bc4a5dae6abf7b8293041526d7e8f901234567d6e7f8091",
+   "imageTags": [
+    "v1.18.2"
+   ],
+   "imageSizeInBytes": 87031808,
+   "imagePushedAt": {{epoch:now-6d}},
+   "imageManifestMediaType": "application/vnd.docker.distribution.manifest.v2+json",
+   "artifactMediaType": "application/vnd.docker.container.image.v1+json",
+   "imageScanStatus": {
+    "status": "COMPLETE",
+    "description": "The scan was completed successfully."
+   },
+   "lastRecordedPullTime": {{epoch:now-11m}},
+   "imageScanFindingsSummary": {
+    "imageScanCompletedAt": {{epoch:now-6d}},
+    "vulnerabilitySourceUpdatedAt": {{epoch:now-6h}},
+    "findingSeverityCounts": {
+     "LOW": 1
+    }
+   }
+  },
+  {
+   "registryId": "{{account}}",
+   "repositoryName": "orders-worker",
+   "imageDigest": "sha256:e7b5a3c6fbb849c0acd5b6ebf7bc08c93a4152637e8f9012345678e7f8091a2b",
+   "imageTags": [],
+   "imageSizeInBytes": 86507520,
+   "imagePushedAt": {{epoch:now-30d}},
+   "imageManifestMediaType": "application/vnd.docker.distribution.manifest.v2+json",
+   "artifactMediaType": "application/vnd.docker.container.image.v1+json",
+   "imageScanStatus": {
+    "status": "FAILED",
+    "description": "The scan was completed successfully."
+   }
+  }
+ ]
+}

@@ -890,6 +890,20 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         render_ecr_repo_split(app, repo, area, frame);
         return;
     }
+    if let Some(img) = resource
+        .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::ecr::EcrImage>())
+    {
+        render_simple_split(
+            app,
+            area,
+            frame,
+            "ECR Image",
+            &img.label,
+            &img.digest,
+            &descriptor_tabs(app, &crate::aws::services::ecr::ECR_IMAGE_SECTIONS),
+        );
+        return;
+    }
     if let Some(finding) = resource.and_then(|r| r.as_any().downcast_ref::<ShFinding>()) {
         render_sh_finding_split(app, finding, area, frame);
         return;
@@ -2894,6 +2908,16 @@ pub fn resource_jump_target(
     //     container-image findings, ECS task defs, Lambda container images.
     for field in [value, key] {
         if let Some(name) = ecr_repo_from_image_uri(field) {
+            // Pinned by digest → the image row itself (`repo@digest` is its
+            // id). A tag can't be resolved to a digest without a call, so a
+            // tagged reference still lands on the repository.
+            if let Some(digest) = ecr_digest_from_image_uri(field) {
+                return mk(
+                    ServiceType::Ecr,
+                    JumpView::Ecr(crate::app::EcrView::Images),
+                    &format!("{}@{}", name, digest),
+                );
+            }
             return mk(ServiceType::Ecr, JumpView::None, name);
         }
     }
@@ -3418,6 +3442,13 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
 /// (`<acct>.dkr.ecr.<region>.amazonaws.com/<repo>[:tag][@sha256:…]`). Returns
 /// `None` for anything that isn't an ECR image reference. The repo name may
 /// contain slashes; the `:tag` / `@digest` suffix is stripped.
+/// The `sha256:…` digest of a digest-pinned ECR image URI, if it has one.
+fn ecr_digest_from_image_uri(s: &str) -> Option<&str> {
+    ecr_repo_from_image_uri(s)?;
+    let d = s.split_once('@')?.1.trim();
+    d.starts_with("sha256:").then_some(d)
+}
+
 fn ecr_repo_from_image_uri(s: &str) -> Option<&str> {
     if !s.contains(".dkr.ecr.") {
         return None;
@@ -3702,6 +3733,7 @@ fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
         .or_else(|| app.cfn_resource_jump_target(key, value))
         .or_else(|| app.cfn_export_jump_target(key, value))
         .or_else(|| app.code_row_jump_target(key, value))
+        .or_else(|| app.ecr_row_jump_target(key, value))
         .or_else(|| app.cc_repo_pr_row_jump_target(key, value))
         .or_else(|| app.cw_composite_alarm_child_jump_target(key, value))
         .or_else(|| app.insp_resource_finding_jump_target(key, value))
@@ -27499,6 +27531,174 @@ pub fn ecr_repo_section_lines(
     }
 }
 
+/// Body rows for an ECR image's split pane. `users` is `Some((rows,
+/// ecs_cache_warm))` for the Used By section (computed by the caller from
+/// in-memory ECS data), `None` otherwise.
+pub fn ecr_image_section_lines(
+    img: &crate::aws::services::ecr::EcrImage,
+    section: crate::aws::services::ecr::EcrImageDetailSection,
+    findings: Option<&crate::lazy::Lazy<crate::aws::services::ecr::EcrScanFindings>>,
+    users: Option<(&[crate::aws::services::ecr::EcrImageUser], bool)>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::ecr::EcrImageDetailSection as S;
+    use crate::lazy::Lazy;
+    match section {
+        S::Overview => {
+            let mut rows = vec![
+                ("Repository".to_string(), img.repo_name.clone()),
+                (
+                    "Tags".to_string(),
+                    if img.tags.is_empty() { "<untagged>".to_string() } else { img.tags.join(", ") },
+                ),
+                ("Digest".to_string(), img.digest.clone()),
+                ("URI".to_string(), img.image_ref()),
+                ("Size".to_string(), img.size_display()),
+            ];
+            if let Some(p) = &img.pushed_at {
+                rows.push(("Pushed".to_string(), p.clone()));
+            }
+            rows.push((
+                "Last Pulled".to_string(),
+                img.last_pulled_at.clone().unwrap_or_else(|| "Never".to_string()),
+            ));
+            if let Some(a) = &img.artifact_media_type {
+                rows.push(("Artifact Type".to_string(), a.clone()));
+            }
+            if let Some(m) = &img.manifest_media_type {
+                rows.push(("Manifest Type".to_string(), m.clone()));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("Scan".to_string(), String::new()));
+            rows.push((
+                "  Status".to_string(),
+                if img.scan_status.is_empty() { "Not scanned".to_string() } else { img.scan_status.clone() },
+            ));
+            let breakdown = img.vuln_breakdown();
+            if !breakdown.is_empty() {
+                rows.push(("  Vulnerabilities".to_string(), breakdown));
+            } else if img.scan_status == "COMPLETE" {
+                rows.push(("  Vulnerabilities".to_string(), "✓ No findings".to_string()));
+            }
+            if let Some(d) = img.scan_status_description.as_ref().filter(|d| !d.is_empty()) {
+                rows.push(("  Detail".to_string(), d.clone()));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push((
+                " · Last Pulled is ECR's own record (refreshed at most daily)".to_string(),
+                String::new(),
+            ));
+            rows
+        }
+        S::Findings => match findings {
+            None | Some(Lazy::Loading) => vec![("".to_string(), "Loading…".to_string())],
+            Some(Lazy::Error(e)) => error_rows(e),
+            Some(Lazy::Loaded(f)) => ecr_findings_rows(f),
+        },
+        S::UsedBy => {
+            let (list, warm) = users.unwrap_or((&[][..], false));
+            let mut rows = Vec::new();
+            if list.is_empty() {
+                rows.push((" No ECS task or task definition found using this image".to_string(), String::new()));
+            } else {
+                rows.push((format!("ECS ({})", list.len()), String::new()));
+                rows.push((String::new(), String::new()));
+                for u in list {
+                    rows.push((u.name.clone(), String::new()));
+                    rows.push((format!("  {}", u.kind), u.id.clone()));
+                    rows.push(("  Container".to_string(), u.container.clone()));
+                    if !u.status.is_empty() {
+                        rows.push(("  Status".to_string(), u.status.clone()));
+                    }
+                    rows.push((String::new(), String::new()));
+                }
+            }
+            rows.push((String::new(), String::new()));
+            // Coverage, so an empty list never reads as "nothing uses it".
+            if warm {
+                rows.push((" · searched the loaded ECS tasks (running + recently stopped)".to_string(), String::new()));
+            } else {
+                rows.push((" · ECS not loaded — open @ecs, then come back to search its tasks".to_string(), String::new()));
+            }
+            rows.push((" · task definitions count once their details have been opened".to_string(), String::new()));
+            rows
+        }
+    }
+}
+
+/// The Findings section body: a summary, then one group per finding,
+/// worst first (already sorted by the fetch).
+fn ecr_findings_rows(f: &crate::aws::services::ecr::EcrScanFindings) -> Vec<(String, String)> {
+    let mut rows = vec![(
+        "Scan Status".to_string(),
+        if f.scan_status.is_empty() { "—".to_string() } else { f.scan_status.clone() },
+    )];
+    if !f.scanner.is_empty() {
+        rows.push(("Scanner".to_string(), f.scanner.clone()));
+    }
+    if let Some(d) = f.status_description.as_ref().filter(|d| !d.is_empty()) {
+        rows.push(("Detail".to_string(), d.clone()));
+    }
+    if let Some(c) = &f.completed_at {
+        rows.push(("Completed".to_string(), c.clone()));
+    }
+    if let Some(u) = &f.vuln_db_updated_at {
+        rows.push(("Vuln DB Updated".to_string(), u.clone()));
+    }
+    rows.push((String::new(), String::new()));
+    if f.findings.is_empty() {
+        let note = if f.scan_status == "COMPLETE" {
+            "✓ No findings"
+        } else {
+            "No findings to show"
+        };
+        rows.push((String::new(), note.to_string()));
+        return rows;
+    }
+    let shown = f.findings.len();
+    rows.push((
+        if f.truncated > 0 {
+            format!("Findings ({} worst of {})", shown, shown + f.truncated)
+        } else {
+            format!("Findings ({})", shown)
+        },
+        String::new(),
+    ));
+    rows.push((String::new(), String::new()));
+    for x in &f.findings {
+        let sev = if x.severity.is_empty() { "UNDEFINED" } else { x.severity.as_str() };
+        rows.push((format!("{} {}", sev, x.id), String::new()));
+        if let Some(p) = &x.package {
+            let ver = x.installed.as_deref().map(|v| format!(" {}", v)).unwrap_or_default();
+            rows.push(("  Package".to_string(), format!("{}{}", p, ver)));
+        }
+        if let Some(v) = &x.fixed_in {
+            rows.push(("  Fixed In".to_string(), v.clone()));
+        } else if let Some(fa) = &x.fix_available {
+            rows.push(("  Fix Available".to_string(), fa.clone()));
+        }
+        if let Some(sc) = x.score {
+            rows.push(("  Score".to_string(), format!("{:.1}", sc)));
+        }
+        if let Some(st) = &x.status {
+            rows.push(("  Status".to_string(), st.clone()));
+        }
+        if let Some(e) = &x.exploit_available {
+            rows.push(("  Exploit Available".to_string(), e.clone()));
+        }
+        if let Some(u) = &x.url {
+            rows.push(("  URL".to_string(), u.clone()));
+        }
+        if let Some(d) = x.description.as_ref().filter(|d| !d.is_empty()) {
+            let one_line = d.split_whitespace().collect::<Vec<_>>().join(" ");
+            let short: String = one_line.chars().take(200).collect();
+            let ell = if one_line.chars().count() > 200 { "…" } else { "" };
+            rows.push(("  Description".to_string(), format!("{}{}", short, ell)));
+        }
+        rows.push((String::new(), String::new()));
+    }
+    rows
+}
+
 /// The Overview pane: a score header (bars, the one place a chart earns its
 /// space) over the standard section machinery. It used to be a bespoke
 /// full-body renderer that ignored the descriptor system entirely, which
@@ -41367,6 +41567,81 @@ mod ecr_jump_tests {
 
         // Non-ECR strings don't match.
         assert_eq!(ecr_repo_from_image_uri("docker.io/library/nginx:latest"), None);
+    }
+
+    #[test]
+    fn digest_pinned_ecr_uri_jumps_to_the_image() {
+        let d = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let t = resource_jump_target(
+            "Image",
+            &format!("123456789012.dkr.ecr.eu-west-1.amazonaws.com/team/app@{d}"),
+            ServiceType::ECS,
+        )
+        .expect("digest uri should jump");
+        assert_eq!(t.service, ServiceType::Ecr);
+        assert!(matches!(t.view, JumpView::Ecr(crate::app::EcrView::Images)));
+        assert_eq!(t.id, format!("team/app@{d}"));
+        // A tag can't be resolved offline — still the repository.
+        let t = resource_jump_target(
+            "Image",
+            "123456789012.dkr.ecr.eu-west-1.amazonaws.com/team/app:v1",
+            ServiceType::ECS,
+        )
+        .unwrap();
+        assert_eq!(t.id, "team/app");
+    }
+
+    #[test]
+    fn ecr_image_sections_render() {
+        use crate::aws::services::ecr::{
+            EcrFinding, EcrImage, EcrImageDetailSection as S, EcrImageUser, EcrScanFindings,
+        };
+        let img = EcrImage::from_sdk(
+            &aws_sdk_ecr::types::ImageDetail::builder()
+                .repository_name("web")
+                .image_digest("sha256:abc")
+                .build(),
+            "web",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/web",
+        );
+        let ov = ecr_image_section_lines(&img, S::Overview, None, None);
+        assert!(ov.iter().any(|(k, v)| k == "Tags" && v == "<untagged>"));
+        assert!(ov.iter().any(|(k, v)| k == "Last Pulled" && v == "Never"));
+
+        let loading = ecr_image_section_lines(&img, S::Findings, None, None);
+        assert!(loading.iter().any(|(_, v)| v.starts_with("Loading")));
+        let err = crate::lazy::Lazy::Error("denied".to_string());
+        let rows = ecr_image_section_lines(&img, S::Findings, Some(&err), None);
+        assert!(rows.iter().any(|(k, _)| k.contains("denied")));
+        let loaded = crate::lazy::Lazy::Loaded(EcrScanFindings {
+            scan_status: "COMPLETE".into(),
+            scanner: "Enhanced".into(),
+            findings: vec![EcrFinding {
+                id: "CVE-1".into(),
+                severity: "HIGH".into(),
+                package: Some("openssl".into()),
+                installed: Some("3.0".into()),
+                fixed_in: Some("3.1".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let rows = ecr_image_section_lines(&img, S::Findings, Some(&loaded), None);
+        assert!(rows.iter().any(|(k, _)| k == "HIGH CVE-1"));
+        assert!(rows.iter().any(|(k, v)| k == "  Package" && v == "openssl 3.0"));
+        assert!(rows.iter().any(|(k, v)| k == "  Fixed In" && v == "3.1"));
+
+        let users = [EcrImageUser {
+            kind: "Task",
+            name: "web · 0f1e".into(),
+            id: "arn:aws:ecs:us-east-1:1:task/c/0f1e".into(),
+            container: "web".into(),
+            status: "RUNNING".into(),
+        }];
+        let rows = ecr_image_section_lines(&img, S::UsedBy, None, Some((&users[..], true)));
+        assert!(rows.iter().any(|(k, v)| k == "  Task" && v.ends_with("/0f1e")));
+        let cold = ecr_image_section_lines(&img, S::UsedBy, None, Some((&[][..], false)));
+        assert!(cold.iter().any(|(k, _)| k.contains("ECS not loaded")));
     }
 
     #[test]

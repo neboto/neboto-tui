@@ -194,8 +194,7 @@ GdDetector) share the `render_simple_split` skeleton in details_pane.rs; the
 Vpc and DxLag panes fill their Subnets/Gateways/Connections sections by
 **filtering sibling resources** already in `self.resources` (no extra
 fetches). Deliberately still flat: `ElasticIp` (the flat view is complete),
-`CognitoUser` (would need a lazy `AdminGetUser`), `EcrImage` (not a
-selectable resource — rows live inside the ECR repo pane).
+`CognitoUser` (would need a lazy `AdminGetUser`).
 
 **How it works (section descriptors, ADR 0002):** every split pane declares
 its sections **once** with the `sections!` macro in its service file

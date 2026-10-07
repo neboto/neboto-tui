@@ -553,6 +553,31 @@ the service you're touching.
   `ListMetrics(AWS/FSx)` rather than hard-coded. `m` charts storage/throughput/
   latency + a storage-composition breakdown; `f` toggles volume↔file-system
   graph.
+- **ECR** (`@ecr`, `ecr.rs`) — sub-tabs Repositories (1) / **Images** (2).
+  Images are first-class rows: phase 2 of the list load walks
+  `DescribeImages` for every repo (`buffer_unordered(6)`, capped at 100 per
+  repo by `fetch_ecr_repo_images`, newest first); a repo that fails is a
+  `ResourceLoadWarning`, never a load error. The Images tab spans every repo,
+  so its default order is **newest push first** (`execution_start_ms`, same
+  as the Executions tabs) and the row label is `repo:tag` (or
+  `repo@<12 hex>` untagged). **Image id is `repo@sha256:…`, not the bare
+  digest** — the same image pushed to two repos shares a digest; the repo
+  pane's `  Digest` rows and digest-pinned image URIs jump by that id.
+  Image pane sections: **Overview** (eager, from `ImageDetail`),
+  **Findings** (lazy `DescribeImageScanFindings`; `ScanNotFoundException` =
+  "NOT SCANNED", not an error; basic `findings` and enhanced/Inspector
+  `enhancedFindings` are normalized into one `EcrFinding` — an image has one
+  or the other; sorted worst-first and capped at 300), **Used By** (zero
+  API: ECS tasks from the warm ECS cache, matched by the **resolved digest**
+  each container carries so a task started from a since-moved `:latest` still
+  matches; task definitions only once their details have been opened —
+  their image refs are tags, so they match current tags only. The section
+  states its coverage so an empty list never reads as "unused").
+  **No Layers section, on purpose**: layers need `BatchGetImage` (the
+  manifest), and ECR bumps an image's `lastRecordedPullTime` on that call —
+  merely *looking* at an image would move the "Last Pulled" date people use
+  to decide what is safe to delete. `GetDownloadUrlForLayer` has the same
+  problem. Don't add either without an explicit opt-in.
 - **EKS** (`@eks`) — the showcase: eight-section split pane. **Tier 1
   (AWS-API depth) only** — live Kubernetes workloads (pods/nodes via the cluster
   API server) are deliberately out of scope. Add-on "update-available" costs one

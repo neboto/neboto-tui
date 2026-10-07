@@ -1,0 +1,105 @@
+{
+ "registryId": "{{account}}",
+ "repositoryName": "storefront-web",
+ "imageId": {
+  "imageDigest": "sha256:a3f1c9e2b7d4058c6e91f2a7b3d8c4e5f60718293a4b5c6d7e8f9012a3b4c5d6"
+ },
+ "imageScanStatus": {
+  "status": "COMPLETE",
+  "description": "The scan was completed successfully."
+ },
+ "imageScanFindings": {
+  "imageScanCompletedAt": {{epoch:now-3d}},
+  "vulnerabilitySourceUpdatedAt": {{epoch:now-6h}},
+  "findingSeverityCounts": {
+   "HIGH": 1,
+   "MEDIUM": 2
+  },
+  "enhancedFindings": [
+   {
+    "awsAccountId": "{{account}}",
+    "description": "A crafted certificate can make certificate verification read past a buffer.",
+    "findingArn": "arn:aws:inspector2:{{region}}:{{account}}:finding/demo31337",
+    "firstObservedAt": {{epoch:now-3d}},
+    "lastObservedAt": {{epoch:now-6h}},
+    "score": 7.5,
+    "severity": "HIGH",
+    "status": "ACTIVE",
+    "title": "CVE-2026-31337 - openssl",
+    "type": "PACKAGE_VULNERABILITY",
+    "updatedAt": {{epoch:now-6h}},
+    "fixAvailable": "YES",
+    "exploitAvailable": "NO",
+    "packageVulnerabilityDetails": {
+     "source": "NVD",
+     "sourceUrl": "https://nvd.nist.gov/vuln/detail/CVE-2026-31337",
+     "vulnerabilityId": "CVE-2026-31337",
+     "vulnerablePackages": [
+      {
+       "name": "openssl",
+       "version": "3.0.13-r0",
+       "fixedInVersion": "3.0.15-r1",
+       "packageManager": "OS"
+      }
+     ]
+    }
+   },
+   {
+    "awsAccountId": "{{account}}",
+    "description": "Integer overflow in XML attribute parsing.",
+    "findingArn": "arn:aws:inspector2:{{region}}:{{account}}:finding/demo22041",
+    "firstObservedAt": {{epoch:now-3d}},
+    "lastObservedAt": {{epoch:now-6h}},
+    "score": 5.3,
+    "severity": "MEDIUM",
+    "status": "ACTIVE",
+    "title": "CVE-2026-22041 - libexpat",
+    "type": "PACKAGE_VULNERABILITY",
+    "updatedAt": {{epoch:now-6h}},
+    "fixAvailable": "YES",
+    "exploitAvailable": "NO",
+    "packageVulnerabilityDetails": {
+     "source": "NVD",
+     "sourceUrl": "https://nvd.nist.gov/vuln/detail/CVE-2026-22041",
+     "vulnerabilityId": "CVE-2026-22041",
+     "vulnerablePackages": [
+      {
+       "name": "libexpat",
+       "version": "2.6.2-r0",
+       "fixedInVersion": "2.6.3-r0",
+       "packageManager": "OS"
+      }
+     ]
+    }
+   },
+   {
+    "awsAccountId": "{{account}}",
+    "description": "Out-of-bounds read in the awk applet.",
+    "findingArn": "arn:aws:inspector2:{{region}}:{{account}}:finding/demo48211",
+    "firstObservedAt": {{epoch:now-3d}},
+    "lastObservedAt": {{epoch:now-6h}},
+    "score": 4.7,
+    "severity": "MEDIUM",
+    "status": "ACTIVE",
+    "title": "CVE-2025-48211 - busybox",
+    "type": "PACKAGE_VULNERABILITY",
+    "updatedAt": {{epoch:now-6h}},
+    "fixAvailable": "YES",
+    "exploitAvailable": "NO",
+    "packageVulnerabilityDetails": {
+     "source": "NVD",
+     "sourceUrl": "https://nvd.nist.gov/vuln/detail/CVE-2025-48211",
+     "vulnerabilityId": "CVE-2025-48211",
+     "vulnerablePackages": [
+      {
+       "name": "busybox",
+       "version": "1.36.1-r15",
+       "fixedInVersion": "1.36.1-r19",
+       "packageManager": "OS"
+      }
+     ]
+    }
+   }
+  ]
+ }
+}

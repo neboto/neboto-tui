@@ -595,6 +595,11 @@
       "Tags",
       "Optimizer"
     ],
+    "ECR Image": [
+      "Overview",
+      "Findings",
+      "Used By"
+    ],
     "ECR Repository": [
       "Details",
       "Images",

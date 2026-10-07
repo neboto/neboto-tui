@@ -1,0 +1,2 @@
+!status 400
+{"__type":"ScanNotFoundException","message":"Image scan does not exist for the image"}

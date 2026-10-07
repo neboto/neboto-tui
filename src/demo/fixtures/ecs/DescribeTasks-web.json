@@ -7,7 +7,7 @@
     "createdAt": {{epoch:now-3d}}, "startedAt": {{epoch:now-3d}},
     "containers": [{
       "containerArn": "arn:aws:ecs:{{region}}:{{account}}:container/acme-prod/0f1e2d3c4b5a69788796a5b4c3d2e1f0/c0", "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/0f1e2d3c4b5a69788796a5b4c3d2e1f0",
-      "name": "web", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/storefront-web:latest", "lastStatus": "RUNNING",
+      "name": "web", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/storefront-web:latest", "imageDigest": "sha256:a3f1c9e2b7d4058c6e91f2a7b3d8c4e5f60718293a4b5c6d7e8f9012a3b4c5d6", "lastStatus": "RUNNING",
       "networkInterfaces": [{"attachmentId": "a-0f1e2d3c4b5a69788796a5b4c3d2e1f0", "privateIpv4Address": "10.20.11.34"}]
     }],
     "tags": []
@@ -21,7 +21,7 @@
     "createdAt": {{epoch:now-3d}}, "startedAt": {{epoch:now-3d}},
     "containers": [{
       "containerArn": "arn:aws:ecs:{{region}}:{{account}}:container/acme-prod/1a2b3c4d5e6f70819283a4b5c6d7e8f9/c0", "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/1a2b3c4d5e6f70819283a4b5c6d7e8f9",
-      "name": "web", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/storefront-web:latest", "lastStatus": "RUNNING",
+      "name": "web", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/storefront-web:latest", "imageDigest": "sha256:a3f1c9e2b7d4058c6e91f2a7b3d8c4e5f60718293a4b5c6d7e8f9012a3b4c5d6", "lastStatus": "RUNNING",
       "networkInterfaces": [{"attachmentId": "a-1a2b3c4d5e6f70819283a4b5c6d7e8f9", "privateIpv4Address": "10.20.12.41"}]
     }],
     "tags": []
@@ -35,7 +35,7 @@
     "createdAt": {{epoch:now-3d}}, "startedAt": {{epoch:now-3d}},
     "containers": [{
       "containerArn": "arn:aws:ecs:{{region}}:{{account}}:container/acme-prod/2b3c4d5e6f7081929384b5c6d7e8f9a0/c0", "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/2b3c4d5e6f7081929384b5c6d7e8f9a0",
-      "name": "web", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/storefront-web:latest", "lastStatus": "RUNNING",
+      "name": "web", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/storefront-web:latest", "imageDigest": "sha256:a3f1c9e2b7d4058c6e91f2a7b3d8c4e5f60718293a4b5c6d7e8f9012a3b4c5d6", "lastStatus": "RUNNING",
       "networkInterfaces": [{"attachmentId": "a-2b3c4d5e6f7081929384b5c6d7e8f9a0", "privateIpv4Address": "10.20.11.48"}]
     }],
     "tags": []

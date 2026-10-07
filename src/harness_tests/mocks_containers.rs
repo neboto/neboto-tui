@@ -77,6 +77,21 @@ pub(super) fn mocks() -> Vec<Mock> {
             }),
         ),
         (
+            ServiceType::Ecr,
+            "EcrImage",
+            Box::new(svc::ecr::EcrImage::from_sdk(
+                &aws_sdk_ecr::types::ImageDetail::builder()
+                    .registry_id("123456789012")
+                    .repository_name("mock-repo")
+                    .image_digest("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+                    .image_tags("v1")
+                    .image_size_in_bytes(10_485_760)
+                    .build(),
+                "mock-repo",
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/mock-repo",
+            )),
+        ),
+        (
             ServiceType::Code,
             "CodeArtifactRepo",
             Box::new(svc::code::CodeArtifactRepo {

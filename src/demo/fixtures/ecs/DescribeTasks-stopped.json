@@ -7,7 +7,7 @@
     "createdAt": {{epoch:now-19m}}, "startedAt": {{epoch:now-19m}}, "stoppedAt": {{epoch:now-18m}}, "stoppingAt": {{epoch:now-18m}}, "executionStoppedAt": {{epoch:now-18m}}, "stopCode": "EssentialContainerExited", "stoppedReason": "Essential container in task exited",
     "containers": [{
       "containerArn": "arn:aws:ecs:{{region}}:{{account}}:container/acme-prod/5d1e0c7a9b8f4e2d8c6a4b2e0f1d3c5a/c0", "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/5d1e0c7a9b8f4e2d8c6a4b2e0f1d3c5a",
-      "name": "worker", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/orders-worker:latest", "lastStatus": "STOPPED", "exitCode": 1, "reason": "Error: required environment variable DATABASE_URL is not set",
+      "name": "worker", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/orders-worker:latest", "imageDigest": "sha256:c5f3e1a4d9f627ae8ab3f4c9d5fae6a7182930415c6d7e8f9012345c5d6e7f80", "lastStatus": "STOPPED", "exitCode": 1, "reason": "Error: required environment variable DATABASE_URL is not set",
       "networkInterfaces": [{"attachmentId": "a-5d1e0c7a9b8f4e2d8c6a4b2e0f1d3c5a", "privateIpv4Address": "10.20.11.69"}]
     }],
     "tags": []
@@ -21,7 +21,7 @@
     "createdAt": {{epoch:now-19m}}, "startedAt": {{epoch:now-19m}}, "stoppedAt": {{epoch:now-18m}}, "stoppingAt": {{epoch:now-18m}}, "executionStoppedAt": {{epoch:now-18m}}, "stopCode": "EssentialContainerExited", "stoppedReason": "Essential container in task exited",
     "containers": [{
       "containerArn": "arn:aws:ecs:{{region}}:{{account}}:container/acme-prod/6e2f1d8b0c9a5f3e9d7b5c3f1a2e4d6b/c0", "taskArn": "arn:aws:ecs:{{region}}:{{account}}:task/acme-prod/6e2f1d8b0c9a5f3e9d7b5c3f1a2e4d6b",
-      "name": "worker", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/orders-worker:latest", "lastStatus": "STOPPED", "exitCode": 1, "reason": "Error: required environment variable DATABASE_URL is not set",
+      "name": "worker", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/orders-worker:latest", "imageDigest": "sha256:c5f3e1a4d9f627ae8ab3f4c9d5fae6a7182930415c6d7e8f9012345c5d6e7f80", "lastStatus": "STOPPED", "exitCode": 1, "reason": "Error: required environment variable DATABASE_URL is not set",
       "networkInterfaces": [{"attachmentId": "a-6e2f1d8b0c9a5f3e9d7b5c3f1a2e4d6b", "privateIpv4Address": "10.20.12.76"}]
     }],
     "tags": []

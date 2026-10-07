@@ -94,7 +94,12 @@ impl DemoRequest {
             .next()
             .unwrap_or_default()
             .to_string();
-        let mut labels = host.split('.');
+        let mut labels = host.split('.').peekable();
+        // Some endpoints carry an `api.` label before the service
+        // (`api.ecr.<region>.amazonaws.com`) — the service is the next one.
+        if labels.peek() == Some(&"api") {
+            labels.next();
+        }
         let service = labels.next().unwrap_or_default().to_string();
         let region = labels
             .next()

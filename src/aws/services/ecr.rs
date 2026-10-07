@@ -10,6 +10,14 @@ use std::any::Any;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
+/// Repos whose images are listed concurrently during the list load. ECR's
+/// DescribeImages rate limit is per account, so stay well under it.
+const IMAGE_LIST_CONCURRENCY: usize = 6;
+
+/// Findings kept per image for the Findings section — the worst ones, since
+/// the list is sorted by severity before the cut.
+const MAX_IMAGE_FINDINGS: usize = 300;
+
 pub struct EcrService {
     client: EcrClient,
 }
@@ -43,27 +51,13 @@ impl AwsService for EcrService {
         event_tx: mpsc::UnboundedSender<Event>,
         service_type: ServiceType,
     ) -> Result<()> {
+        use futures::stream::StreamExt;
         let mut total = 0usize;
 
-        let repos = self.fetch_repositories().await;
-
-        match repos {
-            Ok(repos) if !repos.is_empty() => {
-                let batch: Vec<Box<dyn Resource>> = repos
-                    .into_iter()
-                    .map(|r| Box::new(r) as Box<dyn Resource>)
-                    .collect();
-                total += batch.len();
-                let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
-                    service: service_type,
-                    resources: batch,
-                    progress: LoadProgress {
-                        loaded_count: total,
-                        total_count: None,
-                        status_message: None,
-                    },
-                });
-            }
+        // Phase 1: repositories (+ tags). A failure here is fatal — nothing
+        // else can stream without the repo list.
+        let repos = match self.fetch_repositories().await {
+            Ok(repos) => repos,
             Err(e) => {
                 let _ = event_tx.send(Event::ResourceLoadError {
                     service: service_type,
@@ -71,7 +65,77 @@ impl AwsService for EcrService {
                 });
                 return Ok(());
             }
-            _ => {}
+        };
+        let targets: Vec<(String, String)> =
+            repos.iter().map(|r| (r.name.clone(), r.uri.clone())).collect();
+        if !repos.is_empty() {
+            let batch: Vec<Box<dyn Resource>> = repos
+                .into_iter()
+                .map(|r| Box::new(r) as Box<dyn Resource>)
+                .collect();
+            total += batch.len();
+            let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                service: service_type,
+                resources: batch,
+                progress: LoadProgress {
+                    loaded_count: total,
+                    total_count: None,
+                    status_message: Some("Loaded repositories. Loading images...".to_string()),
+                },
+            });
+        }
+
+        // Phase 2: every repo's images, so they are list rows of their own
+        // (the Images sub-tab). One DescribeImages walk per repo, capped per
+        // repo by `fetch_ecr_repo_images`. A repo that fails is a warning,
+        // never a load error — the repos and other images already streamed.
+        let client = self.client.clone();
+        let mut stream = futures::stream::iter(targets.into_iter().map(|(name, uri)| {
+            let client = client.clone();
+            async move {
+                let res = fetch_ecr_repo_images(client, name.clone(), uri).await;
+                (name, res)
+            }
+        }))
+        .buffer_unordered(IMAGE_LIST_CONCURRENCY);
+        let mut failed = 0usize;
+        let mut first_err: Option<String> = None;
+        while let Some((_name, res)) = stream.next().await {
+            match res {
+                Ok(images) if !images.is_empty() => {
+                    total += images.len();
+                    let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                        service: service_type,
+                        resources: images
+                            .into_iter()
+                            .map(|i| Box::new(i) as Box<dyn Resource>)
+                            .collect(),
+                        progress: LoadProgress {
+                            loaded_count: total,
+                            total_count: None,
+                            status_message: None,
+                        },
+                    });
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    failed += 1;
+                    if first_err.is_none() {
+                        first_err = Some(e.to_string());
+                    }
+                }
+            }
+        }
+        if failed > 0 {
+            let _ = event_tx.send(Event::ResourceLoadWarning {
+                service: service_type,
+                warning: format!(
+                    "images unavailable for {} repositor{}: {}",
+                    failed,
+                    if failed == 1 { "y" } else { "ies" },
+                    first_err.unwrap_or_default()
+                ),
+            });
         }
 
         let _ = event_tx.send(Event::ResourcesFullyLoaded {
@@ -196,6 +260,191 @@ pub async fn fetch_ecr_lifecycle(client: EcrClient, repo_name: String) -> Result
         }
         Err(e) => Err(crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e))),
     }
+}
+
+/// One vulnerability from `DescribeImageScanFindings`, normalized across the
+/// two scanners: basic scanning returns `findings` (CVE name + attributes),
+/// enhanced (Inspector) scanning returns `enhancedFindings` (package details,
+/// score, remediation). An image only ever has one or the other.
+#[derive(Debug, Clone, Default)]
+pub struct EcrFinding {
+    /// CVE id (basic: `name`; enhanced: `vulnerabilityId`, else `title`).
+    pub id: String,
+    pub severity: String,
+    pub score: Option<f64>,
+    pub package: Option<String>,
+    pub installed: Option<String>,
+    pub fixed_in: Option<String>,
+    /// Enhanced only: ACTIVE / SUPPRESSED / CLOSED.
+    pub status: Option<String>,
+    pub fix_available: Option<String>,
+    pub exploit_available: Option<String>,
+    pub url: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EcrScanFindings {
+    pub scan_status: String,
+    pub status_description: Option<String>,
+    pub completed_at: Option<String>,
+    pub vuln_db_updated_at: Option<String>,
+    /// "Basic" / "Enhanced" — which scanner produced the findings (empty
+    /// when there are none, since the response doesn't say otherwise).
+    pub scanner: String,
+    pub findings: Vec<EcrFinding>,
+    /// Findings returned beyond `MAX_IMAGE_FINDINGS` (dropped, least severe).
+    pub truncated: usize,
+}
+
+/// An ECS task or task definition that references an image (Used By).
+#[derive(Debug, Clone)]
+pub struct EcrImageUser {
+    /// "Task" / "Task Definition" — also the row label the jump keys on.
+    pub kind: &'static str,
+    pub name: String,
+    /// Task ARN / task-definition ARN — the jump target.
+    pub id: String,
+    pub container: String,
+    pub status: String,
+}
+
+/// Severity rank for sorting, worst first.
+pub fn severity_rank(sev: &str) -> u8 {
+    match sev.to_ascii_uppercase().as_str() {
+        "CRITICAL" => 0,
+        "HIGH" => 1,
+        "MEDIUM" => 2,
+        "LOW" => 3,
+        "INFORMATIONAL" => 4,
+        _ => 5,
+    }
+}
+
+/// The image's scan findings. `ScanNotFoundException` (never scanned) is an
+/// empty result, not an error.
+pub async fn fetch_ecr_image_findings(
+    client: EcrClient,
+    repo_name: String,
+    registry_id: String,
+    digest: String,
+) -> Result<EcrScanFindings> {
+    use aws_sdk_ecr::types::ImageIdentifier;
+    let mut out = EcrScanFindings::default();
+    let mut token: Option<String> = None;
+    loop {
+        let mut req = client
+            .describe_image_scan_findings()
+            .repository_name(&repo_name)
+            .image_id(ImageIdentifier::builder().image_digest(&digest).build())
+            .max_results(1000);
+        if !registry_id.is_empty() {
+            req = req.registry_id(&registry_id);
+        }
+        if let Some(t) = &token {
+            req = req.next_token(t);
+        }
+        let page = match req.send().await {
+            Ok(p) => p,
+            Err(e)
+                if e.as_service_error()
+                    .map(|se| se.is_scan_not_found_exception())
+                    .unwrap_or(false) =>
+            {
+                out.scan_status = "NOT SCANNED".to_string();
+                return Ok(out);
+            }
+            Err(e) => {
+                return Err(crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))
+            }
+        };
+        if let Some(st) = page.image_scan_status() {
+            out.scan_status = st.status().map(|s| s.as_str().to_string()).unwrap_or_default();
+            out.status_description = st.description().map(|s| s.to_string());
+        }
+        if let Some(f) = page.image_scan_findings() {
+            out.completed_at = f.image_scan_completed_at().map(|t| fmt_epoch(t.secs()));
+            out.vuln_db_updated_at =
+                f.vulnerability_source_updated_at().map(|t| fmt_epoch(t.secs()));
+            for b in f.findings() {
+                out.scanner = "Basic".to_string();
+                let attr = |k: &str| {
+                    b.attributes()
+                        .iter()
+                        .find(|a| a.key() == k)
+                        .and_then(|a| a.value())
+                        .map(|s| s.to_string())
+                };
+                out.findings.push(EcrFinding {
+                    id: b.name().unwrap_or_default().to_string(),
+                    severity: b.severity().map(|s| s.as_str().to_string()).unwrap_or_default(),
+                    score: attr("CVSS3_SCORE")
+                        .or_else(|| attr("CVSS2_SCORE"))
+                        .and_then(|s| s.parse().ok()),
+                    package: attr("package_name"),
+                    installed: attr("package_version"),
+                    url: b.uri().map(|s| s.to_string()),
+                    description: b.description().map(|s| s.to_string()),
+                    ..Default::default()
+                });
+            }
+            for e in f.enhanced_findings() {
+                out.scanner = "Enhanced".to_string();
+                let details = e.package_vulnerability_details();
+                let pkg = details.and_then(|d| d.vulnerable_packages().first());
+                out.findings.push(EcrFinding {
+                    id: details
+                        .and_then(|d| d.vulnerability_id())
+                        .or(e.title())
+                        .unwrap_or_default()
+                        .to_string(),
+                    severity: e.severity().unwrap_or_default().to_string(),
+                    score: (e.score() > 0.0).then_some(e.score()),
+                    package: pkg.and_then(|p| p.name()).map(|s| s.to_string()),
+                    installed: pkg.and_then(|p| p.version()).map(|s| s.to_string()),
+                    fixed_in: pkg.and_then(|p| p.fixed_in_version()).map(|s| s.to_string()),
+                    status: e.status().map(|s| s.to_string()),
+                    fix_available: e.fix_available().map(|s| s.to_string()),
+                    exploit_available: e.exploit_available().map(|s| s.to_string()),
+                    url: details
+                        .and_then(|d| d.source_url())
+                        .or_else(|| {
+                            e.remediation()
+                                .and_then(|r| r.recommendation())
+                                .and_then(|r| r.url())
+                        })
+                        .map(|s| s.to_string()),
+                    description: e.description().map(|s| s.to_string()),
+                });
+            }
+        }
+        token = next_page_token(page.next_token(), &token);
+        if token.is_none() {
+            break;
+        }
+    }
+    sort_findings(&mut out.findings);
+    if out.findings.len() > MAX_IMAGE_FINDINGS {
+        out.truncated = out.findings.len() - MAX_IMAGE_FINDINGS;
+        out.findings.truncate(MAX_IMAGE_FINDINGS);
+    }
+    Ok(out)
+}
+
+/// Worst first: severity, then score (highest first), then id for a stable
+/// order between equal findings.
+pub fn sort_findings(findings: &mut [EcrFinding]) {
+    findings.sort_by(|a, b| {
+        severity_rank(&a.severity)
+            .cmp(&severity_rank(&b.severity))
+            .then_with(|| {
+                b.score
+                    .unwrap_or(0.0)
+                    .partial_cmp(&a.score.unwrap_or(0.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| a.id.cmp(&b.id))
+    });
 }
 
 // ── EcrRepository ────────────────────────────────────────────────────────────
@@ -323,12 +572,20 @@ impl Resource for EcrRepository {
 
 #[derive(Debug, Clone)]
 pub struct EcrImage {
+    /// `repo@sha256:…` — the row id. A digest alone isn't unique: the same
+    /// image pushed to two repos has the same digest.
+    pub key: String,
+    /// `repo:first-tag`, or `repo@sha256:<12 hex>` when untagged — the list
+    /// label, which has to say which repo since the Images tab spans them all.
+    pub label: String,
     pub repo_name: String,
     pub repo_uri: String,
     pub registry_id: String,
     pub digest: String,
     pub tags: Vec<String>,
     pub pushed_at: Option<String>,
+    /// Push time in epoch seconds — the Images tab's newest-first order.
+    pub pushed_secs: Option<i64>,
     pub last_pulled_at: Option<String>,
     pub size_bytes: Option<i64>,
     pub artifact_media_type: Option<String>,
@@ -339,7 +596,7 @@ pub struct EcrImage {
 }
 
 impl EcrImage {
-    fn from_sdk(d: &aws_sdk_ecr::types::ImageDetail, repo_name: &str, repo_uri: &str) -> Self {
+    pub fn from_sdk(d: &aws_sdk_ecr::types::ImageDetail, repo_name: &str, repo_uri: &str) -> Self {
         let finding_counts = d
             .image_scan_findings_summary()
             .and_then(|s| s.finding_severity_counts())
@@ -351,13 +608,21 @@ impl EcrImage {
             })
             .unwrap_or_default();
 
+        let digest = d.image_digest().unwrap_or_default().to_string();
+        let label = match d.image_tags().first() {
+            Some(t) => format!("{}:{}", repo_name, t),
+            None => format!("{}@{}", repo_name, short_digest_of(&digest)),
+        };
         Self {
+            key: format!("{}@{}", repo_name, digest),
+            label,
             repo_name: repo_name.to_string(),
             repo_uri: repo_uri.to_string(),
             registry_id: d.registry_id().unwrap_or_default().to_string(),
-            digest: d.image_digest().unwrap_or_default().to_string(),
+            digest,
             tags: d.image_tags().to_vec(),
             pushed_at: d.image_pushed_at().map(|t| fmt_epoch(t.secs())),
+            pushed_secs: d.image_pushed_at().map(|t| t.secs()),
             last_pulled_at: d.last_recorded_pull_time().map(|t| fmt_epoch(t.secs())),
             size_bytes: d.image_size_in_bytes(),
             artifact_media_type: d.artifact_media_type().map(|s| s.to_string()),
@@ -407,11 +672,44 @@ impl EcrImage {
     }
 
     fn short_digest(&self) -> &str {
-        if self.digest.len() > 19 {
-            &self.digest[7..19] // skip "sha256:" show 12 hex chars
-        } else {
-            &self.digest
+        short_digest_of(&self.digest)
+    }
+
+    /// Whether a container image reference (`<acct>.dkr.ecr.<region>.
+    /// amazonaws.com/<repo>[:tag|@digest]`, as ECS task definitions and
+    /// tasks carry it) names this image. A digest reference must match the
+    /// digest; a tag reference (no tag = `latest`) must be one of this
+    /// image's *current* tags — so a task started from `:latest` before the
+    /// tag moved is matched by its resolved digest instead, where the caller
+    /// has one. The registry account must agree when both sides name one.
+    pub fn matches_image_ref(&self, image_ref: &str, resolved_digest: Option<&str>) -> bool {
+        let r = image_ref.trim();
+        let Some((host, path)) = r.split_once(".amazonaws.com/") else {
+            return false;
+        };
+        if !host.contains(".dkr.ecr.") {
+            return false;
         }
+        let account = host.split('.').next().unwrap_or_default();
+        if !self.registry_id.is_empty() && !account.is_empty() && account != self.registry_id {
+            return false;
+        }
+        let (repo_tag, digest) = match path.split_once('@') {
+            Some((rt, d)) => (rt, Some(d)),
+            None => (path, None),
+        };
+        let (repo, tag) = match repo_tag.rsplit_once(':') {
+            Some((repo, tag)) => (repo, Some(tag)),
+            None => (repo_tag, None),
+        };
+        if repo != self.repo_name {
+            return false;
+        }
+        if let Some(d) = digest.or(resolved_digest).filter(|d| !d.is_empty()) {
+            return d == self.digest;
+        }
+        let tag = tag.unwrap_or("latest");
+        self.tags.iter().any(|t| t == tag)
     }
 
     pub fn size_display(&self) -> String {
@@ -449,16 +747,48 @@ impl EcrImage {
     }
 }
 
+crate::sections! {
+    pub enum EcrImageDetailSection,
+    pub static ECR_IMAGE_SECTIONS = [
+        Overview "Overview",
+        Findings "Findings" => crate::app::App::trigger_ecr_image_findings_load,
+        // Computed from the warm ECS cache at render time — no fetch, no hook.
+        UsedBy "Used By",
+    ]
+}
+
 impl Resource for EcrImage {
+    fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
+        Some(&ECR_IMAGE_SECTIONS)
+    }
+    fn cli_command(&self) -> Option<String> {
+        Some(format!(
+            "aws ecr describe-images --repository-name {} --image-ids imageDigest={}",
+            crate::aws::resource::shell_quote(&self.repo_name),
+            crate::aws::resource::shell_quote(&self.digest)
+        ))
+    }
+    fn cli_actions(&self) -> Vec<crate::aws::cli_actions::CliAction> {
+        use crate::aws::cli_actions::{CliAction, CliTier};
+        use crate::aws::resource::shell_quote;
+        vec![CliAction::new(
+            CliTier::Inspect,
+            "describe-image-scan-findings",
+            format!(
+                "aws ecr describe-image-scan-findings --repository-name {} --image-id imageDigest={}",
+                shell_quote(&self.repo_name),
+                shell_quote(&self.digest)
+            ),
+        )]
+    }
+    fn references(&self) -> Vec<(String, String)> {
+        vec![("Repository".to_string(), self.repo_name.clone())]
+    }
     fn id(&self) -> &str {
-        &self.digest
+        &self.key
     }
     fn name(&self) -> &str {
-        if let Some(first) = self.tags.first() {
-            first
-        } else {
-            "<untagged>"
-        }
+        &self.label
     }
     fn resource_type(&self) -> &str {
         "ECR Image"
@@ -496,7 +826,8 @@ impl Resource for EcrImage {
     }
     fn search_text(&self) -> String {
         format!(
-            "{} {} {} {} {}",
+            "{} {} {} {} {} {}",
+            self.key,
             self.repo_name,
             self.tags.join(" "),
             self.short_digest(),
@@ -536,6 +867,15 @@ impl Resource for EcrImage {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// `sha256:<64 hex>` → the first 12 hex chars, as the console abbreviates.
+fn short_digest_of(digest: &str) -> &str {
+    match digest.strip_prefix("sha256:") {
+        Some(hex) if hex.len() > 12 => &hex[..12],
+        Some(hex) => hex,
+        None => digest,
+    }
+}
 
 fn fmt_epoch(secs: i64) -> String {
     let days = secs / 86400;
@@ -623,4 +963,77 @@ pub async fn fetch_ecr_metrics(
         pull_count: parse_metric_datapoints(resp, start),
         x_max: time_range.duration_secs() as f64,
     })
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    const D1: &str = "sha256:aaaaaaaaaaaa0000000000000000000000000000000000000000000000000000";
+    const D2: &str = "sha256:bbbbbbbbbbbb0000000000000000000000000000000000000000000000000000";
+    const HOST: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com";
+
+    fn image(repo: &str, digest: &str, tags: &[&str]) -> EcrImage {
+        let mut b = aws_sdk_ecr::types::ImageDetail::builder()
+            .registry_id("123456789012")
+            .repository_name(repo)
+            .image_digest(digest);
+        for t in tags {
+            b = b.image_tags(*t);
+        }
+        EcrImage::from_sdk(&b.build(), repo, &format!("{HOST}/{repo}"))
+    }
+
+    #[test]
+    fn id_and_label_name_the_repo() {
+        let tagged = image("team/app", D1, &["v1", "latest"]);
+        assert_eq!(tagged.id(), format!("team/app@{D1}"));
+        assert_eq!(tagged.name(), "team/app:v1");
+        let untagged = image("team/app", D1, &[]);
+        assert_eq!(untagged.name(), "team/app@aaaaaaaaaaaa");
+        // Same digest in another repo is a different row.
+        assert_ne!(image("other", D1, &[]).id(), tagged.id());
+    }
+
+    #[test]
+    fn image_ref_matching() {
+        let img = image("web", D1, &["v2", "latest"]);
+        // Tag refs match current tags; no tag means latest.
+        assert!(img.matches_image_ref(&format!("{HOST}/web:v2"), None));
+        assert!(img.matches_image_ref(&format!("{HOST}/web"), None));
+        assert!(!img.matches_image_ref(&format!("{HOST}/web:v1"), None));
+        // Digest refs must match the digest.
+        assert!(img.matches_image_ref(&format!("{HOST}/web@{D1}"), None));
+        assert!(!img.matches_image_ref(&format!("{HOST}/web@{D2}"), None));
+        // A resolved digest wins over a tag that has since moved.
+        assert!(!img.matches_image_ref(&format!("{HOST}/web:latest"), Some(D2)));
+        assert!(img.matches_image_ref(&format!("{HOST}/web:v1"), Some(D1)));
+        // Wrong repo / account / non-ECR.
+        assert!(!img.matches_image_ref(&format!("{HOST}/webapp:v2"), None));
+        assert!(!img.matches_image_ref(
+            "999999999999.dkr.ecr.us-east-1.amazonaws.com/web:v2",
+            None
+        ));
+        assert!(!img.matches_image_ref("docker.io/library/web:v2", None));
+    }
+
+    #[test]
+    fn findings_sort_worst_first() {
+        let f = |id: &str, sev: &str, score: Option<f64>| EcrFinding {
+            id: id.into(),
+            severity: sev.into(),
+            score,
+            ..Default::default()
+        };
+        let mut v = vec![
+            f("low", "LOW", Some(9.0)),
+            f("high-5", "HIGH", Some(5.0)),
+            f("crit", "CRITICAL", None),
+            f("high-8", "HIGH", Some(8.0)),
+            f("odd", "", None),
+        ];
+        sort_findings(&mut v);
+        let ids: Vec<&str> = v.iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(ids, ["crit", "high-8", "high-5", "low", "odd"]);
+    }
 }
