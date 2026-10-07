@@ -160,7 +160,7 @@ aws-sdk-controlcatalog = "1"
 aws-sdk-servicecatalog = "1"
 aws-sdk-s3files = "1"
 aws-sdk-s3tables = "1.62.0"
-similar = "2"
+similar = "3"
 aws-sdk-oam = "1.111.0"
 
 # Dev builds carry full DWARF debuginfo by default (`debug = 2`). With 60+
