@@ -116,7 +116,7 @@ const RIGHT_SECTIONS: &[Section] = &[
     Section {
         title: "Toggles",
         entries: &[
-            ("1–4 · t", "cost group-by · period"),
+            ("1–4 · t · 8", "cost group-by · period · anomalies"),
             ("t", "WAF scope · RAM owner"),
             ("f", "ECS task · execution filter"),
         ],

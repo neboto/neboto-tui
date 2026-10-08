@@ -179,6 +179,22 @@ async fn rest_json_fixtures_route_by_path_and_can_fail() {
 }
 
 #[tokio::test]
+async fn cost_anomalies_fixture_deserializes() {
+    let ce = aws_sdk_costexplorer::Client::new(&demo_config().await);
+    let interval = aws_sdk_costexplorer::types::AnomalyDateInterval::builder()
+        .start_date("2026-01-01")
+        .build()
+        .unwrap();
+    let resp = ce.get_anomalies().date_interval(interval).send().await.expect("GetAnomalies");
+    assert_eq!(resp.anomalies().len(), 3);
+    let first = &resp.anomalies()[0];
+    assert_eq!(first.dimension_value(), Some("AmazonCloudWatch"));
+    assert_eq!(first.root_causes().len(), 2);
+    assert!(first.impact().unwrap().total_impact() > 100.0);
+    assert!(first.anomaly_end_date().is_none(), "the CloudWatch anomaly is ongoing");
+}
+
+#[tokio::test]
 async fn cloudtrail_and_logs_fixtures_deserialize() {
     let config = demo_config().await;
     let ct = aws_sdk_cloudtrail::Client::new(&config);

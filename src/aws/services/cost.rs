@@ -5,7 +5,7 @@ use crate::error::Result;
 use crate::event::{Event, LoadProgress};
 use async_trait::async_trait;
 use aws_sdk_costexplorer::types::{
-    DateInterval, Dimension, DimensionValues, Expression, Granularity, GroupDefinition,
+    AnomalyDateInterval, DateInterval, Dimension, DimensionValues, Expression, Granularity, GroupDefinition,
     GroupDefinitionType, Metric,
 };
 use aws_sdk_costexplorer::Client as CeClient;
@@ -54,6 +54,13 @@ impl AwsService for CostService {
     }
 
     async fn list_resources(&self) -> Result<Vec<Box<dyn Resource>>> {
+        if self.query.anomalies {
+            return Ok(fetch_anomalies(&self.client)
+                .await?
+                .into_iter()
+                .map(|a| Box::new(a) as Box<dyn Resource>)
+                .collect());
+        }
         let items = fetch_cost(&self.client, self.query).await?;
         Ok(items
             .into_iter()
@@ -66,6 +73,9 @@ impl AwsService for CostService {
         event_tx: mpsc::UnboundedSender<Event>,
         service_type: ServiceType,
     ) -> Result<()> {
+        if self.query.anomalies {
+            return self.stream_anomalies(event_tx, service_type).await;
+        }
         match fetch_cost(&self.client, self.query).await {
             Ok(items) => {
                 let total = items.len();
@@ -96,7 +106,7 @@ impl AwsService for CostService {
             Err(e) => {
                 let _ = event_tx.send(Event::ResourceLoadError {
                     service: service_type,
-                    error: friendly_error(&e.to_string()),
+                    error: friendly_error(&e.to_string(), "ce:GetCostAndUsage"),
                 });
                 Ok(())
             }
@@ -108,13 +118,62 @@ impl AwsService for CostService {
     }
 }
 
-/// Map raw Cost Explorer SDK errors to actionable hints.
-fn friendly_error(raw: &str) -> String {
+impl CostService {
+    /// The Anomalies view (key `8`): one paginated `GetAnomalies` walk over
+    /// the last [`ANOMALY_LOOKBACK_DAYS`], streamed as a single batch like the
+    /// spend view (each page is a billed CE request, so there is no point
+    /// showing a partial list for the second it takes).
+    async fn stream_anomalies(
+        &self,
+        event_tx: mpsc::UnboundedSender<Event>,
+        service_type: ServiceType,
+    ) -> Result<()> {
+        match fetch_anomalies(&self.client).await {
+            Ok(items) => {
+                let total = items.len();
+                if total > 0 {
+                    let batch: Vec<Box<dyn Resource>> = items
+                        .into_iter()
+                        .map(|a| Box::new(a) as Box<dyn Resource>)
+                        .collect();
+                    let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                        service: service_type,
+                        resources: batch,
+                        progress: LoadProgress {
+                            loaded_count: total,
+                            total_count: Some(total),
+                            status_message: Some("Loading cost anomalies…".to_string()),
+                        },
+                    });
+                }
+                let _ = event_tx.send(Event::ResourcesFullyLoaded {
+                    service: service_type,
+                    total_count: total,
+                });
+                Ok(())
+            }
+            Err(e) => {
+                let _ = event_tx.send(Event::ResourceLoadError {
+                    service: service_type,
+                    error: friendly_error(&e.to_string(), "ce:GetAnomalies"),
+                });
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Map raw Cost Explorer SDK errors to actionable hints. `action` is the IAM
+/// action the failed view needs, named in the access-denied hint.
+fn friendly_error(raw: &str, action: &str) -> String {
     let low = raw.to_lowercase();
     if low.contains("not subscribed") || low.contains("not enabled") {
         "Cost Explorer is not enabled for this account. Enable it in the Billing console (takes ~24h to populate).".to_string()
     } else if low.contains("accessdenied") || low.contains("access denied") || low.contains("not authorized") {
-        "Access denied — need ce:GetCostAndUsage. Cost Explorer must also be enabled by the management/payer account.".to_string()
+        format!(
+            "Access denied — need {}. Cost Explorer must also be enabled by the management/payer account.",
+            action
+        )
     } else {
         format!("Failed to load cost data: {}", raw)
     }
@@ -191,6 +250,10 @@ impl CostPeriod {
 pub struct CostQuery {
     pub group_by: CostGroupBy,
     pub period: CostPeriod,
+    /// The Anomalies view (key `8`): list Cost Anomaly Detection anomalies
+    /// instead of grouped spend. `group_by`/`period` are kept (not used) so
+    /// leaving the view returns to the grouping the user had.
+    pub anomalies: bool,
 }
 
 impl Default for CostQuery {
@@ -198,6 +261,7 @@ impl Default for CostQuery {
         Self {
             group_by: CostGroupBy::Service,
             period: CostPeriod::Mtd,
+            anomalies: false,
         }
     }
 }
@@ -634,6 +698,348 @@ pub async fn fetch_cost(client: &CeClient, query: CostQuery) -> Result<Vec<CostL
     });
 
     Ok(items)
+}
+
+// ── Anomalies (key 8: Cost Anomaly Detection) ─────────────────────────────────
+
+/// How far back the Anomalies view looks. Cost Anomaly Detection keeps 90
+/// days of history in the console's default view; older anomalies are rarely
+/// actionable and every extra page is a billed request.
+pub const ANOMALY_LOOKBACK_DAYS: i64 = 90;
+
+/// One root cause AWS attributes an anomaly to — any subset of the four
+/// dimensions can be set, plus this cause's share of the impact.
+#[derive(Debug, Clone, Default)]
+pub struct CostRootCause {
+    pub service: Option<String>,
+    pub region: Option<String>,
+    pub linked_account: Option<String>,
+    pub linked_account_name: Option<String>,
+    pub usage_type: Option<String>,
+    /// Dollar contribution of this cause to the anomaly's impact.
+    pub contribution: Option<f64>,
+}
+
+/// A Cost Anomaly Detection anomaly (`ce:GetAnomalies`). Everything the pane
+/// shows comes back on the list call, so both sections are eager.
+#[derive(Debug, Clone)]
+pub struct CostAnomaly {
+    pub anomaly_id: String,
+    /// The monitored dimension value (a service name for an AWS-services
+    /// monitor, an account / cost category / tag value otherwise). Empty
+    /// when AWS didn't report one.
+    pub dimension_value: String,
+    /// `YYYY-MM-DD` (the API's date string, time part dropped).
+    pub start_date: Option<String>,
+    /// None while the anomaly is still ongoing.
+    pub end_date: Option<String>,
+    pub max_score: f64,
+    pub current_score: f64,
+    /// Spend above expected, summed over the anomaly's duration.
+    pub total_impact: f64,
+    /// The largest single-day impact.
+    pub max_impact: f64,
+    pub total_actual: Option<f64>,
+    pub total_expected: Option<f64>,
+    pub impact_pct: Option<f64>,
+    pub monitor_arn: String,
+    /// The user's feedback (`YES` / `NO` / `PLANNED_ACTIVITY`), if given.
+    pub feedback: Option<String>,
+    /// Sorted by contribution, largest first.
+    pub root_causes: Vec<CostRootCause>,
+    label: String,
+    /// Precomputed `"$96.40 over (+82%) · Sep 28 – ongoing"` list cell.
+    summary: String,
+    search_blob: String,
+    tags: HashMap<String, String>,
+}
+
+/// `"2026-09-28T00:00:00Z"` / `"2026-09-28"` → `"2026-09-28"`.
+fn anomaly_day(s: &str) -> String {
+    s.get(..10).unwrap_or(s).to_string()
+}
+
+impl CostAnomaly {
+    pub fn from_sdk(a: &aws_sdk_costexplorer::types::Anomaly) -> Self {
+        let mut root_causes: Vec<CostRootCause> = a
+            .root_causes()
+            .iter()
+            .map(|rc| CostRootCause {
+                service: rc.service().map(str::to_string),
+                region: rc.region().map(str::to_string),
+                linked_account: rc.linked_account().map(str::to_string),
+                linked_account_name: rc.linked_account_name().map(str::to_string),
+                usage_type: rc.usage_type().map(str::to_string),
+                contribution: rc.impact().map(|i| i.contribution()),
+            })
+            .collect();
+        root_causes.sort_by(|x, y| {
+            y.contribution
+                .unwrap_or(0.0)
+                .partial_cmp(&x.contribution.unwrap_or(0.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let impact = a.impact();
+        let score = a.anomaly_score();
+        let mut item = Self {
+            anomaly_id: a.anomaly_id().to_string(),
+            dimension_value: a.dimension_value().unwrap_or_default().to_string(),
+            start_date: a.anomaly_start_date().map(anomaly_day),
+            end_date: a.anomaly_end_date().filter(|s| !s.is_empty()).map(anomaly_day),
+            max_score: score.map(|s| s.max_score()).unwrap_or(0.0),
+            current_score: score.map(|s| s.current_score()).unwrap_or(0.0),
+            total_impact: impact.map(|i| i.total_impact()).unwrap_or(0.0),
+            max_impact: impact.map(|i| i.max_impact()).unwrap_or(0.0),
+            total_actual: impact.and_then(|i| i.total_actual_spend()),
+            total_expected: impact.and_then(|i| i.total_expected_spend()),
+            impact_pct: impact.and_then(|i| i.total_impact_percentage()),
+            monitor_arn: a.monitor_arn().to_string(),
+            feedback: a.feedback().map(|f| f.as_str().to_string()),
+            root_causes,
+            label: String::new(),
+            summary: String::new(),
+            search_blob: String::new(),
+            tags: HashMap::new(),
+        };
+        item.label = item.compute_label();
+        item.summary = item.compute_summary();
+        item.search_blob = item.compute_search_blob();
+        item
+    }
+
+    /// Layer-2 harness / renderer-test mock: one ongoing anomaly with two
+    /// root causes.
+    #[cfg(test)]
+    pub(crate) fn mock() -> Self {
+        use aws_sdk_costexplorer::types::{Anomaly, AnomalyScore, Impact, RootCause, RootCauseImpact};
+        Self::from_sdk(
+            &Anomaly::builder()
+                .anomaly_id("11111111-2222-3333-4444-555555555555")
+                .monitor_arn("arn:aws:ce::123456789012:anomalymonitor/mock")
+                .dimension_value("Amazon CloudWatch")
+                .anomaly_start_date("2026-09-28T00:00:00Z")
+                .anomaly_score(AnomalyScore::builder().max_score(0.91).current_score(0.4).build())
+                .impact(
+                    Impact::builder()
+                        .max_impact(31.2)
+                        .total_impact(96.4)
+                        .total_actual_spend(213.9)
+                        .total_expected_spend(117.5)
+                        .total_impact_percentage(82.0)
+                        .build(),
+                )
+                .root_causes(
+                    RootCause::builder()
+                        .service("AmazonCloudWatch")
+                        .region("us-east-1")
+                        .linked_account("123456789012")
+                        .linked_account_name("acme-prod")
+                        .usage_type("USE1-DataProcessing-Bytes")
+                        .impact(RootCauseImpact::builder().contribution(88.1).build())
+                        .build(),
+                )
+                .root_causes(
+                    RootCause::builder()
+                        .service("AmazonCloudWatch")
+                        .usage_type("USE1-TimedStorage-ByteHrs")
+                        .impact(RootCauseImpact::builder().contribution(8.3).build())
+                        .build(),
+                )
+                .build()
+                .unwrap(),
+        )
+    }
+
+    pub fn is_ongoing(&self) -> bool {
+        self.end_date.is_none()
+    }
+
+    /// The row name: the monitored dimension value, else the top root
+    /// cause's service (a dimension-less monitor), else a generic label.
+    fn compute_label(&self) -> String {
+        if !self.dimension_value.is_empty() {
+            return self.dimension_value.clone();
+        }
+        self.root_causes
+            .iter()
+            .find_map(|rc| rc.service.clone())
+            .unwrap_or_else(|| "Cost anomaly".to_string())
+    }
+
+    /// `Sep 28 – ongoing` / `Sep 28 – Oct 2` / `Sep 28`.
+    pub fn date_range(&self) -> String {
+        let start = self.start_date.as_deref().map(short_date).unwrap_or_default();
+        match self.end_date.as_deref() {
+            None => format!("{} – ongoing", start),
+            Some(e) if Some(e) == self.start_date.as_deref() => start,
+            Some(e) => format!("{} – {}", start, short_date(e)),
+        }
+    }
+
+    fn compute_summary(&self) -> String {
+        let pct = self
+            .impact_pct
+            .map(|p| format!(" (+{:.0}%)", p))
+            .unwrap_or_default();
+        format!(
+            "${} over{} · {}",
+            fmt_money(self.total_impact),
+            pct,
+            self.date_range()
+        )
+    }
+
+    fn compute_search_blob(&self) -> String {
+        let mut parts = vec![self.label.clone(), self.anomaly_id.clone()];
+        for rc in &self.root_causes {
+            parts.extend(
+                [&rc.service, &rc.region, &rc.linked_account, &rc.linked_account_name, &rc.usage_type]
+                    .into_iter()
+                    .flatten()
+                    .cloned(),
+            );
+        }
+        parts.push(if self.is_ongoing() { "ongoing" } else { "closed" }.to_string());
+        parts.join(" ")
+    }
+
+    /// The list's dim second cell (`resource_list::id_cell`) — the id is a
+    /// UUID nobody wants to read.
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
+}
+
+crate::sections! {
+    pub enum CostAnomalyDetailSection,
+    pub static COST_ANOMALY_SECTIONS = [
+        Overview "Overview",
+        RootCauses "Root causes",
+    ]
+}
+
+impl Resource for CostAnomaly {
+    fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
+        Some(&COST_ANOMALY_SECTIONS)
+    }
+
+    fn id(&self) -> &str {
+        &self.anomaly_id
+    }
+
+    fn name(&self) -> &str {
+        &self.label
+    }
+
+    fn resource_type(&self) -> &str {
+        "Cost Anomaly"
+    }
+
+    fn state(&self) -> ResourceState {
+        // The dot is the impact, the Cost spend view's "red = attention" rule:
+        // ≥ $100 over expected red, ≥ $10 yellow, smaller ones neutral.
+        if self.total_impact >= 100.0 {
+            ResourceState::Unavailable
+        } else if self.total_impact >= 10.0 {
+            ResourceState::Pending
+        } else {
+            ResourceState::Unknown(String::new())
+        }
+    }
+
+    fn state_label(&self) -> String {
+        let word = if self.is_ongoing() { "ongoing" } else { "closed" };
+        word.to_string()
+    }
+
+    fn tags(&self) -> &HashMap<String, String> {
+        &self.tags
+    }
+
+    fn search_text(&self) -> String {
+        self.search_blob.clone()
+    }
+
+    fn details(&self) -> Vec<(String, String)> {
+        let mut rows = vec![
+            ("Anomaly ID".to_string(), self.anomaly_id.clone()),
+            ("Dimension".to_string(), self.label.clone()),
+            ("Dates".to_string(), self.date_range()),
+            ("Total impact".to_string(), format!("${}", fmt_money(self.total_impact))),
+            ("Max score".to_string(), format!("{:.2}", self.max_score)),
+            ("Monitor".to_string(), self.monitor_arn.clone()),
+        ];
+        if let Some(f) = &self.feedback {
+            rows.push(("Feedback".to_string(), f.clone()));
+        }
+        rows
+    }
+
+    fn clone_box(&self) -> Box<dyn Resource> {
+        Box::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn cli_command(&self) -> Option<String> {
+        // GetAnomalies can't filter by id; scope it to this anomaly's monitor
+        // and start date, which is as narrow as the API goes.
+        let start = self.start_date.clone().unwrap_or_default();
+        Some(format!(
+            "aws ce get-anomalies --monitor-arn {} --date-interval StartDate={}",
+            crate::aws::resource::shell_quote(&self.monitor_arn),
+            crate::aws::resource::shell_quote(&start)
+        ))
+    }
+
+    fn console_url(&self, _region: &str) -> Option<String> {
+        Some("https://console.aws.amazon.com/cost-management/home#/anomaly-detection/overview".to_string())
+    }
+}
+
+/// Every anomaly whose window overlaps the last [`ANOMALY_LOOKBACK_DAYS`],
+/// newest first (ties: larger impact first). Walks every page — each one is a
+/// billed CE request, but a cut list would hide exactly the old-but-large
+/// anomaly a cleanup is looking for.
+pub async fn fetch_anomalies(client: &CeClient) -> Result<Vec<CostAnomaly>> {
+    let start = Utc::now().date_naive() - ChronoDuration::days(ANOMALY_LOOKBACK_DAYS);
+    let interval = AnomalyDateInterval::builder()
+        .start_date(fmt_date(start))
+        .build()
+        .map_err(|e| crate::error::Error::AwsSdk(e.to_string()))?;
+
+    let mut out: Vec<CostAnomaly> = Vec::new();
+    let mut next_token: Option<String> = None;
+    loop {
+        let mut req = client.get_anomalies().date_interval(interval.clone());
+        if let Some(t) = &next_token {
+            req = req.next_page_token(t);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+        out.extend(resp.anomalies().iter().map(CostAnomaly::from_sdk));
+        next_token = crate::aws::pagination::next_page_token(resp.next_page_token(), &next_token);
+        if next_token.is_none() {
+            break;
+        }
+    }
+    sort_anomalies(&mut out);
+    Ok(out)
+}
+
+/// Newest start first; same-day anomalies by impact, largest first.
+fn sort_anomalies(items: &mut [CostAnomaly]) {
+    items.sort_by(|a, b| {
+        b.start_date.cmp(&a.start_date).then(
+            b.total_impact
+                .partial_cmp(&a.total_impact)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        )
+    });
 }
 
 // ── Drill-down (lazy: usage-type + region breakdowns + month-end forecast) ─────
@@ -1183,5 +1589,80 @@ mod tests {
         assert_eq!(sparkline(&[0.0, 5.0, 10.0]).chars().last(), Some('█')); // max → full block
         assert_eq!(sparkline(&[0.0, 0.0]), "▁▁"); // all-zero → floor, no div-by-zero
         assert_eq!(sparkline(&[]), ""); // empty input
+    }
+
+    // ── Anomalies ─────────────────────────────────────────────────────────────
+
+    fn anomaly(id: &str, start: &str, end: Option<&str>, impact: f64) -> CostAnomaly {
+        use aws_sdk_costexplorer::types::{
+            Anomaly, AnomalyScore, Impact, RootCause, RootCauseImpact,
+        };
+        let mut b = Anomaly::builder()
+            .anomaly_id(id)
+            .monitor_arn("arn:aws:ce::123456789012:anomalymonitor/m-1")
+            .anomaly_start_date(format!("{}T00:00:00Z", start))
+            .anomaly_score(AnomalyScore::builder().max_score(0.8).current_score(0.2).build())
+            .impact(
+                Impact::builder()
+                    .max_impact(impact / 2.0)
+                    .total_impact(impact)
+                    .total_impact_percentage(50.0)
+                    .build(),
+            )
+            .root_causes(
+                RootCause::builder()
+                    .service("Amazon CloudWatch")
+                    .impact(RootCauseImpact::builder().contribution(1.0).build())
+                    .build(),
+            )
+            .root_causes(
+                RootCause::builder()
+                    .service("Amazon Elastic Container Service")
+                    .usage_type("USE1-Fargate-vCPU-Hours:perCPU")
+                    .impact(RootCauseImpact::builder().contribution(9.0).build())
+                    .build(),
+            );
+        if let Some(e) = end {
+            b = b.anomaly_end_date(e);
+        }
+        CostAnomaly::from_sdk(&b.build().unwrap())
+    }
+
+    #[test]
+    fn anomaly_without_dimension_is_named_by_its_top_root_cause() {
+        let a = anomaly("a-1", "2026-09-28", None, 96.4);
+        // Root causes sort by contribution, so ECS (9.0) leads CloudWatch (1.0).
+        assert_eq!(a.root_causes[0].service.as_deref(), Some("Amazon Elastic Container Service"));
+        assert_eq!(a.name(), "Amazon Elastic Container Service");
+        assert_eq!(a.start_date.as_deref(), Some("2026-09-28"), "time part dropped");
+        assert!(a.is_ongoing());
+        assert_eq!(a.state_label(), "ongoing");
+        assert_eq!(a.summary(), "$96.40 over (+50%) · Sep 28 – ongoing");
+        assert!(a.search_text().contains("Fargate"), "root-cause usage types are searchable");
+    }
+
+    #[test]
+    fn anomaly_state_colours_by_impact() {
+        assert_eq!(anomaly("a", "2026-09-01", Some("2026-09-02"), 250.0).state(), ResourceState::Unavailable);
+        assert_eq!(anomaly("b", "2026-09-01", Some("2026-09-02"), 25.0).state(), ResourceState::Pending);
+        assert!(matches!(
+            anomaly("c", "2026-09-01", Some("2026-09-02"), 2.0).state(),
+            ResourceState::Unknown(_)
+        ));
+        let closed = anomaly("d", "2026-09-01", Some("2026-09-01"), 2.0);
+        assert_eq!(closed.state_label(), "closed");
+        assert_eq!(closed.date_range(), "Sep 1", "a one-day anomaly shows one date");
+    }
+
+    #[test]
+    fn anomalies_sort_newest_first_then_by_impact() {
+        let mut v = vec![
+            anomaly("old", "2026-08-01", Some("2026-08-03"), 500.0),
+            anomaly("new-small", "2026-09-20", None, 5.0),
+            anomaly("new-big", "2026-09-20", None, 50.0),
+        ];
+        sort_anomalies(&mut v);
+        let ids: Vec<&str> = v.iter().map(|a| a.anomaly_id.as_str()).collect();
+        assert_eq!(ids, ["new-big", "new-small", "old"]);
     }
 }

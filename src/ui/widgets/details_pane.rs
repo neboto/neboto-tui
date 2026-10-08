@@ -1358,6 +1358,20 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         render_cost_split(app, item, area, frame);
         return;
     }
+    if let Some(a) = resource
+        .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::cost::CostAnomaly>())
+    {
+        render_simple_split(
+            app,
+            area,
+            frame,
+            "Cost Anomaly",
+            a.name(),
+            a.summary(),
+            &descriptor_tabs(app, &crate::aws::services::cost::COST_ANOMALY_SECTIONS),
+        );
+        return;
+    }
     if let Some(role) = resource.and_then(|r| r.as_any().downcast_ref::<IamRole>()) {
         render_iam_role_split(app, role, area, frame);
         return;
@@ -36564,6 +36578,94 @@ pub fn cost_section_lines(
     }
 }
 
+/// A Cost Anomaly Detection anomaly's pane. Both sections are eager — the
+/// list call (`GetAnomalies`) returns everything shown here.
+pub fn cost_anomaly_section_lines(
+    a: &crate::aws::services::cost::CostAnomaly,
+    section: crate::aws::services::cost::CostAnomalyDetailSection,
+) -> Vec<(String, String)> {
+    use crate::aws::services::cost::{fmt_money, CostAnomalyDetailSection as S};
+    let money = |v: f64| format!("${}", fmt_money(v));
+    let kv = |k: &str, v: String| (k.to_string(), v);
+    match section {
+        S::Overview => {
+            let mut rows = vec![
+                kv("Anomaly ID", a.anomaly_id.clone()),
+                kv(
+                    "Status",
+                    if a.is_ongoing() { "⚠ ongoing".to_string() } else { "closed".to_string() },
+                ),
+                kv("Start", a.start_date.clone().unwrap_or_else(|| "—".to_string())),
+                kv("End", a.end_date.clone().unwrap_or_else(|| "— (ongoing)".to_string())),
+                (String::new(), String::new()),
+                kv("Impact", String::new()),
+                kv("Total impact", money(a.total_impact)),
+            ];
+            if let Some(p) = a.impact_pct {
+                rows.push(kv("Above expected", format!("+{:.1}%", p)));
+            }
+            if let Some(v) = a.total_actual {
+                rows.push(kv("Actual spend", money(v)));
+            }
+            if let Some(v) = a.total_expected {
+                rows.push(kv("Expected spend", money(v)));
+            }
+            rows.push(kv("Max daily impact", money(a.max_impact)));
+            rows.push((String::new(), String::new()));
+            rows.push(kv("Score", String::new()));
+            rows.push(kv("Max score", format!("{:.2}", a.max_score)));
+            rows.push(kv("Current score", format!("{:.2}", a.current_score)));
+            rows.push((String::new(), String::new()));
+            rows.push(kv("Detection", String::new()));
+            if !a.dimension_value.is_empty() {
+                rows.push(kv("Dimension value", a.dimension_value.clone()));
+            }
+            rows.push(kv("Monitor", a.monitor_arn.clone()));
+            rows.push(kv(
+                "Feedback",
+                a.feedback.clone().unwrap_or_else(|| "none given".to_string()),
+            ));
+            rows
+        }
+        S::RootCauses => {
+            if a.root_causes.is_empty() {
+                return vec![(
+                    String::new(),
+                    "No root causes reported for this anomaly".to_string(),
+                )];
+            }
+            let mut rows = Vec::new();
+            for (i, rc) in a.root_causes.iter().enumerate() {
+                if i > 0 {
+                    rows.push((String::new(), String::new()));
+                }
+                let head = match rc.contribution {
+                    Some(c) => format!("Cause {} · {}", i + 1, money(c)),
+                    None => format!("Cause {}", i + 1),
+                };
+                rows.push((head, String::new()));
+                if let Some(v) = &rc.service {
+                    rows.push(kv("Service", v.clone()));
+                }
+                if let Some(v) = &rc.usage_type {
+                    rows.push(kv("Usage type", v.clone()));
+                }
+                if let Some(v) = &rc.region {
+                    rows.push(kv("Region", v.clone()));
+                }
+                if let Some(acct) = &rc.linked_account {
+                    let v = match &rc.linked_account_name {
+                        Some(n) if !n.is_empty() => format!("{} ({})", acct, n),
+                        _ => acct.clone(),
+                    };
+                    rows.push(kv("Account", v));
+                }
+            }
+            rows
+        }
+    }
+}
+
 /// Truncate to `n` chars, appending an ellipsis when clipped.
 pub(crate) fn cost_trunc(s: &str, n: usize) -> String {
     if s.chars().count() > n {
@@ -44938,5 +45040,34 @@ mod cfn_op_results_tests {
         assert!(some.iter().any(|(k, v)| k == "  Statements" && v == "1 (1 deny)"));
         let err = cfn_policy_lines(Some(&Lazy::Error("denied".into())));
         assert!(err.iter().any(|(k, _)| k.contains("⚠ denied")));
+    }
+}
+
+#[cfg(test)]
+mod cost_anomaly_tests {
+    use super::cost_anomaly_section_lines;
+    use crate::aws::services::cost::{CostAnomaly, CostAnomalyDetailSection as S};
+
+    #[test]
+    fn overview_reads_the_impact_and_flags_an_open_anomaly() {
+        let a = CostAnomaly::mock();
+        let rows = cost_anomaly_section_lines(&a, S::Overview);
+        let get = |k: &str| rows.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
+        assert_eq!(get("Status").as_deref(), Some("⚠ ongoing"));
+        assert_eq!(get("Total impact").as_deref(), Some("$96.40"));
+        assert_eq!(get("Above expected").as_deref(), Some("+82.0%"));
+        assert_eq!(get("Expected spend").as_deref(), Some("$117.50"));
+        assert_eq!(get("Feedback").as_deref(), Some("none given"));
+        // Group headers are key-only rows (no value).
+        assert_eq!(get("Impact").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn root_causes_list_largest_first_with_account_names() {
+        let a = CostAnomaly::mock();
+        let rows = cost_anomaly_section_lines(&a, S::RootCauses);
+        assert_eq!(rows[0].0, "Cause 1 · $88.10");
+        assert!(rows.contains(&("Account".to_string(), "123456789012 (acme-prod)".to_string())));
+        assert!(rows.iter().any(|(k, _)| k == "Cause 2 · $8.30"));
     }
 }

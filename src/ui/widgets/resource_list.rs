@@ -24,6 +24,14 @@ fn id_cell(resource: &dyn crate::aws::resource::Resource) -> String {
     {
         return rec.value_summary();
     }
+    // A cost anomaly's id is a UUID; its impact and dates are what a row
+    // is for.
+    if let Some(a) = resource
+        .as_any()
+        .downcast_ref::<crate::aws::services::cost::CostAnomaly>()
+    {
+        return a.summary().to_string();
+    }
     if resource.id() != resource.name() {
         resource.id().to_string()
     } else {
@@ -587,8 +595,11 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
     const WIDE_MIN_INNER: usize = 70;
     // Cost overloads `state()` as a spend-trend dot; the words
     // "available"/"unavailable" would mislead there, so it stays compact.
+    // The Anomalies view has real words (`state_label`: ongoing / closed),
+    // so it gets the wide columns.
     let wide = inner_width >= WIDE_MIN_INNER
-        && app.current_service != Some(crate::aws::service::ServiceType::Cost);
+        && (app.current_service != Some(crate::aws::service::ServiceType::Cost)
+            || app.cost_anomalies);
     // @all rows lead with a 6-col service badge; budget the wide columns for it.
     let badge_w: usize = if app.all_search_mode { 6 } else { 0 };
     // Organizations policy rows lead with a `[Type]` badge (fixed-width so the

@@ -516,6 +516,10 @@
       "Trend",
       "Forecast"
     ],
+    "Cost Anomaly": [
+      "Overview",
+      "Root causes"
+    ],
     "DHCP Options": [
       "Overview",
       "VPCs",

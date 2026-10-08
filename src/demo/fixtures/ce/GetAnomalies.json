@@ -1,0 +1,94 @@
+{
+  "Anomalies": [
+    {
+      "AnomalyId": "4f8c2a1e-9b3d-4e6f-a7c5-2d1e0b9a8c71",
+      "AnomalyStartDate": "{{iso:now-6d}}",
+      "DimensionValue": "AmazonCloudWatch",
+      "MonitorArn": "arn:aws:ce::{{account}}:anomalymonitor/7d0e5c2b-1a4f-4b8e-9c3d-6f2a1e0b5d94",
+      "AnomalyScore": { "MaxScore": 0.94, "CurrentScore": 0.88 },
+      "Impact": {
+        "MaxImpact": 31.2,
+        "TotalImpact": 164.75,
+        "TotalActualSpend": 271.4,
+        "TotalExpectedSpend": 106.65,
+        "TotalImpactPercentage": 154.5
+      },
+      "RootCauses": [
+        {
+          "Service": "AmazonCloudWatch",
+          "Region": "{{region}}",
+          "LinkedAccount": "{{account}}",
+          "LinkedAccountName": "acme-prod",
+          "UsageType": "USE1-DataProcessing-Bytes",
+          "Impact": { "Contribution": 151.9 }
+        },
+        {
+          "Service": "AmazonCloudWatch",
+          "Region": "{{region}}",
+          "LinkedAccount": "{{account}}",
+          "LinkedAccountName": "acme-prod",
+          "UsageType": "USE1-TimedStorage-ByteHrs",
+          "Impact": { "Contribution": 12.85 }
+        }
+      ]
+    },
+    {
+      "AnomalyId": "b21d7e94-3c5a-4f08-8e6b-9a0c1d2e3f45",
+      "AnomalyStartDate": "{{iso:now-3d}}",
+      "DimensionValue": "Amazon Elastic Container Service",
+      "MonitorArn": "arn:aws:ce::{{account}}:anomalymonitor/7d0e5c2b-1a4f-4b8e-9c3d-6f2a1e0b5d94",
+      "AnomalyScore": { "MaxScore": 0.61, "CurrentScore": 0.57 },
+      "Impact": {
+        "MaxImpact": 9.4,
+        "TotalImpact": 24.1,
+        "TotalActualSpend": 88.3,
+        "TotalExpectedSpend": 64.2,
+        "TotalImpactPercentage": 37.5
+      },
+      "RootCauses": [
+        {
+          "Service": "Amazon Elastic Container Service",
+          "Region": "{{region}}",
+          "LinkedAccount": "{{account}}",
+          "LinkedAccountName": "acme-prod",
+          "UsageType": "USE1-Fargate-vCPU-Hours:perCPU",
+          "Impact": { "Contribution": 17.6 }
+        },
+        {
+          "Service": "Amazon Elastic Container Service",
+          "Region": "{{region}}",
+          "LinkedAccount": "{{account}}",
+          "LinkedAccountName": "acme-prod",
+          "UsageType": "USE1-Fargate-GB-Hours",
+          "Impact": { "Contribution": 6.5 }
+        }
+      ]
+    },
+    {
+      "AnomalyId": "0c9e8d7f-6a5b-4c3d-9e2f-1a0b9c8d7e6f",
+      "AnomalyStartDate": "{{iso:now-41d}}",
+      "AnomalyEndDate": "{{iso:now-39d}}",
+      "DimensionValue": "Amazon Elastic Compute Cloud - Compute",
+      "MonitorArn": "arn:aws:ce::{{account}}:anomalymonitor/7d0e5c2b-1a4f-4b8e-9c3d-6f2a1e0b5d94",
+      "AnomalyScore": { "MaxScore": 0.72, "CurrentScore": 0.0 },
+      "Impact": {
+        "MaxImpact": 48.0,
+        "TotalImpact": 112.3,
+        "TotalActualSpend": 304.1,
+        "TotalExpectedSpend": 191.8,
+        "TotalImpactPercentage": 58.6
+      },
+      "RootCauses": [
+        {
+          "Service": "Amazon Elastic Compute Cloud - Compute",
+          "Region": "{{region}}",
+          "LinkedAccount": "{{account}}",
+          "LinkedAccountName": "acme-prod",
+          "UsageType": "USE1-BoxUsage:m5.2xlarge",
+          "Impact": { "Contribution": 112.3 }
+        }
+      ],
+      "Feedback": "PLANNED_ACTIVITY"
+    }
+  ]
+}

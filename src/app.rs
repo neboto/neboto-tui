@@ -2492,6 +2492,10 @@ pub struct App {
     // Cost & Billing: query toggles, detail section, lazy drill-down, `m` overlay
     pub cost_group_by: crate::aws::services::cost::CostGroupBy,
     pub cost_period: crate::aws::services::cost::CostPeriod,
+    /// The Anomalies view (key `8`) — Cost Anomaly Detection anomalies in
+    /// place of grouped spend. The group-by/period above are kept so `1`–`7`
+    /// return to the spend view the user left.
+    pub cost_anomalies: bool,
     // Cache
     pub cache: ResourceCache,
     // Resolved TTL settings (config `cache_ttl`/`cache_ttls`), retained so the
@@ -3187,6 +3191,7 @@ impl App {
             org_view: OrgView::Overview,
             cost_group_by: crate::aws::services::cost::CostGroupBy::Service,
             cost_period: crate::aws::services::cost::CostPeriod::Mtd,
+            cost_anomalies: false,
             cache: ResourceCache::new(cache_base_ttl, cache_ttl_overrides.clone()),
             cache_base_ttl,
             cache_ttl_overrides,
@@ -7658,9 +7663,11 @@ impl App {
         }
 
         // Cost grouping / period toggles (list pane). 1–4 pick the GroupBy
-        // dimension, 5–7 pick the period directly, `t` cycles it. Each rebuilds
-        // the Cost service with new query params and refetches (variant-cached,
-        // so revisiting a combination is instant).
+        // dimension, 5–7 pick the period directly, `t` cycles it, `8` opens
+        // the Anomalies view (any of 1–7 / `t` leaves it). Each rebuilds the
+        // Cost service with new query params and refetches (variant-cached,
+        // so revisiting a combination is instant). `Tab` walks the four
+        // groupings then Anomalies.
         if !self.search_active
             && !self.details_focused
             && self.current_service == Some(ServiceType::Cost)
@@ -7668,63 +7675,79 @@ impl App {
             use crate::aws::services::cost::{CostGroupBy, CostPeriod};
             match key.code {
                 KeyCode::Char('1') => {
+                    self.cost_anomalies = false;
                     self.cost_group_by = CostGroupBy::Service;
                     self.apply_cost_query();
                     return Ok(());
                 }
                 KeyCode::Char('2') => {
+                    self.cost_anomalies = false;
                     self.cost_group_by = CostGroupBy::LinkedAccount;
                     self.apply_cost_query();
                     return Ok(());
                 }
                 KeyCode::Char('3') => {
+                    self.cost_anomalies = false;
                     self.cost_group_by = CostGroupBy::Region;
                     self.apply_cost_query();
                     return Ok(());
                 }
                 KeyCode::Char('4') => {
+                    self.cost_anomalies = false;
                     self.cost_group_by = CostGroupBy::UsageType;
                     self.apply_cost_query();
                     return Ok(());
                 }
                 KeyCode::Char('5') => {
+                    self.cost_anomalies = false;
                     self.cost_period = CostPeriod::Mtd;
                     self.apply_cost_query();
                     return Ok(());
                 }
                 KeyCode::Char('6') => {
+                    self.cost_anomalies = false;
                     self.cost_period = CostPeriod::LastMonth;
                     self.apply_cost_query();
                     return Ok(());
                 }
                 KeyCode::Char('7') => {
+                    self.cost_anomalies = false;
                     self.cost_period = CostPeriod::Last3Months;
                     self.apply_cost_query();
                     return Ok(());
                 }
+                KeyCode::Char('8') => {
+                    if !self.cost_anomalies {
+                        self.cost_anomalies = true;
+                        self.apply_cost_query();
+                    }
+                    return Ok(());
+                }
                 KeyCode::Char('t') => {
-                    self.cost_period = match self.cost_period {
-                        CostPeriod::Mtd => CostPeriod::LastMonth,
-                        CostPeriod::LastMonth => CostPeriod::Last3Months,
-                        CostPeriod::Last3Months => CostPeriod::Mtd};
+                    if self.cost_anomalies {
+                        // From Anomalies, `t` returns to spend at the period
+                        // the user left rather than silently cycling it.
+                        self.cost_anomalies = false;
+                    } else {
+                        self.cost_period = match self.cost_period {
+                            CostPeriod::Mtd => CostPeriod::LastMonth,
+                            CostPeriod::LastMonth => CostPeriod::Last3Months,
+                            CostPeriod::Last3Months => CostPeriod::Mtd};
+                    }
                     self.apply_cost_query();
                     return Ok(());
                 }
                 KeyCode::BackTab | KeyCode::Tab => {
                     let forward = matches!(key.code, KeyCode::Tab);
-                    self.cost_group_by = if forward {
-                        match self.cost_group_by {
-                            CostGroupBy::Service => CostGroupBy::LinkedAccount,
-                            CostGroupBy::LinkedAccount => CostGroupBy::Region,
-                            CostGroupBy::Region => CostGroupBy::UsageType,
-                            CostGroupBy::UsageType => CostGroupBy::Service}
-                    } else {
-                        match self.cost_group_by {
-                            CostGroupBy::Service => CostGroupBy::UsageType,
-                            CostGroupBy::LinkedAccount => CostGroupBy::Service,
-                            CostGroupBy::Region => CostGroupBy::LinkedAccount,
-                            CostGroupBy::UsageType => CostGroupBy::Region}
-                    };
+                    // The cycle is the four groupings + Anomalies (as the
+                    // fifth stop), so `H`/`L` reach the Anomalies tab too.
+                    let (group, anomalies) = Self::cost_tab_step(
+                        self.cost_group_by,
+                        self.cost_anomalies,
+                        forward,
+                    );
+                    self.cost_group_by = group;
+                    self.cost_anomalies = anomalies;
                     self.apply_cost_query();
                     return Ok(());
                 }
@@ -10238,7 +10261,8 @@ impl App {
         // (build_services seeds the default query).
         let query = crate::aws::services::cost::CostQuery {
             group_by: self.cost_group_by,
-            period: self.cost_period};
+            period: self.cost_period,
+            anomalies: self.cost_anomalies};
         self.services.insert(
             ServiceType::Cost,
             Arc::new(crate::aws::services::cost::CostService::with_query(
@@ -26827,6 +26851,15 @@ impl App {
                     detail,
                 );
             }
+            if let Some(anomaly) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::cost::CostAnomaly>()
+            {
+                return crate::ui::widgets::details_pane::cost_anomaly_section_lines(
+                    anomaly,
+                    crate::aws::services::cost::CostAnomalyDetailSection::from_index(self.detail_section_idx),
+                );
+            }
             if let Some(item) = resource
                 .as_any()
                 .downcast_ref::<crate::aws::services::cost::CostLineItem>()
@@ -28615,8 +28648,16 @@ impl App {
     /// The cache variant for a service — distinguishes result sets a single
     /// service caches separately. Cost caches each group-by/period combination
     /// independently so toggling between them is instant (no refetch).
+    #[cfg(test)]
+    pub(crate) fn cache_variant_for_test(&self, service: ServiceType) -> Option<String> {
+        self.cache_variant(service)
+    }
+
     fn cache_variant(&self, service: ServiceType) -> Option<String> {
         if service == ServiceType::Cost {
+            if self.cost_anomalies {
+                return Some("Anomalies".to_string());
+            }
             Some(format!("{:?}-{:?}", self.cost_group_by, self.cost_period))
         } else if service == ServiceType::Waf {
             Some(format!("{:?}", self.waf_scope))
@@ -28707,10 +28748,36 @@ impl App {
     /// Rebuild the Cost service with the current group-by/period and reload.
     /// The variant-keyed cache means a previously-viewed combination is served
     /// from cache instantly; only a genuinely new combination refetches.
+    /// One `Tab` (forward) / `Shift-Tab` step through Cost's tab cycle:
+    /// Service → Account → Region → Usage Type → Anomalies → Service. Leaving
+    /// Anomalies forward lands on Service, backward on Usage Type; the
+    /// grouping is unchanged while Anomalies is the stop.
+    pub(crate) fn cost_tab_step(
+        group: crate::aws::services::cost::CostGroupBy,
+        anomalies: bool,
+        forward: bool,
+    ) -> (crate::aws::services::cost::CostGroupBy, bool) {
+        use crate::aws::services::cost::CostGroupBy as G;
+        if anomalies {
+            return (if forward { G::Service } else { G::UsageType }, false);
+        }
+        match (group, forward) {
+            (G::UsageType, true) => (group, true),
+            (G::Service, false) => (group, true),
+            (G::Service, true) => (G::LinkedAccount, false),
+            (G::LinkedAccount, true) => (G::Region, false),
+            (G::Region, true) => (G::UsageType, false),
+            (G::LinkedAccount, false) => (G::Service, false),
+            (G::Region, false) => (G::LinkedAccount, false),
+            (G::UsageType, false) => (G::Region, false),
+        }
+    }
+
     fn apply_cost_query(&mut self) {
         let query = crate::aws::services::cost::CostQuery {
             group_by: self.cost_group_by,
-            period: self.cost_period};
+            period: self.cost_period,
+            anomalies: self.cost_anomalies};
         self.services.insert(
             ServiceType::Cost,
             Arc::new(crate::aws::services::cost::CostService::with_query(
