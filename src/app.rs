@@ -15205,7 +15205,7 @@ impl App {
             .filter_map(|r| r.as_any().downcast_ref::<crate::aws::services::ecr::EcrImage>())
             .filter(|i| i.repo_name == repo_name)
             .collect();
-        images.sort_by(|a, b| b.pushed_secs.cmp(&a.pushed_secs));
+        images.sort_by_key(|i| std::cmp::Reverse(i.pushed_secs));
         images
     }
 

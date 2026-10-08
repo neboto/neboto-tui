@@ -289,7 +289,7 @@ pub async fn fetch_ecr_repo_images(
 /// Sort newest push first, then keep `MAX_IMAGES_PER_REPO`. Every kept row
 /// carries the repo's totals so the repo pane can say what was cut.
 fn newest_images(mut images: Vec<EcrImage>, complete: bool) -> EcrRepoImages {
-    images.sort_by(|a, b| b.pushed_secs.cmp(&a.pushed_secs));
+    images.sort_by_key(|i| std::cmp::Reverse(i.pushed_secs));
     let seen = images.len();
     images.truncate(MAX_IMAGES_PER_REPO);
     for img in &mut images {
