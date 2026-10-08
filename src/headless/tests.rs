@@ -86,15 +86,48 @@ async fn json_output_is_a_versioned_document() {
     assert_eq!(table.lines().count(), rows.len() + 1);
 }
 
+/// Services the demo account has list fixtures with rows for. Each must load
+/// non-empty; Route 53 and S3 have fixtures too, but they're empty lists.
+const DEMO_POPULATED: &[ServiceType] = &[
+    ServiceType::EC2,
+    ServiceType::ECS,
+    ServiceType::IAM,
+    ServiceType::Lambda,
+    ServiceType::CloudFormation,
+    ServiceType::Elb,
+    ServiceType::CloudTrail,
+    ServiceType::CloudWatch,
+    ServiceType::Secrets,
+    ServiceType::Ssm,
+    ServiceType::Ecr,
+];
+
 #[tokio::test]
-async fn every_service_lists_or_fails_cleanly() {
-    // The demo answers anything it has no fixture for with an empty success,
-    // so every service's load must run to completion here — a hang or a
-    // panic in the event draining would show up as this test never ending.
+async fn every_service_load_path_succeeds_against_the_demo() {
+    // A smoke test of every service's real load path (#121): request
+    // building, the wire format, deserialization and the streaming events.
+    // The demo answers anything it has no fixture for with a protocol-correct
+    // empty success, so every load must finish `Ok` with no partial-load
+    // warning — a failure here is a broken fetch (or a restXml call that
+    // needs an empty-list fixture), not missing data. Failures are collected
+    // so one run names all of them.
+    let mut failures = Vec::new();
     for svc in ServiceType::all() {
         let res = tokio::time::timeout(std::time::Duration::from_secs(30), demo_list(svc)).await;
-        assert!(res.is_ok(), "{} never finished listing", svc.name());
+        match res {
+            Err(_) => failures.push(format!("{}: never finished listing", svc.name())),
+            Ok(Err(e)) => failures.push(format!("{}: load error: {}", svc.name(), e.message())),
+            Ok(Ok((rows, warnings))) => {
+                if !warnings.is_empty() {
+                    failures.push(format!("{}: partial load: {warnings:?}", svc.name()));
+                }
+                if rows.is_empty() && DEMO_POPULATED.contains(&svc) {
+                    failures.push(format!("{}: listed empty, but the demo has fixtures for it", svc.name()));
+                }
+            }
+        }
     }
+    assert!(failures.is_empty(), "{} service load(s) failed:\n  {}", failures.len(), failures.join("\n  "));
 }
 
 #[test]
@@ -247,6 +280,8 @@ async fn get_every_demo_resource_settles() {
         ServiceType::CloudTrail,
         ServiceType::Secrets,
         ServiceType::Ssm,
+        ServiceType::Ecr,
+        ServiceType::CloudWatch,
     ] {
         let (rows, _) = demo_list(svc).await.unwrap();
         // Per type, with --type: ids aren't unique across types (a CloudTrail
