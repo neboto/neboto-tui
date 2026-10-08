@@ -18003,6 +18003,9 @@ pub fn eb_environment_section_lines(
             }
             if let Some(lb) = &e.load_balancer {
                 rows.push(kv(&format!("  {EB_ROW_LOAD_BALANCER}"), lb.name.clone()));
+                if let Some(d) = &lb.domain {
+                    rows.push(kv("  Load Balancer DNS", d.clone()));
+                }
                 if !lb.listeners.is_empty() {
                     rows.push(kv("  Listeners", lb.listeners.join(", ")));
                 }

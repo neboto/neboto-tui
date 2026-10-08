@@ -178,7 +178,7 @@ impl AwsService for BeanstalkService {
                 }
             }
         }
-        versions.sort_by(|a, b| b.created_secs.cmp(&a.created_secs));
+        versions.sort_by_key(|v| std::cmp::Reverse(v.created_secs));
         if versions.len() > MAX_VERSIONS {
             warn(format!(
                 "Elastic Beanstalk: {} application versions — showing the newest {MAX_VERSIONS}",
