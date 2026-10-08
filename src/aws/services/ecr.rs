@@ -14,6 +14,14 @@ use tokio::sync::mpsc;
 /// DescribeImages rate limit is per account, so stay well under it.
 const IMAGE_LIST_CONCURRENCY: usize = 6;
 
+/// Image rows kept per repo (the newest by push time).
+pub const MAX_IMAGES_PER_REPO: usize = 100;
+
+/// Images read per repo before giving up on the walk. DescribeImages has no
+/// server-side sort, so finding the newest means reading them all; this is
+/// the bound on that (10 pages of 1000).
+const MAX_IMAGES_SCANNED_PER_REPO: usize = 10_000;
+
 /// Findings kept per image for the Findings section — the worst ones, since
 /// the list is sorted by severity before the cut.
 const MAX_IMAGE_FINDINGS: usize = 300;
@@ -86,8 +94,9 @@ impl AwsService for EcrService {
         }
 
         // Phase 2: every repo's images, so they are list rows of their own
-        // (the Images sub-tab). One DescribeImages walk per repo, capped per
-        // repo by `fetch_ecr_repo_images`. A repo that fails is a warning,
+        // (the Images sub-tab). One DescribeImages walk per repo, cut to the
+        // newest `MAX_IMAGES_PER_REPO` by `fetch_ecr_repo_images` (a cut repo
+        // is named in a load warning). A repo that fails is a warning,
         // never a load error — the repos and other images already streamed.
         let client = self.client.clone();
         let mut stream = futures::stream::iter(targets.into_iter().map(|(name, uri)| {
@@ -100,13 +109,21 @@ impl AwsService for EcrService {
         .buffer_unordered(IMAGE_LIST_CONCURRENCY);
         let mut failed = 0usize;
         let mut first_err: Option<String> = None;
-        while let Some((_name, res)) = stream.next().await {
+        let mut cut: Vec<String> = Vec::new();
+        while let Some((name, res)) = stream.next().await {
             match res {
-                Ok(images) if !images.is_empty() => {
-                    total += images.len();
+                Ok(page) => {
+                    if page.truncated() {
+                        cut.push(name);
+                    }
+                    if page.images.is_empty() {
+                        continue;
+                    }
+                    total += page.images.len();
                     let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
                         service: service_type,
-                        resources: images
+                        resources: page
+                            .images
                             .into_iter()
                             .map(|i| Box::new(i) as Box<dyn Resource>)
                             .collect(),
@@ -117,7 +134,6 @@ impl AwsService for EcrService {
                         },
                     });
                 }
-                Ok(_) => {}
                 Err(e) => {
                     failed += 1;
                     if first_err.is_none() {
@@ -135,6 +151,12 @@ impl AwsService for EcrService {
                     if failed == 1 { "y" } else { "ies" },
                     first_err.unwrap_or_default()
                 ),
+            });
+        }
+        if !cut.is_empty() {
+            let _ = event_tx.send(Event::ResourceLoadWarning {
+                service: service_type,
+                warning: truncation_warning(&cut),
             });
         }
 
@@ -211,18 +233,38 @@ impl EcrService {
 
 // ── Lazy fetches for the split pane ──────────────────────────────────────────
 
+/// One repo's images as list rows: the newest `MAX_IMAGES_PER_REPO` by push
+/// time, plus how many the walk saw. `DescribeImages` returns images in no
+/// particular order, so the walk reads every page (up to
+/// `MAX_IMAGES_SCANNED_PER_REPO`) *before* sorting and cutting — stopping at
+/// the first page would keep an arbitrary 100, not the newest.
+pub struct EcrRepoImages {
+    pub images: Vec<EcrImage>,
+    /// Images the walk read (before the cut).
+    pub seen: usize,
+    /// False when the scan ceiling stopped the walk with pages left, so the
+    /// kept rows are the newest *of those read*, not of the whole repo.
+    pub complete: bool,
+}
+
+impl EcrRepoImages {
+    pub fn truncated(&self) -> bool {
+        !self.complete || self.seen > self.images.len()
+    }
+}
+
 pub async fn fetch_ecr_repo_images(
     client: EcrClient,
     repo_name: String,
     repo_uri: String,
-) -> Result<Vec<EcrImage>> {
+) -> Result<EcrRepoImages> {
     let mut images = Vec::new();
     let mut token: Option<String> = None;
-    loop {
+    let complete = loop {
         let mut req = client
             .describe_images()
             .repository_name(&repo_name)
-            .max_results(100);
+            .max_results(1000);
         if let Some(t) = &token {
             req = req.next_token(t);
         }
@@ -234,12 +276,42 @@ pub async fn fetch_ecr_repo_images(
             images.push(EcrImage::from_sdk(detail, &repo_name, &repo_uri));
         }
         token = next_page_token(page.next_token(), &token);
-        if token.is_none() || images.len() >= 100 {
-            break;
+        if token.is_none() {
+            break true;
         }
+        if images.len() >= MAX_IMAGES_SCANNED_PER_REPO {
+            break false;
+        }
+    };
+    Ok(newest_images(images, complete))
+}
+
+/// Sort newest push first, then keep `MAX_IMAGES_PER_REPO`. Every kept row
+/// carries the repo's totals so the repo pane can say what was cut.
+fn newest_images(mut images: Vec<EcrImage>, complete: bool) -> EcrRepoImages {
+    images.sort_by(|a, b| b.pushed_secs.cmp(&a.pushed_secs));
+    let seen = images.len();
+    images.truncate(MAX_IMAGES_PER_REPO);
+    for img in &mut images {
+        img.repo_images_seen = seen;
+        img.repo_images_complete = complete;
     }
-    images.sort_by(|a, b| b.pushed_at.cmp(&a.pushed_at));
-    Ok(images)
+    EcrRepoImages { images, seen, complete }
+}
+
+/// The load warning for repos whose image list was cut to the newest
+/// `MAX_IMAGES_PER_REPO`. Names up to three repos.
+fn truncation_warning(repos: &[String]) -> String {
+    let mut names: Vec<&str> = repos.iter().map(String::as_str).collect();
+    names.sort_unstable();
+    let shown = names.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+    let more = names.len().saturating_sub(3);
+    format!(
+        "images: showing the newest {} per repository for {}{}",
+        MAX_IMAGES_PER_REPO,
+        shown,
+        if more > 0 { format!(" (+{} more)", more) } else { String::new() }
+    )
 }
 
 pub async fn fetch_ecr_lifecycle(client: EcrClient, repo_name: String) -> Result<String> {
@@ -496,7 +568,8 @@ crate::sections! {
     pub enum EcrRepoDetailSection,
     pub static ECR_REPO_SECTIONS = [
         Details "Details",
-        Images "Images" => crate::app::App::trigger_ecr_images_load,
+        // Filtered from the Images tab's rows already loaded — no fetch.
+        Images "Images",
         LifecyclePolicy "Lifecycle" => crate::app::App::trigger_ecr_lifecycle_load,
         Tags "Tags",
     ]
@@ -593,6 +666,11 @@ pub struct EcrImage {
     pub scan_status: String,
     pub scan_status_description: Option<String>,
     pub finding_counts: HashMap<String, i32>,
+    /// Images the list load read for this repo — more than the repo's
+    /// loaded rows when the newest-N cut dropped some.
+    pub repo_images_seen: usize,
+    /// False when the load stopped reading the repo's images early.
+    pub repo_images_complete: bool,
 }
 
 impl EcrImage {
@@ -637,6 +715,8 @@ impl EcrImage {
                 .and_then(|s| s.description())
                 .map(|s| s.to_string()),
             finding_counts,
+            repo_images_seen: 0,
+            repo_images_complete: true,
         }
     }
 
@@ -681,7 +761,7 @@ impl EcrImage {
     /// digest; a tag reference (no tag = `latest`) must be one of this
     /// image's *current* tags — so a task started from `:latest` before the
     /// tag moved is matched by its resolved digest instead, where the caller
-    /// has one. The registry account must agree when both sides name one.
+    /// has one. The registry host (account + region) must be this repo's.
     pub fn matches_image_ref(&self, image_ref: &str, resolved_digest: Option<&str>) -> bool {
         let r = image_ref.trim();
         let Some((host, path)) = r.split_once(".amazonaws.com/") else {
@@ -690,9 +770,23 @@ impl EcrImage {
         if !host.contains(".dkr.ecr.") {
             return false;
         }
-        let account = host.split('.').next().unwrap_or_default();
-        if !self.registry_id.is_empty() && !account.is_empty() && account != self.registry_id {
-            return false;
+        // Same registry: compare the whole host (account *and* region) with
+        // this image's repo URI, so `web` in eu-west-1 isn't matched by a
+        // us-east-1 `web`. Without a URI, fall back to the account alone.
+        let own_host = self
+            .repo_uri
+            .split_once(".amazonaws.com/")
+            .map(|(h, _)| h)
+            .unwrap_or_default();
+        if !own_host.is_empty() {
+            if !host.eq_ignore_ascii_case(own_host) {
+                return false;
+            }
+        } else {
+            let account = host.split('.').next().unwrap_or_default();
+            if !self.registry_id.is_empty() && !account.is_empty() && account != self.registry_id {
+                return false;
+            }
         }
         let (repo_tag, digest) = match path.split_once('@') {
             Some((rt, d)) => (rt, Some(d)),
@@ -1015,6 +1109,49 @@ mod image_tests {
             None
         ));
         assert!(!img.matches_image_ref("docker.io/library/web:v2", None));
+        // Same account and repo name, other region's registry.
+        assert!(!img.matches_image_ref(
+            "123456789012.dkr.ecr.eu-west-1.amazonaws.com/web:v2",
+            None
+        ));
+    }
+
+    fn pushed(repo: &str, digest: &str, secs: i64) -> EcrImage {
+        let d = aws_sdk_ecr::types::ImageDetail::builder()
+            .registry_id("123456789012")
+            .repository_name(repo)
+            .image_digest(digest)
+            .image_pushed_at(aws_smithy_types::DateTime::from_secs(secs))
+            .build();
+        EcrImage::from_sdk(&d, repo, &format!("{HOST}/{repo}"))
+    }
+
+    #[test]
+    fn newest_images_sorts_before_cutting() {
+        // Arrive oldest-first (DescribeImages has no order) — the cut must
+        // keep the newest, not the first page.
+        let n = MAX_IMAGES_PER_REPO + 20;
+        let images: Vec<EcrImage> =
+            (0..n).map(|i| pushed("web", &format!("sha256:{i:064}"), i as i64)).collect();
+        let out = newest_images(images, true);
+        assert_eq!(out.images.len(), MAX_IMAGES_PER_REPO);
+        assert_eq!(out.seen, n);
+        assert!(out.truncated());
+        assert_eq!(out.images[0].pushed_secs, Some(n as i64 - 1));
+        assert_eq!(out.images.last().unwrap().pushed_secs, Some(20));
+        assert!(out.images.iter().all(|i| i.repo_images_seen == n));
+
+        let small = newest_images(vec![pushed("web", D1, 1)], true);
+        assert!(!small.truncated());
+        assert!(newest_images(vec![pushed("web", D1, 1)], false).truncated());
+    }
+
+    #[test]
+    fn truncation_warning_names_a_few_repos() {
+        let one = truncation_warning(&["web".to_string()]);
+        assert!(one.contains("newest 100") && one.ends_with("for web"), "{one}");
+        let many: Vec<String> = ["e", "d", "c", "b", "a"].iter().map(|s| s.to_string()).collect();
+        assert!(truncation_warning(&many).ends_with("for a, b, c (+2 more)"));
     }
 
     #[test]

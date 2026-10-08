@@ -15166,26 +15166,6 @@ impl App {
             .unwrap_or(false)
     }
 
-    pub(crate) fn trigger_ecr_images_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(repo) = self.get_selected_resource().and_then(|r| {
-            r.as_any().downcast_ref::<crate::aws::services::ecr::EcrRepository>()
-        }) {
-            let name = repo.name.clone();
-            let uri = repo.uri.clone();
-            let client = self.aws_clients.ecr_client();
-            self.trigger_lazy(
-                |app| &mut app.lazy.ecr_repo_images,
-                name.clone(),
-                event_tx,
-                async move {
-                    crate::aws::services::ecr::fetch_ecr_repo_images(client, name, uri)
-                        .await
-                        .map_err(|e| format!("Images unavailable: {}", e))
-                },
-            );
-        }
-    }
-
     pub(crate) fn trigger_ecr_image_findings_load(
         &mut self,
         event_tx: &mpsc::UnboundedSender<Event>,
@@ -15210,6 +15190,23 @@ impl App {
                 },
             );
         }
+    }
+
+    /// A repo's images for its Images section: the Images tab's rows already
+    /// in the list (the list load fetches them), newest first — no fetch of
+    /// its own, the VPC-subnets pattern.
+    pub(crate) fn ecr_repo_sibling_images(
+        &self,
+        repo_name: &str,
+    ) -> Vec<&crate::aws::services::ecr::EcrImage> {
+        let mut images: Vec<&crate::aws::services::ecr::EcrImage> = self
+            .resources
+            .iter()
+            .filter_map(|r| r.as_any().downcast_ref::<crate::aws::services::ecr::EcrImage>())
+            .filter(|i| i.repo_name == repo_name)
+            .collect();
+        images.sort_by(|a, b| b.pushed_secs.cmp(&a.pushed_secs));
+        images
     }
 
     /// ECS tasks and task definitions that reference `img`, from data already
@@ -19970,6 +19967,25 @@ impl App {
                     }
                 }
                 None => {
+                    // A digest-pinned image URI targets `repo@sha256:…`, but
+                    // the Images tab holds only each repo's newest rows — an
+                    // older digest isn't there. Once the load is done, fall
+                    // back to the repository rather than an empty list.
+                    if !self.loading && self.current_service == Some(ServiceType::Ecr) {
+                        if let Some(repo) = Self::ecr_image_jump_fallback(&id) {
+                            self.ecr_view = EcrView::Repositories;
+                            self.search_query = repo.clone();
+                            self.pending_jump = Some(repo);
+                            self.pending_jump_section = None;
+                            self.update_search();
+                            self.success_message = Some(
+                                "Image not among the loaded rows — showing its repository".to_string(),
+                            );
+                            self.success_message_time = Some(Instant::now());
+                            self.resolve_pending_jump(event_tx);
+                            return;
+                        }
+                    }
                     // Not in view yet. Keep the pending jump alive while results
                     // are still streaming in or a lazy section hasn't grafted yet
                     // (a later batch / `*Loaded` event will resolve it) — clearing
@@ -19987,6 +20003,13 @@ impl App {
                 }
             }
         }
+    }
+
+    /// The repository behind an ECR image row id (`repo@sha256:…`) — where an
+    /// unresolved image jump lands instead. `None` for any other id.
+    pub(crate) fn ecr_image_jump_fallback(id: &str) -> Option<String> {
+        let (repo, digest) = id.split_once('@')?;
+        (!repo.is_empty() && digest.starts_with("sha256:")).then(|| repo.to_string())
     }
 
     /// "Go to resource": jump from the selected detail row to the resource it
@@ -20150,11 +20173,6 @@ impl App {
             id: arn})
     }
 
-    /// "Go to the action's target": CodeSuite rows whose value is a bare name
-    /// rather than an ARN, so only the row *label* identifies what it points
-    /// at. Serves both a pipeline's Stages section and a run's Actions section
-    /// — the labels are emitted by `action_target`, which is why they have to
-    /// stay in step with this table.
     /// ECR row jumps. Repo pane, Images section: a `  Digest` row opens that
     /// image on the Images tab. Image pane: `Repository` (Overview) goes to
     /// the repo, and Used By's `  Task` / `  Task Definition` rows go to ECS.
@@ -20208,6 +20226,11 @@ impl App {
         Some(JumpTarget { service, view, id: id.to_string() })
     }
 
+    /// "Go to the action's target": CodeSuite rows whose value is a bare name
+    /// rather than an ARN, so only the row *label* identifies what it points
+    /// at. Serves both a pipeline's Stages section and a run's Actions section
+    /// — the labels are emitted by `action_target`, which is why they have to
+    /// stay in step with this table.
     pub fn code_row_jump_target(&self, key: &str, value: &str) -> Option<crate::app::JumpTarget> {
         if value.is_empty() || self.current_service != Some(ServiceType::Code) {
             return None;
@@ -25938,10 +25961,12 @@ impl App {
                 .as_any()
                 .downcast_ref::<crate::aws::services::ecr::EcrRepository>()
             {
+                let images = self.ecr_repo_sibling_images(&repo.name);
                 return crate::ui::widgets::details_pane::ecr_repo_section_lines(
                     repo,
                     crate::aws::services::ecr::EcrRepoDetailSection::from_index(self.detail_section_idx),
-                    self.lazy.ecr_repo_images.get(&repo.name),
+                    &images,
+                    self.loading,
                     self.lazy.ecr_lifecycle.get(&repo.name),
                 );
             }
@@ -32601,5 +32626,15 @@ mod ecr_row_jump_tests {
         assert!(App::ecr_image_row_target("web", S::Findings, "  Task", arn).is_none());
         assert!(App::ecr_image_row_target("web", S::UsedBy, "  Container", "web").is_none());
         assert!(App::ecr_image_row_target("web", S::Overview, "Repository", "").is_none());
+    }
+
+    #[test]
+    fn unresolved_image_jump_falls_back_to_its_repo() {
+        let d = "sha256:0123456789abcdef";
+        assert_eq!(App::ecr_image_jump_fallback(&format!("team/web@{d}")).as_deref(), Some("team/web"));
+        // Not an image id: an ECS task ARN, a repo name, an email-ish string.
+        assert!(App::ecr_image_jump_fallback("web").is_none());
+        assert!(App::ecr_image_jump_fallback("ops@example.com").is_none());
+        assert!(App::ecr_image_jump_fallback(&format!("@{d}")).is_none());
     }
 }

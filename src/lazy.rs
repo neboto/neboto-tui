@@ -695,8 +695,6 @@ pub struct LazyStore {
     pub config_eval: LazyMap<Vec<crate::aws::services::awsconfig::ConfigEvalResult>>,
 
     // ── ECR / Cognito / Backup ───────────────────────────────────────────
-    /// A repo's images (newest first), keyed by repo name.
-    pub ecr_repo_images: LazyMap<Vec<crate::aws::services::ecr::EcrImage>>,
     /// A repo's lifecycle-policy JSON (empty = none), keyed by repo name.
     pub ecr_lifecycle: LazyMap<String>,
     /// An image's scan findings, keyed by `EcrImage::key` (`repo@digest`).

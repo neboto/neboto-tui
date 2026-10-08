@@ -2909,8 +2909,10 @@ pub fn resource_jump_target(
     for field in [value, key] {
         if let Some(name) = ecr_repo_from_image_uri(field) {
             // Pinned by digest → the image row itself (`repo@digest` is its
-            // id). A tag can't be resolved to a digest without a call, so a
-            // tagged reference still lands on the repository.
+            // id); if that row isn't loaded (older than the per-repo cut),
+            // `resolve_pending_jump` falls back to the repository. A tag can't
+            // be resolved to a digest without a call, so a tagged reference
+            // lands on the repository directly.
             if let Some(digest) = ecr_digest_from_image_uri(field) {
                 return mk(
                     ServiceType::Ecr,
@@ -3438,10 +3440,6 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
     }
 }
 
-/// Extract the repository name from an ECR image URI
-/// (`<acct>.dkr.ecr.<region>.amazonaws.com/<repo>[:tag][@sha256:…]`). Returns
-/// `None` for anything that isn't an ECR image reference. The repo name may
-/// contain slashes; the `:tag` / `@digest` suffix is stripped.
 /// The `sha256:…` digest of a digest-pinned ECR image URI, if it has one.
 fn ecr_digest_from_image_uri(s: &str) -> Option<&str> {
     ecr_repo_from_image_uri(s)?;
@@ -3449,6 +3447,10 @@ fn ecr_digest_from_image_uri(s: &str) -> Option<&str> {
     d.starts_with("sha256:").then_some(d)
 }
 
+/// Extract the repository name from an ECR image URI
+/// (`<acct>.dkr.ecr.<region>.amazonaws.com/<repo>[:tag][@sha256:…]`). Returns
+/// `None` for anything that isn't an ECR image reference. The repo name may
+/// contain slashes; the `:tag` / `@digest` suffix is stripped.
 fn ecr_repo_from_image_uri(s: &str) -> Option<&str> {
     if !s.contains(".dkr.ecr.") {
         return None;
@@ -27422,7 +27424,8 @@ fn render_ecr_repo_split(app: &App, repo: &EcrRepository, area: Rect, frame: &mu
 pub fn ecr_repo_section_lines(
     repo: &EcrRepository,
     section: crate::aws::services::ecr::EcrRepoDetailSection,
-    images: Option<&crate::lazy::Lazy<Vec<crate::aws::services::ecr::EcrImage>>>,
+    images: &[&crate::aws::services::ecr::EcrImage],
+    list_loading: bool,
     lifecycle: Option<&crate::lazy::Lazy<String>>,
 ) -> Vec<(String, String)> {
     
@@ -27445,66 +27448,78 @@ pub fn ecr_repo_section_lines(
             rows.push(("ARN".to_string(), repo.arn.clone()));
             rows
         }
-        EcrRepoDetailSection::Images => match images {
-            None | Some(crate::lazy::Lazy::Loading) => {
-                vec![("".to_string(), "Loading images…".to_string())]
+        EcrRepoDetailSection::Images => {
+            // The Images tab's rows for this repo (the list load fetched
+            // them) — filtered, not fetched again.
+            if images.is_empty() {
+                return if list_loading {
+                    vec![("".to_string(), "Loading…".to_string())]
+                } else {
+                    vec![(" No images in this repository".to_string(), String::new())]
+                };
             }
-            Some(crate::lazy::Lazy::Loaded(list)) => {
-                if list.is_empty() {
-                    return vec![(" No images in this repository".to_string(), String::new())];
+            let seen = images[0].repo_images_seen;
+            let complete = images[0].repo_images_complete;
+            let heading = if seen > images.len() || !complete {
+                format!(
+                    "Images (newest {} of {}{})",
+                    images.len(),
+                    seen,
+                    if complete { "" } else { "+" }
+                )
+            } else {
+                format!("Images ({}, newest first)", images.len())
+            };
+            let mut rows = vec![(heading, String::new())];
+            rows.push((String::new(), String::new()));
+            for img in images {
+                // Group header: the image tag(s), or <untagged>.
+                let tag_display = if img.tags.is_empty() {
+                    "<untagged>".to_string()
+                } else {
+                    img.tags.join(", ")
+                };
+                rows.push((tag_display, String::new()));
+
+                rows.push(("  URI".to_string(), img.image_ref()));
+                rows.push(("  Digest".to_string(), img.digest.clone()));
+                if let Some(p) = &img.pushed_at {
+                    rows.push(("  Pushed".to_string(), p.clone()));
                 }
-                let mut rows = vec![(format!("Images ({}, newest first)", list.len()), String::new())];
+                rows.push((
+                    "  Last Pulled".to_string(),
+                    img.last_pulled_at.clone().unwrap_or_else(|| "Never".to_string()),
+                ));
+                rows.push(("  Size".to_string(), img.size_display()));
+                if let Some(a) = &img.artifact_media_type {
+                    rows.push(("  Artifact Type".to_string(), a.clone()));
+                }
+                if let Some(m) = &img.manifest_media_type {
+                    rows.push(("  Manifest Type".to_string(), m.clone()));
+                }
+
+                // Scan status + findings.
+                let scan = if img.scan_status.is_empty() {
+                    "Not scanned".to_string()
+                } else {
+                    img.scan_status.clone()
+                };
+                rows.push(("  Scan Status".to_string(), scan));
+                let breakdown = img.vuln_breakdown();
+                if !breakdown.is_empty() {
+                    rows.push(("  Vulnerabilities".to_string(), breakdown));
+                } else if img.scan_status == "COMPLETE" {
+                    rows.push(("  Vulnerabilities".to_string(), "✓ No findings".to_string()));
+                } else if let Some(d) = &img.scan_status_description {
+                    if !d.is_empty() {
+                        rows.push(("  Scan Detail".to_string(), d.clone()));
+                    }
+                }
+
                 rows.push((String::new(), String::new()));
-                for img in list {
-                    // Group header: the image tag(s), or <untagged>.
-                    let tag_display = if img.tags.is_empty() {
-                        "<untagged>".to_string()
-                    } else {
-                        img.tags.join(", ")
-                    };
-                    rows.push((tag_display, String::new()));
-
-                    rows.push(("  URI".to_string(), img.image_ref()));
-                    rows.push(("  Digest".to_string(), img.digest.clone()));
-                    if let Some(p) = &img.pushed_at {
-                        rows.push(("  Pushed".to_string(), p.clone()));
-                    }
-                    rows.push((
-                        "  Last Pulled".to_string(),
-                        img.last_pulled_at.clone().unwrap_or_else(|| "Never".to_string()),
-                    ));
-                    rows.push(("  Size".to_string(), img.size_display()));
-                    if let Some(a) = &img.artifact_media_type {
-                        rows.push(("  Artifact Type".to_string(), a.clone()));
-                    }
-                    if let Some(m) = &img.manifest_media_type {
-                        rows.push(("  Manifest Type".to_string(), m.clone()));
-                    }
-
-                    // Scan status + findings.
-                    let scan = if img.scan_status.is_empty() {
-                        "Not scanned".to_string()
-                    } else {
-                        img.scan_status.clone()
-                    };
-                    rows.push(("  Scan Status".to_string(), scan));
-                    let breakdown = img.vuln_breakdown();
-                    if !breakdown.is_empty() {
-                        rows.push(("  Vulnerabilities".to_string(), breakdown));
-                    } else if img.scan_status == "COMPLETE" {
-                        rows.push(("  Vulnerabilities".to_string(), "✓ No findings".to_string()));
-                    } else if let Some(d) = &img.scan_status_description {
-                        if !d.is_empty() {
-                            rows.push(("  Scan Detail".to_string(), d.clone()));
-                        }
-                    }
-
-                    rows.push((String::new(), String::new()));
-                }
-                rows
             }
-            Some(crate::lazy::Lazy::Error(e)) => error_rows(e),
-        },
+            rows
+        }
         EcrRepoDetailSection::LifecyclePolicy => match lifecycle {
             None | Some(crate::lazy::Lazy::Loading) => {
                 vec![("".to_string(), "Loading lifecycle policy…".to_string())]
@@ -41642,6 +41657,45 @@ mod ecr_jump_tests {
         assert!(rows.iter().any(|(k, v)| k == "  Task" && v.ends_with("/0f1e")));
         let cold = ecr_image_section_lines(&img, S::UsedBy, None, Some((&[][..], false)));
         assert!(cold.iter().any(|(k, _)| k.contains("ECS not loaded")));
+    }
+
+    #[test]
+    fn ecr_repo_images_section_reads_sibling_rows() {
+        use crate::aws::services::ecr::{EcrImage, EcrRepoDetailSection as S, EcrRepository};
+        let repo = EcrRepository {
+            name: "web".into(),
+            arn: String::new(),
+            registry_id: String::new(),
+            uri: "123456789012.dkr.ecr.us-east-1.amazonaws.com/web".into(),
+            created: None,
+            image_tag_mutability: "MUTABLE".into(),
+            scan_on_push: false,
+            encryption_type: "AES256".into(),
+            kms_key: None,
+            tags: Default::default(),
+        };
+        let mut img = EcrImage::from_sdk(
+            &aws_sdk_ecr::types::ImageDetail::builder()
+                .repository_name("web")
+                .image_digest("sha256:abc")
+                .image_tags("v1")
+                .build(),
+            "web",
+            &repo.uri,
+        );
+        img.repo_images_seen = 1;
+        let rows = ecr_repo_section_lines(&repo, S::Images, &[&img], false, None);
+        assert_eq!(rows[0].0, "Images (1, newest first)");
+        assert!(rows.iter().any(|(k, v)| k == "  Digest" && v == "sha256:abc"));
+        // A cut list says so.
+        img.repo_images_seen = 250;
+        let rows = ecr_repo_section_lines(&repo, S::Images, &[&img], false, None);
+        assert_eq!(rows[0].0, "Images (newest 1 of 250)");
+        // Empty: loading while the list streams, "none" once it's done.
+        let rows = ecr_repo_section_lines(&repo, S::Images, &[], true, None);
+        assert!(rows.iter().any(|(_, v)| v.starts_with("Loading")));
+        let rows = ecr_repo_section_lines(&repo, S::Images, &[], false, None);
+        assert!(rows.iter().any(|(k, _)| k.contains("No images")));
     }
 
     #[test]
