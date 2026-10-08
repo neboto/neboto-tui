@@ -1,0 +1,15 @@
+<DescribeEnvironmentResourcesResponse xmlns="http://elasticbeanstalk.amazonaws.com/docs/2010-12-01/">
+  <DescribeEnvironmentResourcesResult>
+    <EnvironmentResources>
+      <EnvironmentName>portal-legacy</EnvironmentName>
+      <AutoScalingGroups><member><Name>awseb-e-p0rtalstd1-stack-AWSEBAutoScalingGroup-7Q2W3E4R5T6Y</Name></member></AutoScalingGroups>
+      <Instances/>
+      <LaunchConfigurations/>
+      <LaunchTemplates><member><Id>lt-0p0rta1std000001</Id></member></LaunchTemplates>
+      <LoadBalancers><member><Name>arn:aws:elasticloadbalancing:{{region}}:{{account}}:loadbalancer/app/legacy-admin-alb/7f3e2d1c0b9a8e6d</Name></member></LoadBalancers>
+      <Triggers/>
+      <Queues/>
+    </EnvironmentResources>
+  </DescribeEnvironmentResourcesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeEnvironmentResourcesResponse>

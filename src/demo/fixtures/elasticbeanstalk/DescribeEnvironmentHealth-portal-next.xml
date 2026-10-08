@@ -1,0 +1,17 @@
+<DescribeEnvironmentHealthResponse xmlns="http://elasticbeanstalk.amazonaws.com/docs/2010-12-01/">
+  <DescribeEnvironmentHealthResult>
+    <EnvironmentName>portal-next</EnvironmentName>
+    <HealthStatus>Ok</HealthStatus>
+    <Status>Ready</Status>
+    <Color>Green</Color>
+    <Causes/>
+    <ApplicationMetrics>
+      <Duration>10</Duration>
+      <RequestCount>1873</RequestCount>
+      <StatusCodes><Status2xx>1861</Status2xx><Status3xx>9</Status3xx><Status4xx>3</Status4xx><Status5xx>0</Status5xx></StatusCodes>
+      <Latency><P999>0.412</P999><P99>0.184</P99><P95>0.092</P95><P90>0.071</P90><P85>0.060</P85><P75>0.044</P75><P50>0.027</P50><P10>0.011</P10></Latency>
+    </ApplicationMetrics>
+    <RefreshedAt>{{iso:now-1m}}</RefreshedAt>
+  </DescribeEnvironmentHealthResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeEnvironmentHealthResponse>

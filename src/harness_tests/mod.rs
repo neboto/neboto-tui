@@ -32,6 +32,7 @@ mod ec2_console_test;
 mod cli_picker_test;
 mod batch_test;
 mod dms_test;
+mod beanstalk_test;
 mod s3tables_jump_test;
 mod ec2_lb_test;
 mod xray_test;
@@ -76,7 +77,7 @@ pub(crate) fn all_mocks() -> Vec<Mock> {
     // an empty Vec after a bad merge). 140 walk! types were covered when this
     // was written — bump the floor when panes are added, never lower it.
     assert!(
-        out.len() >= 163,
+        out.len() >= 166,
         "mock registry shrank to {} entries — a mocks_* batch file lost coverage",
         out.len()
     );

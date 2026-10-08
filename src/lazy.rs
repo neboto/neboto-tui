@@ -427,6 +427,16 @@ pub struct LazyStore {
     /// DMS serverless replication Tables section, keyed by config ARN.
     pub dms_serverless_table_stats: LazyMap<crate::aws::services::dms::DmsTableStats>,
 
+    // ── Elastic Beanstalk (all keyed by environment id) ──────────────────
+    /// Environment Health section (`DescribeEnvironmentHealth`).
+    pub eb_health: LazyMap<crate::aws::services::beanstalk::EbHealth>,
+    /// Environment Events section (`DescribeEvents`, newest page).
+    pub eb_events: LazyMap<Vec<crate::aws::services::beanstalk::EbEvent>>,
+    /// Environment Configuration section (`DescribeConfigurationSettings`).
+    pub eb_config: LazyMap<crate::aws::services::beanstalk::EbConfig>,
+    /// Environment Resources section (`DescribeEnvironmentResources`).
+    pub eb_resources: LazyMap<crate::aws::services::beanstalk::EbResources>,
+
     // ── Transfer Family ──────────────────────────────────────────────────
     /// A server's users, keyed by server id.
     pub transfer_users: LazyMap<Vec<crate::aws::services::transfer::TransferUser>>,

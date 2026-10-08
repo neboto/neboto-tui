@@ -116,6 +116,12 @@ AWS.
   a declarative loop AWS runs (model + prompt + tools + memory), i.e. the
   managed option AgentCore Runtime is not.
 
+- `ServiceType::Beanstalk` (`@eb`, file `beanstalk.rs`) is **Elastic
+  Beanstalk** — `@eb` used to alias EventBridge, which is now `@events` /
+  `@eventbridge` only. One environment list holds both **Standard** (EC2)
+  and **Cluster Mode** (EKS-backed) environments; `EnvironmentTier` decides
+  which (`EbDeploymentType::from_tier`).
+
 **Standalone-regional gotcha**: `ServiceType::Route53Resolver` (`@resolver`,
 file `route53resolver.rs`) is **separate** from `ServiceType::Route53` (`@r53`,
 hosted zones). Resolver endpoints/rules are genuinely region-scoped (so

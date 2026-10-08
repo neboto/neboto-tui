@@ -1,0 +1,25 @@
+<DescribeConfigurationSettingsResponse xmlns="http://elasticbeanstalk.amazonaws.com/docs/2010-12-01/">
+  <DescribeConfigurationSettingsResult>
+    <ConfigurationSettings>
+      <member>
+        <ApplicationName>acme-portal</ApplicationName>
+        <EnvironmentName>portal-next</EnvironmentName>
+        <DeploymentStatus>deployed</DeploymentStatus>
+        <DateCreated>{{iso:now-12d}}</DateCreated>
+        <DateUpdated>{{iso:now-3d}}</DateUpdated>
+        <OptionSettings>
+          <member><Namespace>aws:ec2:vpc</Namespace><OptionName>Subnets</OptionName><Value>subnet-0a11prv00000001a,subnet-0a11prv00000002b</Value></member>
+          <member><Namespace>aws:elasticbeanstalk:eks</Namespace><OptionName>cluster-role</OptionName><Value>arn:aws:iam::{{account}}:role/service-role/aws-elasticbeanstalk-eks-cluster-role</Value></member>
+          <member><Namespace>aws:elasticbeanstalk:eks</Namespace><OptionName>node-role</OptionName><Value>arn:aws:iam::{{account}}:role/service-role/aws-elasticbeanstalk-eks-node-role</Value></member>
+          <member><Namespace>aws:elasticbeanstalk:eks:environment</Namespace><OptionName>observability-role</OptionName><Value>arn:aws:iam::{{account}}:role/service-role/aws-elasticbeanstalk-eks-observability-role</Value></member>
+          <member><Namespace>aws:elasticbeanstalk:eks:environment</Namespace><OptionName>load-balancer-type</OptionName><Value>application</Value></member>
+          <member><Namespace>aws:elasticbeanstalk:eks:environment:autoscaling</Namespace><OptionName>min-replica</OptionName><Value>3</Value></member>
+          <member><Namespace>aws:elasticbeanstalk:eks:environment:autoscaling</Namespace><OptionName>max-replica</OptionName><Value>12</Value></member>
+          <member><Namespace>aws:elasticbeanstalk:eks:environment:deployment</Namespace><OptionName>strategy</OptionName><Value>RollingUpdate</Value></member>
+          <member><Namespace>aws:elasticbeanstalk:application:environment</Namespace><OptionName>NODE_ENV</OptionName><Value>production</Value></member>
+        </OptionSettings>
+      </member>
+    </ConfigurationSettings>
+  </DescribeConfigurationSettingsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeConfigurationSettingsResponse>
