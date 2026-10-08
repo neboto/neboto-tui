@@ -102,6 +102,17 @@ const DEMO_POPULATED: &[ServiceType] = &[
     ServiceType::Ecr,
 ];
 
+/// Services whose load correctly reports "not set up" on an account that
+/// answers every call empty, as the demo does for unfixtured services. The
+/// load must fail (or warn) with exactly this message — anything else is a
+/// broken fetch. Giving one of these demo fixtures moves it out of here.
+const DEMO_NOT_SET_UP: &[(ServiceType, &str)] = &[
+    (ServiceType::Config, "isn't recording in this region"),
+    (ServiceType::GuardDuty, "GuardDuty isn't enabled in this region"),
+    (ServiceType::ResourceExplorer, "Resource Explorer isn't set up"),
+    (ServiceType::ControlTower, "no aws-controltower Config aggregator visible"),
+];
+
 #[tokio::test]
 async fn every_service_load_path_succeeds_against_the_demo() {
     // A smoke test of every service's real load path (#121): request
@@ -114,6 +125,17 @@ async fn every_service_load_path_succeeds_against_the_demo() {
     let mut failures = Vec::new();
     for svc in ServiceType::all() {
         let res = tokio::time::timeout(std::time::Duration::from_secs(30), demo_list(svc)).await;
+        if let Some((_, expected)) = DEMO_NOT_SET_UP.iter().find(|(s, _)| *s == svc) {
+            let said = match &res {
+                Ok(Err(e)) => e.message().to_string(),
+                Ok(Ok((_, warnings))) => warnings.join("; "),
+                Err(_) => "never finished listing".to_string(),
+            };
+            if !said.contains(expected) {
+                failures.push(format!("{}: expected \"{expected}\", got: {said:?}", svc.name()));
+            }
+            continue;
+        }
         match res {
             Err(_) => failures.push(format!("{}: never finished listing", svc.name())),
             Ok(Err(e)) => failures.push(format!("{}: load error: {}", svc.name(), e.message())),
