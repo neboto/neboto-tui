@@ -553,6 +553,43 @@ the service you're touching.
   `ListMetrics(AWS/FSx)` rather than hard-coded. `m` charts storage/throughput/
   latency + a storage-composition breakdown; `f` toggles volume↔file-system
   graph.
+- **ECR** (`@ecr`, `ecr.rs`) — sub-tabs Repositories (1) / **Images** (2).
+  Images are first-class rows: phase 2 of the list load walks
+  `DescribeImages` for every repo (`buffer_unordered(6)`); a repo that fails
+  is a `ResourceLoadWarning`, never a load error. **`DescribeImages` has no
+  order** — `fetch_ecr_repo_images` reads every page (up to 10k images)
+  *then* sorts by push time and keeps the newest `MAX_IMAGES_PER_REPO`
+  (100). Stopping after the first page kept an arbitrary 100 (review of
+  #154). A cut repo is named in a `Partial load —` warning and its Images
+  section heading says `newest 100 of N`. That walk is one call per repo per
+  load (5-min cache, and every watch refresh), the price of image rows; the
+  repo pane's Images section therefore **filters those loaded rows**
+  (`App::ecr_repo_sibling_images`, the VPC-subnets pattern) rather than
+  calling `DescribeImages` a second time. A digest-pinned URI whose image is
+  older than the cut can't resolve; `resolve_pending_jump` then falls back
+  to the repository (`ecr_image_jump_fallback`) instead of an empty list. The Images tab spans every repo,
+  so its default order is **newest push first** (`execution_start_ms`, same
+  as the Executions tabs) and the row label is `repo:tag` (or
+  `repo@<12 hex>` untagged). **Image id is `repo@sha256:…`, not the bare
+  digest** — the same image pushed to two repos shares a digest; the repo
+  pane's `  Digest` rows and digest-pinned image URIs jump by that id.
+  Image pane sections: **Overview** (eager, from `ImageDetail`),
+  **Findings** (lazy `DescribeImageScanFindings`; `ScanNotFoundException` =
+  "NOT SCANNED", not an error; basic `findings` and enhanced/Inspector
+  `enhancedFindings` are normalized into one `EcrFinding` — an image has one
+  or the other; sorted worst-first and capped at 300), **Used By** (zero
+  API: ECS tasks from the warm ECS cache, matched by the **resolved digest**
+  each container carries so a task started from a since-moved `:latest` still
+  matches — the registry **host** must be the image repo's own, so a
+  same-named repo in another region or account never matches; task
+  definitions only once their details have been opened —
+  their image refs are tags, so they match current tags only. The section
+  states its coverage so an empty list never reads as "unused").
+  **No Layers section, on purpose**: layers need `BatchGetImage` (the
+  manifest), and ECR bumps an image's `lastRecordedPullTime` on that call —
+  merely *looking* at an image would move the "Last Pulled" date people use
+  to decide what is safe to delete. `GetDownloadUrlForLayer` has the same
+  problem. Don't add either without an explicit opt-in.
 - **EKS** (`@eks`) — the showcase: eight-section split pane. **Tier 1
   (AWS-API depth) only** — live Kubernetes workloads (pods/nodes via the cluster
   API server) are deliberately out of scope. Add-on "update-available" costs one

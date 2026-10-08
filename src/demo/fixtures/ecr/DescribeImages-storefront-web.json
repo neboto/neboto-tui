@@ -1,0 +1,56 @@
+{
+ "imageDetails": [
+  {
+   "registryId": "{{account}}",
+   "repositoryName": "storefront-web",
+   "imageDigest": "sha256:a3f1c9e2b7d4058c6e91f2a7b3d8c4e5f60718293a4b5c6d7e8f9012a3b4c5d6",
+   "imageTags": [
+    "v2.31.0",
+    "latest"
+   ],
+   "imageSizeInBytes": 142606336,
+   "imagePushedAt": {{epoch:now-3d}},
+   "imageManifestMediaType": "application/vnd.docker.distribution.manifest.v2+json",
+   "artifactMediaType": "application/vnd.docker.container.image.v1+json",
+   "imageScanStatus": {
+    "status": "COMPLETE",
+    "description": "The scan was completed successfully."
+   },
+   "lastRecordedPullTime": {{epoch:now-2h}},
+   "imageScanFindingsSummary": {
+    "imageScanCompletedAt": {{epoch:now-3d}},
+    "vulnerabilitySourceUpdatedAt": {{epoch:now-6h}},
+    "findingSeverityCounts": {
+     "HIGH": 1,
+     "MEDIUM": 2
+    }
+   }
+  },
+  {
+   "registryId": "{{account}}",
+   "repositoryName": "storefront-web",
+   "imageDigest": "sha256:b4e2d0f3c8e5169d7fa2e3b8c4e9d5f6071829304b5c6d7e8f90123b4c5d6e7f",
+   "imageTags": [
+    "v2.30.1"
+   ],
+   "imageSizeInBytes": 141557760,
+   "imagePushedAt": {{epoch:now-9d}},
+   "imageManifestMediaType": "application/vnd.docker.distribution.manifest.v2+json",
+   "artifactMediaType": "application/vnd.docker.container.image.v1+json",
+   "imageScanStatus": {
+    "status": "COMPLETE",
+    "description": "The scan was completed successfully."
+   },
+   "lastRecordedPullTime": {{epoch:now-3d}},
+   "imageScanFindingsSummary": {
+    "imageScanCompletedAt": {{epoch:now-9d}},
+    "vulnerabilitySourceUpdatedAt": {{epoch:now-6h}},
+    "findingSeverityCounts": {
+     "HIGH": 1,
+     "MEDIUM": 3,
+     "LOW": 4
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,32 @@
+{
+ "repositories": [
+  {
+   "repositoryArn": "arn:aws:ecr:{{region}}:{{account}}:repository/storefront-web",
+   "registryId": "{{account}}",
+   "repositoryName": "storefront-web",
+   "repositoryUri": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/storefront-web",
+   "createdAt": {{epoch:now-200d}},
+   "imageTagMutability": "MUTABLE",
+   "imageScanningConfiguration": {
+    "scanOnPush": true
+   },
+   "encryptionConfiguration": {
+    "encryptionType": "AES256"
+   }
+  },
+  {
+   "repositoryArn": "arn:aws:ecr:{{region}}:{{account}}:repository/orders-worker",
+   "registryId": "{{account}}",
+   "repositoryName": "orders-worker",
+   "repositoryUri": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/orders-worker",
+   "createdAt": {{epoch:now-150d}},
+   "imageTagMutability": "MUTABLE",
+   "imageScanningConfiguration": {
+    "scanOnPush": true
+   },
+   "encryptionConfiguration": {
+    "encryptionType": "AES256"
+   }
+  }
+ ]
+}

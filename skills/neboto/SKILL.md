@@ -35,8 +35,10 @@ neboto get @ec2 i-0abc123 sg-0def456 -o json
 | `--hide-noise` | Drop AWS-managed defaults and other noise |
 | `--limit N` | At most N rows |
 
-A service lists several types (EC2: instances, security groups, volumes, …);
-use `-t` to narrow. An empty `-t` result prints the types present to stderr.
+A service lists several types (EC2: instances, security groups, volumes, …;
+ECR: repositories and their images); use `-t` to narrow, e.g.
+`neboto ls @ecr -t repository`. An empty `-t` result prints the types present
+to stderr.
 
 ## `get` — full detail
 

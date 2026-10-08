@@ -1326,6 +1326,9 @@ pub struct EcsTaskContainer {
     pub exit_code: Option<i32>,
     pub reason: Option<String>,
     pub image: String,
+    /// The digest the image reference resolved to at launch — what a task
+    /// actually runs, even after its tag has moved on.
+    pub image_digest: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1410,6 +1413,7 @@ impl EcsTask {
                 exit_code: c.exit_code(),
                 reason: c.reason().map(|s| s.to_string()),
                 image: c.image().unwrap_or_default().to_string(),
+                image_digest: c.image_digest().map(|s| s.to_string()),
             })
             .collect();
 

@@ -100,6 +100,7 @@ pub fn has_sub_tabs(service: ServiceType) -> bool {
             | ServiceType::Bedrock
             | ServiceType::AgentCore
             | ServiceType::Kinesis
+            | ServiceType::Ecr
             | ServiceType::StepFunctions
             | ServiceType::Redshift
             | ServiceType::Batch
@@ -491,6 +492,11 @@ fn execution_start_ms(r: &dyn crate::aws::resource::Resource) -> i64 {
     if let Some(p) = any.downcast_ref::<crate::aws::services::code::CodeCommitPullRequest>() {
         return p.created_ms;
     }
+    // The Images tab spans every repo, whose batches land in completion
+    // order — newest push first is the only readable default.
+    if let Some(i) = any.downcast_ref::<crate::aws::services::ecr::EcrImage>() {
+        return i.pushed_secs.map_or(i64::MIN, |s| s.saturating_mul(1000));
+    }
     i64::MIN
 }
 
@@ -660,6 +666,20 @@ pub use crate::aws::services::opensearch::OpenSearchMetricsState;
 
 /// Load state for lazily-fetched MSK `m` metrics.
 pub use crate::aws::services::msk::MskMetricsState;
+
+/// Sub-tab view for ECR (Repositories / Images).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum EcrView {
+    Repositories,
+    Images}
+
+impl EcrView {
+    pub fn resource_type_filter(&self) -> &'static str {
+        match self {
+            EcrView::Repositories => "ECR Repository",
+            EcrView::Images => "ECR Image"}
+    }
+}
 
 /// Sub-tab view for the Kinesis service (Data Streams / Firehose).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1059,6 +1079,7 @@ pub enum JumpView {
     Batch(BatchView),
     Dms(DmsView),
     S3Tables(S3TablesView),
+    Ecr(EcrView),
     /// WAF carries both the sub-tab and the scope (CLOUDFRONT vs REGIONAL) — a
     /// CloudFront distribution's Web ACL is always CLOUDFRONT scope, which lives
     /// in a separate (us-east-1) variant of the WAF list.
@@ -2242,6 +2263,7 @@ pub struct App {
     /// `f` on the CodeSuite Executions sub-tab.
     pub code_exec_status_filter: ExecStatusFilter,
     pub kinesis_view: KinesisView,
+    pub ecr_view: EcrView,
     pub kinesis_metrics: HashMap<String, KinesisMetricsState>,
     pub kinesis_metrics_time_range: MetricsTimeRange,
     pub redshift_view: RedshiftView,
@@ -3048,6 +3070,7 @@ impl App {
             sfn_exec_status_filter: ExecStatusFilter::All,
             code_exec_status_filter: ExecStatusFilter::All,
             kinesis_view: KinesisView::Streams,
+            ecr_view: EcrView::Repositories,
             kinesis_metrics: HashMap::new(),
             kinesis_metrics_time_range: MetricsTimeRange::OneHour,
             redshift_view: RedshiftView::Clusters,
@@ -6489,6 +6512,22 @@ impl App {
             }
         }
 
+        // ECR (Repositories / Images) sub-tab switching
+        if !self.search_active && self.current_service == Some(ServiceType::Ecr) {
+            let view = match key.code {
+                KeyCode::Char('1') => Some(EcrView::Repositories),
+                KeyCode::Char('2') => Some(EcrView::Images),
+                KeyCode::Tab | KeyCode::BackTab => Some(match self.ecr_view {
+                    EcrView::Repositories => EcrView::Images,
+                    EcrView::Images => EcrView::Repositories}),
+                _ => None};
+            if let Some(v) = view {
+                self.ecr_view = v;
+                self.update_search();
+                return Ok(());
+            }
+        }
+
         // Kinesis (Data Streams / Firehose) sub-tab switching
         if !self.search_active && self.current_service == Some(ServiceType::Kinesis) {
             match key.code {
@@ -8827,6 +8866,7 @@ impl App {
             Some(ServiceType::Waf) => Some(self.waf_view.resource_type_filter()),
             Some(ServiceType::StepFunctions) => Some(self.sfn_view.resource_type_filter()),
             Some(ServiceType::Kinesis) => Some(self.kinesis_view.resource_type_filter()),
+            Some(ServiceType::Ecr) => Some(self.ecr_view.resource_type_filter()),
             Some(ServiceType::Redshift) => Some(self.redshift_view.resource_type_filter()),
             Some(ServiceType::Batch) => Some(self.batch_view.resource_type_filter()),
             Some(ServiceType::XRay) => Some(self.xray_view.resource_type_filter()),
@@ -8998,6 +9038,9 @@ impl App {
             }
             Some(ServiceType::Kinesis) => {
                 align!(self, rtype, kinesis_view, KinesisView, [Streams, Firehose])
+            }
+            Some(ServiceType::Ecr) => {
+                align!(self, rtype, ecr_view, EcrView, [Repositories, Images])
             }
             Some(ServiceType::StepFunctions) => {
                 align!(self, rtype, sfn_view, SfnView, [StateMachines, Executions])
@@ -9478,7 +9521,7 @@ impl App {
                     // load order.
                     if matches!(
                         type_filter,
-                        Some("Pipeline Execution" | "State Machine Execution" | "Pull Request")
+                        Some("Pipeline Execution" | "State Machine Execution" | "Pull Request" | "ECR Image")
                     ) {
                         filtered.sort_by_key(|&i| {
                             std::cmp::Reverse(execution_start_ms(self.resources[i].as_ref()))
@@ -10315,6 +10358,9 @@ impl App {
         }
         if service == ServiceType::IdentityCenter {
             self.ic_view = IcView::PermissionSets;
+        }
+        if service == ServiceType::Ecr {
+            self.ecr_view = EcrView::Repositories;
         }
     }
 
@@ -15120,24 +15166,106 @@ impl App {
             .unwrap_or(false)
     }
 
-    pub(crate) fn trigger_ecr_images_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(repo) = self.get_selected_resource().and_then(|r| {
-            r.as_any().downcast_ref::<crate::aws::services::ecr::EcrRepository>()
+    pub(crate) fn trigger_ecr_image_findings_load(
+        &mut self,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
+        if let Some(img) = self.get_selected_resource().and_then(|r| {
+            r.as_any().downcast_ref::<crate::aws::services::ecr::EcrImage>()
         }) {
-            let name = repo.name.clone();
-            let uri = repo.uri.clone();
+            let key = img.key.clone();
+            let (repo, registry, digest) =
+                (img.repo_name.clone(), img.registry_id.clone(), img.digest.clone());
             let client = self.aws_clients.ecr_client();
             self.trigger_lazy(
-                |app| &mut app.lazy.ecr_repo_images,
-                name.clone(),
+                |app| &mut app.lazy.ecr_image_findings,
+                key,
                 event_tx,
                 async move {
-                    crate::aws::services::ecr::fetch_ecr_repo_images(client, name, uri)
-                        .await
-                        .map_err(|e| format!("Images unavailable: {}", e))
+                    crate::aws::services::ecr::fetch_ecr_image_findings(
+                        client, repo, registry, digest,
+                    )
+                    .await
+                    .map_err(|e| format!("Scan findings unavailable: {}", e))
                 },
             );
         }
+    }
+
+    /// A repo's images for its Images section: the Images tab's rows already
+    /// in the list (the list load fetches them), newest first — no fetch of
+    /// its own, the VPC-subnets pattern.
+    pub(crate) fn ecr_repo_sibling_images(
+        &self,
+        repo_name: &str,
+    ) -> Vec<&crate::aws::services::ecr::EcrImage> {
+        let mut images: Vec<&crate::aws::services::ecr::EcrImage> = self
+            .resources
+            .iter()
+            .filter_map(|r| r.as_any().downcast_ref::<crate::aws::services::ecr::EcrImage>())
+            .filter(|i| i.repo_name == repo_name)
+            .collect();
+        images.sort_by_key(|i| std::cmp::Reverse(i.pushed_secs));
+        images
+    }
+
+    /// ECS tasks and task definitions that reference `img`, from data already
+    /// in memory: the warm ECS cache's tasks (their containers carry the
+    /// image and its resolved digest) and every task definition whose
+    /// details have been opened this session. Zero API — the Used By section
+    /// states its coverage instead of fetching. Returns (users, ecs_warm).
+    pub(crate) fn ecr_image_users(
+        &self,
+        img: &crate::aws::services::ecr::EcrImage,
+    ) -> (Vec<crate::aws::services::ecr::EcrImageUser>, bool) {
+        use crate::aws::services::ecr::EcrImageUser;
+        use crate::aws::services::ecs::EcsTask;
+        let variant = self.cache_variant(ServiceType::ECS);
+        let cached = self.cache.get_ref(&ServiceType::ECS, &self.current_region, variant.as_deref());
+        let on_screen = (self.current_service == Some(ServiceType::ECS) && !self.all_search_mode)
+            .then_some(self.resources.as_slice());
+        let ecs_warm = cached.is_some() || on_screen.is_some();
+        let mut users: Vec<EcrImageUser> = Vec::new();
+        for list in [cached, on_screen].into_iter().flatten() {
+            for r in list {
+                let Some(t) = r.as_any().downcast_ref::<EcsTask>() else {
+                    continue;
+                };
+                for c in &t.containers {
+                    if img.matches_image_ref(&c.image, c.image_digest.as_deref())
+                        && !users.iter().any(|u| u.id == t.task_arn && u.container == c.name)
+                    {
+                        users.push(EcrImageUser {
+                            kind: "Task",
+                            name: t.display_name.clone(),
+                            id: t.task_arn.clone(),
+                            container: c.name.clone(),
+                            status: t.last_status.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        let mut defs: Vec<EcrImageUser> = Vec::new();
+        for (arn, entry) in self.lazy.ecs_taskdef_details.iter() {
+            let crate::lazy::Lazy::Loaded(d) = entry else {
+                continue;
+            };
+            for c in &d.containers {
+                if img.matches_image_ref(&c.image, None) {
+                    defs.push(EcrImageUser {
+                        kind: "Task Definition",
+                        name: arn.rsplit('/').next().unwrap_or(arn).to_string(),
+                        id: arn.clone(),
+                        container: c.name.clone(),
+                        status: String::new(),
+                    });
+                }
+            }
+        }
+        defs.sort_by(|a, b| a.name.cmp(&b.name));
+        users.extend(defs);
+        (users, ecs_warm)
     }
 
     pub(crate) fn trigger_ecr_lifecycle_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
@@ -19776,6 +19904,7 @@ impl App {
             JumpView::Batch(v) => self.batch_view = *v,
             JumpView::Dms(v) => self.dms_view = *v,
             JumpView::S3Tables(v) => self.s3tables_view = *v,
+            JumpView::Ecr(v) => self.ecr_view = *v,
             JumpView::Waf(v, scope) => {
                 self.waf_view = *v;
                 // CloudFront Web ACLs live in the CLOUDFRONT-scope variant; if we
@@ -19838,6 +19967,25 @@ impl App {
                     }
                 }
                 None => {
+                    // A digest-pinned image URI targets `repo@sha256:…`, but
+                    // the Images tab holds only each repo's newest rows — an
+                    // older digest isn't there. Once the load is done, fall
+                    // back to the repository rather than an empty list.
+                    if !self.loading && self.current_service == Some(ServiceType::Ecr) {
+                        if let Some(repo) = Self::ecr_image_jump_fallback(&id) {
+                            self.ecr_view = EcrView::Repositories;
+                            self.search_query = repo.clone();
+                            self.pending_jump = Some(repo);
+                            self.pending_jump_section = None;
+                            self.update_search();
+                            self.success_message = Some(
+                                "Image not among the loaded rows — showing its repository".to_string(),
+                            );
+                            self.success_message_time = Some(Instant::now());
+                            self.resolve_pending_jump(event_tx);
+                            return;
+                        }
+                    }
                     // Not in view yet. Keep the pending jump alive while results
                     // are still streaming in or a lazy section hasn't grafted yet
                     // (a later batch / `*Loaded` event will resolve it) — clearing
@@ -19855,6 +20003,13 @@ impl App {
                 }
             }
         }
+    }
+
+    /// The repository behind an ECR image row id (`repo@sha256:…`) — where an
+    /// unresolved image jump lands instead. `None` for any other id.
+    pub(crate) fn ecr_image_jump_fallback(id: &str) -> Option<String> {
+        let (repo, digest) = id.split_once('@')?;
+        (!repo.is_empty() && digest.starts_with("sha256:")).then(|| repo.to_string())
     }
 
     /// "Go to resource": jump from the selected detail row to the resource it
@@ -20016,6 +20171,59 @@ impl App {
             service: ServiceType::Inspector,
             view: JumpView::Inspector(InspectorView::Findings),
             id: arn})
+    }
+
+    /// ECR row jumps. Repo pane, Images section: a `  Digest` row opens that
+    /// image on the Images tab. Image pane: `Repository` (Overview) goes to
+    /// the repo, and Used By's `  Task` / `  Task Definition` rows go to ECS.
+    /// Label-keyed — the renderers' row labels are load-bearing.
+    pub fn ecr_row_jump_target(&self, key: &str, value: &str) -> Option<crate::app::JumpTarget> {
+        let r = self.get_selected_resource()?;
+        let any = r.as_any();
+        let v = value.trim();
+        if let Some(repo) = any.downcast_ref::<crate::aws::services::ecr::EcrRepository>() {
+            use crate::aws::services::ecr::EcrRepoDetailSection as S;
+            return (S::from_index(self.detail_section_idx) == S::Images
+                && key == "  Digest"
+                && v.starts_with("sha256:"))
+            .then(|| JumpTarget {
+                service: ServiceType::Ecr,
+                view: JumpView::Ecr(EcrView::Images),
+                id: format!("{}@{}", repo.name, v),
+            });
+        }
+        let img = any.downcast_ref::<crate::aws::services::ecr::EcrImage>()?;
+        Self::ecr_image_row_target(
+            &img.repo_name,
+            crate::aws::services::ecr::EcrImageDetailSection::from_index(self.detail_section_idx),
+            key,
+            v,
+        )
+    }
+
+    /// The image-pane half of `ecr_row_jump_target`, pure so it is testable
+    /// on hand-built rows.
+    pub(crate) fn ecr_image_row_target(
+        repo_name: &str,
+        section: crate::aws::services::ecr::EcrImageDetailSection,
+        key: &str,
+        value: &str,
+    ) -> Option<JumpTarget> {
+        use crate::aws::services::ecr::EcrImageDetailSection as S;
+        if value.is_empty() {
+            return None;
+        }
+        let (service, view, id) = match (section, key) {
+            (S::Overview, "Repository") if value == repo_name => {
+                (ServiceType::Ecr, JumpView::Ecr(EcrView::Repositories), value)
+            }
+            (S::UsedBy, "  Task") => (ServiceType::ECS, JumpView::Ecs(EcsView::Tasks), value),
+            (S::UsedBy, "  Task Definition") => {
+                (ServiceType::ECS, JumpView::Ecs(EcsView::TaskDefinitions), value)
+            }
+            _ => return None,
+        };
+        Some(JumpTarget { service, view, id: id.to_string() })
     }
 
     /// "Go to the action's target": CodeSuite rows whose value is a bare name
@@ -20296,6 +20504,7 @@ impl App {
             Some(ServiceType::Batch) => JumpView::Batch(self.batch_view),
             Some(ServiceType::Dms) => JumpView::Dms(self.dms_view),
             Some(ServiceType::S3Tables) => JumpView::S3Tables(self.s3tables_view),
+            Some(ServiceType::Ecr) => JumpView::Ecr(self.ecr_view),
             // AWS Config has sub-tabs (config_view) but no JumpView variant, so a
             // back-jump returns to the service with its default sub-tab.
             _ => JumpView::None}
@@ -21521,6 +21730,7 @@ impl App {
                     .or_else(|| self.cfn_resource_jump_target(k, v))
                     .or_else(|| self.cfn_export_jump_target(k, v))
                     .or_else(|| self.code_row_jump_target(k, v))
+                    .or_else(|| self.ecr_row_jump_target(k, v))
                     .or_else(|| self.cc_repo_pr_row_jump_target(k, v))
                     .or_else(|| self.cw_composite_alarm_child_jump_target(k, v))
                     .or_else(|| self.insp_resource_finding_jump_target(k, v))
@@ -25732,14 +25942,31 @@ impl App {
                     self.lazy.cognito_clients.get(&pool.id),
                 );
             }
+            if let Some(img) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::ecr::EcrImage>()
+            {
+                let section =
+                    crate::aws::services::ecr::EcrImageDetailSection::from_index(self.detail_section_idx);
+                let users = (section == crate::aws::services::ecr::EcrImageDetailSection::UsedBy)
+                    .then(|| self.ecr_image_users(img));
+                return crate::ui::widgets::details_pane::ecr_image_section_lines(
+                    img,
+                    section,
+                    self.lazy.ecr_image_findings.get(&img.key),
+                    users.as_ref().map(|(u, warm)| (u.as_slice(), *warm)),
+                );
+            }
             if let Some(repo) = resource
                 .as_any()
                 .downcast_ref::<crate::aws::services::ecr::EcrRepository>()
             {
+                let images = self.ecr_repo_sibling_images(&repo.name);
                 return crate::ui::widgets::details_pane::ecr_repo_section_lines(
                     repo,
                     crate::aws::services::ecr::EcrRepoDetailSection::from_index(self.detail_section_idx),
-                    self.lazy.ecr_repo_images.get(&repo.name),
+                    &images,
+                    self.loading,
                     self.lazy.ecr_lifecycle.get(&repo.name),
                 );
             }
@@ -32370,5 +32597,44 @@ mod session_env_tests {
         assert!(!env_has_static_keys(vars(&[("AWS_PROFILE", "dev"), ("AWS_REGION", "us-east-1")])));
         assert!(!env_has_static_keys(vars(&[("AWS_WEB_IDENTITY_TOKEN_FILE", "/t")])));
         assert!(!env_has_static_keys(vars(&[("AWS_SESSION_TOKEN", "")])));
+    }
+}
+
+#[cfg(test)]
+mod ecr_row_jump_tests {
+    use super::*;
+    use crate::aws::services::ecr::EcrImageDetailSection as S;
+
+    #[test]
+    fn image_pane_rows_route_to_repo_and_ecs() {
+        let t = App::ecr_image_row_target("web", S::Overview, "Repository", "web").unwrap();
+        assert_eq!(t.service, ServiceType::Ecr);
+        assert!(matches!(t.view, JumpView::Ecr(EcrView::Repositories)));
+        assert_eq!(t.id, "web");
+
+        let arn = "arn:aws:ecs:us-east-1:1:task/acme/0f1e";
+        let t = App::ecr_image_row_target("web", S::UsedBy, "  Task", arn).unwrap();
+        assert_eq!(t.service, ServiceType::ECS);
+        assert!(matches!(t.view, JumpView::Ecs(EcsView::Tasks)));
+        assert_eq!(t.id, arn);
+
+        let td = "arn:aws:ecs:us-east-1:1:task-definition/web:42";
+        let t = App::ecr_image_row_target("web", S::UsedBy, "  Task Definition", td).unwrap();
+        assert!(matches!(t.view, JumpView::Ecs(EcsView::TaskDefinitions)));
+
+        // Wrong section / label / empty value: no jump.
+        assert!(App::ecr_image_row_target("web", S::Findings, "  Task", arn).is_none());
+        assert!(App::ecr_image_row_target("web", S::UsedBy, "  Container", "web").is_none());
+        assert!(App::ecr_image_row_target("web", S::Overview, "Repository", "").is_none());
+    }
+
+    #[test]
+    fn unresolved_image_jump_falls_back_to_its_repo() {
+        let d = "sha256:0123456789abcdef";
+        assert_eq!(App::ecr_image_jump_fallback(&format!("team/web@{d}")).as_deref(), Some("team/web"));
+        // Not an image id: an ECS task ARN, a repo name, an email-ish string.
+        assert!(App::ecr_image_jump_fallback("web").is_none());
+        assert!(App::ecr_image_jump_fallback("ops@example.com").is_none());
+        assert!(App::ecr_image_jump_fallback(&format!("@{d}")).is_none());
     }
 }

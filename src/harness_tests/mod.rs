@@ -511,7 +511,7 @@ async fn deep_export_cap_refuses_oversized_selections() {
 
 /// Manual refresh must drop the lazy detail-section store — LazyMap's
 /// contains-guard otherwise serves the first fetch (e.g. an ECR repo's
-/// Images list) for the rest of the session — and, when the detail pane is
+/// lifecycle policy) for the rest of the session — and, when the detail pane is
 /// focused, re-fire the open section's trigger so it refetches instead of
 /// spinning forever over the emptied map.
 #[tokio::test]
@@ -524,23 +524,23 @@ async fn refresh_clears_the_lazy_store_and_refires_the_open_section() {
         .2;
     select_mock(&mut app, ServiceType::Ecr, repo);
 
-    // Simulate an already-loaded Images section for the selected repo.
+    // Simulate an already-loaded Lifecycle section for the selected repo.
     app.lazy
-        .ecr_repo_images
+        .ecr_lifecycle
         .insert_loading("mock-repo".to_string());
-    app.lazy.ecr_repo_images.apply("mock-repo".to_string(), Ok(vec![]));
+    app.lazy.ecr_lifecycle.apply("mock-repo".to_string(), Ok(String::new()));
     let epoch = app.lazy.epoch();
 
     // List-pane `r`: the whole store is replaced and the epoch bumps so
-    // stale in-flight applies drop — a redeployed image shows on refresh.
+    // stale in-flight applies drop — an edited policy shows on refresh.
     app.handle_key(key(KeyCode::Char('r')), &tx).await.unwrap();
     assert!(
-        !app.lazy.ecr_repo_images.contains("mock-repo"),
+        !app.lazy.ecr_lifecycle.contains("mock-repo"),
         "list-pane refresh must clear lazy detail data"
     );
     assert!(app.lazy.epoch() > epoch, "refresh must bump the lazy epoch");
 
-    // Detail-pane `r` on the Images section (no targeted fetch for ECR →
+    // Detail-pane `r` on the Lifecycle section (no targeted fetch for ECR →
     // full refresh): the stale entry is dropped AND the section's trigger
     // re-fires, leaving a fresh in-flight fetch rather than nothing.
     select_mock(
@@ -553,16 +553,16 @@ async fn refresh_clears_the_lazy_store_and_refires_the_open_section() {
             .2,
     );
     app.lazy
-        .ecr_repo_images
+        .ecr_lifecycle
         .insert_loading("mock-repo".to_string());
-    app.lazy.ecr_repo_images.apply("mock-repo".to_string(), Ok(vec![]));
+    app.lazy.ecr_lifecycle.apply("mock-repo".to_string(), Ok(String::new()));
     app.handle_key(key(KeyCode::Enter), &tx).await.unwrap();
-    app.handle_key(key(KeyCode::Char('2')), &tx).await.unwrap();
+    app.handle_key(key(KeyCode::Char('3')), &tx).await.unwrap();
     assert!(app.details_focused);
     app.handle_key(key(KeyCode::Char('r')), &tx).await.unwrap();
     assert!(
         matches!(
-            app.lazy.ecr_repo_images.get("mock-repo"),
+            app.lazy.ecr_lifecycle.get("mock-repo"),
             Some(crate::lazy::Lazy::Loading)
         ),
         "detail-pane refresh must re-fire the open section's fetch"
