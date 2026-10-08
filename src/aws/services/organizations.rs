@@ -474,6 +474,41 @@ impl OrgAccount {
     }
 }
 
+/// Whether `s` on this account would assume a role into it — the same two
+/// refusals `App::trigger_org_role_switch` makes (not ACTIVE, or already the
+/// account being browsed). Gates the status-bar hint and the pane's hint row,
+/// so neither advertises a key that would only answer with an error.
+pub fn org_assume_eligible(account: &OrgAccount, current_account: Option<&str>) -> bool {
+    account.status == "ACTIVE" && current_account != Some(account.account_id.as_str())
+}
+
+/// The Details section's dim hint row naming what `s` will do: the one
+/// configured role, or the picker (last-used preselected) when there are
+/// several. `press s …` is the shape `export_rows` strips from exports.
+pub fn org_assume_hint(roles: &[String], last_used: &str) -> String {
+    match roles {
+        [only] => format!("· press s to assume {only} in this account"),
+        _ => format!("· press s to pick a role to assume in this account (last used: {last_used})"),
+    }
+}
+
+/// The status-bar error for a failed member-account switch. A denied or
+/// missing role (typical for invited accounts, which never got
+/// `OrganizationAccountAccessRole`) also names the config setting, since
+/// that's the fix and nothing else on screen says the setting exists.
+pub fn org_assume_error(role: &str, account_id: &str, err: &str) -> String {
+    let mut msg = format!("Could not assume {role} in {account_id}: {err}");
+    let low = err.to_ascii_lowercase();
+    if low.contains("accessdenied")
+        || low.contains("access denied")
+        || low.contains("not authorized")
+        || low.contains("nosuchentity")
+    {
+        msg.push_str(" — if this account uses another role, set org_access_role / org_access_roles in your config");
+    }
+    msg
+}
+
 crate::sections! {
     pub enum OrgAccountDetailSection,
     pub static ORG_ACCOUNT_SECTIONS = [
@@ -1382,4 +1417,38 @@ fn epoch_days_to_ymd(mut days: i64) -> (i32, u8, u8) {
 
 fn is_leap(y: i32) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+#[cfg(test)]
+mod assume_hint_tests {
+    use super::*;
+
+    fn acct(id: &str, status: &str) -> OrgAccount {
+        let mut a = OrgAccount::from_sdk(&aws_sdk_organizations::types::Account::builder().id(id).build());
+        a.status = status.to_string();
+        a
+    }
+
+    #[test]
+    fn eligibility_mirrors_the_switch_refusals() {
+        assert!(org_assume_eligible(&acct("2", "ACTIVE"), Some("1")));
+        assert!(org_assume_eligible(&acct("2", "ACTIVE"), None));
+        assert!(!org_assume_eligible(&acct("2", "SUSPENDED"), Some("1")));
+        assert!(!org_assume_eligible(&acct("1", "ACTIVE"), Some("1")));
+    }
+
+    #[test]
+    fn failure_points_at_the_config_only_for_a_missing_or_denied_role() {
+        let denied = org_assume_error(
+            "OrganizationAccountAccessRole",
+            "222222222222",
+            "User: arn:aws:iam::1:user/x is not authorized to perform: sts:AssumeRole",
+        );
+        assert!(denied.starts_with("Could not assume OrganizationAccountAccessRole in 222222222222: "));
+        assert!(denied.contains("org_access_role / org_access_roles"));
+        assert!(org_assume_error("R", "2", "AccessDenied: nope").contains("org_access_roles"));
+
+        let other = org_assume_error("R", "2", "dispatch failure: timeout");
+        assert!(!other.contains("org_access_role"));
+    }
 }

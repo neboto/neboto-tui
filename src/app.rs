@@ -9867,9 +9867,10 @@ impl App {
             }
             Err(e) => {
                 self.loading = false;
-                self.error_message = Some(format!(
-                    "Could not assume {} in {}: {}",
-                    role_name, account_id, e
+                self.error_message = Some(crate::aws::services::organizations::org_assume_error(
+                    &role_name,
+                    &account_id,
+                    &e.to_string(),
                 ));
             }
         }
@@ -22601,6 +22602,22 @@ impl App {
                 .unwrap_or(false)
     }
 
+    /// Whether `s` assumes a role into the selected Organizations account —
+    /// mirrors `trigger_org_role_switch`'s refusals (`org_assume_eligible`),
+    /// so a suspended account or the one being browsed gets no hint. Kept
+    /// apart from `supports_session` because the hint reads differently.
+    pub fn supports_org_assume(&self) -> bool {
+        self.get_selected_resource()
+            .and_then(|r| {
+                r.as_any()
+                    .downcast_ref::<crate::aws::services::organizations::OrgAccount>()
+            })
+            .map(|a| {
+                crate::aws::services::organizations::org_assume_eligible(a, self.account_id.as_deref())
+            })
+            .unwrap_or(false)
+    }
+
     /// Whether `x` / `Y` reveal/copy a value for the current selection —
     /// mirrors `trigger_secret_reveal` (Secrets Manager secret / SSM parameter).
     pub fn supports_value_reveal(&self) -> bool {
@@ -26940,10 +26957,21 @@ impl App {
                 .downcast_ref::<crate::aws::services::organizations::OrgAccount>()
             {
                 let details_state = self.lazy.org_account_details.get(&account.account_id);
+                let assume_hint = crate::aws::services::organizations::org_assume_eligible(
+                    account,
+                    self.account_id.as_deref(),
+                )
+                .then(|| {
+                    crate::aws::services::organizations::org_assume_hint(
+                        &self.org_access_roles,
+                        &self.org_access_role,
+                    )
+                });
                 return crate::ui::widgets::details_pane::org_account_section_lines(
                     account,
                     crate::aws::services::organizations::OrgAccountDetailSection::from_index(self.detail_section_idx),
                     details_state,
+                    assume_hint.as_deref(),
                 );
             }
             if let Some(ou) = resource

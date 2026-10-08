@@ -40288,15 +40288,19 @@ pub fn org_account_section_lines(
     account: &OrgAccount,
     section: OrgAccountDetailSection,
     details_state: Option<&crate::lazy::Lazy<crate::aws::services::organizations::OrgAccountDetails>>,
+    assume_hint: Option<&str>,
 ) -> Vec<(String, String)> {
     match section {
-        OrgAccountDetailSection::Details => org_account_details_lines(account),
+        OrgAccountDetailSection::Details => org_account_details_lines(account, assume_hint),
         OrgAccountDetailSection::OuPath => org_account_ou_path_lines(details_state),
         OrgAccountDetailSection::Policies => org_account_policies_lines(details_state),
     }
 }
 
-fn org_account_details_lines(account: &OrgAccount) -> Vec<(String, String)> {
+/// `assume_hint` is the dim `· press s to assume …` row (`org_assume_hint`),
+/// present only when `s` would actually switch into this account. It sits in
+/// Details because that's the section the unfocused preview shows.
+fn org_account_details_lines(account: &OrgAccount, assume_hint: Option<&str>) -> Vec<(String, String)> {
     let mut rows = vec![("".to_string(), "".to_string())];
     rows.push(("Account Name".to_string(), account.account_name.clone()));
     rows.push(("Account ID".to_string(), account.account_id.clone()));
@@ -40310,6 +40314,11 @@ fn org_account_details_lines(account: &OrgAccount) -> Vec<(String, String)> {
     }
     rows.push(("ARN".to_string(), account.arn.clone()));
     rows.push(("".to_string(), "".to_string()));
+    // Last, after the spacer: an export strips the hint row, and leading it
+    // with its own spacer would leave two blanks there.
+    if let Some(hint) = assume_hint {
+        rows.push(("".to_string(), hint.to_string()));
+    }
     rows
 }
 
