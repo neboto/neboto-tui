@@ -448,6 +448,9 @@ pub struct SnsTopic {
     pub policy: Option<String>,
     pub effective_delivery_policy: Option<String>,
     pub tags: HashMap<String, String>,
+    /// Set when the list-time `ListTagsForResource` failed — the Tags
+    /// section shows it rather than "No tags" (#28).
+    pub tags_error: Option<String>,
 }
 
 impl SnsTopic {
@@ -473,15 +476,16 @@ async fn fetch_topic(sns: &SnsClient, arn: String) -> Option<SnsTopic> {
         Ok(r) => r.attributes().cloned().unwrap_or_default(),
         Err(_) => HashMap::new(),
     };
-    let tags: HashMap<String, String> = tags_res
-        .ok()
-        .map(|r| {
+    let (tags, tags_error): (HashMap<String, String>, _) = match tags_res {
+        Ok(r) => (
             r.tags()
                 .iter()
                 .map(|t| (t.key().to_string(), t.value().to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
+                .collect(),
+            None,
+        ),
+        Err(e) => (HashMap::new(), Some(crate::error::sdk_error_message(&e))),
+    };
 
     let name = arn.rsplit(':').next().unwrap_or(&arn).to_string();
     let parse = |k: &str| attrs.get(k).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
@@ -503,6 +507,7 @@ async fn fetch_topic(sns: &SnsClient, arn: String) -> Option<SnsTopic> {
         name,
         arn,
         tags,
+        tags_error,
     })
 }
 

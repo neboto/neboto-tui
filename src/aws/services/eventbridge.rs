@@ -1,6 +1,7 @@
 use crate::aws::client::AwsClients;
 use crate::aws::resource::{native_state_label, Resource, ResourceState};
 use crate::aws::service::{AwsService, ServiceType};
+use crate::aws::tags::take_tags;
 use crate::error::Result;
 use crate::event::{Event, LoadProgress};
 use async_trait::async_trait;
@@ -90,6 +91,8 @@ impl AwsService for EventBridgeService {
             async move { fetch_tags(&client, &arn).await }
         });
         let bus_tags = futures::future::join_all(bus_tag_futs).await;
+        let mut tags_warned = false;
+        let bus_tags = take_tags(bus_tags, service_type, "bus", &mut tags_warned, &event_tx);
         for (b, tags) in buses.iter_mut().zip(bus_tags) {
             b.tags = tags;
         }
@@ -171,6 +174,8 @@ impl AwsService for EventBridgeService {
                 async move { fetch_tags(&client, &arn).await }
             });
             let rule_tags = futures::future::join_all(tag_futs).await;
+            let rule_tags =
+                take_tags(rule_tags, service_type, "rule", &mut tags_warned, &event_tx);
             for (r, tags) in rules.iter_mut().zip(rule_tags) {
                 r.tags = tags;
             }
@@ -684,18 +689,25 @@ pub async fn fetch_eb_targets(
         .collect())
 }
 
-async fn fetch_tags(client: &EbClient, arn: &str) -> HashMap<String, String> {
+async fn fetch_tags(
+    client: &EbClient,
+    arn: &str,
+) -> std::result::Result<HashMap<String, String>, String> {
     if arn.is_empty() {
-        return HashMap::new();
+        return Ok(HashMap::new());
     }
-    match client.list_tags_for_resource().resource_arn(arn).send().await {
-        Ok(resp) => resp
-            .tags()
-            .iter()
-            .map(|t| (t.key().to_string(), t.value().to_string()))
-            .collect(),
-        Err(_) => HashMap::new(),
-    }
+    client
+        .list_tags_for_resource()
+        .resource_arn(arn)
+        .send()
+        .await
+        .map(|resp| {
+            resp.tags()
+                .iter()
+                .map(|t| (t.key().to_string(), t.value().to_string()))
+                .collect()
+        })
+        .map_err(|e| crate::error::sdk_error_message(&e))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

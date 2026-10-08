@@ -2,6 +2,7 @@ use crate::aws::client::AwsClients;
 use crate::aws::pagination::next_page_token;
 use crate::aws::resource::{native_state_label, Resource, ResourceState};
 use crate::aws::service::{AwsService, ServiceType};
+use crate::aws::tags::take_tags;
 use crate::error::Result;
 use crate::event::{Event, LoadProgress};
 use async_trait::async_trait;
@@ -86,6 +87,8 @@ impl AwsService for BackupService {
             vaults.iter().map(|v| fetch_tags(&self.client, v.arn.clone())),
         )
         .await;
+        let mut tags_warned = false;
+        let vault_tags = take_tags(vault_tags, service_type, "vault", &mut tags_warned, &event_tx);
         for (v, tags) in vaults.iter_mut().zip(vault_tags) {
             v.tags = tags;
         }
@@ -131,6 +134,7 @@ impl AwsService for BackupService {
             plans.iter().map(|p| fetch_tags(&self.client, p.arn.clone())),
         )
         .await;
+        let plan_tags = take_tags(plan_tags, service_type, "plan", &mut tags_warned, &event_tx);
         for (p, tags) in plans.iter_mut().zip(plan_tags) {
             p.tags = tags;
         }
@@ -236,17 +240,24 @@ impl AwsService for BackupService {
     }
 }
 
-async fn fetch_tags(client: &BackupClient, arn: String) -> HashMap<String, String> {
+async fn fetch_tags(
+    client: &BackupClient,
+    arn: String,
+) -> std::result::Result<HashMap<String, String>, String> {
     if arn.is_empty() {
-        return HashMap::new();
+        return Ok(HashMap::new());
     }
-    match client.list_tags().resource_arn(&arn).send().await {
-        Ok(resp) => resp
-            .tags()
-            .map(|t| t.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default(),
-        Err(_) => HashMap::new(),
-    }
+    client
+        .list_tags()
+        .resource_arn(&arn)
+        .send()
+        .await
+        .map(|resp| {
+            resp.tags()
+                .map(|t| t.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default()
+        })
+        .map_err(|e| crate::error::sdk_error_message(&e))
 }
 
 // ── Lazy: plan details (rules + selections) ──────────────────────────────────
