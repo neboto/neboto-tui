@@ -205,6 +205,7 @@ fn fallback(key: KeyEvent, after: &View) -> Option<&'static str> {
             KeyCode::Char('d') => Some("half page down"),
             KeyCode::Char('u') => Some("half page up"),
             KeyCode::Char('x') => Some("export list"),
+            KeyCode::Char('w') => Some("wrap lines"),
             _ => None,
         };
     }

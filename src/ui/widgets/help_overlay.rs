@@ -53,6 +53,7 @@ const LEFT_SECTIONS: &[Section] = &[
             ("Ctrl-A", "select all"),
             ("y / c", "copy selection or row"),
             ("\\", "flat view (all sections)"),
+            ("Ctrl-W", "wrap long values"),
             ("Z", "full-width pane"),
             ("r", "refresh this resource"),
         ],
