@@ -333,7 +333,7 @@ Each takes over the keymap while open; `Esc` closes, `Z` goes full-width.
 | `o` | S3 object browser — folders, `/` filter, `V` version history incl. delete markers, `i` metadata, `v`/`e` preview, `d` download, `p` presigned URL; `t` on a `.tfstate` opens the Terraform state viewer (one row per instance, `Enter` jumps to the live resource) |
 | `i` | DynamoDB item browser (Scan / Query, filters, GSI/LSI) · AgentCore memory session browser |
 | `s` | SSM Session Manager · ECS Exec · assume an org member-account role |
-| `x` / `Y` | Reveal / copy a secret or SSM parameter value (never cached) |
+| `x` / `Y` | Reveal / copy a secret or SSM parameter value (never cached); on a Route 53 record's Test answer section, `x` asks Route 53 what it answers (again on each press) |
 | `O` | Open this resource in the AWS Console |
 
 ### Mouse

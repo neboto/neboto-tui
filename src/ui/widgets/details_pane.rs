@@ -363,6 +363,21 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         render_r53_health_check_split(app, hc, area, frame);
         return;
     }
+    if let Some(rec) = resource
+        .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::route53::R53Record>())
+    {
+        let subtitle = format!("{} · {}", rec.record_type, rec.routing_policy());
+        render_simple_split(
+            app,
+            area,
+            frame,
+            "R53 Record",
+            &rec.name,
+            &subtitle,
+            &descriptor_tabs(app, &crate::aws::services::route53::R53_RECORD_SECTIONS),
+        );
+        return;
+    }
     if let Some(cert) = resource.and_then(|r| r.as_any().downcast_ref::<AcmCertificate>()) {
         render_acm_cert_split(app, cert, area, frame);
         return;
@@ -7925,13 +7940,106 @@ fn render_r53_health_check_section_tabs(app: &App, area: Rect, frame: &mut Frame
 pub fn r53_health_check_section_lines(
     hc: &R53HealthCheck,
     section: R53HealthCheckDetailSection,
-    status_state: Option<&crate::lazy::Lazy<Vec<crate::aws::services::route53::R53HealthObservation>>>,
+    status_state: Option<&crate::lazy::Lazy<crate::aws::services::route53::R53HealthStatus>>,
 ) -> Vec<(String, String)> {
     match section {
         R53HealthCheckDetailSection::Overview => r53_health_overview_lines(hc),
         R53HealthCheckDetailSection::Status => r53_health_status_lines(status_state),
         R53HealthCheckDetailSection::Tags => r53_health_tags_lines(hc),
     }
+}
+
+pub fn r53_record_section_lines(
+    rec: &crate::aws::services::route53::R53Record,
+    section: crate::aws::services::route53::R53RecordDetailSection,
+    answer: Option<&crate::lazy::Lazy<crate::aws::services::route53::R53TestAnswer>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::route53::R53RecordDetailSection as S;
+    match section {
+        // The rows the flat pane always showed — `r53_row_jump_target` keys
+        // on their labels (Zone ID, Health Check, Alias Target, Target).
+        S::Details => {
+            let mut rows = vec![("".to_string(), "".to_string())];
+            rows.extend(rec.details());
+            rows
+        }
+        S::TestAnswer => r53_test_answer_lines(rec, answer),
+    }
+}
+
+fn r53_test_answer_lines(
+    rec: &crate::aws::services::route53::R53Record,
+    answer: Option<&crate::lazy::Lazy<crate::aws::services::route53::R53TestAnswer>>,
+) -> Vec<(String, String)> {
+    let mut rows = vec![("".to_string(), "".to_string())];
+    let a = match answer {
+        None => {
+            rows.push((
+                "".to_string(),
+                "What Route 53 itself answers for this name and type, after routing policy and health checks · press x to ask".to_string(),
+            ));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Loading) => {
+            rows.push(("".to_string(), "Loading…".to_string()));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Error(e)) => {
+            rows.extend(error_rows(e));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Loaded(a)) => a,
+    };
+    rows.push((format!("Answer at {}", a.asked_at), "".to_string())); // group header
+    rows.push(("Response Code".to_string(), a.response_code.clone()));
+    rows.push(("Protocol".to_string(), a.protocol.clone()));
+    rows.push(("Nameserver".to_string(), a.nameserver.clone()));
+    rows.push(("".to_string(), "".to_string()));
+    if a.record_data.is_empty() {
+        rows.push(("".to_string(), "No records in the answer".to_string()));
+    } else {
+        rows.push((format!("Record Data ({})", a.record_data.len()), "".to_string()));
+        for d in &a.record_data {
+            rows.push((format!("  {}", d), "".to_string()));
+        }
+    }
+    if let Some(same) = r53_answer_matches_record(rec, &a.record_data) {
+        rows.push(("".to_string(), "".to_string()));
+        rows.push((
+            "".to_string(),
+            if same {
+                "✓ matches this record's values".to_string()
+            } else if rec.routing_policy() == "simple" {
+                "· differs from this record's values".to_string()
+            } else {
+                "· another answer than this record's values — routing picked a different record in the set, or a health check failed this one over".to_string()
+            },
+        ));
+    }
+    rows.push(("".to_string(), "".to_string()));
+    rows.push(("".to_string(), "· press x to ask again (weighted sets resample)".to_string()));
+    rows
+}
+
+/// Whether a test answer is exactly this record's configured values
+/// (order-, case- and trailing-dot-insensitive). `None` for alias records,
+/// whose answer is the target's addresses and has nothing to compare with.
+fn r53_answer_matches_record(
+    rec: &crate::aws::services::route53::R53Record,
+    data: &[String],
+) -> Option<bool> {
+    if rec.values.is_empty() || data.is_empty() {
+        return None;
+    }
+    let norm = |v: &[String]| {
+        let mut v: Vec<String> = v
+            .iter()
+            .map(|s| s.trim().trim_end_matches('.').to_ascii_lowercase())
+            .collect();
+        v.sort();
+        v
+    };
+    Some(norm(&rec.values) == norm(data))
 }
 
 fn r53_health_overview_lines(hc: &R53HealthCheck) -> Vec<(String, String)> {
@@ -8008,7 +8116,7 @@ fn r53_health_overview_lines(hc: &R53HealthCheck) -> Vec<(String, String)> {
     rows
 }
 
-fn r53_health_status_lines(state: Option<&crate::lazy::Lazy<Vec<crate::aws::services::route53::R53HealthObservation>>>) -> Vec<(String, String)> {
+fn r53_health_status_lines(state: Option<&crate::lazy::Lazy<crate::aws::services::route53::R53HealthStatus>>) -> Vec<(String, String)> {
     let mut rows = vec![("".to_string(), "".to_string())];
     match state {
         None => {
@@ -8021,7 +8129,8 @@ fn r53_health_status_lines(state: Option<&crate::lazy::Lazy<Vec<crate::aws::serv
         Some(crate::lazy::Lazy::Error(e)) => {
             rows.extend(error_rows(e));
         }
-        Some(crate::lazy::Lazy::Loaded(obs)) => {
+        Some(crate::lazy::Lazy::Loaded(st)) => {
+            let obs = &st.observations;
             if obs.is_empty() {
                 rows.push((
                     "  No observations (calculated/alarm checks report no per-region status)".to_string(),
@@ -8041,9 +8150,38 @@ fn r53_health_status_lines(state: Option<&crate::lazy::Lazy<Vec<crate::aws::serv
                     }
                 }
             }
+            rows.extend(r53_last_failure_lines(st));
         }
     }
     rows.push(("".to_string(), "".to_string()));
+    rows
+}
+
+/// "Last failure" group under the live observations: per checker, the most
+/// recent failure reason and when it was seen — so a check that is healthy
+/// now but flapped an hour ago still says so.
+fn r53_last_failure_lines(st: &crate::aws::services::route53::R53HealthStatus) -> Vec<(String, String)> {
+    let mut rows = vec![
+        ("".to_string(), "".to_string()),
+        ("Last failure per checker".to_string(), "".to_string()), // group header
+    ];
+    if let Some(e) = &st.last_failure_error {
+        rows.extend(error_rows(e));
+        return rows;
+    }
+    if st.last_failures.is_empty() {
+        rows.push(("".to_string(), "No failures on record".to_string()));
+        return rows;
+    }
+    // Newest first: that's the flap you came to find.
+    let mut failures: Vec<_> = st.last_failures.iter().collect();
+    failures.sort_by(|a, b| b.checked_time.cmp(&a.checked_time));
+    for f in failures {
+        rows.push((format!("  {}", f.region), f.status.clone()));
+        if let Some(t) = &f.checked_time {
+            rows.push((format!("  {:<20}", "  at"), t.clone()));
+        }
+    }
     rows
 }
 

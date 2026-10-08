@@ -5587,6 +5587,7 @@ impl App {
                     // (detail-pane) chain — the list-pane `x` below has no
                     // section open and could never reach it.
                     self.trigger_agentcore_agent_card_load(event_tx);
+                    self.trigger_r53_test_answer(event_tx);
                     self.trigger_secret_reveal(event_tx);
                 }
                 KeyCode::Char('Y') => {
@@ -22643,6 +22644,48 @@ impl App {
             || (self.details_focused && self.agentcore_agent_card_pending())
     }
 
+    /// Whether `x` runs `TestDNSAnswer` here — a record's Test answer
+    /// section, focused. Gates the status-bar hint.
+    pub fn supports_dns_test(&self) -> bool {
+        self.details_focused && self.selected_r53_record_on_test_section().is_some()
+    }
+
+    fn selected_r53_record_on_test_section(&self) -> Option<&crate::aws::services::route53::R53Record> {
+        use crate::aws::services::route53::R53RecordDetailSection as S;
+        let r = self
+            .get_selected_resource()?
+            .as_any()
+            .downcast_ref::<crate::aws::services::route53::R53Record>()?;
+        (S::from_index(self.detail_section_idx) == S::TestAnswer).then_some(r)
+    }
+
+    /// `x` on a record's Test answer section: ask Route 53 what it answers.
+    /// Never a section hook — each press is a deliberate sample, so a done
+    /// (or failed) answer is invalidated and asked again; a press while one
+    /// is in flight is ignored.
+    fn trigger_r53_test_answer(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(r) = self.selected_r53_record_on_test_section() else {
+            return;
+        };
+        let (id, zone, name, rtype) = (
+            r.id.clone(),
+            r.zone_id.clone(),
+            r.name.clone(),
+            r.record_type.clone(),
+        );
+        if matches!(self.lazy.r53_test_answer.get(&id), Some(crate::lazy::Lazy::Loading)) {
+            return;
+        }
+        self.lazy.r53_test_answer.invalidate(&id);
+        let client = self.aws_clients.route53_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.r53_test_answer,
+            id,
+            event_tx,
+            crate::aws::services::route53::fetch_test_dns_answer(client, zone, name, rtype),
+        );
+    }
+
     /// Whether the CloudTrail lens (`W`) has an identifier to look up for the
     /// current selection — mirrors `open_trail_lens`'s blank-key error path.
     pub fn supports_trail_lens(&self) -> bool {
@@ -24667,6 +24710,16 @@ impl App {
                     hc,
                     crate::aws::services::route53::R53HealthCheckDetailSection::from_index(self.detail_section_idx),
                     self.lazy.r53_health_status.get(&hc.id),
+                );
+            }
+            if let Some(rec) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::route53::R53Record>()
+            {
+                return crate::ui::widgets::details_pane::r53_record_section_lines(
+                    rec,
+                    crate::aws::services::route53::R53RecordDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.r53_test_answer.get(&rec.id),
                 );
             }
             if let Some(sm) = resource

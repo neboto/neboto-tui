@@ -288,8 +288,9 @@ they get their own design pass.
 Triggers fire from the section key, the `Tab`/`Shift-Tab` cycle, and
 (sometimes) list nav. Per-row variants exist (IAM permissions / Org
 SCP documents are keyed by the selected *row* via a `*_row_target` classifier).
-**One section deliberately has no on-enter hook**: AgentCore's runtime Agent
-Card, because `GetAgentCard` is a data-plane call that reaches the running
+**Two sections deliberately have no on-enter hook** — Route 53 records' Test
+answer (`TestDNSAnswer`; each `x` is a fresh sample of a weighted set) and
+AgentCore's runtime Agent Card, because `GetAgentCard` is a data-plane call that reaches the running
 agent container and can cold-start it (billable). An auto-hook would fire that
 from a `Tab` press, and the flat view's trigger sweep would fire it for every
 runtime you looked at — so it's `x`-gated on the Secrets Manager precedent
