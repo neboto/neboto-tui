@@ -25,6 +25,9 @@
 //! - ECR: `storefront-web:v2.31.0` (running) has an unfixed HIGH openssl
 //!   finding; `orders-worker:v1.19.0`'s Used By lists the stopped tasks of
 //!   the failed deployment (matched by the digest they pinned)
+//! - Beanstalk app `acme-portal` runs one Standard and one Cluster Mode
+//!   environment: `portal-legacy` is Red (it sits behind the target-less
+//!   `legacy-admin-alb`), `portal-next` is Green on a shared EKS cluster
 //! - a Secrets Manager secret `prod/orders/db` and a SecureString parameter
 //!   `/orders/db/password` — metadata only, for proving no value is fetched
 //!
@@ -208,6 +211,25 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("cloudtrail", "LookupEvents", when ["vol-0orphan00000004"], "LookupEvents-orphan-volume.json"),
     fx!("cloudtrail", "LookupEvents", when ["ResourceName"], "LookupEvents-none.json"),
     fx!("cloudtrail", "LookupEvents", "LookupEvents.json"),
+    // ── Elastic Beanstalk (awsQuery) ─────────────────────────────────────────
+    // One app, two environments: `portal-legacy` (Standard, Red — its ALB is
+    // the target-less `legacy-admin-alb`) and `portal-next` (Cluster Mode, on
+    // a shared EKS cluster). Per-environment calls are keyed on the form
+    // field the app sends: EnvironmentId for health/events/resources,
+    // EnvironmentName for configuration.
+    fx!("elasticbeanstalk", "DescribeEnvironments", "DescribeEnvironments.xml"),
+    fx!("elasticbeanstalk", "DescribeApplications", "DescribeApplications.xml"),
+    fx!("elasticbeanstalk", "DescribeApplicationVersions", "DescribeApplicationVersions.xml"),
+    fx!("elasticbeanstalk", "ListTagsForResource", "ListTagsForResource-portal.xml"),
+    fx!("elasticbeanstalk", "DescribeEnvironmentResources", when ["EnvironmentId=e-p0rtalstd1"], "DescribeEnvironmentResources-portal-legacy.xml"),
+    fx!("elasticbeanstalk", "DescribeEnvironmentResources", when ["EnvironmentId=e-p0rtalcls1"], "DescribeEnvironmentResources-portal-next.xml"),
+    fx!("elasticbeanstalk", "DescribeEnvironmentHealth", when ["EnvironmentId=e-p0rtalstd1"], "DescribeEnvironmentHealth-portal-legacy.xml"),
+    fx!("elasticbeanstalk", "DescribeEnvironmentHealth", when ["EnvironmentId=e-p0rtalcls1"], "DescribeEnvironmentHealth-portal-next.xml"),
+    fx!("elasticbeanstalk", "DescribeEvents", when ["EnvironmentId=e-p0rtalstd1"], "DescribeEvents-portal-legacy.xml"),
+    fx!("elasticbeanstalk", "DescribeEvents", when ["EnvironmentId=e-p0rtalcls1"], "DescribeEvents-portal-next.xml"),
+    fx!("elasticbeanstalk", "DescribeConfigurationSettings", when ["EnvironmentName=portal-legacy"], "DescribeConfigurationSettings-portal-legacy.xml"),
+    fx!("elasticbeanstalk", "DescribeConfigurationSettings", when ["EnvironmentName=portal-next"], "DescribeConfigurationSettings-portal-next.xml"),
+
     // ── CloudWatch alarms (the `monitoring` endpoint, awsQuery) ─────────────
     // The timeline lens finds alarms by dimension in the warm cache, then
     // asks for each one's history by name.

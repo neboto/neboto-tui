@@ -1,0 +1,16 @@
+<DescribeEnvironmentResourcesResponse xmlns="http://elasticbeanstalk.amazonaws.com/docs/2010-12-01/">
+  <DescribeEnvironmentResourcesResult>
+    <EnvironmentResources>
+      <EnvironmentName>portal-next</EnvironmentName>
+      <AutoScalingGroups/>
+      <Instances/>
+      <LaunchConfigurations/>
+      <LaunchTemplates/>
+      <LoadBalancers/>
+      <Triggers/>
+      <Queues/>
+      <Cluster><ClusterArn>arn:aws:eks:{{region}}:{{account}}:cluster/eb-cluster-subnet-0a11prv</ClusterArn></Cluster>
+    </EnvironmentResources>
+  </DescribeEnvironmentResourcesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeEnvironmentResourcesResponse>

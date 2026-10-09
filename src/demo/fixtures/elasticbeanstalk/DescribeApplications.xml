@@ -1,0 +1,23 @@
+<DescribeApplicationsResponse xmlns="http://elasticbeanstalk.amazonaws.com/docs/2010-12-01/">
+  <DescribeApplicationsResult>
+    <Applications>
+      <member>
+        <ApplicationName>acme-portal</ApplicationName>
+        <ApplicationArn>arn:aws:elasticbeanstalk:{{region}}:{{account}}:application/acme-portal</ApplicationArn>
+        <Description>Customer self-service portal</Description>
+        <DateCreated>{{iso:now-700d}}</DateCreated>
+        <DateUpdated>{{iso:now-12d}}</DateUpdated>
+        <Versions><member>v2.0.0-rc3</member><member>v1.14.2</member><member>v1.14.1</member></Versions>
+        <ConfigurationTemplates><member>portal-base</member></ConfigurationTemplates>
+        <ResourceLifecycleConfig>
+          <ServiceRole>arn:aws:iam::{{account}}:role/aws-elasticbeanstalk-service-role</ServiceRole>
+          <VersionLifecycleConfig>
+            <MaxCountRule><Enabled>true</Enabled><MaxCount>50</MaxCount><DeleteSourceFromS3>false</DeleteSourceFromS3></MaxCountRule>
+            <MaxAgeRule><Enabled>false</Enabled><MaxAgeInDays>180</MaxAgeInDays><DeleteSourceFromS3>false</DeleteSourceFromS3></MaxAgeRule>
+          </VersionLifecycleConfig>
+        </ResourceLifecycleConfig>
+      </member>
+    </Applications>
+  </DescribeApplicationsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeApplicationsResponse>
