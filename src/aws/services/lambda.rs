@@ -1178,7 +1178,8 @@ mod layer_tests {
 
     #[test]
     fn split_layer_version_arn_takes_the_version_off() {
-        let (arn, acct, v) = split_layer_version_arn(&format!("{UTILS}:12")).unwrap();
+        let versioned = format!("{UTILS}:12");
+        let (arn, acct, v) = split_layer_version_arn(&versioned).unwrap();
         assert_eq!((arn, acct, v), (UTILS, "111111111111", 12));
         assert!(split_layer_version_arn(UTILS).is_none(), "unversioned");
         assert!(split_layer_version_arn("arn:aws:lambda:us-east-1:1:function:f:3").is_none());
