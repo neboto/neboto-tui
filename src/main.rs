@@ -721,6 +721,9 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
             if app.supports_session() {
                 hints.push(("s", "session"));
             }
+            if app.supports_org_assume() {
+                hints.push(("s", "assume role"));
+            }
             hints.push(("r", "refresh"));
             hints.extend_from_slice(&[("Esc", "back"), ("?", "help")]);
             hints
@@ -751,6 +754,9 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
             }
             if app.supports_session() {
                 hints.push(("s", "session"));
+            }
+            if app.supports_org_assume() {
+                hints.push(("s", "assume role"));
             }
             if app.supports_value_reveal() {
                 hints.push(("x", "reveal"));

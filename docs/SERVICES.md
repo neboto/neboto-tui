@@ -1895,7 +1895,15 @@ the service you're touching.
   `install_new_clients` helpers — new account-scoped lazy state MUST be
   cleared in the former, which `switch_profile` also uses). With **several**
   configured roles `s` opens the role picker (`org_role_selector.rs`,
-  last-used preselected); with one it fires directly. Every session is
+  last-used preselected); with one it fires directly. **Discoverability**
+  (#86): `supports_org_assume()` puts `s assume role` in both panes' status
+  bars, and the account's Details section ends in a dim `· press s to
+  assume <role> …` row (names the picker + last-used role when several are
+  configured) so the unfocused preview says it too. Both gate on
+  `org_assume_eligible`, which mirrors `trigger_org_role_switch`'s two
+  refusals (not ACTIVE / already browsing it) — keep them in step, or the
+  hint advertises a key that only errors. A denied/missing-role failure
+  appends a pointer to `org_access_role(s)` (`org_assume_error`). Every session is
   scoped down with the AWS-managed `ReadOnlyAccess` **session policy**
   (`policy_arns` on AssumeRole), so assumed credentials can never mutate.
   `ReadOnlyAccess` has gaps, though — it grants no `controltower:List*`, so
