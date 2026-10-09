@@ -66,6 +66,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub demo: bool,
 
+    /// Don't check GitHub for a newer neboto release this run (config
+    /// `update_check = false` turns it off for good).
+    #[arg(long)]
+    pub no_update_check: bool,
+
     /// Color theme preset: dark (default), light, solarized-dark,
     /// solarized-light, gruvbox-dark, gruvbox-light, dracula, nord,
     /// catppuccin-mocha, catppuccin-latte.
@@ -201,6 +206,9 @@ impl Cli {
         if self.theme.is_some() {
             config.theme = self.theme.clone();
         }
+        if self.no_update_check {
+            config.update_check = Some(false);
+        }
         // Demo mode never touches real credentials or a configured emulator,
         // and opens on a service with data rather than the splash.
         if self.demo {
@@ -233,6 +241,7 @@ mod tests {
             macro_name: None,
             theme: None,
             demo: false,
+            no_update_check: false,
         }
     }
 
@@ -263,6 +272,17 @@ mod tests {
         assert_eq!(cfg.default_service.as_deref(), Some("ec2")); // overridden
         assert_eq!(cfg.default_region.as_deref(), Some("us-east-1")); // untouched
         assert_eq!(cfg.show_banner, Some(false));
+    }
+
+    #[test]
+    fn no_update_check_flag_overlays_config() {
+        let mut cfg = Config::default();
+        Cli { no_update_check: true, ..empty() }.apply_to(&mut cfg);
+        assert_eq!(cfg.update_check, Some(false));
+        // Absent flag leaves the config value (or the default) alone.
+        let mut cfg = Config::default();
+        empty().apply_to(&mut cfg);
+        assert_eq!(cfg.update_check, None);
     }
 
     #[test]

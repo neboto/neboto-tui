@@ -150,6 +150,13 @@ pub struct Config {
     /// warning = "yellow"
     /// ```
     pub theme_colors: Option<std::collections::HashMap<String, String>>,
+    /// Check once a day whether a newer neboto release is out, and show a
+    /// `↑ vX.Y.Z` chip on the service strip when one is (default true). The
+    /// only request neboto makes that isn't to AWS: an anonymous GET of the
+    /// latest GitHub Release. `--no-update-check` or
+    /// `NEBOTO_NO_UPDATE_CHECK=1` turn it off for one run; it never runs
+    /// under `--demo`, in CI, or for the `ls` / `get` subcommands.
+    pub update_check: Option<bool>,
     /// Set when the config file existed but failed to parse — the app starts
     /// on defaults and surfaces this in the status bar. Never silently: a
     /// TOML typo used to wipe every setting (default_service, roles, …) with

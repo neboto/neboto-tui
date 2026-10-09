@@ -141,6 +141,7 @@ Every flag overrides the config file for that run only.
 | `--show-keys` | Show each key and what it did in a corner box, for recordings and screen shares |
 | `--endpoint-url <URL>` | Point at a local emulator |
 | `--demo` | Browse a made-up account offline — no credentials, no network |
+| `--no-update-check` | Skip the daily check for a newer release (see [Update check](#update-check)) |
 | `--banner` / `--no-banner` | Show or hide the ASCII banner |
 
 With no arguments and no `default_service` configured, neboto shows a welcome
@@ -373,6 +374,7 @@ the faster route, but nothing needs it.
 | Click | Select a row, switch a tab or section, open a picker from a badge, press a status-bar hint (`m metrics`, `W trail`…) |
 | Double-click | `⏎`: open the detail pane, follow a link, confirm a picker row |
 | Click a `→` | Follow that link |
+| Click the `↑ vX.Y.Z` chip | Copy the upgrade command (shown when a newer release is out) |
 | Click the detail pane's title bar | Full width (`Z`) |
 | Wheel | Scroll the list, the detail body, a picker, or an in-pane view (the log tail pauses following, as `k` does) |
 | Drag | Select a range of rows (then `y` copies it) |
@@ -486,9 +488,25 @@ template.
 | `org_access_role`, `org_access_roles` | Role name(s) for the member-account switch |
 | `controltower_audit_account`, `controltower_audit_role` | The account holding the Control Tower Config aggregator (**quote the id** — a bare 12-digit number is a TOML integer) |
 | `endpoint_url` | Point every client at a local emulator |
+| `update_check` | Check once a day for a newer release (default `true`; see [Update check](#update-check)) |
 
 A config file that fails to parse warns in the status bar at startup rather
 than silently falling back to defaults.
+
+### Update check
+
+Once a day, neboto asks GitHub whether there's a newer release (an anonymous
+`GET https://api.github.com/repos/neboto/neboto-tui/releases/latest`). If
+there is, a `↑ vX.Y.Z` chip appears on the service strip; clicking it copies
+the upgrade command and stops announcing that version. It is the only request
+neboto makes that isn't to AWS. It sends nothing about you or your account,
+and a failed request (offline, behind a proxy) is silent.
+
+It's on by default. Turn it off with `update_check = false` in the config,
+`--no-update-check` for one run, or `NEBOTO_NO_UPDATE_CHECK=1`. It never runs
+under `--demo`, when `CI` is set, or for the `ls` / `get` subcommands. The
+answer is cached in `$XDG_CACHE_HOME/neboto/update-check.json` (default
+`~/.cache/…`).
 
 ### Credentials and region
 

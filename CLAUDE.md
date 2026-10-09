@@ -1146,13 +1146,19 @@ and the approaches you rejected are the part nobody can recover from your code.
   keys, default `["managedby", "managed-by", "managed_by"]`) +
   `ownership_ribbon` (default true; `false` hides the ribbon, timeline
   unaffected),
+  `update_check` (default true: a once-a-day anonymous GET of the latest
+  GitHub Release, `src/update_check.rs` — the **only non-AWS request**, so it
+  stays silent on failure, never runs in tests / headless / `--demo` / CI
+  (`App::spawn_update_check` is called from `main.rs`'s TUI startup only),
+  and shows as a clickable `↑ vX.Y.Z` service-strip chip),
   `cache_ttl` (base cache freshness in seconds, default 300) +
   `[cache_ttls]` (per-service overrides keyed by any `@`-search prefix;
   unknown prefixes are ignored).
   No `default_service` ⇒ welcome splash, nothing loads.
 - **`src/cli.rs`**: clap `Cli` (parsed in `main` before the runtime).
   `-s/--service`, `-r/--region`, `-p/--profile`, `--endpoint-url`,
-  `--banner`/`--no-banner`, `-w/--watch`, `--theme`, `--show-keys` — each **overrides the config file**
+  `--banner`/`--no-banner`, `-w/--watch`, `--theme`, `--show-keys`,
+  `--no-update-check` — each **overrides the config file**
   for the run via
   `Cli::apply_to(&mut Config)`, applied in `App::new(cli)` after `Config::load()`.
   `-m/--macro NAME` is the exception: it names an action, not a setting, so it

@@ -88,6 +88,12 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
         None => String::new(),
     };
     let hint_text = " S: services  @: prefix ";
+    // A newer release (`update_check.rs`): dim, so it reads as news rather
+    // than a warning; clicking it shows how to upgrade and retires it.
+    let update_text = match &app.update_available {
+        Some(v) => format!(" ↑ v{} ", v),
+        None => String::new(),
+    };
 
     let endpoint_style = Style::default()
         .fg(Color::Black)
@@ -102,11 +108,15 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
         .add_modifier(Modifier::BOLD);
     let account_style = Style::default().fg(theme::aws_orange());
     let hint_style = Style::default().fg(theme::text_dim());
+    let update_style = Style::default().fg(theme::accent());
 
     // Candidate badge sets, widest first. The last (assumed/endpoint only) is
     // the floor — identity info survives any terminal width.
-    let build = |hint: bool, account: bool, assumed_long: bool, profile: bool| {
+    let build = |hint: bool, update: bool, account: bool, assumed_long: bool, profile: bool| {
         let mut parts: Vec<(String, Style)> = Vec::new();
+        if update && !update_text.is_empty() {
+            parts.push((update_text.clone(), update_style));
+        }
         if !endpoint_text.is_empty() {
             parts.push((endpoint_text.clone(), endpoint_style));
         }
@@ -126,11 +136,12 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
         parts
     };
     let candidates = [
-        build(true, true, true, true),
-        build(false, true, true, true),
-        build(false, false, true, true),
-        build(false, false, false, true),
-        build(false, false, false, false),
+        build(true, true, true, true, true),
+        build(false, true, true, true, true),
+        build(false, false, true, true, true),
+        build(false, false, false, true, true),
+        build(false, false, false, false, true),
+        build(false, false, false, false, false),
     ];
     let parts_width = |parts: &[(String, Style)]| -> u16 {
         parts
@@ -339,6 +350,12 @@ pub fn render_service_tabs(app: &App, area: Rect, frame: &mut Frame) {
     let mut badge_x = area.x + left_width + pad;
     for (text, style) in right_parts {
         let w = text.chars().count() as u16;
+        if !update_text.is_empty() && *text == update_text && badge_x + w <= area.x + area.width {
+            app.push_click_region(
+                Rect { x: badge_x, y: area.y, width: w, height: 1 },
+                crate::app::ClickAction::UpdateNotice,
+            );
+        }
         let key = if *text == profile_text || *text == account_text {
             Some('P')
         } else if text == hint_text {

@@ -112,6 +112,14 @@
 # See scripts/seed-floci.sh to load bulk test data.
 # endpoint_url = "http://localhost:4566"
 
+# ── Update check ─────────────────────────────────────────────────────────────
+
+# Once a day, ask GitHub whether a newer neboto release is out and show a
+# `↑ vX.Y.Z` chip on the service strip when one is. The only request neboto
+# makes that isn't to AWS (an anonymous GET of the latest release). Default
+# true; `--no-update-check` or NEBOTO_NO_UPDATE_CHECK=1 skip it for one run.
+# update_check = false
+
 # ── Note on Cost Explorer ────────────────────────────────────────────────────
 #
 # The cost service (@cost) uses AWS Cost Explorer, which bills ~$0.01 per API

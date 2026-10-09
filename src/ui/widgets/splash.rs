@@ -155,15 +155,34 @@ pub fn render_splash(app: &App, area: Rect, frame: &mut Frame) {
         Rect { x: menu_x, y: menu_y, width: MENU_W, height: menu_h }.intersection(area),
     );
 
-    // ── Footer tip (centered) ──
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "Tip: set default_service in ~/.config/neboto/config.toml to skip this screen",
+    // ── Footer (centered): a newer release takes the tip's slot, and is a
+    // click target like the service strip's `↑` chip ──
+    let footer_y = menu_y + menu_h + 1;
+    let (footer, footer_style) = match &app.update_available {
+        Some(v) => (
+            format!(
+                "↑ neboto v{v} is out (you have v{}) — click for the upgrade command",
+                crate::update_check::current_version()
+            ),
+            Style::default().fg(theme::accent()),
+        ),
+        None => (
+            "Tip: set default_service in ~/.config/neboto/config.toml to skip this screen"
+                .to_string(),
             Style::default()
                 .fg(theme::text_dim())
                 .add_modifier(Modifier::ITALIC),
-        )))
-        .alignment(Alignment::Center),
-        Rect { x: area.x, y: menu_y + menu_h + 1, width: area.width, height: 1 }.intersection(area),
+        ),
+    };
+    if app.update_available.is_some() && footer_y < area.y + area.height {
+        let w = (footer.chars().count() as u16).min(area.width);
+        app.push_click_region(
+            Rect { x: area.x + area.width.saturating_sub(w) / 2, y: footer_y, width: w, height: 1 },
+            ClickAction::UpdateNotice,
+        );
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(footer, footer_style))).alignment(Alignment::Center),
+        Rect { x: area.x, y: footer_y, width: area.width, height: 1 }.intersection(area),
     );
 }
