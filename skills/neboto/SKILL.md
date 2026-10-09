@@ -59,6 +59,11 @@ events / template / drift, ECS deployments, …). Up to 50 ids per call.
   and its task definition share a name).
 - `--wait SECS` (default 60): sections still loading after that come back
   as `null`, with a note on stderr.
+- **To compare two resources** (prod vs staging, two task definition
+  revisions), diff two `get`s:
+  `diff <(neboto get @lambda a -o md) <(neboto get @lambda b -o md)`.
+  The sections come out in the same order, so the diff lines up. There's no
+  compare subcommand.
 
 ## Output
 

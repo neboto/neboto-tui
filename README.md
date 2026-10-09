@@ -185,6 +185,16 @@ matched by exact id (or ARN, where that's its id), then exact name.
 | `--section <NAME>` | Only this section, any case; repeatable. The other sections' data isn't fetched |
 | `--wait <SECS>` | How long to wait for slow sections (default 60); anything still loading prints as not loaded, with a note on stderr |
 
+**To compare two resources**, diff two `get`s. Both come out with the same
+sections in the same order, so the diff lines up:
+
+```sh
+diff <(neboto get @lambda orders-api-prod -o md) <(neboto get @lambda orders-api-staging -o md)
+```
+
+`--section` narrows it to what you care about, and any diff tool works
+(`delta`, `vimdiff`, `git diff --no-index`).
+
 **For AI agents:** [`skills/neboto/SKILL.md`](skills/neboto/SKILL.md) teaches
 an agent the commands, output shapes and exit codes. For Claude Code, copy it
 to `~/.claude/skills/neboto/SKILL.md`:
