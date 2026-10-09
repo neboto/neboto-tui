@@ -28582,10 +28582,6 @@ impl App {
         );
     }
 
-    /// Lazy Triggers section: both the poll-based sources
-    /// (`ListEventSourceMappings`) and the push-trigger EventBridge rules
-    /// that target this function, keyed by ARN. Idempotent once
-    /// Loading/Loaded (each half guards separately via `trigger_lazy`).
     /// A layer's Versions section: every published version via
     /// `ListLayerVersions`, keyed by the (unversioned) layer ARN.
     pub(crate) fn trigger_lambda_layer_versions_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
@@ -28606,6 +28602,10 @@ impl App {
         );
     }
 
+    /// Lazy Triggers section: both the poll-based sources
+    /// (`ListEventSourceMappings`) and the push-trigger EventBridge rules
+    /// that target this function, keyed by ARN. Idempotent once
+    /// Loading/Loaded (each half guards separately via `trigger_lazy`).
     pub(crate) fn trigger_lambda_triggers_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         self.trigger_lambda_esms_load(event_tx);
         self.trigger_lambda_eb_rules_load(event_tx);
