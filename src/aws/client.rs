@@ -680,6 +680,10 @@ impl AwsClients {
         aws_sdk_databasemigration::Client::new(&self.config)
     }
 
+    pub fn beanstalk_client(&self) -> aws_sdk_elasticbeanstalk::Client {
+        aws_sdk_elasticbeanstalk::Client::new(&self.config)
+    }
+
     pub fn fms_client(&self) -> aws_sdk_fms::Client {
         aws_sdk_fms::Client::new(&self.config)
     }

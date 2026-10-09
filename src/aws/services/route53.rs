@@ -791,7 +791,64 @@ pub enum DnsTarget {
     GlobalAccelerator(String),
 }
 
+crate::sections! {
+    pub enum R53RecordDetailSection,
+    pub static R53_RECORD_SECTIONS = [
+        // "Details", not "Overview": it's what the flat pane's one section
+        // was called, and `neboto get` scripts key on section names.
+        Details "Details",
+        // No on-enter hook: `x` runs the test, so a Tab press or the flat
+        // view's trigger sweep never fires one (the AgentCore Agent Card
+        // precedent), and each `x` is a fresh sample of a weighted set.
+        TestAnswer "Test answer",
+    ]
+}
+
+/// What Route 53 answered for one `TestDNSAnswer` (`x` on a record's Test
+/// answer section), asked from Route 53's default resolver.
+#[derive(Debug, Clone)]
+pub struct R53TestAnswer {
+    pub nameserver: String,
+    pub response_code: String,
+    pub protocol: String,
+    pub record_data: Vec<String>,
+    /// Local time the answer came back, so repeated `x` presses on a
+    /// weighted set read as distinct samples.
+    pub asked_at: String,
+}
+
+/// `TestDNSAnswer` for one record: the answer Route 53 itself would serve,
+/// after routing policy and health checks — which can differ from the
+/// record's configured values (a weighted pick, a failover to secondary, an
+/// alias resolved to its target's addresses). Read-only.
+pub async fn fetch_test_dns_answer(
+    client: R53Client,
+    zone_id: String,
+    name: String,
+    record_type: String,
+) -> std::result::Result<R53TestAnswer, String> {
+    let resp = client
+        .test_dns_answer()
+        .hosted_zone_id(zone_id.trim_start_matches("/hostedzone/"))
+        .record_name(&name)
+        .record_type(aws_sdk_route53::types::RrType::from(record_type.as_str()))
+        .send()
+        .await
+        .map_err(|e| crate::error::sdk_error_message(&e))?;
+    Ok(R53TestAnswer {
+        nameserver: resp.nameserver().to_string(),
+        response_code: resp.response_code().to_string(),
+        protocol: resp.protocol().to_string(),
+        record_data: resp.record_data().to_vec(),
+        asked_at: chrono::Local::now().format("%H:%M:%S").to_string(),
+    })
+}
+
 impl Resource for R53Record {
+    fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
+        Some(&R53_RECORD_SECTIONS)
+    }
+
     fn id(&self) -> &str {
         &self.id
     }
@@ -1276,15 +1333,21 @@ pub struct R53HealthObservation {
     pub checked_time: Option<String>,
 }
 
-/// Fetch the per-region observations for one health check (`GetHealthCheckStatus`).
-pub async fn fetch_health_check_status(
-    client: R53Client,
-    id: String,
-) -> Result<Vec<R53HealthObservation>> {
-    let resp = client.get_health_check_status().health_check_id(&id).send().await?;
-    let obs = resp
-        .health_check_observations()
-        .iter()
+/// The Status section's bundle: what each checker sees now, and the last
+/// time each one saw the endpoint fail — the "healthy now, flapped an hour
+/// ago" case the live view can't show.
+#[derive(Debug, Clone)]
+pub struct R53HealthStatus {
+    pub observations: Vec<R53HealthObservation>,
+    /// `GetHealthCheckLastFailureReason`: one entry per checker that has a
+    /// failure on record (the status text is the failure reason).
+    pub last_failures: Vec<R53HealthObservation>,
+    /// Set when that call failed; the live observations still render.
+    pub last_failure_error: Option<String>,
+}
+
+fn health_observations(obs: &[aws_sdk_route53::types::HealthCheckObservation]) -> Vec<R53HealthObservation> {
+    obs.iter()
         .map(|o| {
             let report = o.status_report();
             R53HealthObservation {
@@ -1299,8 +1362,34 @@ pub async fn fetch_health_check_status(
                 checked_time: report.and_then(|r| r.checked_time()).map(|t| t.to_string()),
             }
         })
-        .collect();
-    Ok(obs)
+        .collect()
+}
+
+/// Fetch one health check's per-region observations (`GetHealthCheckStatus`)
+/// and, alongside, each checker's last failure reason
+/// (`GetHealthCheckLastFailureReason`, best-effort).
+pub async fn fetch_health_check_status(client: R53Client, id: String) -> Result<R53HealthStatus> {
+    let (status, failures) = tokio::join!(
+        client.get_health_check_status().health_check_id(&id).send(),
+        client.get_health_check_last_failure_reason().health_check_id(&id).send(),
+    );
+    let observations = health_observations(status?.health_check_observations());
+    let (last_failures, last_failure_error) = match failures {
+        Ok(resp) => (
+            health_observations(resp.health_check_observations())
+                .into_iter()
+                // A checker with nothing on record reports no reason.
+                .filter(|o| o.status != "—" && !o.status.is_empty())
+                .collect(),
+            None,
+        ),
+        Err(e) => (Vec::new(), Some(crate::error::sdk_error_message(&e))),
+    };
+    Ok(R53HealthStatus {
+        observations,
+        last_failures,
+        last_failure_error,
+    })
 }
 
 // ── Health-check CloudWatch metrics (`m`) — AWS/Route53, dim HealthCheckId ─────

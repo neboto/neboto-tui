@@ -603,6 +603,8 @@ pub struct ResolverRuleAssociation {
 pub struct ResolverEndpointDetail {
     pub ip_addresses: Vec<ResolverEndpointIp>,
     pub tags: Vec<(String, String)>,
+    /// Set when `ListTagsForResource` failed — `tags` is then incomplete.
+    pub tags_error: Option<String>,
 }
 
 /// Fetch an endpoint's per-AZ IP addresses (`ListResolverEndpointIpAddresses`)
@@ -643,8 +645,12 @@ pub async fn fetch_resolver_endpoint_detail(
             break;
         }
     }
-    let tags = fetch_resolver_tags(&client, &arn).await;
-    Ok(ResolverEndpointDetail { ip_addresses, tags })
+    let (tags, tags_error) = fetch_resolver_tags(&client, &arn).await;
+    Ok(ResolverEndpointDetail {
+        ip_addresses,
+        tags,
+        tags_error,
+    })
 }
 
 // ── Lazy detail: rule associations + tags ─────────────────────────────────────
@@ -653,6 +659,8 @@ pub async fn fetch_resolver_endpoint_detail(
 pub struct ResolverRuleDetail {
     pub associations: Vec<ResolverRuleAssociation>,
     pub tags: Vec<(String, String)>,
+    /// Set when `ListTagsForResource` failed — `tags` is then incomplete.
+    pub tags_error: Option<String>,
 }
 
 /// Fetch a rule's VPC associations (`ListResolverRuleAssociations`, filtered to
@@ -695,11 +703,20 @@ pub async fn fetch_resolver_rule_detail(
             break;
         }
     }
-    let tags = fetch_resolver_tags(&client, &arn).await;
-    Ok(ResolverRuleDetail { associations, tags })
+    let (tags, tags_error) = fetch_resolver_tags(&client, &arn).await;
+    Ok(ResolverRuleDetail {
+        associations,
+        tags,
+        tags_error,
+    })
 }
 
-async fn fetch_resolver_tags(client: &ResolverClient, arn: &str) -> Vec<(String, String)> {
+/// Best-effort: a failure returns the tags read so far plus the error, which
+/// the Tags section renders instead of "(no tags)" (#28).
+async fn fetch_resolver_tags(
+    client: &ResolverClient,
+    arn: &str,
+) -> (Vec<(String, String)>, Option<String>) {
     let mut tags = Vec::new();
     let mut next: Option<String> = None;
     loop {
@@ -717,10 +734,10 @@ async fn fetch_resolver_tags(client: &ResolverClient, arn: &str) -> Vec<(String,
                     break;
                 }
             }
-            Err(_) => break,
+            Err(e) => return (tags, Some(crate::error::sdk_error_message(&e))),
         }
     }
-    tags
+    (tags, None)
 }
 
 // ── Endpoint CloudWatch metrics (`m`) — AWS/Route53Resolver, dim EndpointId ───

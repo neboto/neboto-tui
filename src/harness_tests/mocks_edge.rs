@@ -348,6 +348,7 @@ pub(super) fn mocks() -> Vec<Mock> {
                 policy: None,
                 effective_delivery_policy: None,
                 tags: HashMap::new(),
+                tags_error: None,
             }),
         ),
     ]

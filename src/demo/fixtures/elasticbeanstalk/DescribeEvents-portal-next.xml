@@ -1,0 +1,10 @@
+<DescribeEventsResponse xmlns="http://elasticbeanstalk.amazonaws.com/docs/2010-12-01/">
+  <DescribeEventsResult>
+    <Events>
+      <member><EventDate>{{iso:now-3d}}</EventDate><Message>Environment update completed successfully.</Message><ApplicationName>acme-portal</ApplicationName><EnvironmentName>portal-next</EnvironmentName><Severity>INFO</Severity></member>
+      <member><EventDate>{{iso:now-3d-3m}}</EventDate><Message>Rolling update: 3 of 3 replicas updated to v2.0.0-rc3.</Message><ApplicationName>acme-portal</ApplicationName><VersionLabel>v2.0.0-rc3</VersionLabel><EnvironmentName>portal-next</EnvironmentName><Severity>INFO</Severity></member>
+      <member><EventDate>{{iso:now-12d}}</EventDate><Message>Environment assigned to existing EKS cluster eb-cluster-subnet-0a11prv (shared by environments on the same subnets).</Message><ApplicationName>acme-portal</ApplicationName><EnvironmentName>portal-next</EnvironmentName><Severity>INFO</Severity></member>
+    </Events>
+  </DescribeEventsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeEventsResponse>

@@ -214,14 +214,17 @@ pub struct Route53ProfileDetail {
     pub vpcs: Vec<Route53ProfileVpc>,
     pub resources: Vec<Route53ProfileResourceAssoc>,
     pub tags: Vec<(String, String)>,
+    /// Set when `ListTagsForResource` failed; the Tags section renders it
+    /// instead of "(no tags)" (#28).
+    pub tags_error: Option<String>,
 }
 
 /// Fetch a profile's full picture — `GetProfile` (status/owner/times),
 /// `ListProfileAssociations` (VPCs), `ListProfileResourceAssociations` (the
 /// bundled DNS resources), and `ListTagsForResource` — bundled into one fetch
 /// shared by all four sections, like Resolver's endpoint/rule details. A
-/// failure in the first three is a real error (propagated); tags degrade to
-/// empty on failure, matching the R53 hosted-zone sharing fetch.
+/// failure in the first three is a real error (propagated); a tags failure is
+/// carried in `tags_error`, matching the R53 hosted-zone bundle.
 pub async fn fetch_profile_detail(
     client: ProfilesClient,
     profile_id: String,
@@ -304,10 +307,14 @@ pub async fn fetch_profile_detail(
         }
     }
 
-    let tags = match client.list_tags_for_resource().resource_arn(&profile_arn).send().await {
-        Ok(resp) => resp.tags().iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-        Err(_) => Vec::new(),
-    };
+    let (tags, tags_error) =
+        match client.list_tags_for_resource().resource_arn(&profile_arn).send().await {
+            Ok(resp) => (
+                resp.tags().iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                None,
+            ),
+            Err(e) => (Vec::new(), Some(crate::error::sdk_error_message(&e))),
+        };
 
     Ok(Route53ProfileDetail {
         owner_id,
@@ -318,5 +325,6 @@ pub async fn fetch_profile_detail(
         vpcs,
         resources,
         tags,
+        tags_error,
     })
 }

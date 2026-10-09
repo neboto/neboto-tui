@@ -364,7 +364,11 @@ pub async fn fetch_kms_tags(
         .key_id(&key_id)
         .into_paginator()
         .send();
-    while let Some(Ok(page)) = paginator.next().await {
+    // A failed page must surface (the Tags section renders `Lazy::Error`
+    // via `error_rows`) — swallowing it read as "No tags" (#28).
+    while let Some(page) = paginator.next().await {
+        let page = page
+            .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
         for t in page.tags() {
             tags.insert(
                 t.tag_key().to_string(),

@@ -7,6 +7,7 @@ pub mod backup;
 pub mod agentcore;
 pub mod bedrock;
 pub mod batch;
+pub mod beanstalk;
 pub mod budgets;
 pub mod invoicing;
 pub mod cloudformation;

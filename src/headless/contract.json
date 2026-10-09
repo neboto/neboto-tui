@@ -120,6 +120,7 @@
     "@ddb",
     "@dms",
     "@dx",
+    "@eb",
     "@ec2",
     "@ecr",
     "@ecs",
@@ -371,6 +372,24 @@
       "Overview",
       "Compute Environments",
       "Jobs",
+      "Tags"
+    ],
+    "Beanstalk Application": [
+      "Overview",
+      "Environments",
+      "Versions",
+      "Tags"
+    ],
+    "Beanstalk Application Version": [
+      "Overview",
+      "Source"
+    ],
+    "Beanstalk Environment": [
+      "Overview",
+      "Health",
+      "Events",
+      "Configuration",
+      "Resources",
       "Tags"
     ],
     "Budget": [
@@ -997,7 +1016,8 @@
       "Tags"
     ],
     "R53 Record": [
-      "Details"
+      "Details",
+      "Test answer"
     ],
     "RAM Resource Share": [
       "Details",

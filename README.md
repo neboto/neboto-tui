@@ -314,6 +314,7 @@ full-width; `\` flattens all sections into one scroll.
 | `h` `←` `Esc` | Back to the list |
 | `Ctrl-O` | Back through history |
 | `/` | Filter the body text |
+| `Ctrl-W` | Wrap long values onto continuation rows (toggle) |
 | `y` / `c` | Copy the row, or the visual selection |
 | `e` | Open in `$EDITOR` |
 | `d` | Download (Lambda deployment package, invoice PDF) |
@@ -332,7 +333,7 @@ Each takes over the keymap while open; `Esc` closes, `Z` goes full-width.
 | `o` | S3 object browser — folders, `/` filter, `V` version history incl. delete markers, `i` metadata, `v`/`e` preview, `d` download, `p` presigned URL; `t` on a `.tfstate` opens the Terraform state viewer (one row per instance, `Enter` jumps to the live resource) |
 | `i` | DynamoDB item browser (Scan / Query, filters, GSI/LSI) · AgentCore memory session browser |
 | `s` | SSM Session Manager · ECS Exec · assume an org member-account role |
-| `x` / `Y` | Reveal / copy a secret or SSM parameter value (never cached) |
+| `x` / `Y` | Reveal / copy a secret or SSM parameter value (never cached); on a Route 53 record's Test answer section, `x` asks Route 53 what it answers (again on each press) |
 | `O` | Open this resource in the AWS Console |
 
 ### Mouse
@@ -393,7 +394,7 @@ same grouping.
 
 | Category | Services (`@prefix`) |
 |---|---|
-| **Compute** | EC2 `@ec2` · Lambda `@lambda` · Auto Scaling `@asg` · Batch `@batch` · WorkSpaces `@workspaces` |
+| **Compute** | EC2 `@ec2` · Lambda `@lambda` · Auto Scaling `@asg` · Batch `@batch` · Elastic Beanstalk `@eb` · WorkSpaces `@workspaces` |
 | **Containers** | ECS `@ecs` · EKS `@eks` · ECR `@ecr` |
 | **Storage** | S3 `@s3` · EFS `@efs` · FSx `@fsx` · Backup `@backup` · Transfer Family `@transfer` |
 | **Database** | RDS `@rds` · DynamoDB `@ddb` · ElastiCache `@elasticache` · DMS `@dms` |
@@ -449,6 +450,7 @@ template.
 | `show_banner` | ASCII banner on startup |
 | `watch`, `watch_interval` | Start in watch mode, and its cadence in seconds |
 | `detail_flat` | Start with the flat all-sections detail view |
+| `detail_wrap` | Start with long detail values wrapped onto continuation rows (`Ctrl-W` toggles) |
 | `show_keys` | Show each key and what it did in a corner box (`--show-keys` for one run) |
 | `export_formats` | Which files exports write: any of `"json"`, `"csv"`, `"md"` (default all three) |
 | `export_dir` | Where exports go (default the working directory; `NEBOTO_EXPORT_DIR` overrides) |
@@ -472,7 +474,8 @@ A `credential_process` that asks for something in the terminal works too, such
 as granted with the `pass` keyring, where gpg's pinentry asks for your
 passphrase. neboto runs it before the TUI starts. When it runs again later
 (after `P`, or when the credentials expire), neboto steps aside until it
-finishes.
+finishes. A process that answers straight from its cache never shows
+anything; the note only appears once it has run for a moment.
 
 ### Themes
 

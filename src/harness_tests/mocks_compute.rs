@@ -246,5 +246,41 @@ pub(super) fn mocks() -> Vec<Mock> {
                     .build(),
             )),
         ),
+        (
+            ServiceType::Beanstalk,
+            "EbEnvironment",
+            Box::new(svc::beanstalk::EbEnvironment::from_sdk(
+                &aws_sdk_elasticbeanstalk::types::EnvironmentDescription::builder()
+                    .environment_id("e-mockenv01")
+                    .environment_name("mock-env")
+                    .application_name("mock-app")
+                    .tier(
+                        aws_sdk_elasticbeanstalk::types::EnvironmentTier::builder()
+                            .name("Cluster")
+                            .r#type("EKS")
+                            .build(),
+                    )
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Beanstalk,
+            "EbApplication",
+            Box::new(svc::beanstalk::EbApplication::from_sdk(
+                &aws_sdk_elasticbeanstalk::types::ApplicationDescription::builder()
+                    .application_name("mock-app")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Beanstalk,
+            "EbVersion",
+            Box::new(svc::beanstalk::EbVersion::from_sdk(
+                &aws_sdk_elasticbeanstalk::types::ApplicationVersionDescription::builder()
+                    .application_name("mock-app")
+                    .version_label("v1")
+                    .build(),
+            )),
+        ),
     ]
 }

@@ -427,6 +427,16 @@ pub struct LazyStore {
     /// DMS serverless replication Tables section, keyed by config ARN.
     pub dms_serverless_table_stats: LazyMap<crate::aws::services::dms::DmsTableStats>,
 
+    // ── Elastic Beanstalk (all keyed by environment id) ──────────────────
+    /// Environment Health section (`DescribeEnvironmentHealth`).
+    pub eb_health: LazyMap<crate::aws::services::beanstalk::EbHealth>,
+    /// Environment Events section (`DescribeEvents`, newest page).
+    pub eb_events: LazyMap<Vec<crate::aws::services::beanstalk::EbEvent>>,
+    /// Environment Configuration section (`DescribeConfigurationSettings`).
+    pub eb_config: LazyMap<crate::aws::services::beanstalk::EbConfig>,
+    /// Environment Resources section (`DescribeEnvironmentResources`).
+    pub eb_resources: LazyMap<crate::aws::services::beanstalk::EbResources>,
+
     // ── Transfer Family ──────────────────────────────────────────────────
     /// A server's users, keyed by server id.
     pub transfer_users: LazyMap<Vec<crate::aws::services::transfer::TransferUser>>,
@@ -610,7 +620,10 @@ pub struct LazyStore {
     /// keyed by zone id.
     pub r53_zone_detail: LazyMap<Box<crate::aws::services::route53::R53ZoneDetail>>,
     /// A health check's per-region live observations, keyed by check id.
-    pub r53_health_status: LazyMap<Vec<crate::aws::services::route53::R53HealthObservation>>,
+    pub r53_health_status: LazyMap<crate::aws::services::route53::R53HealthStatus>,
+    /// A record's `TestDNSAnswer`, keyed by record id. `x`-gated, and each
+    /// press re-asks (invalidate + trigger), so a weighted set resamples.
+    pub r53_test_answer: LazyMap<crate::aws::services::route53::R53TestAnswer>,
     /// A Resolver endpoint's IPs + rules + tags, keyed by endpoint id.
     pub resolver_endpoint_details:
         LazyMap<Box<crate::aws::services::route53resolver::ResolverEndpointDetail>>,

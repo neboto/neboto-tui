@@ -740,7 +740,16 @@ the service you're touching.
   `ListHostedZones`) and zones past `MAX_R53_TAB_ZONES` (100) per trigger
   are skipped, counted in `App.r53_records_skipped`, and named in the tab
   strip + the empty state; the zone pane still loads any of them on demand.
-  `⏎` on a record opens its flat `details()`; `Zone ID` jumps to the zone
+  `⏎` on a record opens its split pane: **Details** (the old flat
+  `details()` rows — the section keeps that name because `neboto get`
+  scripts key on it) / **Test answer** (`TestDNSAnswer`, **`x`-gated**, no
+  on-enter hook: each press invalidates and re-asks, so a weighted set
+  resamples, and the flat view's trigger sweep never fires it). It asks from
+  Route 53's default resolver; a resolver-IP / EDNS-client-subnet input is a
+  follow-up. The answer is compared with the record's own values (`✓
+  matches`, or "another answer" for a routing-policy record — a different
+  set member or a failover); alias records have nothing to compare. The op
+  is on the read-only guard's `ALLOW_OPS` (its verb is `test`). `Zone ID` jumps to the zone
   (`r53_row_jump_target`, record-selected only — the zone's own Info row has
   the same label), `Health Check` to the check, and `Alias Target` /
   `Target` (a CNAME's single value) to where the hostname leads:
@@ -760,7 +769,9 @@ the service you're touching.
   hosted zone). No per-record console deep link exists; `console_url` opens
   the zone's record list.
   `R53HealthCheck` split pane: Overview / Status (lazy `GetHealthCheckStatus` —
-  per-region observations) / Tags. `m` metrics use the **global** `AWS/Route53`
+  per-region observations — plus `GetHealthCheckLastFailureReason` in the
+  same bundle, best-effort, as a newest-first "Last failure per checker"
+  group: the healthy-now-but-flapped case) / Tags. `m` metrics use the **global** `AWS/Route53`
   namespace (dim `HealthCheckId`) queried in us-east-1 like CloudFront.
   Disabled checks show a dimmed state; calculated/alarm checks report no
   per-region status. `R53HostedZone` split pane:
@@ -1065,6 +1076,75 @@ the service you're touching.
   **`C`**: tasks/serverless offer `start … resume-processing` and `stop`
   (Change); endpoints offer `test-connection` per instance they've been
   tested from. Never `reload-target`, never a delete.
+- **Elastic Beanstalk** (`@eb`, `beanstalk.rs`, **aws-sdk-elasticbeanstalk**)
+  — browse-only, three sub-tabs **Environments / Applications / Versions**.
+  **`@eb` was EventBridge's alias** until this landed; EventBridge keeps
+  `@events` / `@eventbridge`.
+  **SDK pin**: `1.114` is the first release with Cluster Mode
+  (`EnvironmentResourceDescription.Cluster`); 1.111 (what an unpinned add
+  resolves to against the current lock) predates it. Adding it moves
+  `aws-runtime` 1.9→1.10 and `aws-smithy-runtime` 1.14→1.15 (+ patch
+  bumps of sigv4/json/query/xml/schema/http-client); 1.115+ would want
+  smithy-runtime 1.15+/1.16 for no extra API.
+  **Two environment types**, told apart by `EnvironmentDescription.Tier` —
+  never by config namespace sniffing: `Cluster` / `EKS` is **Cluster Mode**
+  (GA Sep 2026: containers on an EKS Auto Mode cluster Beanstalk creates and
+  operates, **shared by every Cluster environment on the same subnet set**);
+  `WebServer` / `Standard` and `Worker` / `SQS/HTTP` are the EC2 **Standard**
+  type. `EbDeploymentType::from_tier` is the one place that decides it.
+  **Load**: `DescribeEnvironments` (`IncludeDeleted=false` — a terminated env
+  otherwise sits beside its same-named replacement and steals name jumps),
+  `DescribeApplications`, then `DescribeApplicationVersions` over **every
+  page** (no ordering guarantee) sorted newest-first and capped at
+  `MAX_VERSIONS` (warning when cut), then `ListTagsForResource` per
+  environment/application ARN (there's no batch form; `buffer_unordered(8)`),
+  then **`DescribeEnvironmentResources` for Cluster environments only** so
+  their EKS cluster ARN is on the row at list time — `U` on the EKS cluster
+  runs off warm caches and can't fire a lazy fetch, so the eager call is what
+  makes "which environments share this cluster" work. Both core lists failing
+  is a `ResourceLoadError`; anything else is a warning.
+  **ids**: environment `id()` = `e-…` id, `name()` = name; application = name;
+  version = **`app@label`** (labels repeat across apps — the tab spans all).
+  Environment ARNs (`environment/<app>/<env>`) carry the name, not the id, so
+  `arn_jump_target` resolves them by name; version ARNs rebuild `app@label`.
+  **State**: `state_label()` is the health **colour** (green/yellow/red/grey)
+  while `Ready`, the lifecycle status (`updating`, `launching`, …) otherwise;
+  red/yellow/mid-operation environments sort first.
+  **Sections** (environment): Overview (type, tier, health + enhanced status,
+  version, platform — Cluster has no solution stack, the runtime is the
+  image — endpoint/CNAME, inlined load balancer, the EKS cluster for Cluster
+  envs, links) / **Health** (lazy `DescribeEnvironmentHealth` with
+  `AttributeNames=All`; it **needs enhanced health reporting** and errors
+  otherwise — the trigger rewrites that error to say so; Cluster envs report
+  no per-instance health by design) / **Events** (lazy `DescribeEvents`, one
+  page of `MAX_EVENTS`, newest first as returned) / **Configuration** (lazy
+  `DescribeConfigurationSettings`, grouped by namespace (+ resource name);
+  Cluster envs show `aws:elasticbeanstalk:eks*` — the **cluster / node /
+  observability roles** live only here (`cluster-role`, `node-role`,
+  `observability-role`), not on any describe shape, and jump via the generic
+  IAM-ARN classifier) / **Resources** (lazy `DescribeEnvironmentResources`:
+  ASG, instances, LBs, launch templates/configs, triggers, queues — or the
+  EKS cluster) / Tags. Application: Overview (lifecycle policy, saved
+  configs) / Environments + Versions (**sibling-filtered**, no fetch) / Tags.
+  Version: Overview (status, which envs run it) / Source (S3 bundle, image
+  URI, CodeBuild build + role).
+  **Environment properties are shown as returned.** Configuration includes
+  `aws:elasticbeanstalk:application:environment` values verbatim, same as
+  the console's Configuration page and the same IAM action; it is not a
+  secrets API, so no reveal gate. Revisit if that proves too loud.
+  **Jumps**: `eb_row_jump_target` keys on the `EB_ROW_*` label constants in
+  `details_pane.rs` — Application / Environment / Version Label stay in
+  `@eb`; EKS Cluster → `@eks` by name; Auto Scaling Group → `@asg`; a bare
+  (classic) Load Balancer name → `@elb` (ALB rows are ARNs → generic);
+  Launch Template → EC2; Queue (URL) → SQS. **`references()`** carries the
+  EKS cluster ARN (so `U` on the cluster lists the environments sharing it),
+  the LB, the platform ARN, the operations role, linked environments and
+  `app@label` for the deployed version.
+  **`C`**: describe-* reads + `restart-app-server` (Change). Never
+  `rebuild-environment` / `terminate-environment` / `swap-environment-cnames`.
+  **Follow-ups**: `m` (`AWS/ElasticBeanstalk`, enhanced health only), `t`
+  (the env's `/aws/elasticbeanstalk/<env>/…` log groups), and the AI
+  environment analysis if it gets a read API.
 - **Redshift** (`@redshift`, `redshift.rs`, two clients: `redshift` +
   `redshiftserverless`) — sub-tabs **Clusters / Serverless / Snapshots**,
   streamed as three error-tolerant batches. **Clusters**: one paginated

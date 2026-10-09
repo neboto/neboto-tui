@@ -159,6 +159,55 @@ async fn awsquery_fixtures_and_empty_results_deserialize() {
 }
 
 #[tokio::test]
+async fn beanstalk_fixtures_deserialize_with_a_cluster_mode_environment() {
+    let eb = aws_sdk_elasticbeanstalk::Client::new(&demo_config().await);
+    let envs = eb.describe_environments().send().await.expect("DescribeEnvironments");
+    let tiers: Vec<_> = envs
+        .environments()
+        .iter()
+        .map(|e| e.tier().and_then(|t| t.name()).unwrap_or_default())
+        .collect();
+    assert_eq!(tiers, ["WebServer", "Cluster"], "one Standard + one Cluster environment");
+    let res = eb
+        .describe_environment_resources()
+        .environment_id("e-p0rtalcls1")
+        .send()
+        .await
+        .expect("DescribeEnvironmentResources");
+    let cluster = res.environment_resources().and_then(|r| r.cluster()).and_then(|c| c.cluster_arn());
+    assert!(cluster.is_some_and(|a| a.ends_with(":cluster/eb-cluster-subnet-0a11prv")));
+    let std_res = eb
+        .describe_environment_resources()
+        .environment_id("e-p0rtalstd1")
+        .send()
+        .await
+        .expect("DescribeEnvironmentResources (Standard)");
+    let std_res = std_res.environment_resources().unwrap();
+    assert!(std_res.cluster().is_none());
+    assert_eq!(std_res.auto_scaling_groups().len(), 1);
+    let cfg = eb
+        .describe_configuration_settings()
+        .application_name("acme-portal")
+        .environment_name("portal-next")
+        .send()
+        .await
+        .expect("DescribeConfigurationSettings");
+    assert!(cfg.configuration_settings()[0]
+        .option_settings()
+        .iter()
+        .any(|o| o.namespace() == Some("aws:elasticbeanstalk:eks") && o.option_name() == Some("node-role")));
+    let health = eb
+        .describe_environment_health()
+        .environment_id("e-p0rtalstd1")
+        .send()
+        .await
+        .expect("DescribeEnvironmentHealth");
+    assert_eq!(health.color(), Some("Red"));
+    let versions = eb.describe_application_versions().send().await.expect("DescribeApplicationVersions");
+    assert_eq!(versions.application_versions().len(), 3);
+}
+
+#[tokio::test]
 async fn rest_json_fixtures_route_by_path_and_can_fail() {
     let lambda = aws_sdk_lambda::Client::new(&demo_config().await);
     let fns = lambda.list_functions().send().await.expect("ListFunctions");
