@@ -633,7 +633,14 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
     let mut left_is_hints = false;
     // The hints on screen, in order, so each chip can be made clickable.
     let mut hints: Vec<(&str, &str)> = Vec::new();
-    let left: Line = if let Some(error) = &app.error_message {
+    let left: Line = if let Some(note) = crate::tui::handoff_note() {
+        // A credential_process has (or is about to have) the terminal. Drawing
+        // pauses for it, so this line stays as drawn: no spinner.
+        Line::from(Span::styled(
+            format!(" ⟳ {note}"),
+            Style::default().fg(theme::warning()),
+        ))
+    } else if let Some(error) = &app.error_message {
         Line::from(vec![
             Span::styled(
                 " ✗ ",
