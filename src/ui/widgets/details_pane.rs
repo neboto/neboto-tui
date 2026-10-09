@@ -1488,59 +1488,43 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
     };
     let state = resource.map(|r| r.state());
 
-    let visible_height = content_area.height as usize;
     let cursor = selected.unwrap_or(0);
-    let scroll_offset = cursor.saturating_sub(visible_height.saturating_sub(1));
-    app.record_detail_body_geometry(content_area, scroll_offset);
     let q_lower = app.detail_search_query.to_lowercase();
-    let key_widths = key_col_widths(&rows, content_area.width);
 
-    let lines: Vec<Line> = rows
-        .iter()
-        .enumerate()
-        .skip(scroll_offset)
-        .take(visible_height)
-        .map(|(idx, (key, value))| {
-            let spun = spin_loading_row(key, value, app.tick_count, focused);
-            let (key, value) = spun
-                .as_ref()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .unwrap_or((key.as_str(), value.as_str()));
-            let line = style_detail_row(key, value, state.as_ref(), key_widths[idx]);
-            let jump = jump_indicator(app, key, value);
-            if Some(idx) == selected {
-                let sel = theme::selection_style(true);
-                let mut spans: Vec<Span> = line
+    let lines = layout_detail_body(app, &rows, content_area, cursor, |idx, key, value, key_w| {
+        let line = style_detail_row(key, value, state.as_ref(), key_w);
+        let jump = jump_indicator(app, key, value);
+        if Some(idx) == selected {
+            let sel = theme::selection_style(true);
+            let mut spans: Vec<Span> = line
+                .spans
+                .into_iter()
+                .map(|s| Span::styled(s.content, sel))
+                .collect();
+            if jump.is_some() {
+                spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
+            }
+            Line::from(spans).style(sel)
+        } else if !q_lower.is_empty() {
+            let combined = format!("{}{}", key, value);
+            if combined.to_lowercase().contains(&q_lower) {
+                let spans: Vec<Span> = line
                     .spans
                     .into_iter()
-                    .map(|s| Span::styled(s.content, sel))
+                    .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
                     .collect();
-                if jump.is_some() {
-                    spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
-                }
-                Line::from(spans).style(sel)
-            } else if !q_lower.is_empty() {
-                let combined = format!("{}{}", key, value);
-                if combined.to_lowercase().contains(&q_lower) {
-                    let spans: Vec<Span> = line
-                        .spans
-                        .into_iter()
-                        .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
-                        .collect();
-                    Line::from(spans)
-                } else {
-                    line
-                }
-            } else if jump.is_some() {
-                let mut spans = line.spans;
-                spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
                 Line::from(spans)
             } else {
                 line
             }
-        })
-        .collect();
-    record_jump_arrows(app, content_area, scroll_offset, &lines);
+        } else if jump.is_some() {
+            let mut spans = line.spans;
+            spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
+            Line::from(spans)
+        } else {
+            line
+        }
+    });
 
     frame.render_widget(Paragraph::new(lines), content_area);
 
@@ -3700,17 +3684,210 @@ fn cfn_service_fallback_jump_target(
     })
 }
 
+/// Columns a wrapped body keeps free at the right edge for a row's `  →`
+/// jump arrow, so the arrow lands on the row's last screen line instead of
+/// spilling onto a continuation of its own.
+const WRAP_ARROW_RESERVE: usize = 3;
+
+/// Hanging indent for a wrapped row's continuation lines: the value column
+/// for a `key: value` pair, the text's own leading indent for anything else
+/// (capped so a deeply indented line still keeps `WRAP_MIN_COLS` to wrap
+/// into — the key column itself always leaves 20, so this only bites on
+/// indented content lines in very narrow panes).
+fn wrap_indent(key: &str, value: &str, key_w: usize, avail: usize) -> usize {
+    let indent = if is_key_value_row(key, value) {
+        key_w + 2
+    } else if key.is_empty() {
+        2 // empty-key notes render as `"  {value}"`
+    } else {
+        key.chars().take_while(|c| *c == ' ').count()
+    };
+    indent.min(avail.saturating_sub(WRAP_MIN_COLS))
+}
+
+/// Narrowest text column a continuation row is ever given.
+const WRAP_MIN_COLS: usize = 12;
+
+/// Split one styled line into screen rows of at most `avail` display
+/// columns: the first row as is, every following row prefixed with `indent`
+/// spaces. Splits by display width (`unicode-width`), never bytes or chars,
+/// so a wide glyph is never cut in half; span styles and the line's own
+/// style carry over to every row.
+fn wrap_styled_line(line: Line<'static>, avail: usize, indent: usize) -> Vec<Line<'static>> {
+    use unicode_width::UnicodeWidthChar;
+    let avail = avail.max(1);
+    if line.width() <= avail {
+        return vec![line];
+    }
+    let line_style = line.style;
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut cur: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    let mut cap = avail;
+    for span in line.spans {
+        let mut buf = String::new();
+        for ch in span.content.chars() {
+            let cw = ch.width().unwrap_or(0);
+            if used + cw > cap && used > 0 {
+                if !buf.is_empty() {
+                    cur.push(Span::styled(std::mem::take(&mut buf), span.style));
+                }
+                out.push(Line::from(std::mem::take(&mut cur)).style(line_style));
+                // Continuation rows hang under the value column.
+                cur.push(Span::raw(" ".repeat(indent)));
+                used = 0;
+                cap = avail.saturating_sub(indent).max(1);
+                if ch == ' ' {
+                    continue; // don't start a continuation with the break space
+                }
+            }
+            buf.push(ch);
+            used += cw;
+        }
+        if !buf.is_empty() {
+            cur.push(Span::styled(buf, span.style));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(Line::from(cur).style(line_style));
+    }
+    out
+}
+
+/// Lay out a detail body into exactly the screen lines that fit `area`,
+/// keeping the logical `cursor` row on screen, and record the geometry the
+/// mouse needs. `style_row(idx, key, value, key_w)` renders one logical row
+/// (selection / search / jump-arrow styling — the per-renderer part); the
+/// loading spinner is applied before it's called.
+///
+/// Clip mode (the default) is one screen line per row, as it always was.
+/// With `App.detail_wrap` on, long rows continue onto hanging-indent lines
+/// under the value column. Every consumer that indexes the body (`j`/`k`,
+/// copy, visual selection, `/`, `[[`/`]]`) still works on logical rows; only
+/// the screen shape changes, so scrolling is computed here in **screen**
+/// rows, bottom-up from the cursor like the log tail's follow window, so a
+/// wrapped cursor row is never cut off (`Paragraph::wrap` would anchor to
+/// the top and clip). Widths are recomputed every frame — `Z` and terminal
+/// resizes change them.
+fn layout_detail_body<F>(
+    app: &App,
+    rows: &[(String, String)],
+    area: Rect,
+    cursor: usize,
+    style_row: F,
+) -> Vec<Line<'static>>
+where
+    F: Fn(usize, &str, &str, usize) -> Line<'static>,
+{
+    let focused = app.details_focused;
+    let visible_height = area.height as usize;
+    let width = area.width as usize;
+    let key_widths = key_col_widths(rows, area.width);
+    let spun = |idx: usize| -> (String, String) {
+        let (k, v) = &rows[idx];
+        spin_loading_row(k, v, app.tick_count, focused).unwrap_or_else(|| (k.clone(), v.clone()))
+    };
+
+    if !app.detail_wrap {
+        let scroll_offset = cursor.saturating_sub(visible_height.saturating_sub(1));
+        let end = rows.len().min(scroll_offset + visible_height);
+        let row_map: Vec<usize> = (scroll_offset..end).collect();
+        let lines: Vec<Line<'static>> = row_map
+            .iter()
+            .map(|&idx| {
+                let (k, v) = spun(idx);
+                style_row(idx, &k, &v, key_widths[idx])
+            })
+            .collect();
+        record_jump_arrows(app, area, &row_map, &lines);
+        app.record_detail_body_geometry(area, row_map);
+        return lines;
+    }
+
+    if rows.is_empty() {
+        app.record_detail_body_geometry(area, Vec::new());
+        return Vec::new();
+    }
+    let avail = width.saturating_sub(WRAP_ARROW_RESERVE).max(1);
+    let wrapped = |idx: usize| -> Vec<Line<'static>> {
+        let (k, v) = spun(idx);
+        let mut line = style_row(idx, &k, &v, key_widths[idx]);
+        let arrow = if line.spans.last().is_some_and(|s| s.content == "  →") {
+            line.spans.pop()
+        } else {
+            None
+        };
+        let indent = wrap_indent(&k, &v, key_widths[idx], avail);
+        let mut out = wrap_styled_line(line, avail, indent);
+        if let (Some(a), Some(last)) = (arrow, out.last_mut()) {
+            last.spans.push(a);
+        }
+        out
+    };
+    // Height of a row without the per-renderer styling (which only restyles
+    // spans and adds the reserved arrow), so measuring never runs the jump
+    // classifiers for rows that won't be drawn. Measured by actually
+    // wrapping: a wide glyph pushed to the next row makes arithmetic drift.
+    let height = |idx: usize| -> usize {
+        let (k, v) = spun(idx);
+        let line = style_detail_row(&k, &v, None, key_widths[idx]);
+        let indent = wrap_indent(&k, &v, key_widths[idx], avail);
+        if line.width() <= avail {
+            1
+        } else {
+            wrap_styled_line(line, avail, indent).len()
+        }
+    };
+
+    let cursor = cursor.min(rows.len().saturating_sub(1));
+    let first = first_visible_row(cursor, visible_height, height);
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(visible_height);
+    let mut row_map: Vec<usize> = Vec::with_capacity(visible_height);
+    for idx in first..rows.len() {
+        if lines.len() >= visible_height {
+            break;
+        }
+        for l in wrapped(idx) {
+            if lines.len() >= visible_height {
+                break;
+            }
+            lines.push(l);
+            row_map.push(idx);
+        }
+    }
+    record_jump_arrows(app, area, &row_map, &lines);
+    app.record_detail_body_geometry(area, row_map);
+    lines
+}
+
+/// First logical row to draw so the cursor row ends up fully visible:
+/// walk back from the cursor adding row heights while they still fit. A
+/// cursor row taller than the pane starts at its own top.
+fn first_visible_row(cursor: usize, visible_height: usize, height: impl Fn(usize) -> usize) -> usize {
+    let mut used = height(cursor);
+    let mut first = cursor;
+    while first > 0 {
+        let h = height(first - 1);
+        if used + h > visible_height {
+            break;
+        }
+        used += h;
+        first -= 1;
+    }
+    first
+}
+
 /// Indicator state for a jumpable row: `Some(true)` = cross-service (needs
 /// `gd`), `Some(false)` = same-service (`Enter` or `gd`), `None` = not jumpable.
 /// Make each drawn `→` jump arrow a click target that follows its row's link,
 /// as a double-click (or `⏎` on the row) does. Only while the pane has focus:
 /// the unfocused preview may show another section than focusing would, so a
 /// row index recorded there could follow the wrong link.
-fn record_jump_arrows(app: &App, area: Rect, first: usize, lines: &[Line]) {
+fn record_jump_arrows(app: &App, area: Rect, row_map: &[usize], lines: &[Line]) {
     if !app.details_focused {
         return;
     }
-    for (i, line) in lines.iter().enumerate() {
+    for ((i, line), &logical) in lines.iter().enumerate().zip(row_map) {
         if line.spans.last().is_none_or(|s| s.content != "  →") {
             continue;
         }
@@ -3720,7 +3897,7 @@ fn record_jump_arrows(app: &App, area: Rect, first: usize, lines: &[Line]) {
         }
         app.push_click_region(
             Rect { x: area.x + w - 2, y: area.y + i as u16, width: 2, height: 1 },
-            crate::app::ClickAction::FollowJump(first + i),
+            crate::app::ClickAction::FollowJump(logical),
         );
     }
 }
@@ -3989,61 +4166,38 @@ fn render_ec2_section_body(app: &App, area: Rect, frame: &mut Frame) {
     };
 
     let all_rows = app.get_detail_lines_filtered();
-    let visible_height = content_area.height as usize;
     let cursor = app.details_selected_index.unwrap_or(0);
-    let scroll_offset = cursor.saturating_sub(visible_height.saturating_sub(1));
-    app.record_detail_body_geometry(content_area, scroll_offset);
-    let key_widths = key_col_widths(&all_rows, content_area.width);
     let q_lower = app.detail_search_query.to_lowercase();
 
-    let lines: Vec<Line> = all_rows
-        .iter()
-        .enumerate()
-        .skip(scroll_offset)
-        .take(visible_height)
-        .map(|(idx, (key, value))| {
-            let spun = spin_loading_row(key, value, app.tick_count, focused);
-            let (key, value) = spun
-                .as_ref()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .unwrap_or((key.as_str(), value.as_str()));
-            let jump = jump_indicator(app, key, value);
-            let is_selected = focused && app.detail_line_in_selection(idx);
-            let is_cursor = focused && Some(idx) == app.details_selected_index;
-            let mut line = style_detail_row(key, value, None, key_widths[idx]);
+    let lines = layout_detail_body(app, &all_rows, content_area, cursor, |idx, key, value, key_w| {
+        let jump = jump_indicator(app, key, value);
+        let is_selected = focused && app.detail_line_in_selection(idx);
+        let is_cursor = focused && Some(idx) == app.details_selected_index;
+        let mut line = style_detail_row(key, value, None, key_w);
 
-            if is_selected {
-                let sel = theme::selection_style(true);
+        if is_selected {
+            let sel = theme::selection_style(true);
+            let mut spans: Vec<Span> = line
+                .spans
+                .into_iter()
+                .map(|s| Span::styled(s.content, sel))
+                .collect();
+            if jump.is_some() && is_cursor {
+                spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
+            }
+            Line::from(spans).style(sel)
+        } else if !q_lower.is_empty() {
+            let combined = format!("{}{}", key, value);
+            if combined.to_lowercase().contains(&q_lower) {
                 let mut spans: Vec<Span> = line
                     .spans
                     .into_iter()
-                    .map(|s| Span::styled(s.content, sel))
+                    .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
                     .collect();
-                if jump.is_some() && is_cursor {
-                    spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
+                if jump.is_some() {
+                    spans.push(Span::styled("  →", Style::default().fg(theme::text_dim())));
                 }
-                Line::from(spans).style(sel)
-            } else if !q_lower.is_empty() {
-                let combined = format!("{}{}", key, value);
-                if combined.to_lowercase().contains(&q_lower) {
-                    let mut spans: Vec<Span> = line
-                        .spans
-                        .into_iter()
-                        .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
-                        .collect();
-                    if jump.is_some() {
-                        spans.push(Span::styled("  →", Style::default().fg(theme::text_dim())));
-                    }
-                    Line::from(spans)
-                } else {
-                    if jump.is_some() {
-                        line.spans.push(Span::styled(
-                            "  →",
-                            Style::default().fg(theme::text_dim()),
-                        ));
-                    }
-                    line
-                }
+                Line::from(spans)
             } else {
                 if jump.is_some() {
                     line.spans.push(Span::styled(
@@ -4053,9 +4207,16 @@ fn render_ec2_section_body(app: &App, area: Rect, frame: &mut Frame) {
                 }
                 line
             }
-        })
-        .collect();
-    record_jump_arrows(app, content_area, scroll_offset, &lines);
+        } else {
+            if jump.is_some() {
+                line.spans.push(Span::styled(
+                    "  →",
+                    Style::default().fg(theme::text_dim()),
+                ));
+            }
+            line
+        }
+    });
 
     frame.render_widget(Paragraph::new(lines), content_area);
 
@@ -4592,61 +4753,45 @@ fn render_split_section_body(app: &App, area: Rect, frame: &mut Frame) {
     };
 
     let all_rows = app.get_detail_lines_filtered();
-    let visible_height = content_area.height as usize;
     let cursor = app.details_selected_index.unwrap_or(0);
-    let scroll_offset = cursor.saturating_sub(visible_height.saturating_sub(1));
-    app.record_detail_body_geometry(content_area, scroll_offset);
-    let key_widths = key_col_widths(&all_rows, content_area.width);
 
     let q_lower = app.detail_search_query.to_lowercase();
 
-    let lines: Vec<Line> = all_rows
-        .iter()
-        .enumerate()
-        .skip(scroll_offset)
-        .take(visible_height)
-        .map(|(idx, (key, value))| {
-            let spun = spin_loading_row(key, value, app.tick_count, focused);
-            let (key, value) = spun
-                .as_ref()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .unwrap_or((key.as_str(), value.as_str()));
-            let line = style_detail_row(key, value, None, key_widths[idx]);
-            let jump = jump_indicator(app, key, value);
-            if focused && app.detail_line_in_selection(idx) {
-                let sel = theme::selection_style(true);
-                let mut spans: Vec<Span> = line
+    let lines = layout_detail_body(app, &all_rows, content_area, cursor, |idx, key, value, key_w| {
+        let line = style_detail_row(key, value, None, key_w);
+        let jump = jump_indicator(app, key, value);
+        if focused && app.detail_line_in_selection(idx) {
+            let sel = theme::selection_style(true);
+            let mut spans: Vec<Span> = line
+                .spans
+                .into_iter()
+                .map(|s| Span::styled(s.content, sel))
+                .collect();
+            // `→` jump hint only on the cursor line, not the whole range.
+            if jump.is_some() && Some(idx) == app.details_selected_index {
+                spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
+            }
+            Line::from(spans).style(sel)
+        } else if !q_lower.is_empty() {
+            let combined = format!("{}{}", key, value);
+            if combined.to_lowercase().contains(&q_lower) {
+                let spans: Vec<Span> = line
                     .spans
                     .into_iter()
-                    .map(|s| Span::styled(s.content, sel))
+                    .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
                     .collect();
-                // `→` jump hint only on the cursor line, not the whole range.
-                if jump.is_some() && Some(idx) == app.details_selected_index {
-                    spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
-                }
-                Line::from(spans).style(sel)
-            } else if !q_lower.is_empty() {
-                let combined = format!("{}{}", key, value);
-                if combined.to_lowercase().contains(&q_lower) {
-                    let spans: Vec<Span> = line
-                        .spans
-                        .into_iter()
-                        .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
-                        .collect();
-                    Line::from(spans)
-                } else {
-                    line
-                }
-            } else if jump.is_some() && focused {
-                let mut spans = line.spans;
-                spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
                 Line::from(spans)
             } else {
                 line
             }
-        })
-        .collect();
-    record_jump_arrows(app, content_area, scroll_offset, &lines);
+        } else if jump.is_some() && focused {
+            let mut spans = line.spans;
+            spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
+            Line::from(spans)
+        } else {
+            line
+        }
+    });
 
     frame.render_widget(Paragraph::new(lines), content_area);
 
@@ -44938,5 +45083,59 @@ mod cfn_op_results_tests {
         assert!(some.iter().any(|(k, v)| k == "  Statements" && v == "1 (1 deny)"));
         let err = cfn_policy_lines(Some(&Lazy::Error("denied".into())));
         assert!(err.iter().any(|(k, _)| k.contains("⚠ denied")));
+    }
+}
+
+#[cfg(test)]
+mod detail_wrap_tests {
+    use super::*;
+    use unicode_width::UnicodeWidthStr;
+
+    fn text(l: &Line) -> String {
+        l.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn short_line_is_untouched() {
+        let rows = wrap_styled_line(Line::raw("short"), 10, 4);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(text(&rows[0]), "short");
+    }
+
+    #[test]
+    fn continuation_rows_hang_at_the_indent_and_respect_the_width() {
+        let line = Line::from(vec![
+            Span::raw("key : "),
+            Span::styled("abcdefghijklmnopqrstuvwxyz", Style::default().fg(Color::Red)),
+        ]);
+        let rows = wrap_styled_line(line, 12, 6);
+        let joined: String = rows.iter().map(|r| text(r).trim_start().to_string()).collect();
+        assert_eq!(joined, "key : abcdefghijklmnopqrstuvwxyz");
+        for r in &rows[1..] {
+            assert!(text(r).starts_with("      "), "{:?}", text(r));
+        }
+        assert!(rows.iter().all(|r| r.width() <= 12));
+        // The value's style survives the split.
+        assert!(rows[1].spans.iter().any(|s| s.style.fg == Some(Color::Red)));
+    }
+
+    #[test]
+    fn wide_glyphs_are_never_split_or_overflow() {
+        let line = Line::raw("日本語のテキストが長い値です");
+        let rows = wrap_styled_line(line, 7, 0);
+        assert!(rows.iter().all(|r| text(r).width() <= 7));
+        let joined: String = rows.iter().map(text).collect();
+        assert_eq!(joined, "日本語のテキストが長い値です");
+    }
+
+    #[test]
+    fn first_visible_row_keeps_the_cursor_row_whole() {
+        // Heights: row 3 is 4 screen rows tall, the rest 1.
+        let h = |i: usize| if i == 3 { 4 } else { 1 };
+        // 5 rows of screen: cursor row (4) + one row above it.
+        assert_eq!(first_visible_row(3, 5, h), 2);
+        // Cursor taller than the pane: start at its own top.
+        assert_eq!(first_visible_row(3, 2, h), 3);
+        assert_eq!(first_visible_row(0, 5, h), 0);
     }
 }

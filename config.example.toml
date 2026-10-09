@@ -33,6 +33,11 @@
 # instead of one section at a time. `\` toggles it at runtime.
 # detail_flat = true
 
+# Start with long detail values (TXT/DKIM records, policy summaries, tag JSON)
+# wrapped onto continuation rows under the value column instead of clipped at
+# the pane edge. `Ctrl-W` toggles it at runtime.
+# detail_wrap = true
+
 # ── Export ───────────────────────────────────────────────────────────────────
 
 # Which files X (detail), Ctrl-X (list) and the deep export write. Any of

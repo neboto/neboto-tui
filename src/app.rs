@@ -51,7 +51,9 @@ use tokio::sync::mpsc;
 /// handler can map a click/scroll position back to a list row or detail line.
 /// `list_area` is the outer (bordered) resource-list rect; `detail_body_area`
 /// is the inner scrollable detail body (no border); `detail_body_scroll` is the
-/// index of the first visible detail line.
+/// index of the first visible detail line. With detail wrap on a logical line
+/// can span several screen rows — `App.detail_body_rows` maps each drawn
+/// screen row back to its logical line.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MouseGeometry {
     pub list_area: Option<Rect>,
@@ -1945,6 +1947,14 @@ pub struct App {
     /// Session-sticky wrap preference for the log tail/search pane — seeds
     /// each newly-opened pane; `w` inside the pane toggles both.
     pub log_wrap: bool,
+    /// Detail-body wrap (`Ctrl-W`, config `detail_wrap`): long values continue
+    /// on hanging-indent rows under the value column instead of clipping at
+    /// the pane edge. Session-sticky; render-only (rows stay logical).
+    pub detail_wrap: bool,
+    /// Logical detail line drawn on each screen row of the body, top to
+    /// bottom — recorded by the renderer each frame so a click/drag on a
+    /// wrapped continuation row selects the line it belongs to.
+    pub detail_body_rows: RefCell<Vec<usize>>,
     /// Which formats and where `X` / `Ctrl-X` / the deep export write
     /// (config `export_formats` / `export_dir`).
     pub export_options: crate::export::ExportOptions,
@@ -2922,6 +2932,8 @@ impl App {
             detail_search_query: String::new(),
             detail_flat_mode: config.detail_flat.unwrap_or(false),
             log_wrap: config.log_wrap.unwrap_or(false),
+            detail_wrap: config.detail_wrap.unwrap_or(false),
+            detail_body_rows: RefCell::new(Vec::new()),
             keycast: config.show_keys.unwrap_or(false).then(crate::keycast::Keycast::default),
             export_options: crate::export::ExportOptions {
                 formats: crate::export::ExportFormats::from_config(config.export_formats.as_deref()).0,
@@ -5401,6 +5413,15 @@ impl App {
             // Detail pane inline search: active while typing
             if self.detail_search_active {
                 match key.code {
+                    // Ctrl-W deletes the last word, as in a shell — not the
+                    // body-wrap toggle, and not a literal `w`.
+                    KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        let q = self.detail_search_query.trim_end().to_string();
+                        let keep = q.rfind(' ').map(|i| i + 1).unwrap_or(0);
+                        self.detail_search_query.truncate(keep);
+                        self.details_selected_index = Some(0);
+                        return Ok(());
+                    }
                     KeyCode::Char(c) => {
                         self.detail_search_query.push(c);
                         self.details_selected_index = Some(0);
@@ -5647,6 +5668,11 @@ impl App {
                 // deployment) instead of reloading the whole service.
                 KeyCode::Char('r') | KeyCode::F(5) => {
                     self.refresh_selected_resource(event_tx);
+                }
+                // Wrap long values onto continuation rows (before the plain
+                // `w` arm, which matches any modifier).
+                KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.toggle_detail_wrap();
                 }
                 // Watch mode works from the detail pane too — with the pane
                 // focused on an ECS service/task it auto-refreshes just that
@@ -8075,6 +8101,12 @@ impl App {
             // it also works from the list so the preview follows the mode.
             if key.code == KeyCode::Char('\\') {
                 self.toggle_detail_flat_mode();
+                return Ok(());
+            }
+            // `Ctrl-W` wraps the detail body; from the list it reshapes the
+            // preview, like `\`.
+            if key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.toggle_detail_wrap();
                 return Ok(());
             }
         }
@@ -23748,7 +23780,16 @@ impl App {
             return;
         }
         let visible_row = (row - area.y) as usize;
-        let idx = (geom.detail_body_scroll + visible_row).min(count - 1);
+        // Through the renderer's screen-row map (a wrapped line spans several
+        // rows); below the last drawn row, the last line.
+        let rows = self.detail_body_rows.borrow();
+        let idx = match rows.get(visible_row) {
+            Some(&i) => i,
+            None if rows.is_empty() => geom.detail_body_scroll + visible_row,
+            None => count - 1,
+        }
+        .min(count - 1);
+        drop(rows);
         self.details_selected_index = Some(idx);
     }
 
@@ -24028,6 +24069,19 @@ impl App {
         self.success_message_time = Some(Instant::now());
     }
 
+    /// `Ctrl-W` — wrap long detail values onto continuation rows, or clip
+    /// them at the pane edge again. Render-only: rows, cursor and selection
+    /// are logical, so nothing else resets.
+    fn toggle_detail_wrap(&mut self) {
+        self.detail_wrap = !self.detail_wrap;
+        self.success_message = Some(if self.detail_wrap {
+            "Detail view: long values wrap (Ctrl-W to clip)".to_string()
+        } else {
+            "Detail view: long values clip (Ctrl-W to wrap)".to_string()
+        });
+        self.success_message_time = Some(Instant::now());
+    }
+
     fn focus_details_panel(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if self.get_selected_resource().is_some() {
             self.details_focused = true;
@@ -24284,11 +24338,12 @@ impl App {
 
     /// Record the inner detail-body rect + first-visible line index for mouse
     /// hit-testing. Called from the detail body render paths.
-    pub fn record_detail_body_geometry(&self, area: Rect, scroll_offset: usize) {
+    pub fn record_detail_body_geometry(&self, area: Rect, row_map: Vec<usize>) {
         let mut g = self.mouse_geom.get();
         g.detail_body_area = Some(area);
-        g.detail_body_scroll = scroll_offset;
+        g.detail_body_scroll = row_map.first().copied().unwrap_or(0);
         self.mouse_geom.set(g);
+        *self.detail_body_rows.borrow_mut() = row_map;
     }
 
     /// Clear all recorded tab regions. Called once per frame by the service-tab
