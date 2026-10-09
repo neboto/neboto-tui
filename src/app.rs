@@ -51,7 +51,9 @@ use tokio::sync::mpsc;
 /// handler can map a click/scroll position back to a list row or detail line.
 /// `list_area` is the outer (bordered) resource-list rect; `detail_body_area`
 /// is the inner scrollable detail body (no border); `detail_body_scroll` is the
-/// index of the first visible detail line.
+/// index of the first visible detail line. With detail wrap on a logical line
+/// can span several screen rows — `App.detail_body_rows` maps each drawn
+/// screen row back to its logical line.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MouseGeometry {
     pub list_area: Option<Rect>,
@@ -106,6 +108,7 @@ pub fn has_sub_tabs(service: ServiceType) -> bool {
             | ServiceType::Batch
             | ServiceType::XRay
             | ServiceType::Dms
+            | ServiceType::Beanstalk
             | ServiceType::Athena
             | ServiceType::Glue
             | ServiceType::Ses
@@ -859,6 +862,36 @@ impl XRayView {
     }
 }
 
+/// Sub-tab view for Elastic Beanstalk (Environments / Applications / Versions).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum BeanstalkView {
+    Environments,
+    Applications,
+    Versions}
+
+impl BeanstalkView {
+    pub fn resource_type_filter(&self) -> &'static str {
+        match self {
+            BeanstalkView::Environments => "Beanstalk Environment",
+            BeanstalkView::Applications => "Beanstalk Application",
+            BeanstalkView::Versions => "Beanstalk Application Version"}
+    }
+
+    fn next(self) -> Self {
+        match self {
+            BeanstalkView::Environments => BeanstalkView::Applications,
+            BeanstalkView::Applications => BeanstalkView::Versions,
+            BeanstalkView::Versions => BeanstalkView::Environments}
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            BeanstalkView::Environments => BeanstalkView::Versions,
+            BeanstalkView::Applications => BeanstalkView::Environments,
+            BeanstalkView::Versions => BeanstalkView::Applications}
+    }
+}
+
 /// Sub-tab view for DMS (Tasks / Instances / Endpoints / Serverless).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum DmsView {
@@ -1078,6 +1111,7 @@ pub enum JumpView {
     AgentCore(AgentCoreView),
     Batch(BatchView),
     Dms(DmsView),
+    Beanstalk(BeanstalkView),
     S3Tables(S3TablesView),
     Ecr(EcrView),
     /// WAF carries both the sub-tab and the scope (CLOUDFRONT vs REGIONAL) — a
@@ -1945,6 +1979,14 @@ pub struct App {
     /// Session-sticky wrap preference for the log tail/search pane — seeds
     /// each newly-opened pane; `w` inside the pane toggles both.
     pub log_wrap: bool,
+    /// Detail-body wrap (`Ctrl-W`, config `detail_wrap`): long values continue
+    /// on hanging-indent rows under the value column instead of clipping at
+    /// the pane edge. Session-sticky; render-only (rows stay logical).
+    pub detail_wrap: bool,
+    /// Logical detail line drawn on each screen row of the body, top to
+    /// bottom — recorded by the renderer each frame so a click/drag on a
+    /// wrapped continuation row selects the line it belongs to.
+    pub detail_body_rows: RefCell<Vec<usize>>,
     /// Which formats and where `X` / `Ctrl-X` / the deep export write
     /// (config `export_formats` / `export_dir`).
     pub export_options: crate::export::ExportOptions,
@@ -2278,6 +2320,7 @@ pub struct App {
     /// X-Ray list look-back window (`[`/`]` in the list pane); part of the
     /// cache variant, so flipping back is instant.
     pub xray_window: crate::aws::services::xray::XRayWindow,
+    pub beanstalk_view: BeanstalkView,
     pub dms_view: DmsView,
     /// DMS task / replication instance `m` metrics, keyed by ARN.
     pub dms_metrics: HashMap<String, crate::aws::services::dms::DmsMetricsState>,
@@ -2926,6 +2969,8 @@ impl App {
             detail_search_query: String::new(),
             detail_flat_mode: config.detail_flat.unwrap_or(false),
             log_wrap: config.log_wrap.unwrap_or(false),
+            detail_wrap: config.detail_wrap.unwrap_or(false),
+            detail_body_rows: RefCell::new(Vec::new()),
             keycast: config.show_keys.unwrap_or(false).then(crate::keycast::Keycast::default),
             export_options: crate::export::ExportOptions {
                 formats: crate::export::ExportFormats::from_config(config.export_formats.as_deref()).0,
@@ -3086,6 +3131,7 @@ impl App {
             batch_job_filter: BatchJobStatusFilter::All,
             xray_view: XRayView::ServiceMap,
             xray_window: crate::aws::services::xray::XRayWindow::default(),
+            beanstalk_view: BeanstalkView::Environments,
             dms_view: DmsView::Tasks,
             dms_metrics: HashMap::new(),
             dms_metrics_time_range: MetricsTimeRange::OneHour,
@@ -5406,6 +5452,15 @@ impl App {
             // Detail pane inline search: active while typing
             if self.detail_search_active {
                 match key.code {
+                    // Ctrl-W deletes the last word, as in a shell — not the
+                    // body-wrap toggle, and not a literal `w`.
+                    KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        let q = self.detail_search_query.trim_end().to_string();
+                        let keep = q.rfind(' ').map(|i| i + 1).unwrap_or(0);
+                        self.detail_search_query.truncate(keep);
+                        self.details_selected_index = Some(0);
+                        return Ok(());
+                    }
                     KeyCode::Char(c) => {
                         self.detail_search_query.push(c);
                         self.details_selected_index = Some(0);
@@ -5571,6 +5626,7 @@ impl App {
                     // (detail-pane) chain — the list-pane `x` below has no
                     // section open and could never reach it.
                     self.trigger_agentcore_agent_card_load(event_tx);
+                    self.trigger_r53_test_answer(event_tx);
                     self.trigger_secret_reveal(event_tx);
                 }
                 KeyCode::Char('Y') => {
@@ -5652,6 +5708,11 @@ impl App {
                 // deployment) instead of reloading the whole service.
                 KeyCode::Char('r') | KeyCode::F(5) => {
                     self.refresh_selected_resource(event_tx);
+                }
+                // Wrap long values onto continuation rows (before the plain
+                // `w` arm, which matches any modifier).
+                KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.toggle_detail_wrap();
                 }
                 // Watch mode works from the detail pane too — with the pane
                 // focused on an ECS service/task it auto-refreshes just that
@@ -6657,6 +6718,22 @@ impl App {
                 _ => None};
             if let Some(v) = view {
                 self.dms_view = v;
+                self.update_search();
+                return Ok(());
+            }
+        }
+
+        // Elastic Beanstalk (Environments / Applications / Versions) sub-tab switching
+        if !self.search_active && self.current_service == Some(ServiceType::Beanstalk) {
+            let view = match key.code {
+                KeyCode::Char('1') => Some(BeanstalkView::Environments),
+                KeyCode::Char('2') => Some(BeanstalkView::Applications),
+                KeyCode::Char('3') => Some(BeanstalkView::Versions),
+                KeyCode::Tab => Some(self.beanstalk_view.next()),
+                KeyCode::BackTab => Some(self.beanstalk_view.prev()),
+                _ => None};
+            if let Some(v) = view {
+                self.beanstalk_view = v;
                 self.update_search();
                 return Ok(());
             }
@@ -8100,6 +8177,12 @@ impl App {
                 self.toggle_detail_flat_mode();
                 return Ok(());
             }
+            // `Ctrl-W` wraps the detail body; from the list it reshapes the
+            // preview, like `\`.
+            if key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.toggle_detail_wrap();
+                return Ok(());
+            }
         }
 
         // `a` toggles the generic "hide noise" list filter (passing checks / OK
@@ -8894,6 +8977,7 @@ impl App {
             Some(ServiceType::Batch) => Some(self.batch_view.resource_type_filter()),
             Some(ServiceType::XRay) => Some(self.xray_view.resource_type_filter()),
             Some(ServiceType::Dms) => Some(self.dms_view.resource_type_filter()),
+            Some(ServiceType::Beanstalk) => Some(self.beanstalk_view.resource_type_filter()),
             Some(ServiceType::ControlTower) => {
                 Some(self.controltower_view.resource_type_filter())
             }
@@ -9081,6 +9165,10 @@ impl App {
             Some(ServiceType::Dms) => {
                 align!(self, rtype, dms_view, DmsView, [Tasks, Instances, Endpoints, Serverless])
             }
+            Some(ServiceType::Beanstalk) => align!(
+                self, rtype, beanstalk_view, BeanstalkView,
+                [Environments, Applications, Versions]
+            ),
             Some(ServiceType::ControlTower) => {
                 align!(
                     self,
@@ -9890,9 +9978,10 @@ impl App {
             }
             Err(e) => {
                 self.loading = false;
-                self.error_message = Some(format!(
-                    "Could not assume {} in {}: {}",
-                    role_name, account_id, e
+                self.error_message = Some(crate::aws::services::organizations::org_assume_error(
+                    &role_name,
+                    &account_id,
+                    &e.to_string(),
                 ));
             }
         }
@@ -10119,6 +10208,10 @@ impl App {
         services.insert(
             ServiceType::Dms,
             Arc::new(crate::aws::services::dms::DmsService::new(aws_clients)),
+        );
+        services.insert(
+            ServiceType::Beanstalk,
+            Arc::new(crate::aws::services::beanstalk::BeanstalkService::new(aws_clients)),
         );
         services.insert(
             ServiceType::Budgets,
@@ -19927,6 +20020,7 @@ impl App {
             JumpView::AgentCore(v) => self.agentcore_view = *v,
             JumpView::Batch(v) => self.batch_view = *v,
             JumpView::Dms(v) => self.dms_view = *v,
+            JumpView::Beanstalk(v) => self.beanstalk_view = *v,
             JumpView::S3Tables(v) => self.s3tables_view = *v,
             JumpView::Ecr(v) => self.ecr_view = *v,
             JumpView::Waf(v, scope) => {
@@ -20527,6 +20621,7 @@ impl App {
             Some(ServiceType::Waf) => JumpView::Waf(self.waf_view, self.waf_scope),
             Some(ServiceType::Batch) => JumpView::Batch(self.batch_view),
             Some(ServiceType::Dms) => JumpView::Dms(self.dms_view),
+            Some(ServiceType::Beanstalk) => JumpView::Beanstalk(self.beanstalk_view),
             Some(ServiceType::S3Tables) => JumpView::S3Tables(self.s3tables_view),
             Some(ServiceType::Ecr) => JumpView::Ecr(self.ecr_view),
             // AWS Config has sub-tabs (config_view) but no JumpView variant, so a
@@ -21499,6 +21594,73 @@ impl App {
             id: value.to_string()})
     }
 
+    /// Elastic Beanstalk rows → the resource they name. Keyed on the row
+    /// labels `details_pane` exports as `EB_ROW_*` (names carry no
+    /// recognizable id prefix): the application / environment / version
+    /// rows stay in `@eb`; an environment's EKS cluster, Auto Scaling group,
+    /// classic load balancer, launch template and SQS queue cross over.
+    /// ARNs, `i-` ids and IAM role ARNs fall through to the generic
+    /// classifier.
+    pub fn eb_row_jump_target(&self, key: &str, value: &str) -> Option<JumpTarget> {
+        use crate::ui::widgets::details_pane as dp;
+        if value.is_empty() || value.starts_with('·') || self.current_service != Some(ServiceType::Beanstalk) {
+            return None;
+        }
+        let selected = self.get_selected_resource()?;
+        // A version label is only unique within its application: an
+        // environment pane names it via the environment, an application
+        // pane's Environments section via the application itself.
+        let app_name = selected
+            .as_any()
+            .downcast_ref::<crate::aws::services::beanstalk::EbEnvironment>()
+            .map(|e| e.application.as_str())
+            .or_else(|| {
+                selected
+                    .as_any()
+                    .downcast_ref::<crate::aws::services::beanstalk::EbApplication>()
+                    .map(|a| a.name.as_str())
+            });
+        let mk = |service, view, id: String| Some(JumpTarget { service, view, id });
+        match key.trim() {
+            k if k == dp::EB_ROW_APPLICATION => mk(
+                ServiceType::Beanstalk,
+                JumpView::Beanstalk(BeanstalkView::Applications),
+                value.to_string(),
+            ),
+            k if k == dp::EB_ROW_ENVIRONMENT => mk(
+                ServiceType::Beanstalk,
+                JumpView::Beanstalk(BeanstalkView::Environments),
+                value.to_string(),
+            ),
+            k if k == dp::EB_ROW_VERSION => mk(
+                ServiceType::Beanstalk,
+                JumpView::Beanstalk(BeanstalkView::Versions),
+                format!("{}@{value}", app_name?),
+            ),
+            k if k == dp::EB_ROW_EKS_CLUSTER => mk(ServiceType::Eks, JumpView::None, value.to_string()),
+            k if k == dp::EB_ROW_ASG => mk(ServiceType::Asg, JumpView::None, value.to_string()),
+            // ALBs come back as an ARN (generic classifier); a classic
+            // load balancer as its bare name.
+            k if k == dp::EB_ROW_LOAD_BALANCER && !value.starts_with("arn:") => mk(
+                ServiceType::Elb,
+                JumpView::Elb(ElbView::LoadBalancers),
+                value.to_string(),
+            ),
+            k if k == dp::EB_ROW_LAUNCH_TEMPLATE => mk(
+                ServiceType::EC2,
+                JumpView::Ec2(Ec2View::LaunchTemplates),
+                value.to_string(),
+            ),
+            // `SqsQueue::id()` is the queue URL.
+            k if k == dp::EB_ROW_QUEUE => mk(
+                ServiceType::Messaging,
+                JumpView::Msg(MsgView::Queues),
+                value.to_string(),
+            ),
+            _ => None,
+        }
+    }
+
     /// RDS rows → sibling sub-tabs. Instance/cluster/snapshot identifiers have
     /// no recognizable prefix, so rows are keyed by their label: cluster
     /// members ("Writer"/"Reader") and replica rows jump to Instances,
@@ -21765,6 +21927,7 @@ impl App {
                     .or_else(|| self.rds_row_jump_target(k, v))
                     .or_else(|| self.org_row_jump_target(k, v))
                     .or_else(|| self.sh_row_jump_target(k, v))
+                    .or_else(|| self.eb_row_jump_target(k, v))
                     .or_else(|| {
                         crate::ui::widgets::details_pane::resource_jump_target(k, v, current)
                     })
@@ -22625,6 +22788,22 @@ impl App {
                 .unwrap_or(false)
     }
 
+    /// Whether `s` assumes a role into the selected Organizations account —
+    /// mirrors `trigger_org_role_switch`'s refusals (`org_assume_eligible`),
+    /// so a suspended account or the one being browsed gets no hint. Kept
+    /// apart from `supports_session` because the hint reads differently.
+    pub fn supports_org_assume(&self) -> bool {
+        self.get_selected_resource()
+            .and_then(|r| {
+                r.as_any()
+                    .downcast_ref::<crate::aws::services::organizations::OrgAccount>()
+            })
+            .map(|a| {
+                crate::aws::services::organizations::org_assume_eligible(a, self.account_id.as_deref())
+            })
+            .unwrap_or(false)
+    }
+
     /// Whether `x` / `Y` reveal/copy a value for the current selection —
     /// mirrors `trigger_secret_reveal` (Secrets Manager secret / SSM parameter).
     pub fn supports_value_reveal(&self) -> bool {
@@ -22633,6 +22812,48 @@ impl App {
             // AgentCore's agent card is `x`-gated for the same reason: the
             // fetch has a cost the pane shouldn't pay on a Tab press.
             || (self.details_focused && self.agentcore_agent_card_pending())
+    }
+
+    /// Whether `x` runs `TestDNSAnswer` here — a record's Test answer
+    /// section, focused. Gates the status-bar hint.
+    pub fn supports_dns_test(&self) -> bool {
+        self.details_focused && self.selected_r53_record_on_test_section().is_some()
+    }
+
+    fn selected_r53_record_on_test_section(&self) -> Option<&crate::aws::services::route53::R53Record> {
+        use crate::aws::services::route53::R53RecordDetailSection as S;
+        let r = self
+            .get_selected_resource()?
+            .as_any()
+            .downcast_ref::<crate::aws::services::route53::R53Record>()?;
+        (S::from_index(self.detail_section_idx) == S::TestAnswer).then_some(r)
+    }
+
+    /// `x` on a record's Test answer section: ask Route 53 what it answers.
+    /// Never a section hook — each press is a deliberate sample, so a done
+    /// (or failed) answer is invalidated and asked again; a press while one
+    /// is in flight is ignored.
+    fn trigger_r53_test_answer(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(r) = self.selected_r53_record_on_test_section() else {
+            return;
+        };
+        let (id, zone, name, rtype) = (
+            r.id.clone(),
+            r.zone_id.clone(),
+            r.name.clone(),
+            r.record_type.clone(),
+        );
+        if matches!(self.lazy.r53_test_answer.get(&id), Some(crate::lazy::Lazy::Loading)) {
+            return;
+        }
+        self.lazy.r53_test_answer.invalidate(&id);
+        let client = self.aws_clients.route53_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.r53_test_answer,
+            id,
+            event_tx,
+            crate::aws::services::route53::fetch_test_dns_answer(client, zone, name, rtype),
+        );
     }
 
     /// Whether the CloudTrail lens (`W`) has an identifier to look up for the
@@ -23772,7 +23993,16 @@ impl App {
             return;
         }
         let visible_row = (row - area.y) as usize;
-        let idx = (geom.detail_body_scroll + visible_row).min(count - 1);
+        // Through the renderer's screen-row map (a wrapped line spans several
+        // rows); below the last drawn row, the last line.
+        let rows = self.detail_body_rows.borrow();
+        let idx = match rows.get(visible_row) {
+            Some(&i) => i,
+            None if rows.is_empty() => geom.detail_body_scroll + visible_row,
+            None => count - 1,
+        }
+        .min(count - 1);
+        drop(rows);
         self.details_selected_index = Some(idx);
     }
 
@@ -24052,6 +24282,19 @@ impl App {
         self.success_message_time = Some(Instant::now());
     }
 
+    /// `Ctrl-W` — wrap long detail values onto continuation rows, or clip
+    /// them at the pane edge again. Render-only: rows, cursor and selection
+    /// are logical, so nothing else resets.
+    fn toggle_detail_wrap(&mut self) {
+        self.detail_wrap = !self.detail_wrap;
+        self.success_message = Some(if self.detail_wrap {
+            "Detail view: long values wrap (Ctrl-W to clip)".to_string()
+        } else {
+            "Detail view: long values clip (Ctrl-W to wrap)".to_string()
+        });
+        self.success_message_time = Some(Instant::now());
+    }
+
     fn focus_details_panel(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if self.get_selected_resource().is_some() {
             self.details_focused = true;
@@ -24308,11 +24551,12 @@ impl App {
 
     /// Record the inner detail-body rect + first-visible line index for mouse
     /// hit-testing. Called from the detail body render paths.
-    pub fn record_detail_body_geometry(&self, area: Rect, scroll_offset: usize) {
+    pub fn record_detail_body_geometry(&self, area: Rect, row_map: Vec<usize>) {
         let mut g = self.mouse_geom.get();
         g.detail_body_area = Some(area);
-        g.detail_body_scroll = scroll_offset;
+        g.detail_body_scroll = row_map.first().copied().unwrap_or(0);
         self.mouse_geom.set(g);
+        *self.detail_body_rows.borrow_mut() = row_map;
     }
 
     /// Clear all recorded tab regions. Called once per frame by the service-tab
@@ -24636,6 +24880,16 @@ impl App {
                     hc,
                     crate::aws::services::route53::R53HealthCheckDetailSection::from_index(self.detail_section_idx),
                     self.lazy.r53_health_status.get(&hc.id),
+                );
+            }
+            if let Some(rec) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::route53::R53Record>()
+            {
+                return crate::ui::widgets::details_pane::r53_record_section_lines(
+                    rec,
+                    crate::aws::services::route53::R53RecordDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.r53_test_answer.get(&rec.id),
                 );
             }
             if let Some(sm) = resource
@@ -25470,6 +25724,58 @@ impl App {
                     return dp::batch_jobdef_section_lines(
                         d,
                         BatchJobDefDetailSection::from_index(self.detail_section_idx),
+                    );
+                }
+            }
+            {
+                use crate::aws::services::beanstalk::{
+                    EbApplication, EbApplicationDetailSection, EbEnvironment,
+                    EbEnvironmentDetailSection, EbVersion, EbVersionDetailSection,
+                };
+                use crate::ui::widgets::details_pane as dp;
+                if let Some(e) = resource.as_any().downcast_ref::<EbEnvironment>() {
+                    return dp::eb_environment_section_lines(
+                        e,
+                        EbEnvironmentDetailSection::from_index(self.detail_section_idx),
+                        dp::EbEnvLazy {
+                            health: self.lazy.eb_health.get(&e.id),
+                            events: self.lazy.eb_events.get(&e.id),
+                            config: self.lazy.eb_config.get(&e.id),
+                            resources: self.lazy.eb_resources.get(&e.id),
+                        },
+                    );
+                }
+                if let Some(ap) = resource.as_any().downcast_ref::<EbApplication>() {
+                    let envs: Vec<&EbEnvironment> = self
+                        .resources
+                        .iter()
+                        .filter_map(|r| r.as_any().downcast_ref::<EbEnvironment>())
+                        .filter(|e| e.application == ap.name)
+                        .collect();
+                    let versions: Vec<&EbVersion> = self
+                        .resources
+                        .iter()
+                        .filter_map(|r| r.as_any().downcast_ref::<EbVersion>())
+                        .filter(|v| v.application == ap.name)
+                        .collect();
+                    return dp::eb_application_section_lines(
+                        ap,
+                        EbApplicationDetailSection::from_index(self.detail_section_idx),
+                        &envs,
+                        &versions,
+                    );
+                }
+                if let Some(v) = resource.as_any().downcast_ref::<EbVersion>() {
+                    let deployed: Vec<&EbEnvironment> = self
+                        .resources
+                        .iter()
+                        .filter_map(|r| r.as_any().downcast_ref::<EbEnvironment>())
+                        .filter(|e| e.application == v.application && e.version_label.as_deref() == Some(v.label.as_str()))
+                        .collect();
+                    return dp::eb_version_section_lines(
+                        v,
+                        EbVersionDetailSection::from_index(self.detail_section_idx),
+                        &deployed,
                     );
                 }
             }
@@ -26973,10 +27279,21 @@ impl App {
                 .downcast_ref::<crate::aws::services::organizations::OrgAccount>()
             {
                 let details_state = self.lazy.org_account_details.get(&account.account_id);
+                let assume_hint = crate::aws::services::organizations::org_assume_eligible(
+                    account,
+                    self.account_id.as_deref(),
+                )
+                .then(|| {
+                    crate::aws::services::organizations::org_assume_hint(
+                        &self.org_access_roles,
+                        &self.org_access_role,
+                    )
+                });
                 return crate::ui::widgets::details_pane::org_account_section_lines(
                     account,
                     crate::aws::services::organizations::OrgAccountDetailSection::from_index(self.detail_section_idx),
                     details_state,
+                    assume_hint.as_deref(),
                 );
             }
             if let Some(ou) = resource
@@ -28645,14 +28962,14 @@ impl App {
         }
     }
 
-    /// The cache variant for a service — distinguishes result sets a single
-    /// service caches separately. Cost caches each group-by/period combination
-    /// independently so toggling between them is instant (no refetch).
     #[cfg(test)]
     pub(crate) fn cache_variant_for_test(&self, service: ServiceType) -> Option<String> {
         self.cache_variant(service)
     }
 
+    /// The cache variant for a service — distinguishes result sets a single
+    /// service caches separately. Cost caches each group-by/period combination
+    /// independently so toggling between them is instant (no refetch).
     fn cache_variant(&self, service: ServiceType) -> Option<String> {
         if service == ServiceType::Cost {
             if self.cost_anomalies {
@@ -28745,9 +29062,6 @@ impl App {
         self.update_search();
     }
 
-    /// Rebuild the Cost service with the current group-by/period and reload.
-    /// The variant-keyed cache means a previously-viewed combination is served
-    /// from cache instantly; only a genuinely new combination refetches.
     /// One `Tab` (forward) / `Shift-Tab` step through Cost's tab cycle:
     /// Service → Account → Region → Usage Type → Anomalies → Service. Leaving
     /// Anomalies forward lands on Service, backward on Usage Type; the
@@ -28773,6 +29087,9 @@ impl App {
         }
     }
 
+    /// Rebuild the Cost service with the current group-by/period and reload.
+    /// The variant-keyed cache means a previously-viewed combination is served
+    /// from cache instantly; only a genuinely new combination refetches.
     fn apply_cost_query(&mut self) {
         let query = crate::aws::services::cost::CostQuery {
             group_by: self.cost_group_by,
@@ -31947,6 +32264,104 @@ impl App {
                 crate::aws::services::xray::fetch_trace_detail(client, id)
                     .await
                     .map_err(|e| format!("Trace unavailable: {}", e))
+            },
+        );
+    }
+
+    // ── Elastic Beanstalk: environment lazy sections ─────────────────────────
+
+    /// The selected Beanstalk environment, when the open section is `want`.
+    fn selected_eb_env_on(
+        &self,
+        want: crate::aws::services::beanstalk::EbEnvironmentDetailSection,
+    ) -> Option<crate::aws::services::beanstalk::EbEnvironment> {
+        use crate::aws::services::beanstalk::{EbEnvironment, EbEnvironmentDetailSection};
+        if EbEnvironmentDetailSection::from_index(self.detail_section_idx) != want {
+            return None;
+        }
+        self.get_selected_resource()?
+            .as_any()
+            .downcast_ref::<EbEnvironment>()
+            .cloned()
+    }
+
+    pub(crate) fn trigger_eb_health_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::beanstalk::{fetch_health, EbEnvironmentDetailSection};
+        let Some(env) = self.selected_eb_env_on(EbEnvironmentDetailSection::Health) else {
+            return;
+        };
+        let client = self.aws_clients.beanstalk_client();
+        let id = env.id.clone();
+        self.trigger_lazy(
+            |app| &mut app.lazy.eb_health,
+            env.id,
+            event_tx,
+            async move {
+                fetch_health(client, id).await.map_err(|e| {
+                    // Basic health reporting has no DescribeEnvironmentHealth.
+                    if e.to_ascii_lowercase().contains("enhanced") {
+                        format!("Enhanced health reporting is off for this environment — only the basic colour is available ({e})")
+                    } else {
+                        format!("Environment health unavailable: {e}")
+                    }
+                })
+            },
+        );
+    }
+
+    pub(crate) fn trigger_eb_events_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::beanstalk::{fetch_events, EbEnvironmentDetailSection};
+        let Some(env) = self.selected_eb_env_on(EbEnvironmentDetailSection::Events) else {
+            return;
+        };
+        let client = self.aws_clients.beanstalk_client();
+        let id = env.id.clone();
+        self.trigger_lazy(
+            |app| &mut app.lazy.eb_events,
+            env.id,
+            event_tx,
+            async move {
+                fetch_events(client, id)
+                    .await
+                    .map_err(|e| format!("Events unavailable: {e}"))
+            },
+        );
+    }
+
+    pub(crate) fn trigger_eb_config_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::beanstalk::{fetch_config, EbEnvironmentDetailSection};
+        let Some(env) = self.selected_eb_env_on(EbEnvironmentDetailSection::Configuration) else {
+            return;
+        };
+        let client = self.aws_clients.beanstalk_client();
+        let (app_name, env_name) = (env.application.clone(), env.name.clone());
+        self.trigger_lazy(
+            |app| &mut app.lazy.eb_config,
+            env.id,
+            event_tx,
+            async move {
+                fetch_config(client, app_name, env_name)
+                    .await
+                    .map_err(|e| format!("Configuration unavailable: {e}"))
+            },
+        );
+    }
+
+    pub(crate) fn trigger_eb_resources_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::beanstalk::{fetch_resources, EbEnvironmentDetailSection};
+        let Some(env) = self.selected_eb_env_on(EbEnvironmentDetailSection::Resources) else {
+            return;
+        };
+        let client = self.aws_clients.beanstalk_client();
+        let id = env.id.clone();
+        self.trigger_lazy(
+            |app| &mut app.lazy.eb_resources,
+            env.id,
+            event_tx,
+            async move {
+                fetch_resources(client, id)
+                    .await
+                    .map_err(|e| format!("Environment resources unavailable: {e}"))
             },
         );
     }

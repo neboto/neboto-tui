@@ -116,6 +116,12 @@ AWS.
   a declarative loop AWS runs (model + prompt + tools + memory), i.e. the
   managed option AgentCore Runtime is not.
 
+- `ServiceType::Beanstalk` (`@eb`, file `beanstalk.rs`) is **Elastic
+  Beanstalk** — `@eb` used to alias EventBridge, which is now `@events` /
+  `@eventbridge` only. One environment list holds both **Standard** (EC2)
+  and **Cluster Mode** (EKS-backed) environments; `EnvironmentTier` decides
+  which (`EbDeploymentType::from_tier`).
+
 **Standalone-regional gotcha**: `ServiceType::Route53Resolver` (`@resolver`,
 file `route53resolver.rs`) is **separate** from `ServiceType::Route53` (`@r53`,
 hosted zones). Resolver endpoints/rules are genuinely region-scoped (so
@@ -161,7 +167,8 @@ Variations on the pattern:
   rows read by name (the "KMS-alias pattern" — e.g. WorkSpaces resolves bundle
   and directory maps before `DescribeWorkspaces`).
 - **Toggle rows** (rebuild + variant-cache the service, not resource filters):
-  Cost (`cost_group_by` keys 1–4 + `cost_period` keys 5–7, `t` cycles), WAF
+  Cost (`cost_group_by` keys 1–4 + `cost_period` keys 5–7, `t` cycles; key
+  `8` is the Anomalies view, `cost_anomalies`, its own cache variant), WAF
   (`waf_scope`), RAM (`ram_owner` SELF/OTHER via `t`), Service Quotas
   (`quota_service_code`, `c` picker), X-Ray (`xray_window`, `[`/`]` in
   the list pane), CloudTrail (`ct_query`, `f` filter
@@ -233,6 +240,18 @@ anchors (`flat_jump_to_section`). Snapshot/section code must call
 `section_detail_lines()`, never `get_detail_lines()` (recursion into the flat
 cache).
 
+**Detail wrap** (`Ctrl-W`, config `detail_wrap`): render-only — long rows
+continue on hanging-indent screen rows under the value column. All three
+body renderers go through `layout_detail_body` (details_pane.rs), which
+takes the per-renderer row styling as a closure, scrolls in **screen** rows
+bottom-up from the cursor (the log tail's trick; never `Paragraph::wrap`),
+wraps by display width, and records the screen-row → logical-row map
+(`App.detail_body_rows`) that mouse clicks/drags and `→` arrow regions use.
+Everything that indexes the body (`j`/`k`, copy, visual, `/`, `[[`) stays
+on logical rows. A new body renderer must use the helper, or wrap silently
+doesn't apply to it. `w` stays watch mode; in the `/` search box `Ctrl-W`
+deletes a word.
+
 **`style_detail_row` conventions** (the `(key, value)` tuples
 `*_section_lines` return):
 - **Key-value row**: key padded to the body's **adaptive key column**
@@ -276,8 +295,9 @@ they get their own design pass.
 Triggers fire from the section key, the `Tab`/`Shift-Tab` cycle, and
 (sometimes) list nav. Per-row variants exist (IAM permissions / Org
 SCP documents are keyed by the selected *row* via a `*_row_target` classifier).
-**One section deliberately has no on-enter hook**: AgentCore's runtime Agent
-Card, because `GetAgentCard` is a data-plane call that reaches the running
+**Two sections deliberately have no on-enter hook** — Route 53 records' Test
+answer (`TestDNSAnswer`; each `x` is a fresh sample of a weighted set) and
+AgentCore's runtime Agent Card, because `GetAgentCard` is a data-plane call that reaches the running
 agent container and can cold-start it (billable). An auto-hook would fire that
 from a `Tab` press, and the flat view's trigger sweep would fire it for every
 runtime you looked at — so it's `x`-gated on the Secrets Manager precedent
@@ -1104,6 +1124,7 @@ and the approaches you rejected are the part nobody can recover from your code.
   `endpoint_url`, `watch`/`watch_interval` (start in watch mode / its cadence),
   `detail_flat` (start in the flat all-section detail view),
   `log_wrap` (start log tail/search panes with long lines wrapped),
+  `detail_wrap` (start the detail body with long values wrapped — `Ctrl-W`),
   `show_keys` (keycast: each key and what it did, in a corner box),
   `export_formats` (which of `json`/`csv`/`md` exports write, default all
   three — `export::ExportFormats`; bad values warn at startup, never fatal) +

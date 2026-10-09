@@ -262,6 +262,21 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                         .to_string(),
                 )
             }
+            // No anomalies is the usual answer (and needs a monitor to be
+            // anything else). Cost is global and `r` re-runs a billed call,
+            // so the generic "r refresh · R switch region" hint is wrong here.
+            else if app.current_service == Some(crate::aws::service::ServiceType::Cost)
+                && app.cost_anomalies
+            {
+                (
+                    format!(
+                        "No cost anomalies in the last {} days",
+                        crate::aws::services::cost::ANOMALY_LOOKBACK_DAYS
+                    ),
+                    "Cost Anomaly Detection only reports once a monitor is set up (Billing console)"
+                        .to_string(),
+                )
+            }
             // X-Ray with nothing at all in the window: tracing is off, or the
             // window is too short for the sampling rate — not a permission gap.
             else if app.current_service == Some(crate::aws::service::ServiceType::XRay) {

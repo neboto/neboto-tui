@@ -75,6 +75,7 @@ pub enum ServiceType {
     Batch,
     XRay,
     Dms,
+    Beanstalk,
     Budgets,
     Invoices,
     ControlTower,
@@ -153,6 +154,7 @@ impl ServiceType {
             ServiceType::Batch,
             ServiceType::XRay,
             ServiceType::Dms,
+            ServiceType::Beanstalk,
             ServiceType::Budgets,
             ServiceType::Invoices,
             ServiceType::ControlTower,
@@ -208,6 +210,7 @@ impl ServiceType {
             | ServiceType::Lambda
             | ServiceType::Asg
             | ServiceType::Batch
+            | ServiceType::Beanstalk
             | ServiceType::Workspaces => "Compute",
             ServiceType::ECS | ServiceType::Eks | ServiceType::Ecr => "Containers",
             ServiceType::S3
@@ -339,6 +342,7 @@ impl ServiceType {
             ServiceType::Ses => "SES",
             ServiceType::Msk => "MSK",
             ServiceType::Dms => "DMS",
+            ServiceType::Beanstalk => "Elastic Beanstalk",
             ServiceType::Fms => "Firewall Manager",
             ServiceType::Redshift => "Redshift",
             ServiceType::Batch => "Batch",
@@ -417,6 +421,7 @@ impl ServiceType {
             ServiceType::Ses => "SES",
             ServiceType::Msk => "MSK",
             ServiceType::Dms => "DMS",
+            ServiceType::Beanstalk => "EB",
             ServiceType::Fms => "FMS",
             ServiceType::Redshift => "RSH",
             ServiceType::Batch => "BAT",
@@ -499,6 +504,7 @@ impl ServiceType {
             ServiceType::Redshift => "Clusters, Serverless Workgroups, Snapshots",
             ServiceType::Batch => "Job Queues, Compute Environments, Jobs, Job Definitions",
             ServiceType::Dms => "Replication Tasks, Instances, Endpoints, Serverless Replications",
+            ServiceType::Beanstalk => "Environments (Standard + Cluster Mode), Applications, Versions",
             ServiceType::Budgets => "Cost & Usage Budgets, Alerts, Subscribers",
             ServiceType::Invoices => "Invoice Summaries & PDF Download",
             ServiceType::ControlTower => "Landing Zone, Enabled Controls, Baselines & Operations",
@@ -561,7 +567,8 @@ impl ServiceType {
             "ddb" | "dynamodb" | "dynamo" => Some(ServiceType::DynamoDb),
             "eks" | "kubernetes" | "k8s" => Some(ServiceType::Eks),
             "efs" | "filesystem" | "filesystems" | "nfs" => Some(ServiceType::Efs),
-            "events" | "eventbridge" | "eb" => Some(ServiceType::EventBridge),
+            "events" | "eventbridge" => Some(ServiceType::EventBridge),
+            "eb" | "beanstalk" | "elasticbeanstalk" => Some(ServiceType::Beanstalk),
             "gd" | "guardduty" | "threats" => Some(ServiceType::GuardDuty),
             "sh" | "securityhub" | "shub" => Some(ServiceType::SecurityHub),
             "cognito" | "userpool" | "userpools" | "idp" => Some(ServiceType::Cognito),
@@ -688,6 +695,7 @@ impl ServiceType {
             ServiceType::Ses => "@ses",
             ServiceType::Msk => "@msk",
             ServiceType::Dms => "@dms",
+            ServiceType::Beanstalk => "@eb",
             ServiceType::Fms => "@fms",
             ServiceType::Redshift => "@redshift",
             ServiceType::Batch => "@batch",

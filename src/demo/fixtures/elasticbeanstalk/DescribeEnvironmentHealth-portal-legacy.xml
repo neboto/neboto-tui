@@ -1,0 +1,21 @@
+<DescribeEnvironmentHealthResponse xmlns="http://elasticbeanstalk.amazonaws.com/docs/2010-12-01/">
+  <DescribeEnvironmentHealthResult>
+    <EnvironmentName>portal-legacy</EnvironmentName>
+    <HealthStatus>Severe</HealthStatus>
+    <Status>Ready</Status>
+    <Color>Red</Color>
+    <Causes>
+      <member>Environment health has transitioned from Degraded to Severe. 0 out of 2 instances are in service behind the load balancer.</member>
+      <member>ELB health is failing or not available for all instances.</member>
+    </Causes>
+    <ApplicationMetrics>
+      <Duration>10</Duration>
+      <RequestCount>412</RequestCount>
+      <StatusCodes><Status2xx>0</Status2xx><Status3xx>0</Status3xx><Status4xx>0</Status4xx><Status5xx>412</Status5xx></StatusCodes>
+      <Latency><P999>0.004</P999><P99>0.003</P99><P95>0.002</P95><P90>0.002</P90><P85>0.002</P85><P75>0.001</P75><P50>0.001</P50><P10>0.001</P10></Latency>
+    </ApplicationMetrics>
+    <InstancesHealth><NoData>0</NoData><Unknown>0</Unknown><Pending>0</Pending><Ok>0</Ok><Info>0</Info><Warning>0</Warning><Degraded>0</Degraded><Severe>2</Severe></InstancesHealth>
+    <RefreshedAt>{{iso:now-1m}}</RefreshedAt>
+  </DescribeEnvironmentHealthResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeEnvironmentHealthResponse>

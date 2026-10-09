@@ -363,6 +363,21 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         render_r53_health_check_split(app, hc, area, frame);
         return;
     }
+    if let Some(rec) = resource
+        .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::route53::R53Record>())
+    {
+        let subtitle = format!("{} · {}", rec.record_type, rec.routing_policy());
+        render_simple_split(
+            app,
+            area,
+            frame,
+            "R53 Record",
+            &rec.name,
+            &subtitle,
+            &descriptor_tabs(app, &crate::aws::services::route53::R53_RECORD_SECTIONS),
+        );
+        return;
+    }
     if let Some(cert) = resource.and_then(|r| r.as_any().downcast_ref::<AcmCertificate>()) {
         render_acm_cert_split(app, cert, area, frame);
         return;
@@ -591,6 +606,21 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         }
         if let Some(d) = any.downcast_ref::<BatchJobDefinition>() {
             render_batch_jobdef_split(app, d, area, frame);
+            return;
+        }
+    }
+    if let Some(r) = resource {
+        use crate::aws::services::beanstalk::{EbApplication, EbEnvironment, EbVersion};
+        if let Some(e) = r.as_any().downcast_ref::<EbEnvironment>() {
+            render_eb_environment_split(app, e, area, frame);
+            return;
+        }
+        if let Some(a) = r.as_any().downcast_ref::<EbApplication>() {
+            render_eb_application_split(app, a, area, frame);
+            return;
+        }
+        if let Some(v) = r.as_any().downcast_ref::<EbVersion>() {
+            render_eb_version_split(app, v, area, frame);
             return;
         }
     }
@@ -1502,59 +1532,43 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
     };
     let state = resource.map(|r| r.state());
 
-    let visible_height = content_area.height as usize;
     let cursor = selected.unwrap_or(0);
-    let scroll_offset = cursor.saturating_sub(visible_height.saturating_sub(1));
-    app.record_detail_body_geometry(content_area, scroll_offset);
     let q_lower = app.detail_search_query.to_lowercase();
-    let key_widths = key_col_widths(&rows, content_area.width);
 
-    let lines: Vec<Line> = rows
-        .iter()
-        .enumerate()
-        .skip(scroll_offset)
-        .take(visible_height)
-        .map(|(idx, (key, value))| {
-            let spun = spin_loading_row(key, value, app.tick_count, focused);
-            let (key, value) = spun
-                .as_ref()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .unwrap_or((key.as_str(), value.as_str()));
-            let line = style_detail_row(key, value, state.as_ref(), key_widths[idx]);
-            let jump = jump_indicator(app, key, value);
-            if Some(idx) == selected {
-                let sel = theme::selection_style(true);
-                let mut spans: Vec<Span> = line
+    let lines = layout_detail_body(app, &rows, content_area, cursor, |idx, key, value, key_w| {
+        let line = style_detail_row(key, value, state.as_ref(), key_w);
+        let jump = jump_indicator(app, key, value);
+        if Some(idx) == selected {
+            let sel = theme::selection_style(true);
+            let mut spans: Vec<Span> = line
+                .spans
+                .into_iter()
+                .map(|s| Span::styled(s.content, sel))
+                .collect();
+            if jump.is_some() {
+                spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
+            }
+            Line::from(spans).style(sel)
+        } else if !q_lower.is_empty() {
+            let combined = format!("{}{}", key, value);
+            if combined.to_lowercase().contains(&q_lower) {
+                let spans: Vec<Span> = line
                     .spans
                     .into_iter()
-                    .map(|s| Span::styled(s.content, sel))
+                    .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
                     .collect();
-                if jump.is_some() {
-                    spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
-                }
-                Line::from(spans).style(sel)
-            } else if !q_lower.is_empty() {
-                let combined = format!("{}{}", key, value);
-                if combined.to_lowercase().contains(&q_lower) {
-                    let spans: Vec<Span> = line
-                        .spans
-                        .into_iter()
-                        .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
-                        .collect();
-                    Line::from(spans)
-                } else {
-                    line
-                }
-            } else if jump.is_some() {
-                let mut spans = line.spans;
-                spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
                 Line::from(spans)
             } else {
                 line
             }
-        })
-        .collect();
-    record_jump_arrows(app, content_area, scroll_offset, &lines);
+        } else if jump.is_some() {
+            let mut spans = line.spans;
+            spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
+            Line::from(spans)
+        } else {
+            line
+        }
+    });
 
     frame.render_widget(Paragraph::new(lines), content_area);
 
@@ -3082,6 +3096,24 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
             };
             mk(ServiceType::Dms, JumpView::Dms(view), arn)
         }
+        // Beanstalk: environment/<app>/<env>, application/<app>,
+        // applicationversion/<app>/<label>. Environments resolve by name
+        // (ids are `e-…`, which the ARN doesn't carry); versions are keyed
+        // `app@label` because a label is only unique within its app.
+        "elasticbeanstalk" => {
+            use crate::app::BeanstalkView;
+            let (kind, rest) = resource.split_once('/')?;
+            let (view, id) = match kind {
+                "environment" => (BeanstalkView::Environments, rest.split_once('/')?.1.to_string()),
+                "application" => (BeanstalkView::Applications, rest.to_string()),
+                "applicationversion" => {
+                    let (app, label) = rest.split_once('/')?;
+                    (BeanstalkView::Versions, format!("{app}@{label}"))
+                }
+                _ => return None,
+            };
+            mk(ServiceType::Beanstalk, JumpView::Beanstalk(view), &id)
+        }
         "route53" => {
             // resource = "hostedzone/Z123…". R53HostedZone::id() stores the
             // full "/hostedzone/ID" form, so reconstruct it for an exact-id
@@ -3714,17 +3746,210 @@ fn cfn_service_fallback_jump_target(
     })
 }
 
+/// Columns a wrapped body keeps free at the right edge for a row's `  →`
+/// jump arrow, so the arrow lands on the row's last screen line instead of
+/// spilling onto a continuation of its own.
+const WRAP_ARROW_RESERVE: usize = 3;
+
+/// Hanging indent for a wrapped row's continuation lines: the value column
+/// for a `key: value` pair, the text's own leading indent for anything else
+/// (capped so a deeply indented line still keeps `WRAP_MIN_COLS` to wrap
+/// into — the key column itself always leaves 20, so this only bites on
+/// indented content lines in very narrow panes).
+fn wrap_indent(key: &str, value: &str, key_w: usize, avail: usize) -> usize {
+    let indent = if is_key_value_row(key, value) {
+        key_w + 2
+    } else if key.is_empty() {
+        2 // empty-key notes render as `"  {value}"`
+    } else {
+        key.chars().take_while(|c| *c == ' ').count()
+    };
+    indent.min(avail.saturating_sub(WRAP_MIN_COLS))
+}
+
+/// Narrowest text column a continuation row is ever given.
+const WRAP_MIN_COLS: usize = 12;
+
+/// Split one styled line into screen rows of at most `avail` display
+/// columns: the first row as is, every following row prefixed with `indent`
+/// spaces. Splits by display width (`unicode-width`), never bytes or chars,
+/// so a wide glyph is never cut in half; span styles and the line's own
+/// style carry over to every row.
+fn wrap_styled_line(line: Line<'static>, avail: usize, indent: usize) -> Vec<Line<'static>> {
+    use unicode_width::UnicodeWidthChar;
+    let avail = avail.max(1);
+    if line.width() <= avail {
+        return vec![line];
+    }
+    let line_style = line.style;
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut cur: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    let mut cap = avail;
+    for span in line.spans {
+        let mut buf = String::new();
+        for ch in span.content.chars() {
+            let cw = ch.width().unwrap_or(0);
+            if used + cw > cap && used > 0 {
+                if !buf.is_empty() {
+                    cur.push(Span::styled(std::mem::take(&mut buf), span.style));
+                }
+                out.push(Line::from(std::mem::take(&mut cur)).style(line_style));
+                // Continuation rows hang under the value column.
+                cur.push(Span::raw(" ".repeat(indent)));
+                used = 0;
+                cap = avail.saturating_sub(indent).max(1);
+                if ch == ' ' {
+                    continue; // don't start a continuation with the break space
+                }
+            }
+            buf.push(ch);
+            used += cw;
+        }
+        if !buf.is_empty() {
+            cur.push(Span::styled(buf, span.style));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(Line::from(cur).style(line_style));
+    }
+    out
+}
+
+/// Lay out a detail body into exactly the screen lines that fit `area`,
+/// keeping the logical `cursor` row on screen, and record the geometry the
+/// mouse needs. `style_row(idx, key, value, key_w)` renders one logical row
+/// (selection / search / jump-arrow styling — the per-renderer part); the
+/// loading spinner is applied before it's called.
+///
+/// Clip mode (the default) is one screen line per row, as it always was.
+/// With `App.detail_wrap` on, long rows continue onto hanging-indent lines
+/// under the value column. Every consumer that indexes the body (`j`/`k`,
+/// copy, visual selection, `/`, `[[`/`]]`) still works on logical rows; only
+/// the screen shape changes, so scrolling is computed here in **screen**
+/// rows, bottom-up from the cursor like the log tail's follow window, so a
+/// wrapped cursor row is never cut off (`Paragraph::wrap` would anchor to
+/// the top and clip). Widths are recomputed every frame — `Z` and terminal
+/// resizes change them.
+fn layout_detail_body<F>(
+    app: &App,
+    rows: &[(String, String)],
+    area: Rect,
+    cursor: usize,
+    style_row: F,
+) -> Vec<Line<'static>>
+where
+    F: Fn(usize, &str, &str, usize) -> Line<'static>,
+{
+    let focused = app.details_focused;
+    let visible_height = area.height as usize;
+    let width = area.width as usize;
+    let key_widths = key_col_widths(rows, area.width);
+    let spun = |idx: usize| -> (String, String) {
+        let (k, v) = &rows[idx];
+        spin_loading_row(k, v, app.tick_count, focused).unwrap_or_else(|| (k.clone(), v.clone()))
+    };
+
+    if !app.detail_wrap {
+        let scroll_offset = cursor.saturating_sub(visible_height.saturating_sub(1));
+        let end = rows.len().min(scroll_offset + visible_height);
+        let row_map: Vec<usize> = (scroll_offset..end).collect();
+        let lines: Vec<Line<'static>> = row_map
+            .iter()
+            .map(|&idx| {
+                let (k, v) = spun(idx);
+                style_row(idx, &k, &v, key_widths[idx])
+            })
+            .collect();
+        record_jump_arrows(app, area, &row_map, &lines);
+        app.record_detail_body_geometry(area, row_map);
+        return lines;
+    }
+
+    if rows.is_empty() {
+        app.record_detail_body_geometry(area, Vec::new());
+        return Vec::new();
+    }
+    let avail = width.saturating_sub(WRAP_ARROW_RESERVE).max(1);
+    let wrapped = |idx: usize| -> Vec<Line<'static>> {
+        let (k, v) = spun(idx);
+        let mut line = style_row(idx, &k, &v, key_widths[idx]);
+        let arrow = if line.spans.last().is_some_and(|s| s.content == "  →") {
+            line.spans.pop()
+        } else {
+            None
+        };
+        let indent = wrap_indent(&k, &v, key_widths[idx], avail);
+        let mut out = wrap_styled_line(line, avail, indent);
+        if let (Some(a), Some(last)) = (arrow, out.last_mut()) {
+            last.spans.push(a);
+        }
+        out
+    };
+    // Height of a row without the per-renderer styling (which only restyles
+    // spans and adds the reserved arrow), so measuring never runs the jump
+    // classifiers for rows that won't be drawn. Measured by actually
+    // wrapping: a wide glyph pushed to the next row makes arithmetic drift.
+    let height = |idx: usize| -> usize {
+        let (k, v) = spun(idx);
+        let line = style_detail_row(&k, &v, None, key_widths[idx]);
+        let indent = wrap_indent(&k, &v, key_widths[idx], avail);
+        if line.width() <= avail {
+            1
+        } else {
+            wrap_styled_line(line, avail, indent).len()
+        }
+    };
+
+    let cursor = cursor.min(rows.len().saturating_sub(1));
+    let first = first_visible_row(cursor, visible_height, height);
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(visible_height);
+    let mut row_map: Vec<usize> = Vec::with_capacity(visible_height);
+    for idx in first..rows.len() {
+        if lines.len() >= visible_height {
+            break;
+        }
+        for l in wrapped(idx) {
+            if lines.len() >= visible_height {
+                break;
+            }
+            lines.push(l);
+            row_map.push(idx);
+        }
+    }
+    record_jump_arrows(app, area, &row_map, &lines);
+    app.record_detail_body_geometry(area, row_map);
+    lines
+}
+
+/// First logical row to draw so the cursor row ends up fully visible:
+/// walk back from the cursor adding row heights while they still fit. A
+/// cursor row taller than the pane starts at its own top.
+fn first_visible_row(cursor: usize, visible_height: usize, height: impl Fn(usize) -> usize) -> usize {
+    let mut used = height(cursor);
+    let mut first = cursor;
+    while first > 0 {
+        let h = height(first - 1);
+        if used + h > visible_height {
+            break;
+        }
+        used += h;
+        first -= 1;
+    }
+    first
+}
+
 /// Indicator state for a jumpable row: `Some(true)` = cross-service (needs
 /// `gd`), `Some(false)` = same-service (`Enter` or `gd`), `None` = not jumpable.
 /// Make each drawn `→` jump arrow a click target that follows its row's link,
 /// as a double-click (or `⏎` on the row) does. Only while the pane has focus:
 /// the unfocused preview may show another section than focusing would, so a
 /// row index recorded there could follow the wrong link.
-fn record_jump_arrows(app: &App, area: Rect, first: usize, lines: &[Line]) {
+fn record_jump_arrows(app: &App, area: Rect, row_map: &[usize], lines: &[Line]) {
     if !app.details_focused {
         return;
     }
-    for (i, line) in lines.iter().enumerate() {
+    for ((i, line), &logical) in lines.iter().enumerate().zip(row_map) {
         if line.spans.last().is_none_or(|s| s.content != "  →") {
             continue;
         }
@@ -3734,7 +3959,7 @@ fn record_jump_arrows(app: &App, area: Rect, first: usize, lines: &[Line]) {
         }
         app.push_click_region(
             Rect { x: area.x + w - 2, y: area.y + i as u16, width: 2, height: 1 },
-            crate::app::ClickAction::FollowJump(first + i),
+            crate::app::ClickAction::FollowJump(logical),
         );
     }
 }
@@ -3760,6 +3985,7 @@ fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
         .or_else(|| app.rds_row_jump_target(key, value))
         .or_else(|| app.org_row_jump_target(key, value))
         .or_else(|| app.sh_row_jump_target(key, value))
+        .or_else(|| app.eb_row_jump_target(key, value))
         .or_else(|| resource_jump_target(key, value, current))?;
     Some(target.service != current)
 }
@@ -4003,61 +4229,38 @@ fn render_ec2_section_body(app: &App, area: Rect, frame: &mut Frame) {
     };
 
     let all_rows = app.get_detail_lines_filtered();
-    let visible_height = content_area.height as usize;
     let cursor = app.details_selected_index.unwrap_or(0);
-    let scroll_offset = cursor.saturating_sub(visible_height.saturating_sub(1));
-    app.record_detail_body_geometry(content_area, scroll_offset);
-    let key_widths = key_col_widths(&all_rows, content_area.width);
     let q_lower = app.detail_search_query.to_lowercase();
 
-    let lines: Vec<Line> = all_rows
-        .iter()
-        .enumerate()
-        .skip(scroll_offset)
-        .take(visible_height)
-        .map(|(idx, (key, value))| {
-            let spun = spin_loading_row(key, value, app.tick_count, focused);
-            let (key, value) = spun
-                .as_ref()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .unwrap_or((key.as_str(), value.as_str()));
-            let jump = jump_indicator(app, key, value);
-            let is_selected = focused && app.detail_line_in_selection(idx);
-            let is_cursor = focused && Some(idx) == app.details_selected_index;
-            let mut line = style_detail_row(key, value, None, key_widths[idx]);
+    let lines = layout_detail_body(app, &all_rows, content_area, cursor, |idx, key, value, key_w| {
+        let jump = jump_indicator(app, key, value);
+        let is_selected = focused && app.detail_line_in_selection(idx);
+        let is_cursor = focused && Some(idx) == app.details_selected_index;
+        let mut line = style_detail_row(key, value, None, key_w);
 
-            if is_selected {
-                let sel = theme::selection_style(true);
+        if is_selected {
+            let sel = theme::selection_style(true);
+            let mut spans: Vec<Span> = line
+                .spans
+                .into_iter()
+                .map(|s| Span::styled(s.content, sel))
+                .collect();
+            if jump.is_some() && is_cursor {
+                spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
+            }
+            Line::from(spans).style(sel)
+        } else if !q_lower.is_empty() {
+            let combined = format!("{}{}", key, value);
+            if combined.to_lowercase().contains(&q_lower) {
                 let mut spans: Vec<Span> = line
                     .spans
                     .into_iter()
-                    .map(|s| Span::styled(s.content, sel))
+                    .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
                     .collect();
-                if jump.is_some() && is_cursor {
-                    spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
+                if jump.is_some() {
+                    spans.push(Span::styled("  →", Style::default().fg(theme::text_dim())));
                 }
-                Line::from(spans).style(sel)
-            } else if !q_lower.is_empty() {
-                let combined = format!("{}{}", key, value);
-                if combined.to_lowercase().contains(&q_lower) {
-                    let mut spans: Vec<Span> = line
-                        .spans
-                        .into_iter()
-                        .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
-                        .collect();
-                    if jump.is_some() {
-                        spans.push(Span::styled("  →", Style::default().fg(theme::text_dim())));
-                    }
-                    Line::from(spans)
-                } else {
-                    if jump.is_some() {
-                        line.spans.push(Span::styled(
-                            "  →",
-                            Style::default().fg(theme::text_dim()),
-                        ));
-                    }
-                    line
-                }
+                Line::from(spans)
             } else {
                 if jump.is_some() {
                     line.spans.push(Span::styled(
@@ -4067,9 +4270,16 @@ fn render_ec2_section_body(app: &App, area: Rect, frame: &mut Frame) {
                 }
                 line
             }
-        })
-        .collect();
-    record_jump_arrows(app, content_area, scroll_offset, &lines);
+        } else {
+            if jump.is_some() {
+                line.spans.push(Span::styled(
+                    "  →",
+                    Style::default().fg(theme::text_dim()),
+                ));
+            }
+            line
+        }
+    });
 
     frame.render_widget(Paragraph::new(lines), content_area);
 
@@ -4606,61 +4816,45 @@ fn render_split_section_body(app: &App, area: Rect, frame: &mut Frame) {
     };
 
     let all_rows = app.get_detail_lines_filtered();
-    let visible_height = content_area.height as usize;
     let cursor = app.details_selected_index.unwrap_or(0);
-    let scroll_offset = cursor.saturating_sub(visible_height.saturating_sub(1));
-    app.record_detail_body_geometry(content_area, scroll_offset);
-    let key_widths = key_col_widths(&all_rows, content_area.width);
 
     let q_lower = app.detail_search_query.to_lowercase();
 
-    let lines: Vec<Line> = all_rows
-        .iter()
-        .enumerate()
-        .skip(scroll_offset)
-        .take(visible_height)
-        .map(|(idx, (key, value))| {
-            let spun = spin_loading_row(key, value, app.tick_count, focused);
-            let (key, value) = spun
-                .as_ref()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .unwrap_or((key.as_str(), value.as_str()));
-            let line = style_detail_row(key, value, None, key_widths[idx]);
-            let jump = jump_indicator(app, key, value);
-            if focused && app.detail_line_in_selection(idx) {
-                let sel = theme::selection_style(true);
-                let mut spans: Vec<Span> = line
+    let lines = layout_detail_body(app, &all_rows, content_area, cursor, |idx, key, value, key_w| {
+        let line = style_detail_row(key, value, None, key_w);
+        let jump = jump_indicator(app, key, value);
+        if focused && app.detail_line_in_selection(idx) {
+            let sel = theme::selection_style(true);
+            let mut spans: Vec<Span> = line
+                .spans
+                .into_iter()
+                .map(|s| Span::styled(s.content, sel))
+                .collect();
+            // `→` jump hint only on the cursor line, not the whole range.
+            if jump.is_some() && Some(idx) == app.details_selected_index {
+                spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
+            }
+            Line::from(spans).style(sel)
+        } else if !q_lower.is_empty() {
+            let combined = format!("{}{}", key, value);
+            if combined.to_lowercase().contains(&q_lower) {
+                let spans: Vec<Span> = line
                     .spans
                     .into_iter()
-                    .map(|s| Span::styled(s.content, sel))
+                    .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
                     .collect();
-                // `→` jump hint only on the cursor line, not the whole range.
-                if jump.is_some() && Some(idx) == app.details_selected_index {
-                    spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
-                }
-                Line::from(spans).style(sel)
-            } else if !q_lower.is_empty() {
-                let combined = format!("{}{}", key, value);
-                if combined.to_lowercase().contains(&q_lower) {
-                    let spans: Vec<Span> = line
-                        .spans
-                        .into_iter()
-                        .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
-                        .collect();
-                    Line::from(spans)
-                } else {
-                    line
-                }
-            } else if jump.is_some() && focused {
-                let mut spans = line.spans;
-                spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
                 Line::from(spans)
             } else {
                 line
             }
-        })
-        .collect();
-    record_jump_arrows(app, content_area, scroll_offset, &lines);
+        } else if jump.is_some() && focused {
+            let mut spans = line.spans;
+            spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
+            Line::from(spans)
+        } else {
+            line
+        }
+    });
 
     frame.render_widget(Paragraph::new(lines), content_area);
 
@@ -7794,13 +7988,106 @@ fn render_r53_health_check_section_tabs(app: &App, area: Rect, frame: &mut Frame
 pub fn r53_health_check_section_lines(
     hc: &R53HealthCheck,
     section: R53HealthCheckDetailSection,
-    status_state: Option<&crate::lazy::Lazy<Vec<crate::aws::services::route53::R53HealthObservation>>>,
+    status_state: Option<&crate::lazy::Lazy<crate::aws::services::route53::R53HealthStatus>>,
 ) -> Vec<(String, String)> {
     match section {
         R53HealthCheckDetailSection::Overview => r53_health_overview_lines(hc),
         R53HealthCheckDetailSection::Status => r53_health_status_lines(status_state),
         R53HealthCheckDetailSection::Tags => r53_health_tags_lines(hc),
     }
+}
+
+pub fn r53_record_section_lines(
+    rec: &crate::aws::services::route53::R53Record,
+    section: crate::aws::services::route53::R53RecordDetailSection,
+    answer: Option<&crate::lazy::Lazy<crate::aws::services::route53::R53TestAnswer>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::route53::R53RecordDetailSection as S;
+    match section {
+        // The rows the flat pane always showed — `r53_row_jump_target` keys
+        // on their labels (Zone ID, Health Check, Alias Target, Target).
+        S::Details => {
+            let mut rows = vec![("".to_string(), "".to_string())];
+            rows.extend(rec.details());
+            rows
+        }
+        S::TestAnswer => r53_test_answer_lines(rec, answer),
+    }
+}
+
+fn r53_test_answer_lines(
+    rec: &crate::aws::services::route53::R53Record,
+    answer: Option<&crate::lazy::Lazy<crate::aws::services::route53::R53TestAnswer>>,
+) -> Vec<(String, String)> {
+    let mut rows = vec![("".to_string(), "".to_string())];
+    let a = match answer {
+        None => {
+            rows.push((
+                "".to_string(),
+                "What Route 53 itself answers for this name and type, after routing policy and health checks · press x to ask".to_string(),
+            ));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Loading) => {
+            rows.push(("".to_string(), "Loading…".to_string()));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Error(e)) => {
+            rows.extend(error_rows(e));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Loaded(a)) => a,
+    };
+    rows.push((format!("Answer at {}", a.asked_at), "".to_string())); // group header
+    rows.push(("Response Code".to_string(), a.response_code.clone()));
+    rows.push(("Protocol".to_string(), a.protocol.clone()));
+    rows.push(("Nameserver".to_string(), a.nameserver.clone()));
+    rows.push(("".to_string(), "".to_string()));
+    if a.record_data.is_empty() {
+        rows.push(("".to_string(), "No records in the answer".to_string()));
+    } else {
+        rows.push((format!("Record Data ({})", a.record_data.len()), "".to_string()));
+        for d in &a.record_data {
+            rows.push((format!("  {}", d), "".to_string()));
+        }
+    }
+    if let Some(same) = r53_answer_matches_record(rec, &a.record_data) {
+        rows.push(("".to_string(), "".to_string()));
+        rows.push((
+            "".to_string(),
+            if same {
+                "✓ matches this record's values".to_string()
+            } else if rec.routing_policy() == "simple" {
+                "· differs from this record's values".to_string()
+            } else {
+                "· another answer than this record's values — routing picked a different record in the set, or a health check failed this one over".to_string()
+            },
+        ));
+    }
+    rows.push(("".to_string(), "".to_string()));
+    rows.push(("".to_string(), "· press x to ask again (weighted sets resample)".to_string()));
+    rows
+}
+
+/// Whether a test answer is exactly this record's configured values
+/// (order-, case- and trailing-dot-insensitive). `None` for alias records,
+/// whose answer is the target's addresses and has nothing to compare with.
+fn r53_answer_matches_record(
+    rec: &crate::aws::services::route53::R53Record,
+    data: &[String],
+) -> Option<bool> {
+    if rec.values.is_empty() || data.is_empty() {
+        return None;
+    }
+    let norm = |v: &[String]| {
+        let mut v: Vec<String> = v
+            .iter()
+            .map(|s| s.trim().trim_end_matches('.').to_ascii_lowercase())
+            .collect();
+        v.sort();
+        v
+    };
+    Some(norm(&rec.values) == norm(data))
 }
 
 fn r53_health_overview_lines(hc: &R53HealthCheck) -> Vec<(String, String)> {
@@ -7877,7 +8164,7 @@ fn r53_health_overview_lines(hc: &R53HealthCheck) -> Vec<(String, String)> {
     rows
 }
 
-fn r53_health_status_lines(state: Option<&crate::lazy::Lazy<Vec<crate::aws::services::route53::R53HealthObservation>>>) -> Vec<(String, String)> {
+fn r53_health_status_lines(state: Option<&crate::lazy::Lazy<crate::aws::services::route53::R53HealthStatus>>) -> Vec<(String, String)> {
     let mut rows = vec![("".to_string(), "".to_string())];
     match state {
         None => {
@@ -7890,7 +8177,8 @@ fn r53_health_status_lines(state: Option<&crate::lazy::Lazy<Vec<crate::aws::serv
         Some(crate::lazy::Lazy::Error(e)) => {
             rows.extend(error_rows(e));
         }
-        Some(crate::lazy::Lazy::Loaded(obs)) => {
+        Some(crate::lazy::Lazy::Loaded(st)) => {
+            let obs = &st.observations;
             if obs.is_empty() {
                 rows.push((
                     "  No observations (calculated/alarm checks report no per-region status)".to_string(),
@@ -7910,9 +8198,38 @@ fn r53_health_status_lines(state: Option<&crate::lazy::Lazy<Vec<crate::aws::serv
                     }
                 }
             }
+            rows.extend(r53_last_failure_lines(st));
         }
     }
     rows.push(("".to_string(), "".to_string()));
+    rows
+}
+
+/// "Last failure" group under the live observations: per checker, the most
+/// recent failure reason and when it was seen — so a check that is healthy
+/// now but flapped an hour ago still says so.
+fn r53_last_failure_lines(st: &crate::aws::services::route53::R53HealthStatus) -> Vec<(String, String)> {
+    let mut rows = vec![
+        ("".to_string(), "".to_string()),
+        ("Last failure per checker".to_string(), "".to_string()), // group header
+    ];
+    if let Some(e) = &st.last_failure_error {
+        rows.extend(error_rows(e));
+        return rows;
+    }
+    if st.last_failures.is_empty() {
+        rows.push(("".to_string(), "No failures on record".to_string()));
+        return rows;
+    }
+    // Newest first: that's the flap you came to find.
+    let mut failures: Vec<_> = st.last_failures.iter().collect();
+    failures.sort_by(|a, b| b.checked_time.cmp(&a.checked_time));
+    for f in failures {
+        rows.push((format!("  {}", f.region), f.status.clone()));
+        if let Some(t) = &f.checked_time {
+            rows.push((format!("  {:<20}", "  at"), t.clone()));
+        }
+    }
     rows
 }
 
@@ -8207,6 +8524,9 @@ fn acm_tags_lines(details_state: Option<&crate::lazy::Lazy<crate::aws::services:
             vec![("".to_string(), "Loading tags…".to_string())]
         }
         Some(crate::lazy::Lazy::Error(e)) => error_rows(e),
+        Some(crate::lazy::Lazy::Loaded(d)) if d.tags_error.is_some() => {
+            error_rows(d.tags_error.as_deref().unwrap_or_default())
+        }
         Some(crate::lazy::Lazy::Loaded(d)) => {
             let mut rows = vec![];
             if d.tags.is_empty() {
@@ -10533,7 +10853,10 @@ pub fn code_pipeline_section_lines(
         CodePipelineDetailSection::Tags => match details_state {
             None | Some(Lazy::Loading) => vec![("".to_string(), "Loading…".to_string())],
             Some(Lazy::Error(e)) => error_rows(e),
-            Some(Lazy::Loaded(d)) => tag_rows(&d.tags),
+            Some(Lazy::Loaded(d)) => match &d.tags_error {
+                Some(err) => error_rows(err),
+                None => tag_rows(&d.tags),
+            },
         },
     }
 }
@@ -17539,6 +17862,578 @@ fn truncate_chars_x(s: &str, max: usize) -> String {
     }
 }
 
+// ── Elastic Beanstalk split panes ─────────────────────────────────────────────
+
+fn render_eb_environment_split(
+    app: &App,
+    e: &crate::aws::services::beanstalk::EbEnvironment,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let subtitle = format!(
+        "{} · {} · {} · {}",
+        e.application,
+        e.deployment.label(),
+        if e.tier_name.is_empty() { "—" } else { e.tier_name.as_str() },
+        e.state_label()
+    );
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "Beanstalk Environment",
+        &e.name,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::beanstalk::EB_ENVIRONMENT_SECTIONS),
+    );
+}
+
+fn render_eb_application_split(
+    app: &App,
+    a: &crate::aws::services::beanstalk::EbApplication,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let subtitle = a.description.clone().unwrap_or_else(|| "Elastic Beanstalk application".to_string());
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "Beanstalk Application",
+        &a.name,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::beanstalk::EB_APPLICATION_SECTIONS),
+    );
+}
+
+fn render_eb_version_split(
+    app: &App,
+    v: &crate::aws::services::beanstalk::EbVersion,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let subtitle = format!("{} · {}", v.application, v.state_label());
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "Beanstalk Application Version",
+        &v.label,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::beanstalk::EB_VERSION_SECTIONS),
+    );
+}
+
+/// The four lazy sections of an environment pane, bundled so the
+/// dispatcher in `section_detail_lines` stays one call.
+pub struct EbEnvLazy<'a> {
+    pub health: Option<&'a crate::lazy::Lazy<crate::aws::services::beanstalk::EbHealth>>,
+    pub events: Option<&'a crate::lazy::Lazy<Vec<crate::aws::services::beanstalk::EbEvent>>>,
+    pub config: Option<&'a crate::lazy::Lazy<crate::aws::services::beanstalk::EbConfig>>,
+    pub resources: Option<&'a crate::lazy::Lazy<crate::aws::services::beanstalk::EbResources>>,
+}
+
+fn eb_loading() -> Vec<(String, String)> {
+    vec![("".to_string(), "Loading…".to_string())]
+}
+
+/// `✓`/`⚠`/`✗` prefix for a Beanstalk health colour (or enhanced status).
+fn eb_health_mark(word: &str) -> String {
+    match word.to_ascii_lowercase().as_str() {
+        "green" | "ok" | "info" => format!("✓ {word}"),
+        "yellow" | "warning" | "degraded" | "pending" => format!("⚠ {word}"),
+        "red" | "severe" => format!("✗ {word}"),
+        _ => word.to_string(),
+    }
+}
+
+/// Labels the Beanstalk row classifier (`App::eb_row_jump_target`) keys on —
+/// renaming a row here without the classifier silently kills its jump.
+pub const EB_ROW_APPLICATION: &str = "Application";
+pub const EB_ROW_VERSION: &str = "Version Label";
+pub const EB_ROW_ENVIRONMENT: &str = "Environment";
+pub const EB_ROW_EKS_CLUSTER: &str = "EKS Cluster";
+pub const EB_ROW_ASG: &str = "Auto Scaling Group";
+pub const EB_ROW_LOAD_BALANCER: &str = "Load Balancer";
+pub const EB_ROW_LAUNCH_TEMPLATE: &str = "Launch Template";
+pub const EB_ROW_QUEUE: &str = "Queue";
+
+pub fn eb_environment_section_lines(
+    e: &crate::aws::services::beanstalk::EbEnvironment,
+    section: crate::aws::services::beanstalk::EbEnvironmentDetailSection,
+    lazy: EbEnvLazy<'_>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::beanstalk::{EbDeploymentType, EbEnvironmentDetailSection as S};
+    use crate::lazy::Lazy;
+    match section {
+        S::Overview => {
+            let mut rows = vec![
+                kv("Name", e.name.clone()),
+                kv("Environment ID", e.id.clone()),
+                kv(EB_ROW_APPLICATION, e.application.clone()),
+                kv("Deployment Type", e.deployment.label()),
+                kv(
+                    "Tier",
+                    match (e.tier_name.as_str(), e.tier_type.as_str()) {
+                        ("", "") => "—".to_string(),
+                        (n, "") => n.to_string(),
+                        (n, t) => format!("{n} ({t})"),
+                    },
+                ),
+                kv("Status", e.status.clone()),
+                kv("Health", eb_health_mark(&e.health)),
+            ];
+            if let Some(h) = &e.health_status {
+                rows.push(kv("Health Status", eb_health_mark(h)));
+            }
+            if e.abortable_operation {
+                rows.push(kv("Operation", "⚠ an update is in progress (abortable)"));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("Deployment".to_string(), String::new()));
+            rows.push(kv(
+                &format!("  {EB_ROW_VERSION}"),
+                e.version_label.clone().unwrap_or_else(|| "—".to_string()),
+            ));
+            match e.deployment {
+                EbDeploymentType::Standard => {
+                    rows.push(kv("  Platform", e.platform_label().unwrap_or_else(|| "—".to_string())));
+                }
+                EbDeploymentType::Cluster => {
+                    rows.push(kv("  Platform", "· none — the runtime is the container image"));
+                }
+            }
+            if let Some(p) = &e.platform_arn {
+                rows.push(kv("  Platform ARN", p.clone()));
+            }
+            if let Some(t) = &e.template_name {
+                rows.push(kv("  Saved Configuration", t.clone()));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("Endpoint".to_string(), String::new()));
+            rows.push(kv("  URL", e.endpoint_url.clone().unwrap_or_else(|| "—".to_string())));
+            if let Some(c) = &e.cname {
+                rows.push(kv("  CNAME", c.clone()));
+            }
+            if let Some(lb) = &e.load_balancer {
+                rows.push(kv(&format!("  {EB_ROW_LOAD_BALANCER}"), lb.name.clone()));
+                if let Some(d) = &lb.domain {
+                    rows.push(kv("  Load Balancer DNS", d.clone()));
+                }
+                if !lb.listeners.is_empty() {
+                    rows.push(kv("  Listeners", lb.listeners.join(", ")));
+                }
+            }
+            if e.deployment == EbDeploymentType::Cluster {
+                rows.push((String::new(), String::new()));
+                rows.push(("Cluster".to_string(), String::new()));
+                match &e.cluster_arn {
+                    Some(arn) => {
+                        rows.push(kv(&format!("  {EB_ROW_EKS_CLUSTER}"), e.cluster_name().unwrap_or(arn.as_str()).to_string()));
+                        rows.push(kv("  Cluster ARN", arn.clone()));
+                        rows.push(kv(
+                            "",
+                            "· shared by every Cluster environment on the same subnets — U on the EKS cluster lists them",
+                        ));
+                    }
+                    None => rows.push(kv(
+                        &format!("  {EB_ROW_EKS_CLUSTER}"),
+                        "· not resolved — see the Resources section",
+                    )),
+                }
+                rows.push(kv("", "· cluster / node roles: Configuration › aws:elasticbeanstalk:eks"));
+            }
+            if !e.links.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Links".to_string(), String::new()));
+                for (name, env) in &e.links {
+                    rows.push(kv(&format!("  {EB_ROW_ENVIRONMENT}"), env.clone()));
+                    rows.push(kv("    Link Name", name.clone()));
+                }
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("Other".to_string(), String::new()));
+            if let Some(d) = &e.description {
+                rows.push(kv("  Description", d.clone()));
+            }
+            if let Some(r) = &e.operations_role {
+                rows.push(kv("  Operations Role", r.clone()));
+            }
+            if let Some(c) = &e.created {
+                rows.push(kv("  Created", c.clone()));
+            }
+            if let Some(u) = &e.updated {
+                rows.push(kv("  Updated", u.clone()));
+            }
+            if !e.arn.is_empty() {
+                rows.push(kv("  ARN", e.arn.clone()));
+            }
+            rows
+        }
+        S::Health => match lazy.health {
+            None | Some(Lazy::Loading) => eb_loading(),
+            Some(Lazy::Error(err)) => {
+                let mut rows = vec![kv("Health", eb_health_mark(&e.health))];
+                rows.extend(error_rows(err));
+                rows
+            }
+            Some(Lazy::Loaded(h)) => {
+                let mut rows = Vec::new();
+                if let Some(c) = &h.color {
+                    rows.push(kv("Color", eb_health_mark(c)));
+                }
+                if let Some(s) = &h.health_status {
+                    rows.push(kv("Health Status", eb_health_mark(s)));
+                }
+                if let Some(s) = &h.status {
+                    rows.push(kv("Status", s.clone()));
+                }
+                if let Some(r) = &h.refreshed {
+                    rows.push(kv("Refreshed", r.clone()));
+                }
+                rows.push((String::new(), String::new()));
+                rows.push(("Causes".to_string(), String::new()));
+                if h.causes.is_empty() {
+                    rows.push(kv("", "✓ none reported"));
+                } else {
+                    for c in &h.causes {
+                        rows.push((format!("  ⚠ {c}"), String::new()));
+                    }
+                }
+                if !h.instances.is_empty() {
+                    rows.push((String::new(), String::new()));
+                    rows.push(("Instances".to_string(), String::new()));
+                    for (k, n) in &h.instances {
+                        let v = match *k {
+                            "Degraded" | "Severe" => format!("✗ {n}"),
+                            "Warning" => format!("⚠ {n}"),
+                            _ => n.to_string(),
+                        };
+                        rows.push(kv(&format!("  {k}"), v));
+                    }
+                } else if e.deployment == EbDeploymentType::Cluster {
+                    rows.push((String::new(), String::new()));
+                    rows.push(kv("", "· Cluster environments don't report per-instance health"));
+                }
+                if let Some(m) = &h.requests {
+                    rows.push((String::new(), String::new()));
+                    let window = m.duration.map(|d| format!(" (last {d}s)")).unwrap_or_default();
+                    rows.push((format!("Requests{window}"), String::new()));
+                    rows.push(kv("  Count", m.request_count.to_string()));
+                    let code = |n: Option<i32>| n.map(|n| n.to_string()).unwrap_or_else(|| "—".to_string());
+                    let codes = format!(
+                        "2xx {} · 3xx {} · 4xx {} · 5xx {}",
+                        code(m.status_2xx),
+                        code(m.status_3xx),
+                        code(m.status_4xx),
+                        code(m.status_5xx)
+                    );
+                    rows.push(kv(
+                        "  Status Codes",
+                        if m.status_5xx.unwrap_or(0) > 0 { format!("✗ {codes}") } else { codes },
+                    ));
+                    let lat = |v: Option<f64>| v.map(|s| format!("{:.0} ms", s * 1000.0)).unwrap_or_else(|| "—".to_string());
+                    rows.push(kv(
+                        "  Latency",
+                        format!("p50 {} · p90 {} · p99 {}", lat(m.p50), lat(m.p90), lat(m.p99)),
+                    ));
+                }
+                rows
+            }
+        },
+        S::Events => match lazy.events {
+            None | Some(Lazy::Loading) => eb_loading(),
+            Some(Lazy::Error(err)) => error_rows(err),
+            Some(Lazy::Loaded(evs)) if evs.is_empty() => {
+                vec![kv("", "No events for this environment")]
+            }
+            Some(Lazy::Loaded(evs)) => {
+                let mut rows = vec![kv(
+                    "",
+                    format!(
+                        "· newest {} events{}",
+                        evs.len(),
+                        if evs.len() as i32 >= crate::aws::services::beanstalk::MAX_EVENTS { " (cap)" } else { "" }
+                    ),
+                )];
+                rows.push((String::new(), String::new()));
+                for ev in evs {
+                    let mark = match ev.severity.as_str() {
+                        "ERROR" | "FATAL" => "✗ ",
+                        "WARN" => "⚠ ",
+                        // Pad unmarked rows to the marker's width so the
+                        // time column lines up across severities.
+                        _ => "  ",
+                    };
+                    rows.push((
+                        format!(
+                            "  {mark}{:<20} {:<6} {}",
+                            ev.time.as_deref().unwrap_or("—"),
+                            ev.severity,
+                            ev.message
+                        ),
+                        String::new(),
+                    ));
+                }
+                rows
+            }
+        },
+        S::Configuration => match lazy.config {
+            None | Some(Lazy::Loading) => eb_loading(),
+            Some(Lazy::Error(err)) => error_rows(err),
+            Some(Lazy::Loaded(cfg)) if cfg.settings.is_empty() => {
+                vec![kv("", "No configuration settings returned")]
+            }
+            Some(Lazy::Loaded(cfg)) => eb_config_rows(cfg),
+        },
+        S::Resources => match lazy.resources {
+            None | Some(Lazy::Loading) => eb_loading(),
+            Some(Lazy::Error(err)) => error_rows(err),
+            Some(Lazy::Loaded(r)) if r.is_empty() => {
+                vec![kv("", "No resources reported — the environment may still be launching")]
+            }
+            Some(Lazy::Loaded(r)) => eb_resource_rows(r),
+        },
+        S::Tags => tag_rows(&e.tags),
+    }
+}
+
+/// Option settings grouped under a header per namespace. Values that look
+/// like secrets are not special-cased: Beanstalk returns environment
+/// properties verbatim, exactly as the console's Configuration page shows
+/// them, and `elasticbeanstalk:DescribeConfigurationSettings` is the read
+/// permission that already grants them.
+pub fn eb_config_rows(cfg: &crate::aws::services::beanstalk::EbConfig) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    if let Some(s) = &cfg.deployment_status {
+        rows.push(kv("Deployment Status", s.clone()));
+        rows.push((String::new(), String::new()));
+    }
+    let mut current: Option<(&str, Option<&str>)> = None;
+    for s in &cfg.settings {
+        let group = (s.namespace.as_str(), s.resource.as_deref());
+        if current != Some(group) {
+            if current.is_some() {
+                rows.push((String::new(), String::new()));
+            }
+            let header = match s.resource.as_deref() {
+                Some(r) => format!("{} [{r}]", s.namespace),
+                None => s.namespace.clone(),
+            };
+            rows.push((header, String::new()));
+            current = Some(group);
+        }
+        rows.push(kv(&format!("  {}", s.option), s.value.clone().unwrap_or_else(|| "—".to_string())));
+    }
+    rows
+}
+
+pub fn eb_resource_rows(r: &crate::aws::services::beanstalk::EbResources) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    if let Some(arn) = &r.cluster_arn {
+        rows.push(("Cluster".to_string(), String::new()));
+        let name = arn.split_once(":cluster/").map(|(_, n)| n).unwrap_or(arn.as_str());
+        rows.push(kv(&format!("  {EB_ROW_EKS_CLUSTER}"), name.to_string()));
+        rows.push(kv("  Cluster ARN", arn.clone()));
+    }
+    fn group(rows: &mut Vec<(String, String)>, title: &str, label: &str, items: &[String]) {
+        if items.is_empty() {
+            return;
+        }
+        if !rows.is_empty() {
+            rows.push((String::new(), String::new()));
+        }
+        rows.push((title.to_string(), String::new()));
+        for i in items {
+            rows.push(kv(&format!("  {label}"), i.clone()));
+        }
+    }
+    group(&mut rows, "Auto Scaling Groups", EB_ROW_ASG, &r.auto_scaling_groups);
+    group(&mut rows, "Instances", "Instance", &r.instances);
+    group(&mut rows, "Load Balancers", EB_ROW_LOAD_BALANCER, &r.load_balancers);
+    group(&mut rows, "Launch Templates", EB_ROW_LAUNCH_TEMPLATE, &r.launch_templates);
+    group(&mut rows, "Launch Configurations", "Launch Configuration", &r.launch_configurations);
+    group(&mut rows, "Scaling Triggers", "Trigger", &r.triggers);
+    if !r.queues.is_empty() {
+        if !rows.is_empty() {
+            rows.push((String::new(), String::new()));
+        }
+        rows.push(("Queues".to_string(), String::new()));
+        for (name, url) in &r.queues {
+            rows.push(kv(&format!("  {EB_ROW_QUEUE}"), url.clone()));
+            rows.push(kv("    Name", name.clone()));
+        }
+    }
+    rows
+}
+
+pub fn eb_application_section_lines(
+    a: &crate::aws::services::beanstalk::EbApplication,
+    section: crate::aws::services::beanstalk::EbApplicationDetailSection,
+    envs: &[&crate::aws::services::beanstalk::EbEnvironment],
+    versions: &[&crate::aws::services::beanstalk::EbVersion],
+) -> Vec<(String, String)> {
+    use crate::aws::services::beanstalk::{EbApplicationDetailSection as S, EbDeploymentType};
+    match section {
+        S::Overview => {
+            let standard = envs.iter().filter(|e| e.deployment == EbDeploymentType::Standard).count();
+            let cluster = envs.len() - standard;
+            let mut rows = vec![
+                kv("Name", a.name.clone()),
+                kv("Environments", format!("{} ({standard} Standard · {cluster} Cluster)", envs.len())),
+                kv("Versions", versions.len().to_string()),
+            ];
+            if let Some(d) = &a.description {
+                rows.push(kv("Description", d.clone()));
+            }
+            if let Some(c) = &a.created {
+                rows.push(kv("Created", c.clone()));
+            }
+            if let Some(u) = &a.updated {
+                rows.push(kv("Updated", u.clone()));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("Version Lifecycle".to_string(), String::new()));
+            if a.lifecycle_rules.is_empty() {
+                rows.push(kv("", "· no lifecycle policy — versions accumulate until the quota"));
+            } else {
+                for r in &a.lifecycle_rules {
+                    rows.push(kv("  Rule", r.clone()));
+                }
+                if let Some(role) = &a.lifecycle_role {
+                    rows.push(kv("  Service Role", role.clone()));
+                }
+            }
+            if !a.configuration_templates.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Saved Configurations".to_string(), String::new()));
+                for t in &a.configuration_templates {
+                    rows.push((format!("  {t}"), String::new()));
+                }
+            }
+            if !a.arn.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(kv("ARN", a.arn.clone()));
+            }
+            rows
+        }
+        S::Environments => {
+            if envs.is_empty() {
+                return vec![kv("", "No environments in this application")];
+            }
+            let mut rows = Vec::new();
+            for (i, e) in envs.iter().enumerate() {
+                if i > 0 {
+                    rows.push((String::new(), String::new()));
+                }
+                rows.push(kv(EB_ROW_ENVIRONMENT, e.name.clone()));
+                rows.push(kv("  Type", e.deployment.label()));
+                rows.push(kv("  Health", eb_health_mark(&e.health)));
+                rows.push(kv("  Status", e.status.clone()));
+                if let Some(v) = &e.version_label {
+                    rows.push(kv(&format!("  {EB_ROW_VERSION}"), v.clone()));
+                }
+                if let Some(c) = e.cluster_name() {
+                    rows.push(kv(&format!("  {EB_ROW_EKS_CLUSTER}"), c.to_string()));
+                }
+            }
+            rows
+        }
+        S::Versions => {
+            if versions.is_empty() {
+                return vec![kv("", "No application versions loaded for this application")];
+            }
+            let mut rows = vec![(
+                format!("    {:<32} {:<12} {:<20} {}", "LABEL", "STATUS", "CREATED", "DEPLOYED TO"),
+                String::new(),
+            )];
+            for v in versions {
+                let deployed: Vec<&str> = envs
+                    .iter()
+                    .filter(|e| e.version_label.as_deref() == Some(v.label.as_str()))
+                    .map(|e| e.name.as_str())
+                    .collect();
+                let mark = if v.status == "Failed" { "✗ " } else { "  " };
+                rows.push((
+                    format!(
+                        "  {mark}{:<32} {:<12} {:<20} {}",
+                        truncate_chars(&v.label, 32),
+                        v.status,
+                        v.created.as_deref().unwrap_or("—"),
+                        deployed.join(", ")
+                    ),
+                    String::new(),
+                ));
+            }
+            rows
+        }
+        S::Tags => tag_rows(&a.tags),
+    }
+}
+
+pub fn eb_version_section_lines(
+    v: &crate::aws::services::beanstalk::EbVersion,
+    section: crate::aws::services::beanstalk::EbVersionDetailSection,
+    deployed: &[&crate::aws::services::beanstalk::EbEnvironment],
+) -> Vec<(String, String)> {
+    use crate::aws::services::beanstalk::EbVersionDetailSection as S;
+    match section {
+        S::Overview => {
+            let mut rows = vec![
+                kv("Label", v.label.clone()),
+                kv(EB_ROW_APPLICATION, v.application.clone()),
+                kv(
+                    "Status",
+                    if v.status == "Failed" { format!("✗ {}", v.status) } else { v.status.clone() },
+                ),
+            ];
+            if let Some(d) = &v.description {
+                rows.push(kv("Description", d.clone()));
+            }
+            if let Some(c) = &v.created {
+                rows.push(kv("Created", c.clone()));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("Deployed To".to_string(), String::new()));
+            if deployed.is_empty() {
+                rows.push(kv("", "· not running in any environment"));
+            } else {
+                for e in deployed {
+                    rows.push(kv(&format!("  {EB_ROW_ENVIRONMENT}"), e.name.clone()));
+                }
+            }
+            if !v.arn.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(kv("ARN", v.arn.clone()));
+            }
+            rows
+        }
+        S::Source => {
+            let mut rows = Vec::new();
+            if let Some(i) = &v.image_uri {
+                rows.push(kv("Image", i.clone()));
+            }
+            if let Some(b) = &v.source_bundle {
+                rows.push(kv("Source Bundle", b.clone()));
+            }
+            if let Some((ty, repo, loc)) = &v.source_build {
+                rows.push(kv("Source Repository", format!("{repo} ({ty})")));
+                rows.push(kv("Source Location", loc.clone()));
+            }
+            if let Some(b) = &v.build_arn {
+                rows.push(kv("Build", b.clone()));
+            }
+            if let Some(r) = &v.build_role {
+                rows.push(kv("Build Role", r.clone()));
+            }
+            if rows.is_empty() {
+                rows.push(kv("", "No source recorded for this version"));
+            }
+            rows
+        }
+    }
+}
+
 // ── DMS split panes ─────────────────────────────────────────────────────────
 
 fn render_dms_task_split(
@@ -22994,14 +23889,7 @@ pub fn permission_set_section_lines(
                 vec![("  Loading…".to_string(), "".to_string())]
             }
             Some(Lazy::Error(e)) => error_rows(e),
-            Some(Lazy::Loaded(a)) if a.tags.is_empty() => {
-                vec![("  (no tags)".to_string(), "".to_string())]
-            }
-            Some(Lazy::Loaded(a)) => a
-                .tags
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
+            Some(Lazy::Loaded(a)) => bundle_tag_rows(&a.tags, a.tags_error.as_deref()),
         },
     }
 }
@@ -32058,13 +32946,6 @@ fn render_waf_rule_group_split(
     );
 }
 
-fn waf_tag_lines(tags: &[(String, String)]) -> Vec<(String, String)> {
-    if tags.is_empty() {
-        return vec![("  (no tags)".to_string(), String::new())];
-    }
-    tags.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-}
-
 pub fn waf_ip_set_section_lines(
     s: &crate::aws::services::waf::WafIpSet,
     section: WafIpSetDetailSection,
@@ -32112,7 +32993,7 @@ pub fn waf_ip_set_section_lines(
                 vec![("  Loading…".to_string(), "".to_string())]
             }
             Some(crate::lazy::Lazy::Error(e)) => error_rows(e),
-            Some(crate::lazy::Lazy::Loaded(d)) => waf_tag_lines(&d.tags),
+            Some(crate::lazy::Lazy::Loaded(d)) => bundle_tag_rows(&d.tags, d.tags_error.as_deref()),
         },
     }
 }
@@ -32167,7 +33048,7 @@ pub fn waf_rule_group_section_lines(
                 vec![("  Loading…".to_string(), "".to_string())]
             }
             Some(crate::lazy::Lazy::Error(e)) => error_rows(e),
-            Some(crate::lazy::Lazy::Loaded(d)) => waf_tag_lines(&d.tags),
+            Some(crate::lazy::Lazy::Loaded(d)) => bundle_tag_rows(&d.tags, d.tags_error.as_deref()),
         },
     }
 }
@@ -32330,12 +33211,17 @@ pub fn route53_profile_section_lines(
                 vec![("  Loading…".to_string(), "".to_string())]
             }
             Some(crate::lazy::Lazy::Error(err)) => error_rows(err),
-            Some(crate::lazy::Lazy::Loaded(d)) => resolver_tag_rows(&d.tags),
+            Some(crate::lazy::Lazy::Loaded(d)) => bundle_tag_rows(&d.tags, d.tags_error.as_deref()),
         },
     }
 }
 
-fn resolver_tag_rows(tags: &[(String, String)]) -> Vec<(String, String)> {
+/// Tags section rows for a lazy bundle that fetches tags best-effort: a
+/// failed tag call renders as a warning, never as "(no tags)" (#28).
+fn bundle_tag_rows(tags: &[(String, String)], err: Option<&str>) -> Vec<(String, String)> {
+    if let Some(err) = err {
+        return error_rows(err);
+    }
     if tags.is_empty() {
         return vec![("  (no tags)".to_string(), String::new())];
     }
@@ -32488,7 +33374,7 @@ pub fn resolver_endpoint_section_lines(
         S::Tags => match state {
             None | Some(crate::lazy::Lazy::Loading) => vec![("  Loading…".to_string(), "".to_string())],
             Some(crate::lazy::Lazy::Error(err)) => error_rows(err),
-            Some(crate::lazy::Lazy::Loaded(d)) => resolver_tag_rows(&d.tags),
+            Some(crate::lazy::Lazy::Loaded(d)) => bundle_tag_rows(&d.tags, d.tags_error.as_deref()),
         },
     }
 }
@@ -32602,7 +33488,7 @@ pub fn resolver_rule_section_lines(
         S::Tags => match state {
             None | Some(crate::lazy::Lazy::Loading) => vec![("  Loading…".to_string(), "".to_string())],
             Some(crate::lazy::Lazy::Error(err)) => error_rows(err),
-            Some(crate::lazy::Lazy::Loaded(d)) => resolver_tag_rows(&d.tags),
+            Some(crate::lazy::Lazy::Loaded(d)) => bundle_tag_rows(&d.tags, d.tags_error.as_deref()),
         },
     }
 }
@@ -36457,6 +37343,9 @@ fn sns_permissions_lines(topic: &SnsTopic) -> Vec<(String, String)> {
 }
 
 fn sns_tags_lines(topic: &SnsTopic) -> Vec<(String, String)> {
+    if let Some(err) = &topic.tags_error {
+        return error_rows(err);
+    }
     let mut rows = vec![("".to_string(), "".to_string())];
 
     if topic.tags.is_empty() {
@@ -40390,15 +41279,19 @@ pub fn org_account_section_lines(
     account: &OrgAccount,
     section: OrgAccountDetailSection,
     details_state: Option<&crate::lazy::Lazy<crate::aws::services::organizations::OrgAccountDetails>>,
+    assume_hint: Option<&str>,
 ) -> Vec<(String, String)> {
     match section {
-        OrgAccountDetailSection::Details => org_account_details_lines(account),
+        OrgAccountDetailSection::Details => org_account_details_lines(account, assume_hint),
         OrgAccountDetailSection::OuPath => org_account_ou_path_lines(details_state),
         OrgAccountDetailSection::Policies => org_account_policies_lines(details_state),
     }
 }
 
-fn org_account_details_lines(account: &OrgAccount) -> Vec<(String, String)> {
+/// `assume_hint` is the dim `· press s to assume …` row (`org_assume_hint`),
+/// present only when `s` would actually switch into this account. It sits in
+/// Details because that's the section the unfocused preview shows.
+fn org_account_details_lines(account: &OrgAccount, assume_hint: Option<&str>) -> Vec<(String, String)> {
     let mut rows = vec![("".to_string(), "".to_string())];
     rows.push(("Account Name".to_string(), account.account_name.clone()));
     rows.push(("Account ID".to_string(), account.account_id.clone()));
@@ -40412,6 +41305,11 @@ fn org_account_details_lines(account: &OrgAccount) -> Vec<(String, String)> {
     }
     rows.push(("ARN".to_string(), account.arn.clone()));
     rows.push(("".to_string(), "".to_string()));
+    // Last, after the spacer: an export strips the hint row, and leading it
+    // with its own spacer would leave two blanks there.
+    if let Some(hint) = assume_hint {
+        rows.push(("".to_string(), hint.to_string()));
+    }
     rows
 }
 
@@ -45069,5 +45967,59 @@ mod cost_anomaly_tests {
         assert_eq!(rows[0].0, "Cause 1 · $88.10");
         assert!(rows.contains(&("Account".to_string(), "123456789012 (acme-prod)".to_string())));
         assert!(rows.iter().any(|(k, _)| k == "Cause 2 · $8.30"));
+    }
+}
+
+#[cfg(test)]
+mod detail_wrap_tests {
+    use super::*;
+    use unicode_width::UnicodeWidthStr;
+
+    fn text(l: &Line) -> String {
+        l.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn short_line_is_untouched() {
+        let rows = wrap_styled_line(Line::raw("short"), 10, 4);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(text(&rows[0]), "short");
+    }
+
+    #[test]
+    fn continuation_rows_hang_at_the_indent_and_respect_the_width() {
+        let line = Line::from(vec![
+            Span::raw("key : "),
+            Span::styled("abcdefghijklmnopqrstuvwxyz", Style::default().fg(Color::Red)),
+        ]);
+        let rows = wrap_styled_line(line, 12, 6);
+        let joined: String = rows.iter().map(|r| text(r).trim_start().to_string()).collect();
+        assert_eq!(joined, "key : abcdefghijklmnopqrstuvwxyz");
+        for r in &rows[1..] {
+            assert!(text(r).starts_with("      "), "{:?}", text(r));
+        }
+        assert!(rows.iter().all(|r| r.width() <= 12));
+        // The value's style survives the split.
+        assert!(rows[1].spans.iter().any(|s| s.style.fg == Some(Color::Red)));
+    }
+
+    #[test]
+    fn wide_glyphs_are_never_split_or_overflow() {
+        let line = Line::raw("日本語のテキストが長い値です");
+        let rows = wrap_styled_line(line, 7, 0);
+        assert!(rows.iter().all(|r| text(r).width() <= 7));
+        let joined: String = rows.iter().map(text).collect();
+        assert_eq!(joined, "日本語のテキストが長い値です");
+    }
+
+    #[test]
+    fn first_visible_row_keeps_the_cursor_row_whole() {
+        // Heights: row 3 is 4 screen rows tall, the rest 1.
+        let h = |i: usize| if i == 3 { 4 } else { 1 };
+        // 5 rows of screen: cursor row (4) + one row above it.
+        assert_eq!(first_visible_row(3, 5, h), 2);
+        // Cursor taller than the pane: start at its own top.
+        assert_eq!(first_visible_row(3, 2, h), 3);
+        assert_eq!(first_visible_row(0, 5, h), 0);
     }
 }

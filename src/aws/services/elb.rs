@@ -25,24 +25,46 @@ impl ElbService {
 /// Fetch tags for up to 20 ARNs in a single `describe_tags` call and merge them
 /// into a `arn -> tags` map. ELB does not return tags inline on
 /// describe_load_balancers / describe_target_groups.
-async fn fetch_tags(client: &ElbClient, arns: &[String]) -> HashMap<String, HashMap<String, String>> {
+/// Batched `DescribeTags` (20 ARNs per call). The first failure sends one
+/// load warning and sets `failed`, after which this asks nothing for the
+/// rest of the load — a denied call stays denied, and silently mapping it to
+/// untagged rows read as "No tags" (#28).
+async fn fetch_tags(
+    client: &ElbClient,
+    arns: &[String],
+    failed: &mut bool,
+    event_tx: &mpsc::UnboundedSender<Event>,
+    service_type: ServiceType,
+) -> HashMap<String, HashMap<String, String>> {
     let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
     for chunk in arns.chunks(20) {
-        let resp = client
+        if *failed {
+            break;
+        }
+        let resp = match client
             .describe_tags()
             .set_resource_arns(Some(chunk.to_vec()))
             .send()
-            .await;
-        if let Ok(resp) = resp {
-            for td in resp.tag_descriptions() {
-                if let Some(arn) = td.resource_arn() {
-                    let tags: HashMap<String, String> = td
-                        .tags()
-                        .iter()
-                        .filter_map(|t| Some((t.key()?.to_string(), t.value()?.to_string())))
-                        .collect();
-                    out.insert(arn.to_string(), tags);
-                }
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                *failed = true;
+                let _ = event_tx.send(Event::ResourceLoadWarning {
+                    service: service_type,
+                    warning: format!("tags: {}", crate::error::sdk_error_message(&e)),
+                });
+                break;
+            }
+        };
+        for td in resp.tag_descriptions() {
+            if let Some(arn) = td.resource_arn() {
+                let tags: HashMap<String, String> = td
+                    .tags()
+                    .iter()
+                    .filter_map(|t| Some((t.key()?.to_string(), t.value()?.to_string())))
+                    .collect();
+                out.insert(arn.to_string(), tags);
             }
         }
     }
@@ -71,6 +93,7 @@ impl AwsService for ElbService {
         service_type: ServiceType,
     ) -> Result<()> {
         let mut total = 0usize;
+        let mut tags_failed = false;
 
         // ── Load balancers ──────────────────────────────────────────────
         let mut lb_paginator = self.client.describe_load_balancers().into_paginator().send();
@@ -83,7 +106,9 @@ impl AwsService for ElbService {
                         continue;
                     }
                     let arns: Vec<String> = lbs.iter().map(|l| l.arn.clone()).collect();
-                    let tag_map = fetch_tags(&self.client, &arns).await;
+                    let tag_map =
+                        fetch_tags(&self.client, &arns, &mut tags_failed, &event_tx, service_type)
+                            .await;
                     for lb in &mut lbs {
                         if let Some(tags) = tag_map.get(&lb.arn) {
                             lb.tags = tags.clone();
@@ -124,7 +149,9 @@ impl AwsService for ElbService {
                         continue;
                     }
                     let arns: Vec<String> = tgs.iter().map(|t| t.arn.clone()).collect();
-                    let tag_map = fetch_tags(&self.client, &arns).await;
+                    let tag_map =
+                        fetch_tags(&self.client, &arns, &mut tags_failed, &event_tx, service_type)
+                            .await;
                     for tg in &mut tgs {
                         if let Some(tags) = tag_map.get(&tg.arn) {
                             tg.tags = tags.clone();

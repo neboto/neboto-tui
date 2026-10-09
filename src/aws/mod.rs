@@ -7,3 +7,4 @@ pub mod region;
 pub mod resource;
 pub mod service;
 pub mod services;
+pub mod tags;

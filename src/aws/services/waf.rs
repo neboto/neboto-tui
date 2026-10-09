@@ -1149,16 +1149,20 @@ pub async fn fetch_waf_insights(
 
 // ── WAF IP Set / Rule Group lazy detail ─────────────────────────────────────
 
-async fn fetch_waf_tags(client: &WafClient, arn: &str) -> Vec<(String, String)> {
+/// Best-effort: a failure comes back as the error (rendered in the Tags
+/// section in place of "(no tags)", #28) rather than failing the bundle.
+async fn fetch_waf_tags(client: &WafClient, arn: &str) -> (Vec<(String, String)>, Option<String>) {
+    let resp = match client.list_tags_for_resource().resource_arn(arn).send().await {
+        Ok(resp) => resp,
+        Err(e) => return (Vec::new(), Some(crate::error::sdk_error_message(&e))),
+    };
     let mut tags = Vec::new();
-    if let Ok(resp) = client.list_tags_for_resource().resource_arn(arn).send().await {
-        if let Some(info) = resp.tag_info_for_resource() {
-            for t in info.tag_list() {
-                tags.push((t.key().to_string(), t.value().to_string()));
-            }
+    if let Some(info) = resp.tag_info_for_resource() {
+        for t in info.tag_list() {
+            tags.push((t.key().to_string(), t.value().to_string()));
         }
     }
-    tags
+    (tags, None)
 }
 
 #[derive(Clone, Debug)]
@@ -1166,6 +1170,7 @@ pub struct WafIpSetDetail {
     pub ip_address_version: String,
     pub addresses: Vec<String>,
     pub tags: Vec<(String, String)>,
+    pub tags_error: Option<String>,
 }
 
 /// Fetch an IP set's addresses (`GetIPSet`) + tags, for the Addresses/Tags
@@ -1194,11 +1199,12 @@ pub async fn fetch_ip_set(
             )
         })
         .unwrap_or_default();
-    let tags = fetch_waf_tags(&client, &arn).await;
+    let (tags, tags_error) = fetch_waf_tags(&client, &arn).await;
     Ok(WafIpSetDetail {
         ip_address_version,
         addresses,
         tags,
+        tags_error,
     })
 }
 
@@ -1214,6 +1220,7 @@ pub struct WafRuleGroupDetail {
     pub capacity: i64,
     pub rules: Vec<WafRgRule>,
     pub tags: Vec<(String, String)>,
+    pub tags_error: Option<String>,
 }
 
 fn rule_action_label(a: Option<&aws_sdk_wafv2::types::RuleAction>) -> String {
@@ -1259,11 +1266,12 @@ pub async fn fetch_rule_group(
         })
         .unwrap_or_default();
     rules.sort_by_key(|r| r.priority);
-    let tags = fetch_waf_tags(&client, &arn).await;
+    let (tags, tags_error) = fetch_waf_tags(&client, &arn).await;
     Ok(WafRuleGroupDetail {
         capacity,
         rules,
         tags,
+        tags_error,
     })
 }
 

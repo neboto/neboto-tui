@@ -1,0 +1,12 @@
+<DescribeEventsResponse xmlns="http://elasticbeanstalk.amazonaws.com/docs/2010-12-01/">
+  <DescribeEventsResult>
+    <Events>
+      <member><EventDate>{{iso:now-2h}}</EventDate><Message>Environment health has transitioned from Degraded to Severe. 0 out of 2 instances are in service behind the load balancer.</Message><ApplicationName>acme-portal</ApplicationName><EnvironmentName>portal-legacy</EnvironmentName><Severity>WARN</Severity></member>
+      <member><EventDate>{{iso:now-2h-4m}}</EventDate><Message>Removed instance [i-0p0rta1std0000b2] from your environment.</Message><ApplicationName>acme-portal</ApplicationName><EnvironmentName>portal-legacy</EnvironmentName><Severity>INFO</Severity></member>
+      <member><EventDate>{{iso:now-2h-5m}}</EventDate><Message>Target group deregistered by a change outside Elastic Beanstalk: listener rule on legacy-admin-alb now forwards to an empty target group.</Message><ApplicationName>acme-portal</ApplicationName><EnvironmentName>portal-legacy</EnvironmentName><Severity>ERROR</Severity></member>
+      <member><EventDate>{{iso:now-40d}}</EventDate><Message>Environment update completed successfully.</Message><ApplicationName>acme-portal</ApplicationName><EnvironmentName>portal-legacy</EnvironmentName><Severity>INFO</Severity></member>
+      <member><EventDate>{{iso:now-40d-6m}}</EventDate><Message>Deploying new version to instance(s).</Message><ApplicationName>acme-portal</ApplicationName><VersionLabel>v1.14.2</VersionLabel><EnvironmentName>portal-legacy</EnvironmentName><Severity>INFO</Severity></member>
+    </Events>
+  </DescribeEventsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeEventsResponse>

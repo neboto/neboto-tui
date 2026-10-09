@@ -1,0 +1,10 @@
+<ListTagsForResourceResponse xmlns="http://elasticbeanstalk.amazonaws.com/docs/2010-12-01/">
+  <ListTagsForResourceResult>
+    <ResourceArn>arn:aws:elasticbeanstalk:{{region}}:{{account}}:environment/acme-portal/portal-next</ResourceArn>
+    <ResourceTags>
+      <member><Key>team</Key><Value>portal</Value></member>
+      <member><Key>env</Key><Value>prod</Value></member>
+    </ResourceTags>
+  </ListTagsForResourceResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListTagsForResourceResponse>

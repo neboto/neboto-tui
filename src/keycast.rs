@@ -205,6 +205,7 @@ fn fallback(key: KeyEvent, after: &View) -> Option<&'static str> {
             KeyCode::Char('d') => Some("half page down"),
             KeyCode::Char('u') => Some("half page up"),
             KeyCode::Char('x') => Some("export list"),
+            KeyCode::Char('w') => Some("wrap lines"),
             _ => None,
         };
     }
@@ -217,6 +218,12 @@ fn fallback(key: KeyEvent, after: &View) -> Option<&'static str> {
         KeyCode::Char('w') if in_tail => Some("wrap lines"),
         KeyCode::Char('f') if in_tail => Some("follow"),
         KeyCode::Char('w') => Some("watch mode"),
+        // A single configured role fires the switch asynchronously, so the
+        // view hasn't changed yet when the key is classified (several roles
+        // open the picker, which the overlay diff names instead).
+        KeyCode::Char('s') if after.sub_tab.as_deref() == Some("Organizations Account") => {
+            Some("assume role")
+        }
         KeyCode::Char('f') => Some("filter"),
         KeyCode::Char('F') => Some("state filter"),
         KeyCode::Char('y') => Some("copy"),

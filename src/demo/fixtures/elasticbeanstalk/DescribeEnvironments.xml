@@ -1,0 +1,45 @@
+<DescribeEnvironmentsResponse xmlns="http://elasticbeanstalk.amazonaws.com/docs/2010-12-01/">
+  <DescribeEnvironmentsResult>
+    <Environments>
+      <member>
+        <EnvironmentName>portal-legacy</EnvironmentName>
+        <EnvironmentId>e-p0rtalstd1</EnvironmentId>
+        <EnvironmentArn>arn:aws:elasticbeanstalk:{{region}}:{{account}}:environment/acme-portal/portal-legacy</EnvironmentArn>
+        <ApplicationName>acme-portal</ApplicationName>
+        <VersionLabel>v1.14.2</VersionLabel>
+        <SolutionStackName>64bit Amazon Linux 2023 v6.6.3 running Node.js 20</SolutionStackName>
+        <PlatformArn>arn:aws:elasticbeanstalk:{{region}}::platform/Node.js 20 running on 64bit Amazon Linux 2023/6.6.3</PlatformArn>
+        <Description>Customer portal - classic EC2 environment, being migrated to portal-next</Description>
+        <EndpointURL>legacy-admin-alb-440913377.{{region}}.elb.amazonaws.com</EndpointURL>
+        <CNAME>portal-legacy.{{region}}.elasticbeanstalk.com</CNAME>
+        <DateCreated>{{iso:now-700d}}</DateCreated>
+        <DateUpdated>{{iso:now-2h}}</DateUpdated>
+        <Status>Ready</Status>
+        <AbortableOperationInProgress>false</AbortableOperationInProgress>
+        <Health>Red</Health>
+        <HealthStatus>Severe</HealthStatus>
+        <Tier><Name>WebServer</Name><Type>Standard</Type><Version>1.0</Version></Tier>
+        <EnvironmentLinks/>
+      </member>
+      <member>
+        <EnvironmentName>portal-next</EnvironmentName>
+        <EnvironmentId>e-p0rtalcls1</EnvironmentId>
+        <EnvironmentArn>arn:aws:elasticbeanstalk:{{region}}:{{account}}:environment/acme-portal/portal-next</EnvironmentArn>
+        <ApplicationName>acme-portal</ApplicationName>
+        <VersionLabel>v2.0.0-rc3</VersionLabel>
+        <Description>Customer portal on Beanstalk Cluster (EKS Auto Mode)</Description>
+        <EndpointURL>portal-next.{{region}}.elasticbeanstalk.com</EndpointURL>
+        <CNAME>portal-next.{{region}}.elasticbeanstalk.com</CNAME>
+        <DateCreated>{{iso:now-12d}}</DateCreated>
+        <DateUpdated>{{iso:now-3d}}</DateUpdated>
+        <Status>Ready</Status>
+        <AbortableOperationInProgress>false</AbortableOperationInProgress>
+        <Health>Green</Health>
+        <HealthStatus>Ok</HealthStatus>
+        <Tier><Name>Cluster</Name><Type>EKS</Type></Tier>
+        <EnvironmentLinks/>
+      </member>
+    </Environments>
+  </DescribeEnvironmentsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeEnvironmentsResponse>

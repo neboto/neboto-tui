@@ -270,6 +270,9 @@ pub struct AcmCertDetails {
     pub not_before: Option<String>,
     pub validation_options: Vec<AcmDomainValidation>,
     pub tags: HashMap<String, String>,
+    /// Set when `ListTagsForCertificate` failed — rendered instead of
+    /// "No tags" (#28).
+    pub tags_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -341,7 +344,7 @@ pub async fn fetch_cert_details(client: AcmClient, arn: String) -> Result<AcmCer
         })
         .collect();
 
-    // Fetch tags
+    // Fetch tags (best-effort: a failure is carried, not fatal)
     let tags = client
         .list_tags_for_certificate()
         .certificate_arn(&arn)
@@ -358,7 +361,11 @@ pub async fn fetch_cert_details(client: AcmClient, arn: String) -> Result<AcmCer
                 })
                 .collect::<HashMap<_, _>>()
         })
-        .unwrap_or_default();
+        .map_err(|e| crate::error::sdk_error_message(&e));
+    let (tags, tags_error) = match tags {
+        Ok(tags) => (tags, None),
+        Err(e) => (HashMap::new(), Some(e)),
+    };
 
     Ok(AcmCertDetails {
         subject_alternative_names,
@@ -369,6 +376,7 @@ pub async fn fetch_cert_details(client: AcmClient, arn: String) -> Result<AcmCer
         not_before,
         validation_options,
         tags,
+        tags_error,
     })
 }
 
