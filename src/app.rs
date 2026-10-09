@@ -21569,11 +21569,6 @@ impl App {
             id: value.to_string()})
     }
 
-    /// RDS rows → sibling sub-tabs. Instance/cluster/snapshot identifiers have
-    /// no recognizable prefix, so rows are keyed by their label: cluster
-    /// members ("Writer"/"Reader") and replica rows jump to Instances,
-    /// "Cluster" / "Source Cluster" to Clusters, and "Snapshot" rows (the
-    /// Backups sections) to the Snapshots sub-tab.
     /// Elastic Beanstalk rows → the resource they name. Keyed on the row
     /// labels `details_pane` exports as `EB_ROW_*` (names carry no
     /// recognizable id prefix): the application / environment / version
@@ -21587,9 +21582,19 @@ impl App {
             return None;
         }
         let selected = self.get_selected_resource()?;
-        let env = selected
+        // A version label is only unique within its application: an
+        // environment pane names it via the environment, an application
+        // pane's Environments section via the application itself.
+        let app_name = selected
             .as_any()
-            .downcast_ref::<crate::aws::services::beanstalk::EbEnvironment>();
+            .downcast_ref::<crate::aws::services::beanstalk::EbEnvironment>()
+            .map(|e| e.application.as_str())
+            .or_else(|| {
+                selected
+                    .as_any()
+                    .downcast_ref::<crate::aws::services::beanstalk::EbApplication>()
+                    .map(|a| a.name.as_str())
+            });
         let mk = |service, view, id: String| Some(JumpTarget { service, view, id });
         match key.trim() {
             k if k == dp::EB_ROW_APPLICATION => mk(
@@ -21602,12 +21607,10 @@ impl App {
                 JumpView::Beanstalk(BeanstalkView::Environments),
                 value.to_string(),
             ),
-            // Version rows only exist in an environment pane; the label is
-            // only unique within the environment's application.
             k if k == dp::EB_ROW_VERSION => mk(
                 ServiceType::Beanstalk,
                 JumpView::Beanstalk(BeanstalkView::Versions),
-                format!("{}@{value}", env?.application),
+                format!("{}@{value}", app_name?),
             ),
             k if k == dp::EB_ROW_EKS_CLUSTER => mk(ServiceType::Eks, JumpView::None, value.to_string()),
             k if k == dp::EB_ROW_ASG => mk(ServiceType::Asg, JumpView::None, value.to_string()),
@@ -21633,6 +21636,11 @@ impl App {
         }
     }
 
+    /// RDS rows → sibling sub-tabs. Instance/cluster/snapshot identifiers have
+    /// no recognizable prefix, so rows are keyed by their label: cluster
+    /// members ("Writer"/"Reader") and replica rows jump to Instances,
+    /// "Cluster" / "Source Cluster" to Clusters, and "Snapshot" rows (the
+    /// Backups sections) to the Snapshots sub-tab.
     pub fn rds_row_jump_target(&self, key: &str, value: &str) -> Option<JumpTarget> {
         if value.is_empty() || self.current_service != Some(ServiceType::RDS) {
             return None;

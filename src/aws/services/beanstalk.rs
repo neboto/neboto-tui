@@ -545,7 +545,7 @@ impl Resource for EbEnvironment {
 
     fn cli_actions(&self) -> Vec<CliAction> {
         let id = shell_quote(&self.id);
-        vec![
+        let mut out = vec![
             CliAction::new(
                 CliTier::Inspect,
                 "describe-environment-health",
@@ -572,13 +572,21 @@ impl Resource for EbEnvironment {
                     shell_quote(&self.name)
                 ),
             ),
-            CliAction::new(
-                CliTier::Change,
-                "restart-app-server",
-                format!("aws elasticbeanstalk restart-app-server --environment-id {id}"),
-            )
-            .with_note("restarts the application server on every instance — no redeploy"),
-        ]
+        ];
+        // RestartAppServer restarts the app server on the environment's EC2
+        // instances; a Cluster Mode environment has none (its workload runs
+        // as pods on EKS), so the command is offered on Standard only.
+        if self.deployment != EbDeploymentType::Cluster {
+            out.push(
+                CliAction::new(
+                    CliTier::Change,
+                    "restart-app-server",
+                    format!("aws elasticbeanstalk restart-app-server --environment-id {id}"),
+                )
+                .with_note("restarts the application server on every instance — no redeploy"),
+            );
+        }
+        out
     }
 
     fn id(&self) -> &str {
@@ -1185,6 +1193,17 @@ mod tests {
                 .health(health)
                 .build(),
         )
+    }
+
+    #[test]
+    fn restart_app_server_is_offered_on_standard_environments_only() {
+        let has_restart = |e: &EbEnvironment| e.cli_actions().iter().any(|a| a.label == "restart-app-server");
+        let std = env(("WebServer", "Standard"), EnvironmentStatus::Ready, EnvironmentHealth::Green);
+        assert!(has_restart(&std));
+        let worker = env(("Worker", "SQS/HTTP"), EnvironmentStatus::Ready, EnvironmentHealth::Green);
+        assert!(has_restart(&worker));
+        let cluster = env(("Cluster", "EKS"), EnvironmentStatus::Ready, EnvironmentHealth::Green);
+        assert!(!has_restart(&cluster));
     }
 
     #[test]

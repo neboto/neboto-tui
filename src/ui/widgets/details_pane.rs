@@ -18147,7 +18147,9 @@ pub fn eb_environment_section_lines(
                     let mark = match ev.severity.as_str() {
                         "ERROR" | "FATAL" => "✗ ",
                         "WARN" => "⚠ ",
-                        _ => "",
+                        // Pad unmarked rows to the marker's width so the
+                        // time column lines up across severities.
+                        _ => "  ",
                     };
                     rows.push((
                         format!(
@@ -18315,10 +18317,10 @@ pub fn eb_application_section_lines(
                 rows.push(kv("  Health", eb_health_mark(&e.health)));
                 rows.push(kv("  Status", e.status.clone()));
                 if let Some(v) = &e.version_label {
-                    rows.push(kv("  Version", v.clone()));
+                    rows.push(kv(&format!("  {EB_ROW_VERSION}"), v.clone()));
                 }
                 if let Some(c) = e.cluster_name() {
-                    rows.push(kv("  EKS Cluster", c.to_string()));
+                    rows.push(kv(&format!("  {EB_ROW_EKS_CLUSTER}"), c.to_string()));
                 }
             }
             rows
