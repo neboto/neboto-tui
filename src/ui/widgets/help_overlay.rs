@@ -109,6 +109,7 @@ const RIGHT_SECTIONS: &[Section] = &[
             ("click", "select · tabs · hints · badges"),
             ("double-click", "⏎ (open · follow · confirm)"),
             ("click → · title bar", "follow link · full width"),
+            ("click ↑ vX.Y.Z", "copy the upgrade command"),
             ("wheel · drag", "scroll · select rows"),
             ("right-click", "back · close a popup or view"),
             ("Shift-drag", "terminal text select (iTerm: ⌥)"),

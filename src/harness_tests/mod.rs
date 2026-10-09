@@ -96,6 +96,12 @@ async fn test_app() -> (
     let export_dir = std::env::temp_dir().join("neboto-test-exports");
     let _ = std::fs::create_dir_all(&export_dir);
     std::env::set_var("NEBOTO_EXPORT_DIR", &export_dir);
+    // Clicking the `↑` update chip records the dismissal — keep it out of
+    // the real cache dir.
+    std::env::set_var(
+        "NEBOTO_UPDATE_STATE",
+        std::env::temp_dir().join("neboto-test-update-check.json"),
+    );
 
     let app = App::new_for_test().await;
     let (tx, rx) = mpsc::unbounded_channel();

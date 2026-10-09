@@ -22,6 +22,7 @@ mod sections;
 mod terraform;
 mod tui;
 mod ui;
+mod update_check;
 
 use app::{App, ClickAction};
 use crossterm::event::KeyCode;
@@ -123,6 +124,10 @@ async fn run(cli: cli::Cli) -> Result<()> {
 
     // Load AWS account identity in background
     app.spawn_account_info_fetch(&event_tx);
+
+    // Once-a-day "newer release" check (not for headless runs, which never
+    // reach here; gated on config / env / demo inside).
+    app.spawn_update_check(&event_tx);
 
     // Main event loop
     while app.running {

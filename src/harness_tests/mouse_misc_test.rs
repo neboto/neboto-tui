@@ -102,3 +102,25 @@ async fn one_click_on_an_arrow_follows_the_link() {
     draw(&app, 140);
     assert!(region(&app, |r| matches!(r.action, ClickAction::FollowJump(_))).is_none());
 }
+
+#[tokio::test]
+async fn update_chip_click_explains_and_retires_the_notice() {
+    let (mut app, tx, _rx) = test_app().await;
+    select_mock(&mut app, ServiceType::EC2, instance());
+    draw(&app, 140);
+    assert!(
+        region(&app, |r| matches!(r.action, ClickAction::UpdateNotice)).is_none(),
+        "no chip while up to date"
+    );
+
+    app.update_available = Some("99.0.0".into());
+    draw(&app, 140);
+    let chip = region(&app, |r| matches!(r.action, ClickAction::UpdateNotice))
+        .expect("the ↑ chip is a click target");
+    click(&mut app, &tx, chip).await;
+    let msg = app.success_message.clone().unwrap_or_default();
+    assert!(msg.contains("v99.0.0") && msg.contains("install.sh"), "{msg}");
+    assert!(app.update_available.is_none(), "one click retires the chip");
+    draw(&app, 140);
+    assert!(region(&app, |r| matches!(r.action, ClickAction::UpdateNotice)).is_none());
+}

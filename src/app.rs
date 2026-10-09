@@ -147,7 +147,9 @@ pub enum ClickAction {
     Press(KeyCode),
     /// The `→` on a detail-body row: put the cursor on that row and follow
     /// its link, as `⏎` does. One click, since the arrow says "go there".
-    FollowJump(usize)}
+    FollowJump(usize),
+    /// The service strip's `↑ vX.Y.Z` chip: show how to upgrade.
+    UpdateNotice}
 
 /// A clickable region in the service/sub-tab bars, recorded each frame by the
 /// (read-only) tab widgets so `handle_mouse` can map a click to an action.
@@ -1926,6 +1928,12 @@ pub struct App {
     /// `ownership_ribbon`, default true). Display only — the change
     /// timeline still resolves ownership regardless.
     pub ownership_ribbon: bool,
+    /// Whether the once-a-day release check may run (config `update_check`
+    /// after the CLI overlay; env / CI / demo are checked when it spawns).
+    pub update_check_enabled: bool,
+    /// A newer release to announce on the service strip (`↑ vX.Y.Z`), from
+    /// the cached answer at startup or a fresh check. Cleared by clicking it.
+    pub update_available: Option<String>,
     /// `(account id, role)` of the Control Tower audit account holding the
     /// Config aggregator (config `controltower_audit_account`). Handed to the
     /// Control Tower service so its Compliance phase can read across, and used
@@ -2948,6 +2956,8 @@ impl App {
                     .collect(),
             },
             ownership_ribbon: config.ownership_ribbon.unwrap_or(true),
+            update_check_enabled: config.update_check.unwrap_or(true),
+            update_available: None,
             controltower_audit,
             org_role_selector: crate::ui::widgets::org_role_selector::OrgRoleSelectorState::new(),
             default_service: current_service,
@@ -3921,6 +3931,9 @@ impl App {
                     self.account_id = Some(account_id);
                     self.account_alias = alias;
                 }
+            }
+            Event::UpdateAvailable(latest) => {
+                self.update_available = Some(latest);
             }
             Event::IamPolicyDocumentLoaded {
                 title,
@@ -10021,6 +10034,65 @@ impl App {
 
     /// Fetch the caller's account id + alias in the background (used at startup
     /// and after a profile switch). Result arrives via `AccountInfoLoaded`.
+    /// Once-a-day "is there a newer release?" check (`update_check.rs`).
+    /// The cached answer shows at once; a stale cache refetches off the
+    /// runtime and reports through `Event::UpdateAvailable`. Called only from
+    /// the TUI's startup, so tests and headless runs never touch the network
+    /// or the state file. A failed request is dropped silently — it would be
+    /// noise for everyone offline or behind a proxy.
+    pub fn spawn_update_check(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::update_check as uc;
+        if !uc::enabled(Some(self.update_check_enabled)) {
+            return;
+        }
+        let state = uc::load();
+        self.update_available = state.announce(uc::current_version());
+        if !state.is_stale(uc::now_secs()) {
+            return;
+        }
+        let tx = event_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let Ok(latest) = uc::fetch_latest() else {
+                return;
+            };
+            // Re-read: a click may have dismissed a version meanwhile.
+            let mut state = uc::load();
+            state.checked_at = uc::now_secs();
+            state.latest = Some(latest);
+            uc::save(&state);
+            if let Some(v) = state.announce(uc::current_version()) {
+                let _ = tx.send(Event::UpdateAvailable(v));
+            }
+        });
+    }
+
+    /// The `↑ vX.Y.Z` chip was clicked: copy the upgrade command, say where
+    /// the release notes are (the toast lands in `M` too), and stop
+    /// announcing this version.
+    fn open_update_notice(&mut self) {
+        use crate::update_check as uc;
+        let Some(latest) = self.update_available.take() else {
+            return;
+        };
+        // No clipboard (an SSH session) isn't an error here: the toast
+        // carries the command either way.
+        let error_before = self.error_message.clone();
+        self.copy_to_clipboard(uc::UPGRADE_COMMAND, "the upgrade command");
+        let copied = self.error_message == error_before;
+        self.error_message = error_before;
+        self.success_message = Some(format!(
+            "neboto v{latest} is out (you have v{}) — {} `{}` · notes: {}",
+            uc::current_version(),
+            if copied { "copied the upgrade command" } else { "upgrade with" },
+            uc::UPGRADE_COMMAND,
+            uc::RELEASES_URL,
+        ));
+        self.success_message_time = Some(Instant::now());
+        let mut state = uc::load();
+        state.dismissed = Some(latest);
+        uc::save(&state);
+    }
+
     pub fn spawn_account_info_fetch(&self, event_tx: &mpsc::UnboundedSender<Event>) {
         let sts = self.aws_clients.sts_client();
         let iam = self.aws_clients.iam_client();
@@ -23856,6 +23928,7 @@ impl App {
         event_tx: &mpsc::UnboundedSender<Event>,
     ) -> Result<()> {
         match action {
+            ClickAction::UpdateNotice => self.open_update_notice(),
             ClickAction::AllSearchFilter(filter) => {
                 // Only while the results are on screen; a stale region from
                 // the frame before @all ended does nothing.

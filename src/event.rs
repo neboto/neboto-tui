@@ -157,6 +157,10 @@ pub enum Event {
         generation: u64,
     },
 
+    /// The once-a-day release check found a newer version (without the `v`).
+    /// Failures never send an event — the check is silent when it can't run.
+    UpdateAvailable(String),
+
     /// Fired when a single managed/inline policy document has been fetched
     /// (per-row "view document" action in the IAM Role Permissions section).
     IamPolicyDocumentLoaded {
