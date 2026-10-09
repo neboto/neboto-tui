@@ -1,5 +1,7 @@
 use crate::app::App;
-use crate::aws::services::cost::{fmt_money, CostGroupBy, CostLineItem, CostPeriod};
+use crate::aws::services::cost::{
+    fmt_money, CostAnomaly, CostGroupBy, CostLineItem, CostPeriod, ANOMALY_LOOKBACK_DAYS,
+};
 use crate::ui::theme;
 use crate::ui::widgets::subtab_bar::subtab_bar_spans;
 use ratatui::{
@@ -11,16 +13,20 @@ use ratatui::{
 };
 
 /// Sub-tab row for the Cost service: a GroupBy selector (keys 1–4) on the
-/// left, a Period selector (keys 5–7 direct, `t` cycles) beside it — both
-/// rendered with the shared chip bar so every chip is individually clickable
-/// — and a right-aligned `Σ` total headline summed from the loaded rows.
+/// left, a Period selector (keys 5–7 direct, `t` cycles) beside it, then the
+/// `8 Anomalies` view chip — all rendered with the shared chip bar so every
+/// chip is individually clickable — and a right-aligned `Σ` total headline
+/// summed from the loaded rows. While Anomalies is active the grouping and
+/// period chips show no active marker (they don't apply), and pressing one
+/// returns to the spend view.
 pub fn render_cost_tabs(app: &App, area: Rect, frame: &mut Frame) {
     let g = app.cost_group_by;
+    let spend = !app.cost_anomalies;
     let tabs = [
-        ('1', CostGroupBy::Service.label(), g == CostGroupBy::Service),
-        ('2', CostGroupBy::LinkedAccount.label(), g == CostGroupBy::LinkedAccount),
-        ('3', CostGroupBy::Region.label(), g == CostGroupBy::Region),
-        ('4', CostGroupBy::UsageType.label(), g == CostGroupBy::UsageType),
+        ('1', CostGroupBy::Service.label(), spend && g == CostGroupBy::Service),
+        ('2', CostGroupBy::LinkedAccount.label(), spend && g == CostGroupBy::LinkedAccount),
+        ('3', CostGroupBy::Region.label(), spend && g == CostGroupBy::Region),
+        ('4', CostGroupBy::UsageType.label(), spend && g == CostGroupBy::UsageType),
     ];
 
     // A dim " By" prefix before the chips; the bar (and its click regions)
@@ -46,9 +52,9 @@ pub fn render_cost_tabs(app: &App, area: Rect, frame: &mut Frame) {
 
     let p = app.cost_period;
     let period_tabs = [
-        ('5', CostPeriod::Mtd.label(), p == CostPeriod::Mtd),
-        ('6', CostPeriod::LastMonth.label(), p == CostPeriod::LastMonth),
-        ('7', CostPeriod::Last3Months.label(), p == CostPeriod::Last3Months),
+        ('5', CostPeriod::Mtd.label(), spend && p == CostPeriod::Mtd),
+        ('6', CostPeriod::LastMonth.label(), spend && p == CostPeriod::LastMonth),
+        ('7', CostPeriod::Last3Months.label(), spend && p == CostPeriod::Last3Months),
     ];
     let used = Line::from(spans.clone()).width() as u16;
     let period_area = Rect {
@@ -58,8 +64,23 @@ pub fn render_cost_tabs(app: &App, area: Rect, frame: &mut Frame) {
     };
     spans.extend(subtab_bar_spans(app, period_area, &period_tabs));
 
+    // The Anomalies view chip (key 8) — its own bar so its click region
+    // lands where it is drawn.
+    let used = Line::from(spans.clone()).width() as u16;
+    let anomaly_area = Rect {
+        x: area.x + used,
+        width: area.width.saturating_sub(used),
+        ..area
+    };
+    spans.extend(subtab_bar_spans(app, anomaly_area, &[('8', "Anomalies", app.cost_anomalies)]));
+
     // Σ total headline, right-aligned when it fits.
-    if let Some(total) = cost_total_spans(app) {
+    let total = if app.cost_anomalies {
+        anomaly_total_spans(app)
+    } else {
+        cost_total_spans(app)
+    };
+    if let Some(total) = total {
         let used = Line::from(spans.clone()).width() as u16;
         let total_w = Line::from(total.clone()).width() as u16;
         if used + total_w + 2 <= area.width {
@@ -70,6 +91,49 @@ pub fn render_cost_tabs(app: &App, area: Rect, frame: &mut Frame) {
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// `Σ $412.80 over · 3 ongoing` — the anomalies' summed impact over the
+/// lookback window, plus how many are still open.
+fn anomaly_total_spans(app: &App) -> Option<Vec<Span<'static>>> {
+    if app.all_search_mode {
+        return None;
+    }
+    let mut total = 0.0_f64;
+    let mut ongoing = 0usize;
+    let mut any = false;
+    for r in &app.resources {
+        if let Some(a) = r.as_any().downcast_ref::<CostAnomaly>() {
+            any = true;
+            total += a.total_impact;
+            if a.is_ongoing() {
+                ongoing += 1;
+            }
+        }
+    }
+    if !any {
+        return None;
+    }
+    let mut spans = vec![
+        Span::styled("Σ ", Style::default().fg(theme::text_dim())),
+        Span::styled(
+            format!("${}", fmt_money(total)),
+            Style::default()
+                .fg(theme::text_primary())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" over · {}d", ANOMALY_LOOKBACK_DAYS),
+            Style::default().fg(theme::text_dim()),
+        ),
+    ];
+    if ongoing > 0 {
+        spans.push(Span::styled(
+            format!("  {} ongoing", ongoing),
+            Style::default().fg(theme::warning()),
+        ));
+    }
+    Some(spans)
 }
 
 /// `Σ $1,234.56 MTD ↑8%` — grand total over every loaded row (the full

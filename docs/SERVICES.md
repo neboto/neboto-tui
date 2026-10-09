@@ -2398,6 +2398,28 @@ the service you're touching.
   (`JumpView::Dx`/`JumpView::Tgw`). Gateways have **no CloudWatch metrics** —
   traffic lives on the VIFs (`m` on a VIF) and the physical connection.
 
+- **Cost anomalies** (`@cost`, key `8`, `cost.rs` `CostAnomaly`) — a third
+  *view* on Cost's toggle row, not a second service: `8` was the only free
+  digit (1–4 grouping, 5–7 period), and the Budgets precedent below split
+  out because it needed a whole tab strip, which anomalies don't.
+  `App.cost_anomalies` is a flag beside `cost_group_by`/`cost_period`, which
+  stay untouched so `1`–`7` (or `t`) drop back to the exact spend view the
+  user left; the cache variant is plain `"Anomalies"` (group/period don't
+  apply). `Tab`/`Shift-Tab` treat Anomalies as a fifth stop after Usage Type
+  (`App::cost_tab_step`) so `H`/`L` reach it. One paginated
+  `GetAnomalies` walk over the last `ANOMALY_LOOKBACK_DAYS` (90) — every
+  page is walked, since the API has no sort and a cut list would hide the
+  old-but-large anomaly a cost review is looking for; each page is a billed
+  ~$0.01 CE request, which is why it fires only when the view is opened and
+  rides Cost's 6h TTL. Everything the pane shows is on the list response, so
+  both sections (Overview / Root causes) are eager — no LazyStore entry.
+  `DimensionValue` is empty for some monitor types; the row then names the
+  top root cause's service. The `F`/wide-list word is ongoing/closed (an
+  anomaly with no `AnomalyEndDate`), and unlike the spend view the list goes
+  wide, since those words mean something; the dot is impact (≥ $100 red,
+  ≥ $10 yellow). `GetAnomalies` can't filter by id, so `C` copies a
+  monitor + start-date scoped command. Rejected: `GetAnomalyMonitors` for a
+  monitor *name* — a second billed call per open for one row.
 - **Budgets** (`@budgets`, `budgets.rs`) — a separate `ServiceType` from Cost,
   not a sub-tab of it: Cost's digit keys 1–7 are already claimed by its own
   group-by/period toggles, so a second resource shape can't share the tab

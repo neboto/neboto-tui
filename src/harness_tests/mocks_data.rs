@@ -477,5 +477,10 @@ pub(super) fn mocks() -> Vec<Mock> {
             "CostLineItem",
             Box::new(svc::cost::CostLineItem::mock()),
         ),
+        (
+            ServiceType::Cost,
+            "CostAnomaly",
+            Box::new(svc::cost::CostAnomaly::mock()),
+        ),
     ]
 }

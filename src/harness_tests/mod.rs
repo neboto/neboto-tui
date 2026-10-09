@@ -37,6 +37,7 @@ mod beanstalk_test;
 mod s3tables_jump_test;
 mod ec2_lb_test;
 mod xray_test;
+mod cost_anomalies_test;
 mod r53_records_test;
 mod r53_zone_tags_test;
 mod detail_wrap_test;
