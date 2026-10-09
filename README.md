@@ -195,6 +195,23 @@ diff <(neboto get @lambda orders-api-prod -o md) <(neboto get @lambda orders-api
 `--section` narrows it to what you care about, and any diff tool works
 (`delta`, `vimdiff`, `git diff --no-index`).
 
+Across accounts or regions, give each side its own `-p` / `-r`. Rows that
+carry the account id or region would differ on every line, so swap those out
+first:
+
+```sh
+norm() { sed -e "s/$1/ACCOUNT/g" -e "s/$2/REGION/g"; }
+neboto get @lambda orders-api -p prod    -o md | norm 111111111111 ap-southeast-2 > prod.md
+neboto get @lambda orders-api -p staging -o md | norm 222222222222 ap-southeast-2 > staging.md
+diff prod.md staging.md
+```
+
+The two runs here go one after the other. With `<(…)` they run at once,
+which means two credential prompts at the same time if both profiles use a
+prompting `credential_process`. Each side matches the id or name in its own
+account. For an Organizations member account, use a profile that assumes into
+it (`role_arn` + `source_profile`); the CLI doesn't assume org roles itself.
+
 **For AI agents:** [`skills/neboto/SKILL.md`](skills/neboto/SKILL.md) teaches
 an agent the commands, output shapes and exit codes. For Claude Code, copy it
 to `~/.claude/skills/neboto/SKILL.md`:
