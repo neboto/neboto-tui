@@ -1232,7 +1232,11 @@ Fixtures live in `src/demo/fixtures/<service>/` and are registered in
   list `when` substrings the request URI + body must all contain; the first
   match wins, so narrow entries go first.
 - **Wire format:** bodies are raw wire format (EC2 query XML, awsQuery XML,
-  awsJson, restJson). A body starting `!status 404` fails with that status
+  awsJson, restJson). The exception is RPC v2 CBOR (CloudWatch), which is
+  binary: write those fixtures as JSON, with timestamps as
+  `{"$timestamp": {{epoch:…}}}` and doubles with a decimal point (`5.0`).
+  `src/demo/cbor.rs` encodes them on the way out, and decodes the request
+  body to JSON, so `when` matches text like `"AlarmName":"x"`. A body starting `!status 404` fails with that status
   (with `__type` copied to `x-amzn-errortype`) — use it where the real API
   errors for "none", or the app reads an empty success as "configured".
 - **Placeholders:** `{{account}}`, `{{region}}`, `{{iso:now-15m}}`,

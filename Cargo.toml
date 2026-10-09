@@ -58,6 +58,9 @@ serde = { version = "1.0", features = ["derive"] }
 # preserve_order keeps detail/export JSON keys in on-screen order instead of
 # alphabetizing them (sections and fields read top-to-bottom like the pane).
 serde_json = { version = "1.0", features = ["preserve_order"] }
+# Demo mode encodes CloudWatch fixtures as CBOR (RPC v2); already in the
+# tree through aws-smithy-cbor.
+minicbor = { version = "2.2", features = ["alloc"] }
 toml = "1.1"
 
 # Clipboard

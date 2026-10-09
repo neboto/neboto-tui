@@ -1,0 +1,20 @@
+{
+  "AlarmHistoryItems": [
+    {
+      "AlarmName": "orders-worker-running-tasks",
+      "AlarmType": "MetricAlarm",
+      "Timestamp": {"$timestamp": {{epoch:now-11m}}},
+      "HistoryItemType": "StateUpdate",
+      "HistorySummary": "Alarm updated from ALARM to OK",
+      "HistoryData": "{\"version\": \"1.0\", \"oldState\": {\"stateValue\": \"ALARM\"}, \"newState\": {\"stateValue\": \"OK\", \"stateReason\": \"Threshold Crossed: 3 datapoints were not less than the threshold (2.0).\"}}"
+    },
+    {
+      "AlarmName": "orders-worker-running-tasks",
+      "AlarmType": "MetricAlarm",
+      "Timestamp": {"$timestamp": {{epoch:now-38m}}},
+      "HistoryItemType": "StateUpdate",
+      "HistorySummary": "Alarm updated from OK to ALARM",
+      "HistoryData": "{\"version\": \"1.0\", \"oldState\": {\"stateValue\": \"OK\"}, \"newState\": {\"stateValue\": \"ALARM\", \"stateReason\": \"Threshold Crossed: 3 datapoints [1.0, 1.0, 0.0] were less than the threshold (2.0).\"}}"
+    }
+  ]
+}
