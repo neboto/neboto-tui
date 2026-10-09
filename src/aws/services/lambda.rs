@@ -486,7 +486,7 @@ pub async fn fetch_lambda_layer_versions(
             });
         }
     }
-    out.sort_by(|a, b| b.version.cmp(&a.version));
+    out.sort_by_key(|v| std::cmp::Reverse(v.version));
     Ok(out)
 }
 
