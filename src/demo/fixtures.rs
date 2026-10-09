@@ -18,6 +18,10 @@
 //!   its template builds the redrive ARN from the `DlqName` parameter while
 //!   the DLQ itself keeps a hardcoded name
 //! - `github-actions-deploy` got AdministratorAccess three days ago
+//! - Lambda layers (#102): `shared-utils` is used at two versions
+//!   (`orders-api` on 3, `nightly-report` on 2), `pandas-py39` by
+//!   `nightly-report`, and `pdf-render` by nothing; `orders-api` also pins a
+//!   Datadog layer from another account, which has no Layers-tab row.
 //! - `orders-api` (Lambda) tails live logs with occasional DynamoDB
 //!   throttles, and its errors alarm is firing; `nightly-report` runs on a deprecated runtime and its log
 //!   group never expires (45 GB)
@@ -184,6 +188,10 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("lambda", "GET /2015-03-31/functions/nightly-report", "GetFunction-nightly-report.json"),
     fx!("lambda", "GET /2019-09-30/functions/orders-api/concurrency", "GetFunctionConcurrency-orders-api.json"),
     fx!("lambda", "GET /2019-09-25/functions/*/event-invoke-config", "NotFound.json"),
+    fx!("lambda", "GET /2018-10-31/layers", "ListLayers.json"),
+    fx!("lambda", "GET /2018-10-31/layers/shared-utils/versions", "ListLayerVersions-shared-utils.json"),
+    fx!("lambda", "GET /2018-10-31/layers/pandas-py39/versions", "ListLayerVersions-pandas-py39.json"),
+    fx!("lambda", "GET /2018-10-31/layers/pdf-render/versions", "ListLayerVersions-pdf-render.json"),
     // ── CloudFormation ───────────────────────────────────────────────────────
     // Per-stack calls pass the stack ARN, which carries the name.
     fx!("cloudformation", "DescribeStacks", "DescribeStacks.xml"),

@@ -102,6 +102,7 @@ pub fn has_sub_tabs(service: ServiceType) -> bool {
             | ServiceType::Bedrock
             | ServiceType::AgentCore
             | ServiceType::Kinesis
+            | ServiceType::Lambda
             | ServiceType::Ecr
             | ServiceType::StepFunctions
             | ServiceType::Redshift
@@ -700,6 +701,20 @@ impl KinesisView {
     }
 }
 
+/// Sub-tab view for Lambda (Functions / Layers).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum LambdaView {
+    Functions,
+    Layers}
+
+impl LambdaView {
+    pub fn resource_type_filter(&self) -> &'static str {
+        match self {
+            LambdaView::Functions => "Lambda Function",
+            LambdaView::Layers => "Lambda Layer"}
+    }
+}
+
 /// Load states for lazily-fetched Kinesis / Firehose `m` metrics.
 pub use crate::aws::services::kinesis::{FirehoseMetricsState, KinesisMetricsState};
 
@@ -1116,11 +1131,12 @@ pub enum JumpView {
     Beanstalk(BeanstalkView),
     S3Tables(S3TablesView),
     Ecr(EcrView),
+    Lambda(LambdaView),
     /// WAF carries both the sub-tab and the scope (CLOUDFRONT vs REGIONAL) — a
     /// CloudFront distribution's Web ACL is always CLOUDFRONT scope, which lives
     /// in a separate (us-east-1) variant of the WAF list.
     Waf(WafView, WafScope),
-    /// Single-view services (S3, Lambda, ACM, ASG): switch service + search,
+    /// Single-view services (S3, ACM, ASG): switch service + search,
     /// no sub-tab to set.
     None}
 
@@ -2314,6 +2330,7 @@ pub struct App {
     pub code_exec_status_filter: ExecStatusFilter,
     pub kinesis_view: KinesisView,
     pub ecr_view: EcrView,
+    pub lambda_view: LambdaView,
     pub kinesis_metrics: HashMap<String, KinesisMetricsState>,
     pub kinesis_metrics_time_range: MetricsTimeRange,
     pub redshift_view: RedshiftView,
@@ -3130,6 +3147,7 @@ impl App {
             code_exec_status_filter: ExecStatusFilter::All,
             kinesis_view: KinesisView::Streams,
             ecr_view: EcrView::Repositories,
+            lambda_view: LambdaView::Functions,
             kinesis_metrics: HashMap::new(),
             kinesis_metrics_time_range: MetricsTimeRange::OneHour,
             redshift_view: RedshiftView::Clusters,
@@ -6591,6 +6609,22 @@ impl App {
             }
         }
 
+        // Lambda (Functions / Layers) sub-tab switching
+        if !self.search_active && self.current_service == Some(ServiceType::Lambda) {
+            let view = match key.code {
+                KeyCode::Char('1') => Some(LambdaView::Functions),
+                KeyCode::Char('2') => Some(LambdaView::Layers),
+                KeyCode::Tab | KeyCode::BackTab => Some(match self.lambda_view {
+                    LambdaView::Functions => LambdaView::Layers,
+                    LambdaView::Layers => LambdaView::Functions}),
+                _ => None};
+            if let Some(v) = view {
+                self.lambda_view = v;
+                self.update_search();
+                return Ok(());
+            }
+        }
+
         // ECR (Repositories / Images) sub-tab switching
         if !self.search_active && self.current_service == Some(ServiceType::Ecr) {
             let view = match key.code {
@@ -8986,6 +9020,7 @@ impl App {
             Some(ServiceType::StepFunctions) => Some(self.sfn_view.resource_type_filter()),
             Some(ServiceType::Kinesis) => Some(self.kinesis_view.resource_type_filter()),
             Some(ServiceType::Ecr) => Some(self.ecr_view.resource_type_filter()),
+            Some(ServiceType::Lambda) => Some(self.lambda_view.resource_type_filter()),
             Some(ServiceType::Redshift) => Some(self.redshift_view.resource_type_filter()),
             Some(ServiceType::Batch) => Some(self.batch_view.resource_type_filter()),
             Some(ServiceType::XRay) => Some(self.xray_view.resource_type_filter()),
@@ -9161,6 +9196,9 @@ impl App {
             }
             Some(ServiceType::Ecr) => {
                 align!(self, rtype, ecr_view, EcrView, [Repositories, Images])
+            }
+            Some(ServiceType::Lambda) => {
+                align!(self, rtype, lambda_view, LambdaView, [Functions, Layers])
             }
             Some(ServiceType::StepFunctions) => {
                 align!(self, rtype, sfn_view, SfnView, [StateMachines, Executions])
@@ -10550,6 +10588,11 @@ impl App {
         }
         if service == ServiceType::Ecr {
             self.ecr_view = EcrView::Repositories;
+        }
+        // `JumpView::None` jumps into Lambda (X-Ray "Jump To", bookmarks from
+        // before the Layers tab) name a function — land on its tab.
+        if service == ServiceType::Lambda {
+            self.lambda_view = LambdaView::Functions;
         }
     }
 
@@ -20095,6 +20138,7 @@ impl App {
             JumpView::Beanstalk(v) => self.beanstalk_view = *v,
             JumpView::S3Tables(v) => self.s3tables_view = *v,
             JumpView::Ecr(v) => self.ecr_view = *v,
+            JumpView::Lambda(v) => self.lambda_view = *v,
             JumpView::Waf(v, scope) => {
                 self.waf_view = *v;
                 // CloudFront Web ACLs live in the CLOUDFRONT-scope variant; if we
@@ -20669,6 +20713,27 @@ impl App {
             id: name.to_string()})
     }
 
+    /// Lambda row jumps. Function pane: an own-account `  Layer N` row opens
+    /// that layer on the Layers tab. Layer pane, Used By: a `  Function` row
+    /// opens the function. Label-keyed — the renderers' row labels are
+    /// load-bearing.
+    pub fn lambda_row_jump_target(&self, key: &str, value: &str) -> Option<JumpTarget> {
+        use crate::aws::services::lambda::{LambdaFunction, LambdaLayer, LambdaLayerDetailSection};
+        let any = self.get_selected_resource()?.as_any();
+        if let Some(f) = any.downcast_ref::<LambdaFunction>() {
+            return crate::aws::services::lambda::function_layer_row_target(&f.function_arn, key, value);
+        }
+        any.downcast_ref::<LambdaLayer>()?;
+        (LambdaLayerDetailSection::from_index(self.detail_section_idx) == LambdaLayerDetailSection::UsedBy
+            && key == crate::ui::widgets::details_pane::LAMBDA_LAYER_ROW_FUNCTION
+            && !value.trim().is_empty())
+        .then(|| JumpTarget {
+            service: ServiceType::Lambda,
+            view: JumpView::Lambda(LambdaView::Functions),
+            id: value.trim().to_string(),
+        })
+    }
+
     /// Map the active sub-tab of the current service to a `JumpView` — the
     /// inverse of `apply_jump_view`, used to snapshot the current location.
     fn current_jump_view(&self) -> JumpView {
@@ -20696,6 +20761,7 @@ impl App {
             Some(ServiceType::Beanstalk) => JumpView::Beanstalk(self.beanstalk_view),
             Some(ServiceType::S3Tables) => JumpView::S3Tables(self.s3tables_view),
             Some(ServiceType::Ecr) => JumpView::Ecr(self.ecr_view),
+            Some(ServiceType::Lambda) => JumpView::Lambda(self.lambda_view),
             // AWS Config has sub-tabs (config_view) but no JumpView variant, so a
             // back-jump returns to the service with its default sub-tab.
             _ => JumpView::None}
@@ -21989,6 +22055,7 @@ impl App {
                     .or_else(|| self.cfn_export_jump_target(k, v))
                     .or_else(|| self.code_row_jump_target(k, v))
                     .or_else(|| self.ecr_row_jump_target(k, v))
+                    .or_else(|| self.lambda_row_jump_target(k, v))
                     .or_else(|| self.cc_repo_pr_row_jump_target(k, v))
                     .or_else(|| self.cw_composite_alarm_child_jump_target(k, v))
                     .or_else(|| self.insp_resource_finding_jump_target(k, v))
@@ -24914,6 +24981,25 @@ impl App {
                     instances_state,
                     operations_state,
                     &self.lazy.cfn_stackset_op_results,
+                );
+            }
+            if let Some(layer) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::lambda::LambdaLayer>()
+            {
+                use crate::aws::services::lambda::LambdaFunction;
+                // Users come from the functions already in this load — no
+                // AWS API lists a layer's consumers (the VPC-subnets pattern).
+                let functions: Vec<&LambdaFunction> = self
+                    .resources
+                    .iter()
+                    .filter_map(|r| r.as_any().downcast_ref::<LambdaFunction>())
+                    .collect();
+                return crate::ui::widgets::details_pane::lambda_layer_section_lines(
+                    layer,
+                    crate::aws::services::lambda::LambdaLayerDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.lambda_layer_versions.get(&layer.arn),
+                    &functions,
                 );
             }
             if let Some(func) = resource
@@ -28500,6 +28586,26 @@ impl App {
     /// (`ListEventSourceMappings`) and the push-trigger EventBridge rules
     /// that target this function, keyed by ARN. Idempotent once
     /// Loading/Loaded (each half guards separately via `trigger_lazy`).
+    /// A layer's Versions section: every published version via
+    /// `ListLayerVersions`, keyed by the (unversioned) layer ARN.
+    pub(crate) fn trigger_lambda_layer_versions_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::lambda::LambdaLayer;
+        let Some((arn, name)) = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<LambdaLayer>())
+            .map(|l| (l.arn.clone(), l.name.clone()))
+        else {
+            return;
+        };
+        let client = self.aws_clients.lambda_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.lambda_layer_versions,
+            arn,
+            event_tx,
+            crate::aws::services::lambda::fetch_lambda_layer_versions(client, name),
+        );
+    }
+
     pub(crate) fn trigger_lambda_triggers_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         self.trigger_lambda_esms_load(event_tx);
         self.trigger_lambda_eb_rules_load(event_tx);

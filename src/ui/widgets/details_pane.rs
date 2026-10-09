@@ -355,6 +355,21 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         render_lambda_function_split(app, func, area, frame);
         return;
     }
+    if let Some(layer) = resource
+        .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::lambda::LambdaLayer>())
+    {
+        let subtitle = format!("Layer · latest version {}", layer.latest_version);
+        render_simple_split(
+            app,
+            area,
+            frame,
+            "Lambda Layer",
+            &layer.name,
+            &subtitle,
+            &descriptor_tabs(app, &crate::aws::services::lambda::LAMBDA_LAYER_SECTIONS),
+        );
+        return;
+    }
     if let Some(zone) = resource.and_then(|r| r.as_any().downcast_ref::<R53HostedZone>()) {
         render_r53_zone_split(app, zone, area, frame);
         return;
@@ -3126,6 +3141,10 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
                 )
             })
         }
+        // Layer ARNs are resolved by `lambda_row_jump_target` (own-account
+        // layers only); read as a function they'd jump to a function named
+        // "layer".
+        "lambda" if resource.starts_with("layer:") => None,
         "lambda" => {
             // resource = "function:NAME" (may carry ":VERSION"/":ALIAS")
             let name = resource.strip_prefix("function:").unwrap_or(resource);
@@ -3975,6 +3994,7 @@ fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
         .or_else(|| app.cfn_export_jump_target(key, value))
         .or_else(|| app.code_row_jump_target(key, value))
         .or_else(|| app.ecr_row_jump_target(key, value))
+        .or_else(|| app.lambda_row_jump_target(key, value))
         .or_else(|| app.cc_repo_pr_row_jump_target(key, value))
         .or_else(|| app.cw_composite_alarm_child_jump_target(key, value))
         .or_else(|| app.insp_resource_finding_jump_target(key, value))
@@ -6913,6 +6933,94 @@ fn cfn_stackset_tags_lines(
     rows
 }
 
+// ── Lambda Layer (eager Overview + Used By, lazy Versions) ─────────────────
+
+/// Used By row label for a consuming function — `lambda_row_jump_target`
+/// keys on it, so the jump and the row change together.
+pub const LAMBDA_LAYER_ROW_FUNCTION: &str = "  Function";
+
+pub fn lambda_layer_section_lines(
+    layer: &crate::aws::services::lambda::LambdaLayer,
+    section: crate::aws::services::lambda::LambdaLayerDetailSection,
+    versions: Option<&Lazy<Vec<crate::aws::services::lambda::LambdaLayerVersion>>>,
+    functions: &[&LambdaFunction],
+) -> Vec<(String, String)> {
+    use crate::aws::services::lambda::LambdaLayerDetailSection as S;
+    let kv = |k: &str, v: String| (k.to_string(), v);
+    let blank = || (String::new(), String::new());
+    let or_dash = |v: &str| if v.is_empty() { "—".to_string() } else { v.to_string() };
+    let mut rows = vec![blank()];
+    match section {
+        S::Overview => {
+            rows.push(kv("Layer Name", layer.name.clone()));
+            rows.push(kv("ARN", layer.arn.clone()));
+            rows.push(blank());
+            rows.push(kv("Latest Version", layer.latest_version.to_string()));
+            rows.push(kv("Version ARN", layer.latest_version_arn.clone()));
+            rows.push(kv("Description", or_dash(&layer.description)));
+            rows.push(kv("Created", or_dash(layer.created.split('.').next().unwrap_or(""))));
+            rows.push(kv("Runtimes", or_dash(&layer.runtimes.join(", "))));
+            rows.push(kv("Architectures", or_dash(&layer.architectures.join(", "))));
+            rows.push(kv("License", or_dash(&layer.license)));
+            let used = crate::aws::services::lambda::layer_usage(&layer.arn, functions);
+            let n: usize = used.iter().map(|(_, f)| f.len()).sum();
+            rows.push(blank());
+            rows.push(kv("Used By", format!("{n} loaded function{}", if n == 1 { "" } else { "s" })));
+        }
+        S::Versions => match versions {
+            None | Some(Lazy::Loading) => rows.push(kv("", "Loading…".to_string())),
+            Some(Lazy::Error(e)) => rows.extend(error_rows(e)),
+            Some(Lazy::Loaded(vs)) if vs.is_empty() => rows.push(kv("", "No versions".to_string())),
+            Some(Lazy::Loaded(vs)) => {
+                let used = crate::aws::services::lambda::layer_usage(&layer.arn, functions);
+                for (i, v) in vs.iter().enumerate() {
+                    if i > 0 {
+                        rows.push(blank());
+                    }
+                    rows.push((format!("Version {}", v.version), String::new()));
+                    rows.push(kv("ARN", v.arn.clone()));
+                    rows.push(kv("Created", or_dash(v.created.split('.').next().unwrap_or(""))));
+                    if !v.description.is_empty() {
+                        rows.push(kv("Description", v.description.clone()));
+                    }
+                    rows.push(kv("Runtimes", or_dash(&v.runtimes.join(", "))));
+                    rows.push(kv("Architectures", or_dash(&v.architectures.join(", "))));
+                    if !v.license.is_empty() {
+                        rows.push(kv("License", v.license.clone()));
+                    }
+                    let n = used.iter().find(|(ver, _)| *ver == v.version).map_or(0, |(_, f)| f.len());
+                    rows.push(kv("Used By", format!("{n} loaded function{}", if n == 1 { "" } else { "s" })));
+                }
+            }
+        },
+        S::UsedBy => {
+            let used = crate::aws::services::lambda::layer_usage(&layer.arn, functions);
+            if used.is_empty() {
+                rows.push(kv("", "No loaded function uses this layer".to_string()));
+            }
+            for (i, (version, fns)) in used.iter().enumerate() {
+                if i > 0 {
+                    rows.push(blank());
+                }
+                let latest = if *version == layer.latest_version { " (latest)" } else { "" };
+                rows.push((format!("Version {version}{latest}"), String::new()));
+                for f in fns {
+                    rows.push(kv(LAMBDA_LAYER_ROW_FUNCTION, f.function_name.clone()));
+                }
+            }
+            rows.push(blank());
+            // No AWS API lists a layer's consumers: this is the functions in
+            // this load (region + account) whose layer list names it.
+            rows.push(kv(
+                "",
+                "· functions in this region and account only — other accounts may use it too".to_string(),
+            ));
+        }
+    }
+    rows.push(blank());
+    rows
+}
+
 // ── Lambda Function Split Pane ────────────────────────────────────────────────
 
 fn render_lambda_function_split(
@@ -7330,8 +7438,25 @@ fn lambda_config_lines(
     if !func.layers.is_empty() {
         rows.push(("".to_string(), "".to_string()));
         rows.push(("Layers".to_string(), format!("{} attached", func.layers.len())));
+        let own = crate::aws::services::lambda::arn_account(&func.function_arn);
+        let mut external = 0;
         for (i, arn) in func.layers.iter().enumerate() {
             rows.push((format!("  Layer {}", i + 1), arn.clone()));
+            let owner = crate::aws::services::lambda::split_layer_version_arn(arn).map(|(_, a, _)| a);
+            if owner.is_some() && owner != own {
+                external += 1;
+            }
+        }
+        if external > 0 {
+            // Shared from another account (AWS-managed, a vendor's): not in
+            // this account's ListLayers, so those rows have no jump.
+            rows.push((
+                "".to_string(),
+                format!(
+                    "· {external} external layer{} (another account) — not on the Layers tab",
+                    if external == 1 { "" } else { "s" }
+                ),
+            ));
         }
     }
 

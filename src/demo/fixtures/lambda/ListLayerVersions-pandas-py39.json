@@ -1,0 +1,12 @@
+{
+ "LayerVersions": [
+  {
+   "LayerVersionArn": "arn:aws:lambda:{{region}}:{{account}}:layer:pandas-py39:1",
+   "Version": 1,
+   "Description": "pandas 1.5 + numpy for the reporting jobs",
+   "CreatedDate": "{{iso:now-400d}}",
+   "CompatibleRuntimes": ["python3.9"],
+   "CompatibleArchitectures": ["x86_64"]
+  }
+ ]
+}

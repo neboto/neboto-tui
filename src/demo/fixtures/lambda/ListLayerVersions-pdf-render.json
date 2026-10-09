@@ -1,0 +1,36 @@
+{
+ "LayerVersions": [
+  {
+   "LayerVersionArn": "arn:aws:lambda:{{region}}:{{account}}:layer:pdf-render:4",
+   "Version": 4,
+   "Description": "Headless Chromium for invoice PDFs (unused since the move to the invoice service)",
+   "CreatedDate": "{{iso:now-210d}}",
+   "CompatibleRuntimes": ["nodejs20.x"],
+   "CompatibleArchitectures": ["x86_64"]
+  },
+  {
+   "LayerVersionArn": "arn:aws:lambda:{{region}}:{{account}}:layer:pdf-render:3",
+   "Version": 3,
+   "Description": "Earlier build",
+   "CreatedDate": "{{iso:now-240d}}",
+   "CompatibleRuntimes": ["nodejs20.x"],
+   "CompatibleArchitectures": ["x86_64"]
+  },
+  {
+   "LayerVersionArn": "arn:aws:lambda:{{region}}:{{account}}:layer:pdf-render:2",
+   "Version": 2,
+   "Description": "Earlier build",
+   "CreatedDate": "{{iso:now-270d}}",
+   "CompatibleRuntimes": ["nodejs20.x"],
+   "CompatibleArchitectures": ["x86_64"]
+  },
+  {
+   "LayerVersionArn": "arn:aws:lambda:{{region}}:{{account}}:layer:pdf-render:1",
+   "Version": 1,
+   "Description": "Earlier build",
+   "CreatedDate": "{{iso:now-300d}}",
+   "CompatibleRuntimes": ["nodejs20.x"],
+   "CompatibleArchitectures": ["x86_64"]
+  }
+ ]
+}

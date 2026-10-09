@@ -46,8 +46,23 @@ impl AwsService for LambdaService {
         service_type: ServiceType,
     ) -> Result<()> {
         let mut total = 0usize;
-        let mut paginator = self.client.list_functions().into_paginator().send();
+        let send_batch = |batch: Vec<Box<dyn Resource>>, total: usize| {
+            let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                service: service_type,
+                resources: batch,
+                progress: LoadProgress {
+                    loaded_count: total,
+                    total_count: None,
+                    status_message: None,
+                },
+            });
+        };
 
+        // Phase 1: functions. A failure here is held back rather than sent as
+        // `ResourceLoadError`, which would clear `loading` and drop the
+        // Layers batches that follow — it only becomes fatal if layers fail too.
+        let mut fn_err: Option<String> = None;
+        let mut paginator = self.client.list_functions().into_paginator().send();
         while let Some(result) = paginator.next().await {
             match result {
                 Ok(page) => {
@@ -56,31 +71,60 @@ impl AwsService for LambdaService {
                         .iter()
                         .map(|f| Box::new(LambdaFunction::from_sdk(f)) as Box<dyn Resource>)
                         .collect();
-
-                    let count = batch.len();
-                    if count == 0 {
+                    if batch.is_empty() {
                         continue;
                     }
-                    total += count;
-
-                    let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
-                        service: service_type,
-                        resources: batch,
-                        progress: LoadProgress {
-                            loaded_count: total,
-                            total_count: None,
-                            status_message: None,
-                        },
-                    });
+                    total += batch.len();
+                    send_batch(batch, total);
                 }
                 Err(e) => {
-                    let _ = event_tx.send(Event::ResourceLoadError {
-                        service: service_type,
-                        error: format!("Failed to list Lambda functions: {}", e),
-                    });
-                    return Ok(());
+                    fn_err = Some(format!(
+                        "Failed to list Lambda functions: {}",
+                        crate::error::sdk_error_message(&e)
+                    ));
+                    break;
                 }
             }
+        }
+
+        // Phase 2: this account's layers (Layers tab). `ListLayers` returns
+        // each layer with its latest version; older versions are a lazy
+        // `ListLayerVersions` from the layer's Versions section.
+        let mut layer_err: Option<String> = None;
+        let mut paginator = self.client.list_layers().into_paginator().send();
+        while let Some(result) = paginator.next().await {
+            match result {
+                Ok(page) => {
+                    let batch: Vec<Box<dyn Resource>> = page
+                        .layers()
+                        .iter()
+                        .map(|l| Box::new(LambdaLayer::from_sdk(l)) as Box<dyn Resource>)
+                        .collect();
+                    if batch.is_empty() {
+                        continue;
+                    }
+                    total += batch.len();
+                    send_batch(batch, total);
+                }
+                Err(e) => {
+                    layer_err = Some(format!(
+                        "layers unavailable: {}",
+                        crate::error::sdk_error_message(&e)
+                    ));
+                    break;
+                }
+            }
+        }
+
+        match (fn_err, layer_err) {
+            (Some(error), Some(_)) => {
+                let _ = event_tx.send(Event::ResourceLoadError { service: service_type, error });
+                return Ok(());
+            }
+            (Some(warning), None) | (None, Some(warning)) => {
+                let _ = event_tx.send(Event::ResourceLoadWarning { service: service_type, warning });
+            }
+            (None, None) => {}
         }
 
         let _ = event_tx.send(Event::ResourcesFullyLoaded {
@@ -295,6 +339,213 @@ impl Resource for LambdaFunction {
             region, region, self.function_name
         ))
     }
+}
+
+// ── LambdaLayer ───────────────────────────────────────────────────────────────
+
+/// One row per layer (Layers tab), as `ListLayers` returns it: the layer plus
+/// its latest version. Older versions load lazily (`ListLayerVersions`); who
+/// uses a version is derived from the loaded functions' `layers` — there is
+/// no API that lists a layer's consumers.
+#[derive(Debug, Clone)]
+pub struct LambdaLayer {
+    pub name: String,
+    /// The *unversioned* layer ARN (`…:layer:NAME`) — the row id.
+    pub arn: String,
+    pub latest_version: i64,
+    pub latest_version_arn: String,
+    pub description: String,
+    pub created: String,
+    pub runtimes: Vec<String>,
+    pub architectures: Vec<String>,
+    pub license: String,
+    pub tags: HashMap<String, String>,
+}
+
+impl LambdaLayer {
+    pub fn from_sdk(l: &aws_sdk_lambda::types::LayersListItem) -> Self {
+        let v = l.latest_matching_version();
+        Self {
+            name: l.layer_name().unwrap_or("").to_string(),
+            arn: l.layer_arn().unwrap_or("").to_string(),
+            latest_version: v.map(|v| v.version()).unwrap_or(0),
+            latest_version_arn: v
+                .and_then(|v| v.layer_version_arn())
+                .unwrap_or("")
+                .to_string(),
+            description: v.and_then(|v| v.description()).unwrap_or("").to_string(),
+            created: v.and_then(|v| v.created_date()).unwrap_or("").to_string(),
+            runtimes: v
+                .map(|v| v.compatible_runtimes().iter().map(|r| r.as_str().to_string()).collect())
+                .unwrap_or_default(),
+            architectures: v
+                .map(|v| {
+                    v.compatible_architectures().iter().map(|a| a.as_str().to_string()).collect()
+                })
+                .unwrap_or_default(),
+            license: v.and_then(|v| v.license_info()).unwrap_or("").to_string(),
+            tags: HashMap::new(),
+        }
+    }
+}
+
+crate::sections! {
+    pub enum LambdaLayerDetailSection,
+    pub static LAMBDA_LAYER_SECTIONS = [
+        Overview "Overview",
+        Versions "Versions" => crate::app::App::trigger_lambda_layer_versions_load,
+        UsedBy "Used By",
+    ]
+}
+
+impl Resource for LambdaLayer {
+    fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
+        Some(&LAMBDA_LAYER_SECTIONS)
+    }
+    fn cli_command(&self) -> Option<String> {
+        Some(format!(
+            "aws lambda list-layer-versions --layer-name {}",
+            crate::aws::resource::shell_quote(&self.name)
+        ))
+    }
+    fn id(&self) -> &str {
+        &self.arn
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn resource_type(&self) -> &str {
+        "Lambda Layer"
+    }
+    fn state(&self) -> ResourceState {
+        ResourceState::stateless()
+    }
+    fn tags(&self) -> &HashMap<String, String> {
+        &self.tags
+    }
+    fn search_text(&self) -> String {
+        format!("{} {} {} {}", self.name, self.arn, self.description, self.runtimes.join(" "))
+    }
+    fn details(&self) -> Vec<(String, String)> {
+        vec![
+            ("Layer Name".to_string(), self.name.clone()),
+            ("Latest Version".to_string(), self.latest_version.to_string()),
+            ("Runtimes".to_string(), self.runtimes.join(", ")),
+        ]
+    }
+    fn clone_box(&self) -> Box<dyn Resource> {
+        Box::new(self.clone())
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn console_url(&self, region: &str) -> Option<String> {
+        Some(format!(
+            "https://{}.console.aws.amazon.com/lambda/home?region={}#/layers/{}",
+            region, region, self.name
+        ))
+    }
+}
+
+/// One published version of a layer (Versions section).
+#[derive(Debug, Clone)]
+pub struct LambdaLayerVersion {
+    pub version: i64,
+    pub arn: String,
+    pub description: String,
+    pub created: String,
+    pub runtimes: Vec<String>,
+    pub architectures: Vec<String>,
+    pub license: String,
+}
+
+/// Every version of a layer, newest first. `ListLayerVersions` pages are
+/// walked to the end: a cut would hide exactly the old versions a function
+/// may still be pinned to.
+pub async fn fetch_lambda_layer_versions(
+    client: LambdaClient,
+    layer_name: String,
+) -> std::result::Result<Vec<LambdaLayerVersion>, String> {
+    let mut out = Vec::new();
+    let mut pages = client.list_layer_versions().layer_name(&layer_name).into_paginator().send();
+    while let Some(page) = pages.next().await {
+        let page = page.map_err(|e| crate::error::sdk_error_message(&e))?;
+        for v in page.layer_versions() {
+            out.push(LambdaLayerVersion {
+                version: v.version(),
+                arn: v.layer_version_arn().unwrap_or("").to_string(),
+                description: v.description().unwrap_or("").to_string(),
+                created: v.created_date().unwrap_or("").to_string(),
+                runtimes: v.compatible_runtimes().iter().map(|r| r.as_str().to_string()).collect(),
+                architectures: v
+                    .compatible_architectures()
+                    .iter()
+                    .map(|a| a.as_str().to_string())
+                    .collect(),
+                license: v.license_info().unwrap_or("").to_string(),
+            });
+        }
+    }
+    out.sort_by(|a, b| b.version.cmp(&a.version));
+    Ok(out)
+}
+
+/// Split a layer *version* ARN (`arn:…:ACCOUNT:layer:NAME:VERSION`) into the
+/// unversioned layer ARN, the owning account and the version. `None` for
+/// anything that isn't a versioned layer ARN.
+pub fn split_layer_version_arn(arn: &str) -> Option<(&str, &str, i64)> {
+    let parts: Vec<&str> = arn.split(':').collect();
+    if parts.len() != 8 || parts[0] != "arn" || parts[2] != "lambda" || parts[5] != "layer" {
+        return None;
+    }
+    let version = parts[7].parse().ok()?;
+    let cut = arn.len() - parts[7].len() - 1;
+    Some((&arn[..cut], parts[4], version))
+}
+
+/// The account a Lambda ARN belongs to (5th field).
+pub fn arn_account(arn: &str) -> Option<&str> {
+    arn.split(':').nth(4).filter(|a| !a.is_empty())
+}
+
+/// Function pane, Config section: a `  Layer N` row whose layer lives in the
+/// function's own account → that layer on the Layers tab. A layer shared from
+/// another account (AWS-managed, a vendor's) isn't in `ListLayers`, so it
+/// gets no jump. Label-keyed — `lambda_config_lines` writes the rows.
+pub fn function_layer_row_target(
+    function_arn: &str,
+    key: &str,
+    value: &str,
+) -> Option<crate::app::JumpTarget> {
+    if !key.starts_with("  Layer ") {
+        return None;
+    }
+    let (layer_arn, account, _) = split_layer_version_arn(value.trim())?;
+    (Some(account) == arn_account(function_arn)).then(|| crate::app::JumpTarget {
+        service: ServiceType::Lambda,
+        view: crate::app::JumpView::Lambda(crate::app::LambdaView::Layers),
+        id: layer_arn.to_string(),
+    })
+}
+
+/// Loaded functions using `layer_arn`, grouped by the version they pin:
+/// `(version, [(function name, function ARN)])`, newest version first.
+pub fn layer_usage<'a>(
+    layer_arn: &str,
+    functions: &[&'a LambdaFunction],
+) -> Vec<(i64, Vec<&'a LambdaFunction>)> {
+    let mut by_version: std::collections::BTreeMap<i64, Vec<&'a LambdaFunction>> =
+        std::collections::BTreeMap::new();
+    for f in functions {
+        for l in &f.layers {
+            if let Some((arn, _, v)) = split_layer_version_arn(l) {
+                if arn == layer_arn {
+                    by_version.entry(v).or_default().push(*f);
+                }
+            }
+        }
+    }
+    by_version.into_iter().rev().collect()
 }
 
 // ── Lambda metrics (CloudWatch) ───────────────────────────────────────────────
@@ -907,4 +1158,57 @@ pub async fn download_and_extract_lambda_code(
     .map_err(|e| crate::error::Error::AwsSdk(format!("download task failed: {e}")))??;
 
     Ok((dest_for_return, count))
+}
+
+#[cfg(test)]
+mod layer_tests {
+    use super::*;
+
+    fn func(name: &str, layers: &[&str]) -> LambdaFunction {
+        let mut b = aws_sdk_lambda::types::FunctionConfiguration::builder()
+            .function_name(name)
+            .function_arn(format!("arn:aws:lambda:us-east-1:111111111111:function:{name}"));
+        for l in layers {
+            b = b.layers(aws_sdk_lambda::types::Layer::builder().arn(*l).build());
+        }
+        LambdaFunction::from_sdk(&b.build())
+    }
+
+    const UTILS: &str = "arn:aws:lambda:us-east-1:111111111111:layer:utils";
+
+    #[test]
+    fn split_layer_version_arn_takes_the_version_off() {
+        let (arn, acct, v) = split_layer_version_arn(&format!("{UTILS}:12")).unwrap();
+        assert_eq!((arn, acct, v), (UTILS, "111111111111", 12));
+        assert!(split_layer_version_arn(UTILS).is_none(), "unversioned");
+        assert!(split_layer_version_arn("arn:aws:lambda:us-east-1:1:function:f:3").is_none());
+        assert!(split_layer_version_arn(&format!("{UTILS}:latest")).is_none());
+    }
+
+    #[test]
+    fn layer_usage_groups_by_version_newest_first() {
+        let a = func("a", &[format!("{UTILS}:3").as_str()]);
+        let b = func("b", &[format!("{UTILS}:2").as_str(), "arn:aws:lambda:us-east-1:111111111111:layer:other:1"]);
+        let c = func("c", &[format!("{UTILS}:3").as_str()]);
+        let d = func("d", &[]);
+        let used = layer_usage(UTILS, &[&a, &b, &c, &d]);
+        let shape: Vec<(i64, Vec<&str>)> = used
+            .iter()
+            .map(|(v, fs)| (*v, fs.iter().map(|f| f.function_name.as_str()).collect()))
+            .collect();
+        assert_eq!(shape, [(3, vec!["a", "c"]), (2, vec!["b"])]);
+        // A layer whose name is a prefix of another must not match it.
+        assert!(layer_usage("arn:aws:lambda:us-east-1:111111111111:layer:util", &[&a]).is_empty());
+    }
+
+    #[test]
+    fn only_own_account_layer_rows_jump() {
+        let f = "arn:aws:lambda:us-east-1:111111111111:function:a";
+        let t = function_layer_row_target(f, "  Layer 1", &format!("{UTILS}:3")).unwrap();
+        assert_eq!(t.id, UTILS);
+        assert!(matches!(t.view, crate::app::JumpView::Lambda(crate::app::LambdaView::Layers)));
+        let ext = "arn:aws:lambda:us-east-1:464622532012:layer:Datadog-Extension:65";
+        assert!(function_layer_row_target(f, "  Layer 2", ext).is_none(), "another account's layer");
+        assert!(function_layer_row_target(f, "ARN", &format!("{UTILS}:3")).is_none(), "label-keyed");
+    }
 }

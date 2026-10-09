@@ -1,0 +1,31 @@
+{
+ "LayerVersions": [
+  {
+   "LayerVersionArn": "arn:aws:lambda:{{region}}:{{account}}:layer:shared-utils:3",
+   "Version": 3,
+   "Description": "Logging, tracing and DynamoDB helpers shared by the storefront functions",
+   "CreatedDate": "{{iso:now-12d}}",
+   "CompatibleRuntimes": ["nodejs20.x", "python3.12", "python3.9"],
+   "CompatibleArchitectures": ["arm64", "x86_64"],
+   "LicenseInfo": "MIT"
+  },
+  {
+   "LayerVersionArn": "arn:aws:lambda:{{region}}:{{account}}:layer:shared-utils:2",
+   "Version": 2,
+   "Description": "Adds the structured-logging helper",
+   "CreatedDate": "{{iso:now-160d}}",
+   "CompatibleRuntimes": ["nodejs20.x", "python3.9"],
+   "CompatibleArchitectures": ["x86_64"],
+   "LicenseInfo": "MIT"
+  },
+  {
+   "LayerVersionArn": "arn:aws:lambda:{{region}}:{{account}}:layer:shared-utils:1",
+   "Version": 1,
+   "Description": "Initial release",
+   "CreatedDate": "{{iso:now-420d}}",
+   "CompatibleRuntimes": ["python3.9"],
+   "CompatibleArchitectures": ["x86_64"],
+   "LicenseInfo": "MIT"
+  }
+ ]
+}

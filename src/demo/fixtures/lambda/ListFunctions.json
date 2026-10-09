@@ -20,6 +20,16 @@
    "State": "Active",
    "LastUpdateStatus": "Successful",
    "PackageType": "Zip",
+   "Layers": [
+    {
+     "Arn": "arn:aws:lambda:{{region}}:{{account}}:layer:shared-utils:3",
+     "CodeSize": 1048576
+    },
+    {
+     "Arn": "arn:aws:lambda:{{region}}:464622532012:layer:Datadog-Extension-ARM:65",
+     "CodeSize": 1048576
+    }
+   ],
    "Architectures": [
     "arm64"
    ],
@@ -93,6 +103,16 @@
    "State": "Active",
    "LastUpdateStatus": "Successful",
    "PackageType": "Zip",
+   "Layers": [
+    {
+     "Arn": "arn:aws:lambda:{{region}}:{{account}}:layer:shared-utils:2",
+     "CodeSize": 1048576
+    },
+    {
+     "Arn": "arn:aws:lambda:{{region}}:{{account}}:layer:pandas-py39:1",
+     "CodeSize": 1048576
+    }
+   ],
    "Architectures": [
     "x86_64"
    ],
