@@ -234,12 +234,14 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("elasticbeanstalk", "DescribeConfigurationSettings", when ["EnvironmentName=portal-legacy"], "DescribeConfigurationSettings-portal-legacy.xml"),
     fx!("elasticbeanstalk", "DescribeConfigurationSettings", when ["EnvironmentName=portal-next"], "DescribeConfigurationSettings-portal-next.xml"),
 
-    // ── CloudWatch alarms (the `monitoring` endpoint, awsQuery) ─────────────
-    // The timeline lens finds alarms by dimension in the warm cache, then
-    // asks for each one's history by name.
-    fx!("monitoring", "DescribeAlarms", "DescribeAlarms.xml"),
-    fx!("monitoring", "DescribeAlarmHistory", when ["AlarmName=orders-api-errors"], "DescribeAlarmHistory-orders-api.xml"),
-    fx!("monitoring", "DescribeAlarmHistory", when ["AlarmName=orders-worker-running-tasks"], "DescribeAlarmHistory-orders-worker.xml"),
+    // ── CloudWatch alarms (the `monitoring` endpoint, RPC v2 CBOR) ──────────
+    // JSON here, encoded to CBOR on the way out (`cbor.rs`): timestamps are
+    // `{"$timestamp": …}`, doubles need a decimal point. The timeline lens
+    // finds alarms by dimension in the warm cache, then asks for each one's
+    // history by name.
+    fx!("monitoring", "DescribeAlarms", "DescribeAlarms.json"),
+    fx!("monitoring", "DescribeAlarmHistory", when ["\"AlarmName\":\"orders-api-errors\""], "DescribeAlarmHistory-orders-api.json"),
+    fx!("monitoring", "DescribeAlarmHistory", when ["\"AlarmName\":\"orders-worker-running-tasks\""], "DescribeAlarmHistory-orders-worker.json"),
     // ── CloudWatch Logs ──────────────────────────────────────────────────────
     // FilterLogEvents for the scripted groups is generated (see generate.rs).
     fx!("logs", "DescribeLogGroups", "DescribeLogGroups.json"),

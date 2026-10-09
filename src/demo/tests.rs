@@ -1,6 +1,7 @@
 //! The replay connector drives real SDK clients — these tests are the proof
-//! that each wire format (EC2 query XML, awsJson, awsQuery XML, restJson)
-//! and the empty fallbacks deserialize, not just that a fixture file exists.
+//! that each wire format (EC2 query XML, awsJson, awsQuery XML, restJson,
+//! RPC v2 CBOR) and the empty fallbacks deserialize, not just that a fixture
+//! file exists.
 
 use super::*;
 
@@ -269,6 +270,44 @@ async fn cloudtrail_and_logs_fixtures_deserialize() {
         .await
         .expect("generated FilterLogEvents");
     assert!(tail.events().len() >= 39);
+}
+
+/// CloudWatch speaks Smithy RPC v2 CBOR (#170): the JSON fixtures go out as
+/// CBOR, timestamps tagged and thresholds as floats, and the request body is
+/// decoded so `when` picks each alarm's own history.
+#[tokio::test]
+async fn cloudwatch_cbor_fixtures_deserialize_and_match_per_request() {
+    let cw = aws_sdk_cloudwatch::Client::new(&demo_config().await);
+    let alarms = cw.describe_alarms().send().await.expect("DescribeAlarms");
+    let names: Vec<_> = alarms.metric_alarms().iter().filter_map(|a| a.alarm_name()).collect();
+    assert_eq!(names, ["orders-api-errors", "storefront-alb-5xx", "orders-worker-running-tasks"]);
+    let first = &alarms.metric_alarms()[0];
+    assert_eq!(first.threshold(), Some(5.0));
+    assert_eq!(first.period(), Some(60));
+    assert_eq!(first.dimensions()[0].value(), Some("orders-api"));
+    let updated = first.state_updated_timestamp().expect("tagged timestamp").secs();
+    assert!((chrono::Utc::now().timestamp() - updated - 22 * 60).abs() < 120, "now-22m");
+
+    for (alarm, items, newest) in [
+        ("orders-api-errors", 3, "Alarm updated from OK to ALARM"),
+        ("orders-worker-running-tasks", 2, "Alarm updated from ALARM to OK"),
+    ] {
+        let history = cw
+            .describe_alarm_history()
+            .alarm_name(alarm)
+            .history_item_type(aws_sdk_cloudwatch::types::HistoryItemType::StateUpdate)
+            .send()
+            .await
+            .expect("DescribeAlarmHistory");
+        let rows = history.alarm_history_items();
+        assert_eq!(rows.len(), items, "{alarm}");
+        assert!(rows.iter().all(|r| r.alarm_name() == Some(alarm)), "{alarm}: its own history");
+        assert_eq!(rows[0].history_summary(), Some(newest));
+    }
+
+    // No fixture: the empty map is still a valid response.
+    let none = cw.describe_alarm_history().alarm_name("no-such-alarm").send().await.expect("empty");
+    assert!(none.alarm_history_items().is_empty());
 }
 
 /// Every stored response, rendered, is well-formed: JSON parses and XML tags

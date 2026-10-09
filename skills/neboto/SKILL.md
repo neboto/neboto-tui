@@ -59,6 +59,16 @@ events / template / drift, ECS deployments, …). Up to 50 ids per call.
   and its task definition share a name).
 - `--wait SECS` (default 60): sections still loading after that come back
   as `null`, with a note on stderr.
+- **To compare two resources** (prod vs staging, two task definition
+  revisions), diff two `get`s:
+  `diff <(neboto get @lambda a -o md) <(neboto get @lambda b -o md)`.
+  The sections come out in the same order, so the diff lines up. There's no
+  compare subcommand.
+  Across accounts, give each side its own `-p` (and `-r`), and replace the
+  account id and region with placeholders (`sed`) before diffing, or every
+  ARN row differs. Run the two `get`s one after the other into files when
+  the profiles may prompt for credentials. Each side matches the id or name
+  in its own account.
 
 ## Output
 

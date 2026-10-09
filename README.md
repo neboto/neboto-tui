@@ -185,6 +185,33 @@ matched by exact id (or ARN, where that's its id), then exact name.
 | `--section <NAME>` | Only this section, any case; repeatable. The other sections' data isn't fetched |
 | `--wait <SECS>` | How long to wait for slow sections (default 60); anything still loading prints as not loaded, with a note on stderr |
 
+**To compare two resources**, diff two `get`s. Both come out with the same
+sections in the same order, so the diff lines up:
+
+```sh
+diff <(neboto get @lambda orders-api-prod -o md) <(neboto get @lambda orders-api-staging -o md)
+```
+
+`--section` narrows it to what you care about, and any diff tool works
+(`delta`, `vimdiff`, `git diff --no-index`).
+
+Across accounts or regions, give each side its own `-p` / `-r`. Rows that
+carry the account id or region would differ on every line, so swap those out
+first:
+
+```sh
+norm() { sed -e "s/$1/ACCOUNT/g" -e "s/$2/REGION/g"; }
+neboto get @lambda orders-api -p prod    -o md | norm 111111111111 ap-southeast-2 > prod.md
+neboto get @lambda orders-api -p staging -o md | norm 222222222222 ap-southeast-2 > staging.md
+diff prod.md staging.md
+```
+
+The two runs here go one after the other. With `<(…)` they run at once,
+which means two credential prompts at the same time if both profiles use a
+prompting `credential_process`. Each side matches the id or name in its own
+account. For an Organizations member account, use a profile that assumes into
+it (`role_arn` + `source_profile`); the CLI doesn't assume org roles itself.
+
 **For AI agents:** [`skills/neboto/SKILL.md`](skills/neboto/SKILL.md) teaches
 an agent the commands, output shapes and exit codes. For Claude Code, copy it
 to `~/.claude/skills/neboto/SKILL.md`:
@@ -542,6 +569,20 @@ out, commands that take a value are prefilled with the current one, and a
 visual selection of several instances becomes one `--instance-ids a b c`
 command. You never reconstruct an ARN by hand, and neboto never holds the
 ability to run it.
+
+**The one exception: sessions.** `s` on an instance or ECS task opens an SSM
+Session Manager or ECS Exec shell, through the `aws` CLI rather than the SDK.
+It's always your keypress, and opening a session changes no resource, but a
+shell on the box can change anything there. It's switched off while an Org
+member-account role is assumed.
+
+**Where the guarantee comes from.** Under an assumed member-account role,
+AWS enforces it through the `ReadOnlyAccess` session policy. On your own
+credentials it's enforced by the code and a CI check: every SDK call and every
+action in `PERMISSIONS.md` must be a read. Nothing at runtime stops a write
+there, so for a hard boundary run neboto on a read-only profile, for example
+`ReadOnlyAccess` or the `PERMISSIONS.md` policy. If you don't want shells
+either, add an explicit deny on `ssm:StartSession` and `ecs:ExecuteCommand`.
 
 ---
 

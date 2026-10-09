@@ -1,0 +1,105 @@
+{
+  "MetricAlarms": [
+    {
+      "AlarmName": "orders-api-errors",
+      "AlarmArn": "arn:aws:cloudwatch:{{region}}:{{account}}:alarm:orders-api-errors",
+      "AlarmDescription": "Orders API is failing requests - check DynamoDB throttling",
+      "AlarmConfigurationUpdatedTimestamp": {"$timestamp": {{epoch:now-60d}}},
+      "ActionsEnabled": true,
+      "OKActions": [
+        "arn:aws:sns:{{region}}:{{account}}:acme-oncall"
+      ],
+      "AlarmActions": [
+        "arn:aws:sns:{{region}}:{{account}}:acme-oncall"
+      ],
+      "InsufficientDataActions": [],
+      "StateValue": "ALARM",
+      "StateReason": "Threshold Crossed: 3 out of the last 3 datapoints [9.0 (28/09/26 23:40:00), 7.0 (28/09/26 23:39:00), 8.0 (28/09/26 23:38:00)] were greater than the threshold (5.0) (minimum 3 datapoints for OK -> ALARM transition).",
+      "StateUpdatedTimestamp": {"$timestamp": {{epoch:now-22m}}},
+      "MetricName": "Errors",
+      "Namespace": "AWS/Lambda",
+      "Statistic": "Sum",
+      "Dimensions": [
+        {
+          "Name": "FunctionName",
+          "Value": "orders-api"
+        }
+      ],
+      "Period": 60,
+      "EvaluationPeriods": 3,
+      "DatapointsToAlarm": 3,
+      "Threshold": 5.0,
+      "ComparisonOperator": "GreaterThanThreshold",
+      "TreatMissingData": "notBreaching"
+    },
+    {
+      "AlarmName": "storefront-alb-5xx",
+      "AlarmArn": "arn:aws:cloudwatch:{{region}}:{{account}}:alarm:storefront-alb-5xx",
+      "AlarmDescription": "Storefront returning 5xx to customers",
+      "AlarmConfigurationUpdatedTimestamp": {"$timestamp": {{epoch:now-60d}}},
+      "ActionsEnabled": true,
+      "OKActions": [
+        "arn:aws:sns:{{region}}:{{account}}:acme-oncall"
+      ],
+      "AlarmActions": [
+        "arn:aws:sns:{{region}}:{{account}}:acme-oncall"
+      ],
+      "InsufficientDataActions": [],
+      "StateValue": "OK",
+      "StateReason": "Threshold Crossed: 1 datapoint [2.0 (28/09/26 21:02:00)] was not greater than the threshold (25.0).",
+      "StateUpdatedTimestamp": {"$timestamp": {{epoch:now-3h}}},
+      "MetricName": "HTTPCode_Target_5XX_Count",
+      "Namespace": "AWS/ApplicationELB",
+      "Statistic": "Sum",
+      "Dimensions": [
+        {
+          "Name": "LoadBalancer",
+          "Value": "app/storefront-alb/50dc6c495c0c9188"
+        }
+      ],
+      "Period": 60,
+      "EvaluationPeriods": 5,
+      "DatapointsToAlarm": 5,
+      "Threshold": 25.0,
+      "ComparisonOperator": "GreaterThanThreshold",
+      "TreatMissingData": "notBreaching"
+    },
+    {
+      "AlarmName": "orders-worker-running-tasks",
+      "AlarmArn": "arn:aws:cloudwatch:{{region}}:{{account}}:alarm:orders-worker-running-tasks",
+      "AlarmDescription": "orders-worker has fewer tasks than desired",
+      "AlarmConfigurationUpdatedTimestamp": {"$timestamp": {{epoch:now-60d}}},
+      "ActionsEnabled": true,
+      "OKActions": [
+        "arn:aws:sns:{{region}}:{{account}}:acme-oncall"
+      ],
+      "AlarmActions": [
+        "arn:aws:sns:{{region}}:{{account}}:acme-oncall"
+      ],
+      "InsufficientDataActions": [],
+      "StateValue": "OK",
+      "StateReason": "Threshold Crossed: 3 datapoints [2.0, 2.0, 2.0] were not less than the threshold (2.0).",
+      "StateUpdatedTimestamp": {"$timestamp": {{epoch:now-11m}}},
+      "MetricName": "RunningTaskCount",
+      "Namespace": "ECS/ContainerInsights",
+      "Statistic": "Average",
+      "Dimensions": [
+        {
+          "Name": "ClusterName",
+          "Value": "acme-prod"
+        },
+        {
+          "Name": "ServiceName",
+          "Value": "orders-worker"
+        }
+      ],
+      "Period": 60,
+      "EvaluationPeriods": 3,
+      "DatapointsToAlarm": 3,
+      "Threshold": 2.0,
+      "ComparisonOperator": "LessThanThreshold",
+      "TreatMissingData": "notBreaching"
+    }
+  ],
+  "CompositeAlarms": []
+}

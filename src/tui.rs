@@ -6,7 +6,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
@@ -95,10 +95,22 @@ static NEEDS_CLEAR: AtomicBool = AtomicBool::new(false);
 static TERM_LOCK: Mutex<()> = Mutex::new(());
 /// One handoff at a time (two prompting providers would interleave).
 static HANDOFF_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// What the status bar says while a handoff is pending or running — the
+/// TUI draws it like any other status line, so nothing is printed raw.
+static HANDOFF_NOTE: Mutex<Option<String>> = Mutex::new(None);
+/// Frames drawn so far: the handoff waits for one drawn after it set
+/// `HANDOFF_NOTE`, so the note is on screen before drawing pauses.
+static FRAMES_DRAWN: AtomicU64 = AtomicU64::new(0);
 
 /// How long the handoff waits for the input reader to park. The reader polls
 /// in 100ms slices, so this only runs out if no reader is running.
 const READER_PARK_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// How long the handoff waits for the main loop to draw the note. The loop
+/// draws at least every tick (250ms); this runs out only when the handoff
+/// was started from the main loop itself (an org-role assume validating
+/// base credentials), which can't draw until the handoff returns.
+const NOTE_FRAME_TIMEOUT: Duration = Duration::from_millis(400);
 
 fn term_lock() -> MutexGuard<'static, ()> {
     TERM_LOCK.lock().unwrap_or_else(|e| e.into_inner())
@@ -117,6 +129,16 @@ pub fn input_paused() -> bool {
     paused
 }
 
+/// The credential note for the status bar, while a handoff is pending or
+/// running.
+pub fn handoff_note() -> Option<String> {
+    HANDOFF_NOTE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn set_handoff_note(note: Option<String>) {
+    *HANDOFF_NOTE.lock().unwrap_or_else(|e| e.into_inner()) = note;
+}
+
 /// Draw one frame unless the terminal is lent out. Clears first when the
 /// screen came back from a handoff.
 pub fn draw<F>(tui: &mut Tui, render: F) -> Result<()>
@@ -131,19 +153,22 @@ where
         tui.terminal.clear()?;
     }
     tui.terminal.draw(render)?;
+    FRAMES_DRAWN.fetch_add(1, Ordering::SeqCst);
     Ok(())
 }
 
 /// Run `fut` with the terminal lent out. With no TUI up (startup, headless,
 /// an editor or session already holding the terminal) it simply runs `fut`.
 ///
-/// 1. Before `fut` starts: drawing pauses, and the input reader is waited on
-///    until it is parked. Then mouse reporting goes off (its escape sequences
-///    would land in a prompt's input), the tty goes to cooked mode, `note`
-///    goes on the second-to-last row and the cursor on the last, where a
-///    plain `/dev/tty` prompt writes. It stays on the alternate screen, so a
-///    process that answers from its cache shows only the note where the
-///    status bar was — leaving the alternate screen is what flashed (#151).
+/// 1. Before `fut` starts: `note` goes in the status bar and the handoff
+///    waits for the main loop to draw it, so it is a normal TUI status line,
+///    never raw text printed over the screen. Then drawing pauses, and the
+///    input reader is waited on until it is parked. Mouse reporting goes off
+///    (its escape sequences would land in a prompt's input), the tty goes to
+///    cooked mode, and the cursor is parked at the start of the row above
+///    the status bar, where a plain `/dev/tty` prompt writes. It stays on the
+///    alternate screen, so a process that answers from its cache shows only
+///    the status line — leaving the alternate screen is what flashed (#151).
 /// 2. While `fut` runs, nothing touches the tty.
 /// 3. After: raw mode, the alternate screen again (pinentry-curses' exit
 ///    drops to the normal screen), mouse back on, leftover typed input
@@ -155,6 +180,12 @@ where
     let _serial = HANDOFF_SERIAL.lock().await;
     if !TUI_ACTIVE.load(Ordering::SeqCst) {
         return fut.await;
+    }
+    let drawn = FRAMES_DRAWN.load(Ordering::SeqCst);
+    set_handoff_note(Some(note.to_string()));
+    let deadline = tokio::time::Instant::now() + NOTE_FRAME_TIMEOUT;
+    while FRAMES_DRAWN.load(Ordering::SeqCst) == drawn && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
     HANDED_OFF.store(true, Ordering::SeqCst);
     let deadline = tokio::time::Instant::now() + READER_PARK_TIMEOUT;
@@ -169,9 +200,6 @@ where
                 io::stdout(),
                 DisableMouseCapture,
                 crossterm::cursor::MoveTo(0, rows.saturating_sub(2)),
-                crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown),
-                crossterm::style::Print(format!("neboto: {note}")),
-                crossterm::cursor::MoveTo(0, rows.saturating_sub(1)),
                 crossterm::cursor::Show
             );
             let _ = disable_raw_mode();
@@ -198,6 +226,7 @@ where
             }
             NEEDS_CLEAR.store(true, Ordering::SeqCst);
         }
+        set_handoff_note(None);
         HANDED_OFF.store(false, Ordering::SeqCst);
     }
     result

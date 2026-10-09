@@ -4759,6 +4759,7 @@ dependencies = [
  "flate2",
  "futures",
  "fuzzy-matcher",
+ "minicbor",
  "ratatui",
  "serde",
  "serde_json",

@@ -966,7 +966,7 @@ impl aws_credential_types::provider::ProvideCredentials for TerminalCredentialPr
                 }
             }
             let note = format!(
-                "running credential_process for profile {} (neboto resumes when it finishes)",
+                "Getting credentials for profile {} (credential_process)…",
                 self.profile
             );
             let result = crate::tui::with_terminal(&note, self.inner.provide_credentials()).await;

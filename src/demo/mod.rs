@@ -14,6 +14,7 @@
 //! operation with no fixture answers with a protocol-correct **empty**
 //! success, so an uncovered service shows an empty list, never an error.
 
+mod cbor;
 pub mod fixtures;
 mod generate;
 
@@ -59,7 +60,8 @@ pub enum Protocol {
     Ec2Query,
     /// awsQuery (STS, IAM, …) — form body, `<OpResponse><OpResult>` XML.
     Query,
-    /// Smithy RPC v2 CBOR (CloudWatch metrics) — not covered yet.
+    /// Smithy RPC v2 CBOR (CloudWatch) — JSON fixtures, encoded on the way
+    /// out; the request body is decoded to JSON for `when` (`cbor.rs`).
     Cbor,
     /// restJson / restXml (Lambda, S3, …) — method + path. Not covered yet.
     Rest,
@@ -106,12 +108,14 @@ impl DemoRequest {
             .filter(|l| l.contains('-'))
             .unwrap_or(REGION)
             .to_string();
-        let body = req
-            .body()
-            .bytes()
-            .map(|b| String::from_utf8_lossy(b).into_owned())
-            .unwrap_or_default();
+        let raw = req.body().bytes().unwrap_or_default();
         let headers = req.headers();
+        // A CBOR body is binary: decode it to JSON so `when` can match it.
+        let body = if headers.get("smithy-protocol").is_some() {
+            cbor::to_json(raw).unwrap_or_default()
+        } else {
+            String::from_utf8_lossy(raw).into_owned()
+        };
         let (operation, protocol) = if let Some(target) = headers.get("x-amz-target") {
             (target.rsplit('.').next().unwrap_or(target).to_string(), Protocol::Json)
         } else if headers.get("smithy-protocol").is_some() {
@@ -168,9 +172,8 @@ impl DemoRequest {
             // restXml (S3, Route 53, CloudFront) can't parse `{}`; an empty
             // body deserializes as an output with nothing in it.
             Protocol::Rest if is_rest_xml(&self.service) => String::new(),
-            Protocol::Json | Protocol::Rest => "{}".to_string(),
-            // An empty CBOR map.
-            Protocol::Cbor => "\u{a0}".to_string(),
+            // CBOR bodies are JSON until they go out; `{}` is the empty map.
+            Protocol::Json | Protocol::Rest | Protocol::Cbor => "{}".to_string(),
             Protocol::Ec2Query => format!(
                 "<{op}Response xmlns=\"http://ec2.amazonaws.com/doc/2016-11-15/\"><requestId>demo</requestId></{op}Response>"
             ),
@@ -187,8 +190,10 @@ impl HttpConnector for DemoConnector {
         let (body, content_type) = req.respond();
         let (status, body) = split_status(body);
         let error_type = (status >= 400).then(|| error_type(&body)).flatten();
-        let body = if req.protocol == Protocol::Cbor && body == "\u{a0}" {
-            SdkBody::from(vec![0xa0u8])
+        let body = if req.protocol == Protocol::Cbor {
+            // A fixture that isn't valid JSON answers with an empty map; the
+            // fixture tests catch that before it ships.
+            SdkBody::from(cbor::from_json(&body).unwrap_or_else(|| vec![0xa0]))
         } else {
             SdkBody::from(body)
         };
