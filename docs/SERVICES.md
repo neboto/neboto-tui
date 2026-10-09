@@ -740,7 +740,16 @@ the service you're touching.
   `ListHostedZones`) and zones past `MAX_R53_TAB_ZONES` (100) per trigger
   are skipped, counted in `App.r53_records_skipped`, and named in the tab
   strip + the empty state; the zone pane still loads any of them on demand.
-  `⏎` on a record opens its flat `details()`; `Zone ID` jumps to the zone
+  `⏎` on a record opens its split pane: **Details** (the old flat
+  `details()` rows — the section keeps that name because `neboto get`
+  scripts key on it) / **Test answer** (`TestDNSAnswer`, **`x`-gated**, no
+  on-enter hook: each press invalidates and re-asks, so a weighted set
+  resamples, and the flat view's trigger sweep never fires it). It asks from
+  Route 53's default resolver; a resolver-IP / EDNS-client-subnet input is a
+  follow-up. The answer is compared with the record's own values (`✓
+  matches`, or "another answer" for a routing-policy record — a different
+  set member or a failover); alias records have nothing to compare. The op
+  is on the read-only guard's `ALLOW_OPS` (its verb is `test`). `Zone ID` jumps to the zone
   (`r53_row_jump_target`, record-selected only — the zone's own Info row has
   the same label), `Health Check` to the check, and `Alias Target` /
   `Target` (a CNAME's single value) to where the hostname leads:
@@ -760,7 +769,9 @@ the service you're touching.
   hosted zone). No per-record console deep link exists; `console_url` opens
   the zone's record list.
   `R53HealthCheck` split pane: Overview / Status (lazy `GetHealthCheckStatus` —
-  per-region observations) / Tags. `m` metrics use the **global** `AWS/Route53`
+  per-region observations — plus `GetHealthCheckLastFailureReason` in the
+  same bundle, best-effort, as a newest-first "Last failure per checker"
+  group: the healthy-now-but-flapped case) / Tags. `m` metrics use the **global** `AWS/Route53`
   namespace (dim `HealthCheckId`) queried in us-east-1 like CloudFront.
   Disabled checks show a dimmed state; calculated/alarm checks report no
   per-region status. `R53HostedZone` split pane:

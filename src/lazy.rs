@@ -610,7 +610,10 @@ pub struct LazyStore {
     /// keyed by zone id.
     pub r53_zone_detail: LazyMap<Box<crate::aws::services::route53::R53ZoneDetail>>,
     /// A health check's per-region live observations, keyed by check id.
-    pub r53_health_status: LazyMap<Vec<crate::aws::services::route53::R53HealthObservation>>,
+    pub r53_health_status: LazyMap<crate::aws::services::route53::R53HealthStatus>,
+    /// A record's `TestDNSAnswer`, keyed by record id. `x`-gated, and each
+    /// press re-asks (invalidate + trigger), so a weighted set resamples.
+    pub r53_test_answer: LazyMap<crate::aws::services::route53::R53TestAnswer>,
     /// A Resolver endpoint's IPs + rules + tags, keyed by endpoint id.
     pub resolver_endpoint_details:
         LazyMap<Box<crate::aws::services::route53resolver::ResolverEndpointDetail>>,

@@ -751,6 +751,9 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
             if app.supports_value_reveal() {
                 hints.push(("x", "reveal"));
             }
+            if app.supports_dns_test() {
+                hints.push(("x", "test answer"));
+            }
             if app.supports_trail_lens() {
                 hints.push(("W", "trail"));
             }

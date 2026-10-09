@@ -76,7 +76,7 @@ const RIGHT_SECTIONS: &[Section] = &[
             ("N", "Network-access lens (merged security-group rules)"),
             ("o / i", "S3 objects / DynamoDB items"),
             ("s", "SSM session · ECS exec"),
-            ("x / Y", "reveal / copy secret value"),
+            ("x / Y", "reveal / copy secret value · x: test a DNS record's answer"),
             ("d", "download Lambda package"),
             ("X / ^X", "export detail / list"),
             ("M", "message history"),

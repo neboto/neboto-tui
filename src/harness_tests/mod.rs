@@ -39,6 +39,7 @@ mod r53_records_test;
 mod r53_zone_tags_test;
 mod detail_wrap_test;
 mod tags_error_test;
+mod r53_test_answer_test;
 mod state_filter_test;
 mod subtab_keys_test;
 mod all_search_nav_test;
