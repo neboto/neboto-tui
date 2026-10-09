@@ -148,6 +148,26 @@ the service you're touching.
   appears without visiting Code/Tags first). Don't "simplify" the Config
   hook back to concurrency-only — that reintroduces the invisible-ownership
   bug this fixed.
+  **Layers tab (`2`, #102).** `ListLayers` runs as a second phase of the
+  list load, so `LambdaLayer` rows are one per *layer* (the response carries
+  its latest version) — one row per version would bury the list for a layer
+  published 40 times. A function-phase failure is held back and becomes fatal
+  only if the layer phase fails too (else it's a `ResourceLoadWarning`, so
+  the Layers tab still streams). **Versions** is the one lazy section
+  (`ListLayerVersions`, `lazy.lambda_layer_versions` keyed by the
+  unversioned layer ARN), walked to the last page — a cut would hide exactly
+  the old versions functions are still pinned to. **Used By** is eager and
+  costs nothing: no AWS API lists a layer's consumers, so it filters the
+  loaded functions' `layers` (version ARNs, split by
+  `split_layer_version_arn`) — the VPC-subnets sibling pattern — and says it
+  is limited to this region + account. `ListLayers` only returns the
+  caller's own layers, so on the function pane a `  Layer N` row jumps to
+  the Layers tab **only when the layer ARN's account is the function's**
+  (`function_layer_row_target`); AWS-managed / vendor layers get a dim
+  "external layer" note instead, and `arn_jump_target` declines `layer:`
+  ARNs so they can't fall through to a "function named layer" jump. Not
+  fetched: `GetLayerVersionPolicy` (who a version is shared with) — one call
+  per version; a follow-up if wanted.
 - **Bedrock AgentCore** (`@agentcore`) — the agent *hosting* platform, a
   wholly separate service from `@bedrock` (different clients, different IAM
   prefix `bedrock-agentcore:`, different resources). Bedrock's "Agents" and

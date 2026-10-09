@@ -20,6 +20,7 @@ pub mod eventbridge_tabs;
 pub mod fms_tabs;
 pub mod keycast_box;
 pub mod kinesis_tabs;
+pub mod lambda_tabs;
 pub mod ecr_tabs;
 pub mod sfn_tabs;
 pub mod controltower_tabs;

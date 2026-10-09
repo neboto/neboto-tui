@@ -1,0 +1,41 @@
+{
+ "Layers": [
+  {
+   "LayerName": "shared-utils",
+   "LayerArn": "arn:aws:lambda:{{region}}:{{account}}:layer:shared-utils",
+   "LatestMatchingVersion": {
+    "LayerVersionArn": "arn:aws:lambda:{{region}}:{{account}}:layer:shared-utils:3",
+    "Version": 3,
+    "Description": "Logging, tracing and DynamoDB helpers shared by the storefront functions",
+    "CreatedDate": "{{iso:now-12d}}",
+    "CompatibleRuntimes": ["nodejs20.x", "python3.12", "python3.9"],
+    "CompatibleArchitectures": ["arm64", "x86_64"],
+    "LicenseInfo": "MIT"
+   }
+  },
+  {
+   "LayerName": "pandas-py39",
+   "LayerArn": "arn:aws:lambda:{{region}}:{{account}}:layer:pandas-py39",
+   "LatestMatchingVersion": {
+    "LayerVersionArn": "arn:aws:lambda:{{region}}:{{account}}:layer:pandas-py39:1",
+    "Version": 1,
+    "Description": "pandas 1.5 + numpy for the reporting jobs",
+    "CreatedDate": "{{iso:now-400d}}",
+    "CompatibleRuntimes": ["python3.9"],
+    "CompatibleArchitectures": ["x86_64"]
+   }
+  },
+  {
+   "LayerName": "pdf-render",
+   "LayerArn": "arn:aws:lambda:{{region}}:{{account}}:layer:pdf-render",
+   "LatestMatchingVersion": {
+    "LayerVersionArn": "arn:aws:lambda:{{region}}:{{account}}:layer:pdf-render:4",
+    "Version": 4,
+    "Description": "Headless Chromium for invoice PDFs (unused since the move to the invoice service)",
+    "CreatedDate": "{{iso:now-210d}}",
+    "CompatibleRuntimes": ["nodejs20.x"],
+    "CompatibleArchitectures": ["x86_64"]
+   }
+  }
+ ]
+}

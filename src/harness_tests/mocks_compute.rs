@@ -217,6 +217,24 @@ pub(super) fn mocks() -> Vec<Mock> {
             )),
         ),
         (
+            ServiceType::Lambda,
+            "LambdaLayer",
+            Box::new(svc::lambda::LambdaLayer::from_sdk(
+                &aws_sdk_lambda::types::LayersListItem::builder()
+                    .layer_name("mock-layer")
+                    .layer_arn("arn:aws:lambda:us-east-1:123456789012:layer:mock-layer")
+                    .latest_matching_version(
+                        aws_sdk_lambda::types::LayerVersionsListItem::builder()
+                            .version(3)
+                            .layer_version_arn(
+                                "arn:aws:lambda:us-east-1:123456789012:layer:mock-layer:3",
+                            )
+                            .build(),
+                    )
+                    .build(),
+            )),
+        ),
+        (
             ServiceType::TransitGateway,
             "TgwAttachment",
             Box::new(svc::transit_gateway::TgwAttachment::from_sdk(

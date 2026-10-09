@@ -177,6 +177,9 @@ pub struct LazyStore {
     /// Reserved + provisioned concurrency and async-invoke destinations
     /// (Config section), keyed by function ARN.
     pub lambda_concurrency: LazyMap<crate::aws::services::lambda::LambdaConcurrency>,
+    /// Every published version of a layer (Versions section), keyed by the
+    /// unversioned layer ARN.
+    pub lambda_layer_versions: LazyMap<Vec<crate::aws::services::lambda::LambdaLayerVersion>>,
     /// An instance's Performance Insights wait-event profile, keyed by DB id.
     pub rds_pi: LazyMap<crate::aws::services::rds::RdsPiData>,
     /// Pending maintenance actions (instance or cluster), keyed by ARN.
