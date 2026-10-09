@@ -543,6 +543,20 @@ visual selection of several instances becomes one `--instance-ids a b c`
 command. You never reconstruct an ARN by hand, and neboto never holds the
 ability to run it.
 
+**The one exception: sessions.** `s` on an instance or ECS task opens an SSM
+Session Manager or ECS Exec shell, through the `aws` CLI rather than the SDK.
+It's always your keypress, and opening a session changes no resource, but a
+shell on the box can change anything there. It's switched off while an Org
+member-account role is assumed.
+
+**Where the guarantee comes from.** Under an assumed member-account role,
+AWS enforces it through the `ReadOnlyAccess` session policy. On your own
+credentials it's enforced by the code and a CI check: every SDK call and every
+action in `PERMISSIONS.md` must be a read. Nothing at runtime stops a write
+there, so for a hard boundary run neboto on a read-only profile, for example
+`ReadOnlyAccess` or the `PERMISSIONS.md` policy. If you don't want shells
+either, add an explicit deny on `ssm:StartSession` and `ecs:ExecuteCommand`.
+
 ---
 
 ## Architecture

@@ -16,8 +16,12 @@ calls (README "Why read-only", PERMISSIONS.md). This makes that mechanical:
    (`check` / `check_…`, never `checkpoint_…`), and DENY_OPS overrides it
    for the few ops whose read-sounding verb starts work in the account.
 
-Also checks PERMISSIONS.md the same way: every IAM action it grants must have
-a read-only verb or be in ALLOW_ACTIONS.
+Also checks PERMISSIONS.md the same way: every IAM action it names in
+backticks or double quotes (`service:Action`, wildcards included) must have a
+read-only verb or be in ALLOW_ACTIONS. Fewer than MIN_PERMISSION_ACTIONS
+found fails, so a format change can't quietly turn the check off again — it
+matched only double quotes while the file uses backticks, and read zero
+actions for months (#85).
 
 Usage: scripts/check-readonly.py [--list]   (--list prints every op found)
 Runs in CI (.github/workflows/ci.yml). Needs python3 and a fetched registry
@@ -61,7 +65,7 @@ ALLOW_OPS = {
 }
 
 READ_ACTIONS_RE = re.compile(
-    r"^(Describe|List|Get|Lookup|Search|Select|Filter|Query|Scan|Head|BatchGet|Check|Estimate|Retrieve|Count|View|Preview|Simulate|Validate|Decode|Detect|Read|Evaluate|Test|Download)(?=[A-Z]|$)"
+    r"^(Describe|List|Get|Lookup|Search|Select|Filter|Query|Scan|Head|BatchGet|Check|Estimate|Retrieve|Count|View|Preview|Simulate|Validate|Decode|Detect|Read|Evaluate|Test|Download)(?=[A-Z*]|$)"
 )
 # The IAM-action side of DENY_OPS.
 DENY_ACTIONS = {
@@ -78,7 +82,13 @@ ALLOW_ACTIONS = {
     "ssm:StartSession": "opens an interactive session via the aws CLI — user-initiated, changes no resource",
     "ecs:ExecuteCommand": "ECS Exec (`s` on a task) via the aws CLI — user-initiated, changes no resource",
     "ssm:TerminateSession": "ends our own session",
+    "apigateway:GET": "API Gateway's IAM actions are HTTP verbs; GET is the read",
 }
+
+# PERMISSIONS.md names ~220 actions; far fewer means the pattern stopped
+# matching the file's format, not that the app needs fewer permissions.
+MIN_PERMISSION_ACTIONS = 150
+PERMISSION_ACTION = re.compile(r'[`"]([a-z0-9-]+:[A-Z*][A-Za-z0-9*]*)[`"]')
 
 def sdk_operations():
     meta = json.loads(subprocess.check_output(
@@ -138,7 +148,10 @@ def main():
 
     perm = (ROOT / "PERMISSIONS.md").read_text(encoding="utf-8")
     bad_actions = []
-    for act in sorted(set(re.findall(r'"([a-z0-9-]+:[A-Z][A-Za-z0-9]+)"', perm))):
+    actions = sorted(set(PERMISSION_ACTION.findall(perm)))
+    if len(actions) < MIN_PERMISSION_ACTIONS:
+        print(f"only {len(actions)} IAM actions found in PERMISSIONS.md — pattern no longer matches its format?"); sys.exit(2)
+    for act in actions:
         if act not in DENY_ACTIONS and (READ_ACTIONS_RE.match(act.split(":", 1)[1]) or act in ALLOW_ACTIONS):
             continue
         bad_actions.append(act)
@@ -166,7 +179,7 @@ def main():
               ", ".join(f"{op}@{w}" for op, w in collisions))
     if ok and not list_mode:
         print(f"read-only guard: {len(found)} distinct SDK operations at "
-              f"{sum(map(len, found.values()))} call sites, all read-only; PERMISSIONS.md clean")
+              f"{sum(map(len, found.values()))} call sites, all read-only; PERMISSIONS.md: {len(actions)} actions, all read-only")
     sys.exit(0 if ok else 1)
 
 if __name__ == "__main__":
