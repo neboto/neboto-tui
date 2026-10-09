@@ -321,6 +321,9 @@ impl Resource for GlueDatabase {
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
     }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((format!("database/{}", self.name), &mut self.tags))
+    }
     fn search_text(&self) -> String {
         format!(
             "{} {} {} database glue catalog",
@@ -668,6 +671,9 @@ impl Resource for GlueCrawler {
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
     }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((format!("crawler/{}", self.name), &mut self.tags))
+    }
     fn search_text(&self) -> String {
         format!(
             "{} {} {} crawler glue",
@@ -792,6 +798,9 @@ impl Resource for GlueJob {
     }
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
+    }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((format!("job/{}", self.name), &mut self.tags))
     }
     fn search_text(&self) -> String {
         format!(

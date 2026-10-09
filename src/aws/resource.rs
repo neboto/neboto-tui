@@ -111,6 +111,15 @@ pub trait Resource: Send + Sync + Debug {
     /// Tags
     fn tags(&self) -> &HashMap<String, String>;
 
+    /// Where list-time tags go (#29): the key the Resource Groups Tagging
+    /// API reports this row under — its ARN, or the ARN's resource part
+    /// (`job/NAME`) for a type that carries no ARN — and the `tags` field to
+    /// fill. Only types whose service is wrapped in
+    /// `crate::aws::tags::ListTimeTags` need it; the default opts out.
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        None
+    }
+
     /// Searchable text (for fuzzy search)
     fn search_text(&self) -> String {
         format!(

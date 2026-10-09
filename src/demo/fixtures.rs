@@ -22,6 +22,10 @@
 //!   (`orders-api` on 3, `nightly-report` on 2), `pandas-py39` by
 //!   `nightly-report`, and `pdf-render` by nothing; `orders-api` also pins a
 //!   Datadog layer from another account, which has no Layers-tab row.
+//! - List-time tags (#29): the `orders-api-errors` and `storefront-alb-5xx`
+//!   alarms and the `orders-api` log group are `team=storefront`,
+//!   `nightly-report`'s log group `team=data` (so `ls @cw -f tag:team=storefront`
+//!   finds three rows across two tabs)
 //! - `orders-api` (Lambda) tails live logs with occasional DynamoDB
 //!   throttles, and its errors alarm is firing; `nightly-report` runs on a deprecated runtime and its log
 //!   group never expires (45 GB)
@@ -250,6 +254,10 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("monitoring", "DescribeAlarms", "DescribeAlarms.json"),
     fx!("monitoring", "DescribeAlarmHistory", when ["\"AlarmName\":\"orders-api-errors\""], "DescribeAlarmHistory-orders-api.json"),
     fx!("monitoring", "DescribeAlarmHistory", when ["\"AlarmName\":\"orders-worker-running-tasks\""], "DescribeAlarmHistory-orders-worker.json"),
+    // ── Tagging API (list-time tags, #29) ────────────────────────────────────
+    // One `GetResources` per wrapped service load, told apart by its
+    // `ResourceTypeFilters`; the others fall through to an empty success.
+    fx!("tagging", "GetResources", when ["\"cloudwatch\""], "GetResources-cloudwatch.json"),
     // ── CloudWatch Logs ──────────────────────────────────────────────────────
     // FilterLogEvents for the scripted groups is generated (see generate.rs).
     fx!("logs", "DescribeLogGroups", "DescribeLogGroups.json"),

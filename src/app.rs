@@ -3310,7 +3310,8 @@ impl App {
             | Event::ResourcesPartiallyLoaded { .. }
             | Event::ResourcesFullyLoaded { .. }
             | Event::ResourceLoadError { .. }
-            | Event::ResourceLoadWarning { .. }) => {
+            | Event::ResourceLoadWarning { .. }
+            | Event::ListTagsLoaded { .. }) => {
                 self.handle_load_stream_event(ev, event_tx);
             }
             Event::ResourceRefreshed { id, resource, quiet } => {
@@ -8770,6 +8771,7 @@ impl App {
                     self.load_warnings.push(warning);
                 }
             }
+            Event::ListTagsLoaded { service, tags } => self.apply_list_tags(service, &tags),
             // Another service's warning, or a nested wrapper the forwarder
             // can't build: ignore.
             _ => {}
@@ -8859,6 +8861,30 @@ impl App {
 
         // Clear any error messages
         self.error_message = None;
+    }
+
+    /// List-time tags for this load's rows (#29). They arrive after the last
+    /// batch and before `ResourcesFullyLoaded`, so patching whichever list the
+    /// stream filled — the watch staging, or `resources` — is enough: the
+    /// completion handler then caches rows that already carry them.
+    fn apply_list_tags(&mut self, service: ServiceType, tags: &crate::aws::tags::TagIndex) {
+        // @all holds other services' rows, and a stale service owns nothing.
+        if Some(service) != self.current_service || self.all_search_mode {
+            return;
+        }
+        if let Some(staging) = self.watch_staging.as_mut() {
+            tags.apply(staging);
+            return;
+        }
+        if tags.apply(&mut self.resources) > 0 {
+            // A `tag:` filter or a fuzzy query over tag text can change
+            // which rows match.
+            let selected = self.get_selected_resource_id();
+            self.update_search();
+            if let Some(id) = selected {
+                self.restore_selection_by_id(&id);
+            }
+        }
     }
 
     fn handle_resources_fully_loaded(
@@ -10162,12 +10188,19 @@ impl App {
         org_access_roles: &[String],
     ) -> HashMap<ServiceType, Arc<dyn AwsService>> {
         use crate::aws::services::*;
+        // Services with no list-time tag call of their own get theirs from
+        // the Tagging API, filtered to the service's resource types (#29).
+        use crate::aws::tags::ListTimeTags;
         let mut services: HashMap<ServiceType, Arc<dyn AwsService>> = HashMap::new();
         services.insert(ServiceType::EC2, Arc::new(ec2::Ec2Service::new(aws_clients)));
         services.insert(ServiceType::VPC, Arc::new(vpc::VpcService::new(aws_clients)));
         services.insert(
             ServiceType::CloudTrail,
-            Arc::new(cloudtrail::CloudTrailService::new(aws_clients)),
+            ListTimeTags::wrap(
+                Arc::new(cloudtrail::CloudTrailService::new(aws_clients)),
+                aws_clients,
+                &["cloudtrail"],
+            ),
         );
         services.insert(ServiceType::S3, Arc::new(s3::S3Service::new(aws_clients)));
         services.insert(
@@ -10191,7 +10224,11 @@ impl App {
         services.insert(ServiceType::Acm, Arc::new(acm::AcmService::new(aws_clients)));
         services.insert(
             ServiceType::CloudWatch,
-            Arc::new(cloudwatch::CloudWatchService::new(aws_clients)),
+            ListTimeTags::wrap(
+                Arc::new(cloudwatch::CloudWatchService::new(aws_clients)),
+                aws_clients,
+                &["cloudwatch", "logs"],
+            ),
         );
         services.insert(ServiceType::IAM, Arc::new(iam::IamService::new(aws_clients)));
         services.insert(
@@ -10356,7 +10393,11 @@ impl App {
         );
         services.insert(
             ServiceType::Glue,
-            Arc::new(glue::GlueService::new(aws_clients)),
+            ListTimeTags::wrap(
+                Arc::new(glue::GlueService::new(aws_clients)),
+                aws_clients,
+                &["glue"],
+            ),
         );
         services.insert(
             ServiceType::Ses,
@@ -10429,7 +10470,11 @@ impl App {
         );
         services.insert(
             ServiceType::Bedrock,
-            Arc::new(bedrock::BedrockService::new(aws_clients)),
+            ListTimeTags::wrap(
+                Arc::new(bedrock::BedrockService::new(aws_clients)),
+                aws_clients,
+                &["bedrock"],
+            ),
         );
         services.insert(
             ServiceType::AgentCore,

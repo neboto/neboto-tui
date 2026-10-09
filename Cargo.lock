@@ -2067,6 +2067,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-resourcegroupstagging"
+version = "1.112.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a196c274213b8ed42eff1f3b58c83e1fa387ba8b274da842639254f3faa23bbd"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-route53"
 version = "1.122.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4727,6 +4752,7 @@ dependencies = [
  "aws-sdk-redshiftserverless",
  "aws-sdk-resourceexplorer2",
  "aws-sdk-resourcegroups",
+ "aws-sdk-resourcegroupstagging",
  "aws-sdk-route53",
  "aws-sdk-route53profiles",
  "aws-sdk-route53resolver",

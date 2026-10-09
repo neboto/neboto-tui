@@ -460,6 +460,9 @@ impl Resource for BedrockInferenceProfile {
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
     }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((self.profile_arn.clone(), &mut self.tags))
+    }
     fn search_text(&self) -> String {
         format!("{} {} {}", self.profile_id, self.profile_name, self.profile_type)
     }
@@ -571,6 +574,9 @@ impl Resource for BedrockGuardrail {
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
     }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((self.guardrail_arn.clone(), &mut self.tags))
+    }
     fn search_text(&self) -> String {
         format!("{} {}", self.guardrail_id, self.guardrail_name)
     }
@@ -669,6 +675,9 @@ impl Resource for BedrockKnowledgeBase {
     }
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
+    }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((format!("knowledge-base/{}", self.kb_id), &mut self.tags))
     }
     fn search_text(&self) -> String {
         format!("{} {}", self.kb_id, self.kb_name)
@@ -1446,6 +1455,9 @@ impl Resource for BedrockAgent {
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
     }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((format!("agent/{}", self.agent_id), &mut self.tags))
+    }
     fn search_text(&self) -> String {
         format!("{} {}", self.agent_id, self.agent_name)
     }
@@ -1744,6 +1756,9 @@ impl Resource for BedrockPrompt {
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
     }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((self.arn.clone(), &mut self.tags))
+    }
     fn search_text(&self) -> String {
         format!("{} {}", self.id, self.name)
     }
@@ -1829,6 +1844,9 @@ impl Resource for BedrockFlow {
     }
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
+    }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((self.arn.clone(), &mut self.tags))
     }
     fn search_text(&self) -> String {
         format!("{} {}", self.id, self.name)
@@ -1920,6 +1938,9 @@ impl Resource for BedrockCustomModel {
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
     }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((self.model_arn.clone(), &mut self.tags))
+    }
     fn search_text(&self) -> String {
         format!("{} {}", self.model_name, self.base_model_name)
     }
@@ -1991,6 +2012,9 @@ impl Resource for BedrockImportedModel {
     }
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
+    }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((self.model_arn.clone(), &mut self.tags))
     }
     fn search_text(&self) -> String {
         format!("{} {}", self.model_name, self.architecture)
