@@ -1030,6 +1030,8 @@ pub struct CodePipelineDetails {
     /// `ListTagsForResource` — `ListPipelines` returns no tags and no ARN, so
     /// the Tags section rides this fetch rather than the list row.
     pub tags: HashMap<String, String>,
+    /// Set when the tag call failed — rendered instead of "No tags" (#28).
+    pub tags_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1245,6 +1247,7 @@ pub async fn fetch_pipeline_details(
     // Tags (best effort — a missing `ListTagsForResource` permission must not
     // cost us the stage graph, which is the point of this fetch).
     let mut tags = HashMap::new();
+    let mut tags_error = None;
     if !arn.is_empty() {
         let mut token: Option<String> = None;
         loop {
@@ -1252,7 +1255,13 @@ pub async fn fetch_pipeline_details(
             if let Some(t) = &token {
                 req = req.next_token(t);
             }
-            let Ok(resp) = req.send().await else { break };
+            let resp = match req.send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    tags_error = Some(crate::error::sdk_error_message(&e));
+                    break;
+                }
+            };
             for t in resp.tags() {
                 tags.insert(t.key().to_string(), t.value().to_string());
             }
@@ -1271,6 +1280,7 @@ pub async fn fetch_pipeline_details(
         artifact_store_location,
         artifact_store_kms,
         tags,
+        tags_error,
     })
 }
 

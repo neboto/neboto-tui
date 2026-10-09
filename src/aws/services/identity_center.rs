@@ -845,6 +845,8 @@ pub struct PsAccess {
     pub customer_managed: Vec<(String, String)>, // (name, path)
     pub boundary: Option<String>,                // human label of the boundary
     pub tags: Vec<(String, String)>,
+    /// Set when the tag call failed — rendered instead of "(no tags)" (#28).
+    pub tags_error: Option<String>,
 }
 
 /// Fetch a permission set's policies (inline + AWS-managed + customer-managed),
@@ -931,16 +933,20 @@ pub async fn fetch_permission_set_access(
         });
 
     let mut tags = Vec::new();
-    if let Ok(t) = ssoadmin
+    let mut tags_error = None;
+    match ssoadmin
         .list_tags_for_resource()
         .instance_arn(&instance_arn)
         .resource_arn(&ps_arn)
         .send()
         .await
     {
-        for tag in t.tags() {
-            tags.push((tag.key().to_string(), tag.value().to_string()));
+        Ok(t) => {
+            for tag in t.tags() {
+                tags.push((tag.key().to_string(), tag.value().to_string()));
+            }
         }
+        Err(e) => tags_error = Some(crate::error::sdk_error_message(&e)),
     }
 
     Ok(PsAccess {
@@ -949,6 +955,7 @@ pub async fn fetch_permission_set_access(
         customer_managed,
         boundary,
         tags,
+        tags_error,
     })
 }
 

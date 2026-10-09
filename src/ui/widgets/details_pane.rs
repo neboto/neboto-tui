@@ -8338,6 +8338,9 @@ fn acm_tags_lines(details_state: Option<&crate::lazy::Lazy<crate::aws::services:
             vec![("".to_string(), "Loading tags…".to_string())]
         }
         Some(crate::lazy::Lazy::Error(e)) => error_rows(e),
+        Some(crate::lazy::Lazy::Loaded(d)) if d.tags_error.is_some() => {
+            error_rows(d.tags_error.as_deref().unwrap_or_default())
+        }
         Some(crate::lazy::Lazy::Loaded(d)) => {
             let mut rows = vec![];
             if d.tags.is_empty() {
@@ -10664,7 +10667,10 @@ pub fn code_pipeline_section_lines(
         CodePipelineDetailSection::Tags => match details_state {
             None | Some(Lazy::Loading) => vec![("".to_string(), "Loading…".to_string())],
             Some(Lazy::Error(e)) => error_rows(e),
-            Some(Lazy::Loaded(d)) => tag_rows(&d.tags),
+            Some(Lazy::Loaded(d)) => match &d.tags_error {
+                Some(err) => error_rows(err),
+                None => tag_rows(&d.tags),
+            },
         },
     }
 }
@@ -23125,14 +23131,7 @@ pub fn permission_set_section_lines(
                 vec![("  Loading…".to_string(), "".to_string())]
             }
             Some(Lazy::Error(e)) => error_rows(e),
-            Some(Lazy::Loaded(a)) if a.tags.is_empty() => {
-                vec![("  (no tags)".to_string(), "".to_string())]
-            }
-            Some(Lazy::Loaded(a)) => a
-                .tags
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
+            Some(Lazy::Loaded(a)) => bundle_tag_rows(&a.tags, a.tags_error.as_deref()),
         },
     }
 }
@@ -32189,13 +32188,6 @@ fn render_waf_rule_group_split(
     );
 }
 
-fn waf_tag_lines(tags: &[(String, String)]) -> Vec<(String, String)> {
-    if tags.is_empty() {
-        return vec![("  (no tags)".to_string(), String::new())];
-    }
-    tags.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-}
-
 pub fn waf_ip_set_section_lines(
     s: &crate::aws::services::waf::WafIpSet,
     section: WafIpSetDetailSection,
@@ -32243,7 +32235,7 @@ pub fn waf_ip_set_section_lines(
                 vec![("  Loading…".to_string(), "".to_string())]
             }
             Some(crate::lazy::Lazy::Error(e)) => error_rows(e),
-            Some(crate::lazy::Lazy::Loaded(d)) => waf_tag_lines(&d.tags),
+            Some(crate::lazy::Lazy::Loaded(d)) => bundle_tag_rows(&d.tags, d.tags_error.as_deref()),
         },
     }
 }
@@ -32298,7 +32290,7 @@ pub fn waf_rule_group_section_lines(
                 vec![("  Loading…".to_string(), "".to_string())]
             }
             Some(crate::lazy::Lazy::Error(e)) => error_rows(e),
-            Some(crate::lazy::Lazy::Loaded(d)) => waf_tag_lines(&d.tags),
+            Some(crate::lazy::Lazy::Loaded(d)) => bundle_tag_rows(&d.tags, d.tags_error.as_deref()),
         },
     }
 }
@@ -32461,12 +32453,17 @@ pub fn route53_profile_section_lines(
                 vec![("  Loading…".to_string(), "".to_string())]
             }
             Some(crate::lazy::Lazy::Error(err)) => error_rows(err),
-            Some(crate::lazy::Lazy::Loaded(d)) => resolver_tag_rows(&d.tags),
+            Some(crate::lazy::Lazy::Loaded(d)) => bundle_tag_rows(&d.tags, d.tags_error.as_deref()),
         },
     }
 }
 
-fn resolver_tag_rows(tags: &[(String, String)]) -> Vec<(String, String)> {
+/// Tags section rows for a lazy bundle that fetches tags best-effort: a
+/// failed tag call renders as a warning, never as "(no tags)" (#28).
+fn bundle_tag_rows(tags: &[(String, String)], err: Option<&str>) -> Vec<(String, String)> {
+    if let Some(err) = err {
+        return error_rows(err);
+    }
     if tags.is_empty() {
         return vec![("  (no tags)".to_string(), String::new())];
     }
@@ -32619,7 +32616,7 @@ pub fn resolver_endpoint_section_lines(
         S::Tags => match state {
             None | Some(crate::lazy::Lazy::Loading) => vec![("  Loading…".to_string(), "".to_string())],
             Some(crate::lazy::Lazy::Error(err)) => error_rows(err),
-            Some(crate::lazy::Lazy::Loaded(d)) => resolver_tag_rows(&d.tags),
+            Some(crate::lazy::Lazy::Loaded(d)) => bundle_tag_rows(&d.tags, d.tags_error.as_deref()),
         },
     }
 }
@@ -32733,7 +32730,7 @@ pub fn resolver_rule_section_lines(
         S::Tags => match state {
             None | Some(crate::lazy::Lazy::Loading) => vec![("  Loading…".to_string(), "".to_string())],
             Some(crate::lazy::Lazy::Error(err)) => error_rows(err),
-            Some(crate::lazy::Lazy::Loaded(d)) => resolver_tag_rows(&d.tags),
+            Some(crate::lazy::Lazy::Loaded(d)) => bundle_tag_rows(&d.tags, d.tags_error.as_deref()),
         },
     }
 }
@@ -36588,6 +36585,9 @@ fn sns_permissions_lines(topic: &SnsTopic) -> Vec<(String, String)> {
 }
 
 fn sns_tags_lines(topic: &SnsTopic) -> Vec<(String, String)> {
+    if let Some(err) = &topic.tags_error {
+        return error_rows(err);
+    }
     let mut rows = vec![("".to_string(), "".to_string())];
 
     if topic.tags.is_empty() {
