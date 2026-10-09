@@ -474,7 +474,8 @@ A `credential_process` that asks for something in the terminal works too, such
 as granted with the `pass` keyring, where gpg's pinentry asks for your
 passphrase. neboto runs it before the TUI starts. When it runs again later
 (after `P`, or when the credentials expire), neboto steps aside until it
-finishes.
+finishes. A process that answers straight from its cache never shows
+anything; the note only appears once it has run for a moment.
 
 ### Themes
 
