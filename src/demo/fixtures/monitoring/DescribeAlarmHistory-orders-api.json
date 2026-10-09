@@ -1,0 +1,28 @@
+{
+  "AlarmHistoryItems": [
+    {
+      "AlarmName": "orders-api-errors",
+      "AlarmType": "MetricAlarm",
+      "Timestamp": {"$timestamp": {{epoch:now-22m}}},
+      "HistoryItemType": "StateUpdate",
+      "HistorySummary": "Alarm updated from OK to ALARM",
+      "HistoryData": "{\"version\": \"1.0\", \"oldState\": {\"stateValue\": \"OK\"}, \"newState\": {\"stateValue\": \"ALARM\", \"stateReason\": \"Threshold Crossed: 3 datapoints were greater than the threshold (5.0).\"}}"
+    },
+    {
+      "AlarmName": "orders-api-errors",
+      "AlarmType": "MetricAlarm",
+      "Timestamp": {"$timestamp": {{epoch:now-2d+9m}}},
+      "HistoryItemType": "StateUpdate",
+      "HistorySummary": "Alarm updated from ALARM to OK",
+      "HistoryData": "{\"version\": \"1.0\", \"oldState\": {\"stateValue\": \"ALARM\"}, \"newState\": {\"stateValue\": \"OK\", \"stateReason\": \"Threshold Crossed: 3 datapoints were not greater than the threshold (5.0).\"}}"
+    },
+    {
+      "AlarmName": "orders-api-errors",
+      "AlarmType": "MetricAlarm",
+      "Timestamp": {"$timestamp": {{epoch:now-2d}}},
+      "HistoryItemType": "StateUpdate",
+      "HistorySummary": "Alarm updated from OK to ALARM",
+      "HistoryData": "{\"version\": \"1.0\", \"oldState\": {\"stateValue\": \"OK\"}, \"newState\": {\"stateValue\": \"ALARM\", \"stateReason\": \"Threshold Crossed: 3 datapoints were greater than the threshold (5.0).\"}}"
+    }
+  ]
+}
