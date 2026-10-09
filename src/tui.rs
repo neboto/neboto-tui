@@ -72,30 +72,49 @@ impl Drop for Tui {
 // tty to ask for the passphrase. The SDK only runs the process when a request
 // first needs credentials, which is long after the TUI owns the screen, so
 // pinentry and ratatui used to draw over each other and race for keystrokes
-// (#151). `with_terminal` lends the terminal out for the duration of a future:
-// drawing and the input reader pause, and — only if the future outlives a
-// short grace period — the tty goes to cooked mode with a note, and the TUI
-// comes back with a full redraw.
+// (#151). `with_terminal` lends the terminal out for the duration of a future.
+//
+// The rule that makes this work: **every tty change happens before the
+// process starts, and none while it runs.** pinentry-curses saves the tty
+// modes it finds and restores them on exit, so switching raw → cooked
+// underneath a running pinentry (as #161 did after a grace timer) leaves it
+// echoing the passphrase into a line-buffered tty and then "restoring" raw
+// mode; printing a note while it draws interleaves the two escape streams.
 
 /// Set while a `Tui` owns the terminal (raw mode + alternate screen).
 static TUI_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Set while the terminal is lent out: no drawing, no input polling.
 static HANDED_OFF: AtomicBool = AtomicBool::new(false);
+/// Set by the input reader while it is parked (not inside a `poll`/`read`).
+/// The handoff waits for it, so no in-flight poll can take the prompt's keys.
+static READER_PARKED: AtomicBool = AtomicBool::new(false);
 /// The screen under ratatui's buffer is stale: clear before the next draw.
 static NEEDS_CLEAR: AtomicBool = AtomicBool::new(false);
 /// Held across a draw and across each mode switch, so the handoff never
-/// leaves the alternate screen halfway through a frame.
+/// switches modes halfway through a frame.
 static TERM_LOCK: Mutex<()> = Mutex::new(());
 /// One handoff at a time (two prompting providers would interleave).
 static HANDOFF_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// How long the handoff waits for the input reader to park. The reader polls
+/// in 100ms slices, so this only runs out if no reader is running.
+const READER_PARK_TIMEOUT: Duration = Duration::from_millis(500);
 
 fn term_lock() -> MutexGuard<'static, ()> {
     TERM_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Whether the input reader should leave the tty alone right now.
+/// Called by the input reader before each poll: whether it should leave the
+/// tty alone right now. Records whether it is parked for [`with_terminal`] —
+/// cleared *before* the pause is checked, so a handoff that sees the reader
+/// parked can never race a poll that is about to start.
 pub fn input_paused() -> bool {
-    HANDED_OFF.load(Ordering::SeqCst)
+    READER_PARKED.store(false, Ordering::SeqCst);
+    let paused = HANDED_OFF.load(Ordering::SeqCst);
+    if paused {
+        READER_PARKED.store(true, Ordering::SeqCst);
+    }
+    paused
 }
 
 /// Draw one frame unless the terminal is lent out. Clears first when the
@@ -115,31 +134,20 @@ where
     Ok(())
 }
 
-fn bottom_row() -> u16 {
-    crossterm::terminal::size().map(|(_, h)| h.saturating_sub(1)).unwrap_or(0)
-}
-
-/// How long a lent-out future may run before the handoff becomes visible. A
-/// `credential_process` serving cached credentials (granted with a warm
-/// cache, the common case on a profile switch) answers well inside this, so
-/// it never flashes the screen; one that is still running is prompting or
-/// about to.
-const HANDOFF_GRACE: Duration = Duration::from_millis(300);
-
 /// Run `fut` with the terminal lent out. With no TUI up (startup, headless,
 /// an editor or session already holding the terminal) it simply runs `fut`.
 ///
-/// Two stages, so a fast process never shows anything (#151 follow-up: every
-/// profile switch flashed the shell and the note):
-/// 1. Invisible: drawing and the input reader pause and mouse reporting goes
-///    off (its escape sequences would land in a prompt's input). The screen
-///    is untouched.
-/// 2. After [`HANDOFF_GRACE`], if `fut` is still running: cooked mode, the
-///    cursor shown, and `note` printed on the top row. This stays on the
-///    alternate screen on purpose — a `pinentry-curses` that started inside
-///    the grace period has already drawn there, and leaving would hide it.
-///    A plain `/dev/tty` prompt writes on the bottom row, where stage 1
-///    parked the cursor.
+/// 1. Before `fut` starts: drawing pauses, and the input reader is waited on
+///    until it is parked. Then mouse reporting goes off (its escape sequences
+///    would land in a prompt's input), the tty goes to cooked mode, `note`
+///    goes on the second-to-last row and the cursor on the last, where a
+///    plain `/dev/tty` prompt writes. It stays on the alternate screen, so a
+///    process that answers from its cache shows only the note where the
+///    status bar was — leaving the alternate screen is what flashed (#151).
+/// 2. While `fut` runs, nothing touches the tty.
+/// 3. After: raw mode, the alternate screen again (pinentry-curses' exit
+///    drops to the normal screen), mouse back on, leftover typed input
+///    discarded (a stray Enter after the passphrase), and a full redraw.
 pub async fn with_terminal<F, T>(note: &str, fut: F) -> T
 where
     F: std::future::Future<Output = T>,
@@ -148,61 +156,47 @@ where
     if !TUI_ACTIVE.load(Ordering::SeqCst) {
         return fut.await;
     }
+    HANDED_OFF.store(true, Ordering::SeqCst);
+    let deadline = tokio::time::Instant::now() + READER_PARK_TIMEOUT;
+    while !READER_PARKED.load(Ordering::SeqCst) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     {
         let _guard = term_lock();
-        HANDED_OFF.store(true, Ordering::SeqCst);
-        // Park the (hidden) cursor bottom-left, so a prompt that writes to
-        // the tty lands on its own row rather than mid-frame.
-        let _ = execute!(
-            io::stdout(),
-            DisableMouseCapture,
-            crossterm::cursor::MoveTo(0, bottom_row())
-        );
+        if TUI_ACTIVE.load(Ordering::SeqCst) {
+            let rows = crossterm::terminal::size().map(|(_, h)| h).unwrap_or(1);
+            let _ = execute!(
+                io::stdout(),
+                DisableMouseCapture,
+                crossterm::cursor::MoveTo(0, rows.saturating_sub(2)),
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown),
+                crossterm::style::Print(format!("neboto: {note}")),
+                crossterm::cursor::MoveTo(0, rows.saturating_sub(1)),
+                crossterm::cursor::Show
+            );
+            let _ = disable_raw_mode();
+        }
     }
 
-    tokio::pin!(fut);
-    let (result, visible) = tokio::select! {
-        r = &mut fut => (r, false),
-        _ = tokio::time::sleep(HANDOFF_GRACE) => {
-            {
-                let _guard = term_lock();
-                // The note goes on the top row and the cursor goes back to
-                // where the prompt may already have written its question.
-                let _ = execute!(
-                    io::stdout(),
-                    crossterm::cursor::SavePosition,
-                    crossterm::cursor::MoveTo(0, 0),
-                    crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine),
-                    crossterm::style::Print(format!("neboto: {note}")),
-                    crossterm::cursor::RestorePosition,
-                    crossterm::cursor::Show
-                );
-                let _ = disable_raw_mode();
-            }
-            (fut.await, true)
-        }
-    };
+    let result = fut.await;
 
     {
         let _guard = term_lock();
         // An editor/session teardown in the meantime owns the terminal now;
         // its own `Tui::new` brings the screen back.
         if TUI_ACTIVE.load(Ordering::SeqCst) {
-            if visible {
-                let _ = enable_raw_mode();
-                // Re-enter: a curses prompt's exit (`rmcup`) drops us back to
-                // the normal screen. The note and any prompt text are on the
-                // screen either way, so redraw from scratch.
-                let _ = execute!(
-                    io::stdout(),
-                    EnterAlternateScreen,
-                    EnableMouseCapture,
-                    crossterm::cursor::Hide
-                );
-                NEEDS_CLEAR.store(true, Ordering::SeqCst);
-            } else {
-                let _ = execute!(io::stdout(), EnableMouseCapture);
+            let _ = enable_raw_mode();
+            let _ = execute!(
+                io::stdout(),
+                EnterAlternateScreen,
+                EnableMouseCapture,
+                crossterm::cursor::Hide
+            );
+            // The reader is still parked, so nothing else is reading.
+            while crossterm::event::poll(Duration::ZERO).unwrap_or(false) {
+                let _ = crossterm::event::read();
             }
+            NEEDS_CLEAR.store(true, Ordering::SeqCst);
         }
         HANDED_OFF.store(false, Ordering::SeqCst);
     }
