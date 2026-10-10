@@ -494,7 +494,7 @@ impl Resource for SsmParameter {
     }
 
     fn details(&self) -> Vec<(String, String)> {
-        // Fallback only — the rich split pane lives in details_pane.rs.
+        // Fallback only — the rich split pane lives in details_pane/ssm.rs.
         let mut rows = vec![
             ("Name".to_string(), self.name.clone()),
             ("Type".to_string(), self.param_type.clone()),
@@ -1114,7 +1114,7 @@ impl Resource for SsmAssociation {
     }
 
     fn details(&self) -> Vec<(String, String)> {
-        // Fallback only — the rich split pane lives in details_pane.rs.
+        // Fallback only — the rich split pane lives in details_pane/ssm.rs.
         let mut rows = vec![
             ("Association ID".to_string(), self.association_id.clone()),
             ("Document".to_string(), self.document_name.clone()),
@@ -1313,7 +1313,7 @@ impl Resource for SsmCommand {
     }
 
     fn details(&self) -> Vec<(String, String)> {
-        // Fallback only — the rich split pane lives in details_pane.rs.
+        // Fallback only — the rich split pane lives in details_pane/ssm.rs.
         vec![
             ("Command ID".to_string(), self.command_id.clone()),
             ("Document".to_string(), self.document_name.clone()),
@@ -1479,7 +1479,7 @@ impl Resource for SsmAutomationExecution {
     }
 
     fn details(&self) -> Vec<(String, String)> {
-        // Fallback only — the rich split pane lives in details_pane.rs.
+        // Fallback only — the rich split pane lives in details_pane/ssm.rs.
         vec![
             ("Execution ID".to_string(), self.execution_id.clone()),
             ("Document".to_string(), self.document_name.clone()),
@@ -1597,7 +1597,7 @@ impl Resource for SsmMaintWindow {
     }
 
     fn details(&self) -> Vec<(String, String)> {
-        // Fallback only — the rich split pane lives in details_pane.rs.
+        // Fallback only — the rich split pane lives in details_pane/ssm.rs.
         vec![
             ("Window ID".to_string(), self.window_id.clone()),
             ("Name".to_string(), self.window_name.clone()),
@@ -1720,7 +1720,7 @@ impl Resource for SsmPatchBaseline {
     }
 
     fn details(&self) -> Vec<(String, String)> {
-        // Fallback only — the rich split pane lives in details_pane.rs.
+        // Fallback only — the rich split pane lives in details_pane/ssm.rs.
         vec![
             ("Baseline ID".to_string(), self.baseline_id.clone()),
             ("Name".to_string(), self.baseline_name.clone()),
@@ -1862,7 +1862,7 @@ impl Resource for SsmOpsItem {
     }
 
     fn details(&self) -> Vec<(String, String)> {
-        // Fallback only — the rich split pane lives in details_pane.rs.
+        // Fallback only — the rich split pane lives in details_pane/ssm.rs.
         vec![
             ("OpsItem ID".to_string(), self.ops_item_id.clone()),
             ("Title".to_string(), self.title.clone()),

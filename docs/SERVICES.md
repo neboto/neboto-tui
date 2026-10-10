@@ -1166,7 +1166,7 @@ the service you're touching.
   the console's Configuration page and the same IAM action; it is not a
   secrets API, so no reveal gate. Revisit if that proves too loud.
   **Jumps**: `eb_row_jump_target` keys on the `EB_ROW_*` label constants in
-  `details_pane.rs` — Application / Environment / Version Label stay in
+  `details_pane/beanstalk.rs` — Application / Environment / Version Label stay in
   `@eb`; EKS Cluster → `@eks` by name; Auto Scaling Group → `@asg`; a bare
   (classic) Load Balancer name → `@elb` (ALB rows are ARNs → generic);
   Launch Template → EC2; Queue (URL) → SQS. **`references()`** carries the
