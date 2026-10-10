@@ -93,7 +93,7 @@ impl AwsService for ResourceGroupsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list resource groups: {}", e),
+                        error: format!("Failed to list resource groups: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }
@@ -224,7 +224,7 @@ pub async fn fetch_resource_group_query(
                 Err("No query returned".to_string())
             }
         }
-        Err(e) => Err(format!("{}", e)),
+        Err(e) => Err(crate::error::sdk_error_message(&e)),
     }
 }
 
@@ -259,7 +259,7 @@ pub async fn fetch_resource_group_resources(
                     break;
                 }
             }
-            Err(e) => return Err(format!("{}", e)),
+            Err(e) => return Err(crate::error::sdk_error_message(&e)),
         }
     }
     Ok(members)
@@ -277,6 +277,6 @@ pub async fn fetch_resource_group_tags(
                 .unwrap_or_default();
             Ok(tags)
         }
-        Err(e) => Err(format!("{}", e)),
+        Err(e) => Err(crate::error::sdk_error_message(&e)),
     }
 }

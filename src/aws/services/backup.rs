@@ -76,7 +76,7 @@ impl AwsService for BackupService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list backup vaults: {}", e),
+                        error: format!("Failed to list backup vaults: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }

@@ -52,7 +52,7 @@ impl AwsService for IdentityCenterService {
             Err(e) => {
                 let _ = event_tx.send(Event::ResourceLoadError {
                     service: service_type,
-                    error: format!("Failed to list Identity Center instances: {}", e),
+                    error: format!("Failed to list Identity Center instances: {}", crate::error::sdk_error_message(&e)),
                 });
                 return Ok(());
             }

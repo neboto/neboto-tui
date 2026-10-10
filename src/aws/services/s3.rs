@@ -265,7 +265,7 @@ impl AwsService for S3Service {
             Err(e) => {
                 let _ = event_tx.send(Event::ResourceLoadError {
                     service: service_type,
-                    error: e.to_string(),
+                    error: crate::error::sdk_error_message(&e),
                 });
                 return Err(e.into());
             }
@@ -666,7 +666,7 @@ impl S3Bucket {
         let bucket_policy = match policy_result {
             Ok(response) => response.policy().map(|p| p.to_string()),
             Err(e) => {
-                let err_str = e.to_string();
+                let err_str = crate::error::sdk_error_message(&e);
                 if err_str.contains("AccessDenied") || err_str.contains("Access Denied") {
                     Some("<Access Denied - Insufficient permissions>".to_string())
                 } else {

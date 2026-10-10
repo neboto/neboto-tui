@@ -86,7 +86,7 @@ impl AwsService for MessagingService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list SQS queues: {}", e),
+                        error: format!("Failed to list SQS queues: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }
@@ -134,7 +134,7 @@ impl AwsService for MessagingService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list SNS topics: {}", e),
+                        error: format!("Failed to list SNS topics: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }
@@ -802,4 +802,50 @@ fn parse_points<E>(
         .collect();
     pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     pts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_smithy_runtime_api::client::http::{
+        http_client_fn, HttpConnector, HttpConnectorFuture, SharedHttpConnector,
+    };
+    use aws_smithy_runtime_api::client::orchestrator::{HttpRequest, HttpResponse};
+    use aws_smithy_types::body::SdkBody;
+
+    /// Answers every request the way SQS answers a caller without
+    /// `sqs:ListQueues`.
+    #[derive(Debug)]
+    struct AccessDenied;
+
+    impl HttpConnector for AccessDenied {
+        fn call(&self, _req: HttpRequest) -> HttpConnectorFuture {
+            let body = r#"{"__type":"com.amazonaws.sqs#AccessDenied","message":"User: arn:aws:iam::123456789012:user/ci is not authorized to perform: sqs:ListQueues"}"#;
+            let mut resp = HttpResponse::new(403.try_into().unwrap(), SdkBody::from(body));
+            resp.headers_mut().insert("content-type", "application/x-amz-json-1.0");
+            HttpConnectorFuture::ready(Ok(resp))
+        }
+    }
+
+    /// A bare `SdkError` `Display` is just "service error"; the load error
+    /// must carry the AWS code and message instead (#183).
+    #[tokio::test]
+    async fn load_error_carries_the_aws_message_not_service_error() {
+        let http = http_client_fn(|_, _| SharedHttpConnector::new(AccessDenied));
+        let clients = AwsClients::new_with_http_for_test(http).await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        MessagingService::new(&clients)
+            .list_resources_streaming(tx, ServiceType::Messaging)
+            .await
+            .unwrap();
+        let error = std::iter::from_fn(|| rx.try_recv().ok())
+            .find_map(|ev| match ev {
+                Event::ResourceLoadError { error, .. } => Some(error),
+                _ => None,
+            })
+            .expect("a load error");
+        assert!(error.contains("AccessDenied"), "{error}");
+        assert!(error.contains("not authorized to perform: sqs:ListQueues"), "{error}");
+        assert!(!error.contains("service error"), "{error}");
+    }
 }

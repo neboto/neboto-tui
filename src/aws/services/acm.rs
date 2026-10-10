@@ -75,7 +75,7 @@ impl AwsService for AcmService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list ACM certificates: {}", e),
+                        error: format!("Failed to list ACM certificates: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }

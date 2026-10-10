@@ -76,7 +76,7 @@ impl AwsService for DirectConnectService {
             Err(e) => {
                 let _ = event_tx.send(Event::ResourceLoadError {
                     service: service_type,
-                    error: format!("Failed to list Direct Connect connections: {}", e),
+                    error: format!("Failed to list Direct Connect connections: {}", crate::error::sdk_error_message(&e)),
                 });
                 return Ok(());
             }

@@ -131,7 +131,7 @@ impl AwsService for ElbService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list load balancers: {}", e),
+                        error: format!("Failed to list load balancers: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }

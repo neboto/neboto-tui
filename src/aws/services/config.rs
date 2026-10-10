@@ -91,7 +91,7 @@ impl AwsService for ConfigService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list secrets: {}", e),
+                        error: format!("Failed to list secrets: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }
