@@ -12,6 +12,7 @@
       "--profile",
       "--region",
       "--service",
+      "--session-launch",
       "--show-keys",
       "--theme",
       "--watch"

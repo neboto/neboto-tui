@@ -69,6 +69,13 @@ pub struct Config {
     /// export). Default: the working directory. The `NEBOTO_EXPORT_DIR`
     /// environment variable overrides it.
     pub export_dir: Option<String>,
+    /// Where SSM / ECS Exec sessions open: `"auto"` (default — tmux window,
+    /// then a new terminal window, then the current terminal), `"window"`
+    /// (always a new tmux / terminal window; static env keys are handed over
+    /// through a 0600 temp file, never the command) or `"inline"` (always the
+    /// current terminal). Unknown values warn at startup and mean `auto`.
+    /// `--session-launch` overrides it for one run.
+    pub session_launch: Option<String>,
     /// IAM role name assumed when switching into a member account from the
     /// Organizations accounts list (`s`). Default:
     /// `OrganizationAccountAccessRole`; Control Tower shops typically want

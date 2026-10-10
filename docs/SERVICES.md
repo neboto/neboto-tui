@@ -92,7 +92,20 @@ the service you're touching.
   (`is_secret_aws_var`: the key id, `*SECRET*`, `AWS_*_TOKEN`), because that
   command reaches shell history, `ps -E` and scrollback (#120). So a session
   running on static env keys (and no named profile) skips the window tiers
-  and runs inline, where the child inherits them unwritten.
+  and runs inline, where the child inherits them unwritten. Config
+  `session_launch` (#146, `src/session_launch.rs`) overrides the tiers:
+  `inline` always suspends the TUI; `window` always opens a window, and on
+  static keys hands them over through a `tempfile` (0600, re-asserted before
+  the write) holding `export` lines — the command is
+  `. <file> && rm -f <file> && { … }`, so only the path is in it. The
+  `TempPath` sits in `App.session_handover_files` and is dropped (deleting the
+  file) after `HANDOVER_TTL` by the tick, the backstop for a window that never
+  ran its command. In `window` mode a failed tmux spawn falls through to the
+  terminal-window tier, then inline with a status note; `auto` keeps the old
+  "report tmux failure, stop" behaviour. Rejected: any mode that writes keys
+  into the command (#143's rule is not switchable). Not ours to fix:
+  `session-manager-plugin` gets the session `TokenValue` as an argv entry, so
+  it is in `ps` while the session runs.
 - **Lambda** — Config/Code/**Triggers**/Environment/Tags(+Optimizer). Two lazy
   sections: **Code** (`GetFunction`; `d` (only there) downloads + unzips the
   deployment package (zip-slip-safe) to `~/.cache/neboto/lambda/<fn>/<timestamp>`

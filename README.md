@@ -483,6 +483,7 @@ template.
 | `show_keys` | Show each key and what it did in a corner box (`--show-keys` for one run) |
 | `export_formats` | Which files exports write: any of `"json"`, `"csv"`, `"md"` (default all three) |
 | `export_dir` | Where exports go (default the working directory; `NEBOTO_EXPORT_DIR` overrides) |
+| `session_launch` | Where SSM / ECS Exec sessions open: `"auto"` (default: tmux window → new terminal window → this terminal), `"window"` or `"inline"` (`--session-launch` for one run; see [Why read-only](#why-read-only)) |
 | `theme`, `[theme_colors]` | Preset name and per-color overrides |
 | `cache_ttl`, `[cache_ttls]` | Base cache freshness (seconds) and per-service overrides keyed by `@`-prefix |
 | `org_access_role`, `org_access_roles` | Role name(s) for the member-account switch |
@@ -593,6 +594,17 @@ Session Manager or ECS Exec shell, through the `aws` CLI rather than the SDK.
 It's always your keypress, and opening a session changes no resource, but a
 shell on the box can change anything there. It's switched off while an Org
 member-account role is assumed.
+
+Sessions open in a new tmux window, else a new terminal window, else the
+current terminal (the TUI suspends); config `session_launch` picks
+`"window"` or `"inline"` instead. No credential is ever written into a
+launched command, which would reach shell history, `ps` and the screen: on
+static env keys a session runs in the current terminal, or under
+`"window"` gets the keys through a temp file only you can read, which the new
+shell sources and deletes. One leak is the AWS CLI's own and outside neboto's
+reach: `session-manager-plugin` receives the session's `StartSession` response,
+including its `TokenValue`, as a command-line argument, so it is visible in
+`ps` while the session runs.
 
 **Where the guarantee comes from.** Under an assumed member-account role,
 AWS enforces it through the `ReadOnlyAccess` session policy. On your own
