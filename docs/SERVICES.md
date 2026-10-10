@@ -618,6 +618,22 @@ the service you're touching.
   definitions only once their details have been opened —
   their image refs are tags, so they match current tags only. The section
   states its coverage so an empty list never reads as "unused").
+  **Digest drift (#156)**: a running task's pulled digest that is
+  **untagged** (a re-pushed mutable tag moved on — an untagged-expiry rule
+  can now delete it) or **missing** from its repo (the next placement fails
+  `CannotPullContainerError`) leads the image / repo / ECS service / ECS
+  task panes with a `⚠` line (`App::ecr_digest_drift` →
+  `ecr::digest_status`). Zero API, and it **never guesses**: it says
+  nothing unless both the ECS and ECR data are in memory, only counts an
+  ECR list that finished loading (a half-streamed one would read as
+  "missing"), skips a repo with no image rows (also what a failed
+  `DescribeImages` looks like), and against a list cut to the newest 100
+  it says "not among the newest N", never "deleted". Stopped tasks don't
+  count. `Tag Mutability: MUTABLE` turns into a warning only when running
+  containers pull from the repo. Replicas collapse into one line with a
+  task count. Not a row state (`F`/`--state`): `state()` can't see the
+  other service's cache, and a filter that depends on which services you
+  happened to open would be a lie.
   **No Layers section, on purpose**: layers need `BatchGetImage` (the
   manifest), and ECR bumps an image's `lastRecordedPullTime` on that call —
   merely *looking* at an image would move the "Last Pulled" date people use

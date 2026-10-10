@@ -181,13 +181,17 @@ pub static FIXTURES: &[Fixture] = &[
     // ── ECR (awsJson; host `api.ecr.…`) ──────────────────────────────────────
     // storefront-web's v2.31.0 (what the web tasks run) carries Inspector
     // findings; orders-worker's v1.19.0 is the failed rev-15 image (the
-    // stopped tasks pin its digest), v1.18.2 is what's running after the
-    // rollback, plus one untagged image whose scan FAILED.
+    // stopped tasks pin its digest). CI re-pushed `latest` onto it, so the
+    // digest the rolled-back tasks still run is now **untagged** — and the
+    // repo's lifecycle policy expires untagged images after 7 days (the
+    // #156 drift: ⚠ on the image, repo, service and task panes). Plus one
+    // older untagged image whose scan FAILED.
     fx!("ecr", "DescribeRepositories", "DescribeRepositories.json"),
     fx!("ecr", "DescribeImages", when ["storefront-web"], "DescribeImages-storefront-web.json"),
     fx!("ecr", "DescribeImages", when ["orders-worker"], "DescribeImages-orders-worker.json"),
     fx!("ecr", "DescribeImageScanFindings", when ["storefront-web", "a3f1c9e2b7d4058c6e91f2a7b3d8c4e5f60718293a4b5c6d7e8f9012a3b4c5d6"], "DescribeImageScanFindings-storefront-web.json"),
     fx!("ecr", "DescribeImageScanFindings", "ScanNotFound.json"),
+    fx!("ecr", "GetLifecyclePolicy", when ["orders-worker"], "GetLifecyclePolicy-orders-worker.json"),
     // ── Lambda (restJson: the operation is `METHOD /path`) ───────────────────
     fx!("lambda", "GET /2015-03-31/functions", "ListFunctions.json"),
     fx!("lambda", "GET /2015-03-31/functions/orders-api", "GetFunction-orders-api.json"),

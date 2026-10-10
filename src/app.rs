@@ -15578,6 +15578,107 @@ impl App {
         (users, ecs_warm)
     }
 
+    /// ECS tasks already in memory: the warm ECS cache, plus the on-screen
+    /// list while ECS is the current service. Deduped by ARN.
+    fn loaded_ecs_tasks(&self) -> Vec<&crate::aws::services::ecs::EcsTask> {
+        use crate::aws::services::ecs::EcsTask;
+        let variant = self.cache_variant(ServiceType::ECS);
+        let cached = self.cache.get_ref(&ServiceType::ECS, &self.current_region, variant.as_deref());
+        let on_screen = (self.current_service == Some(ServiceType::ECS) && !self.all_search_mode)
+            .then_some(self.resources.as_slice());
+        let mut tasks: Vec<&EcsTask> = Vec::new();
+        for list in [cached, on_screen].into_iter().flatten() {
+            for t in list.iter().filter_map(|r| r.as_any().downcast_ref::<EcsTask>()) {
+                if !tasks.iter().any(|x| x.task_arn == t.task_arn) {
+                    tasks.push(t);
+                }
+            }
+        }
+        tasks
+    }
+
+    /// ECR repositories + images from a *finished* load — the warm cache, or
+    /// the on-screen list once it stops loading. A half-streamed image list
+    /// would read as "digest missing", so a load in flight counts as nothing.
+    #[allow(clippy::type_complexity)]
+    fn loaded_ecr_rows(
+        &self,
+    ) -> (Vec<&crate::aws::services::ecr::EcrRepository>, Vec<&crate::aws::services::ecr::EcrImage>) {
+        use crate::aws::services::ecr::{EcrImage, EcrRepository};
+        let variant = self.cache_variant(ServiceType::Ecr);
+        let list = self
+            .cache
+            .get_ref(&ServiceType::Ecr, &self.current_region, variant.as_deref())
+            .or_else(|| {
+                (self.current_service == Some(ServiceType::Ecr) && !self.all_search_mode && !self.loading)
+                    .then_some(self.resources.as_slice())
+            })
+            .unwrap_or_default();
+        let repos = list.iter().filter_map(|r| r.as_any().downcast_ref::<EcrRepository>()).collect();
+        let images = list.iter().filter_map(|r| r.as_any().downcast_ref::<EcrImage>()).collect();
+        (repos, images)
+    }
+
+    /// Running containers (of the tasks `keep` selects) whose pulled digest
+    /// is untagged or missing from its ECR repo — zero API, from the warm
+    /// ECS and ECR data (#156). Empty when either side isn't loaded: it
+    /// never guesses.
+    pub(crate) fn ecr_digest_drift(
+        &self,
+        keep: impl Fn(&crate::aws::services::ecs::EcsTask) -> bool,
+    ) -> Vec<crate::aws::services::ecr::DigestDrift> {
+        use crate::aws::services::ecr::{digest_status, DigestDrift, DigestStatus};
+        let (repos, images) = self.loaded_ecr_rows();
+        if repos.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for t in self.loaded_ecs_tasks().into_iter().filter(|t| !t.is_stopped() && keep(t)) {
+            for c in &t.containers {
+                let Some(digest) = c.image_digest.as_deref().filter(|d| !d.is_empty()) else {
+                    continue;
+                };
+                let Some(status) = digest_status(&repos, &images, &c.image, digest) else {
+                    continue;
+                };
+                if status == DigestStatus::Tagged {
+                    continue;
+                }
+                let Some(repo) = repos.iter().find(|r| r.holds_ref(&c.image)) else {
+                    continue;
+                };
+                let owner = t.service_name.clone().unwrap_or_else(|| t.display_name.clone());
+                if let Some(d) = out.iter_mut().find(|d: &&mut DigestDrift| {
+                    d.owner == owner && d.container == c.name && d.repo_uri == repo.uri && d.digest == digest
+                }) {
+                    d.tasks += 1;
+                    continue;
+                }
+                out.push(DigestDrift {
+                    owner,
+                    container: c.name.clone(),
+                    repo_name: repo.name.clone(),
+                    repo_uri: repo.uri.clone(),
+                    digest: digest.to_string(),
+                    status,
+                    tasks: 1,
+                });
+            }
+        }
+        out
+    }
+
+    /// Running containers that pull from `repo` — what makes a MUTABLE tag
+    /// setting a live risk rather than a neutral fact.
+    pub(crate) fn ecr_repo_running_users(&self, repo: &crate::aws::services::ecr::EcrRepository) -> usize {
+        self.loaded_ecs_tasks()
+            .into_iter()
+            .filter(|t| !t.is_stopped())
+            .flat_map(|t| t.containers.iter())
+            .filter(|c| repo.holds_ref(&c.image))
+            .count()
+    }
+
     pub(crate) fn trigger_ecr_lifecycle_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if let Some(repo) = self.get_selected_resource().and_then(|r| {
             r.as_any().downcast_ref::<crate::aws::services::ecr::EcrRepository>()
@@ -26574,11 +26675,17 @@ impl App {
                     crate::aws::services::ecr::EcrImageDetailSection::from_index(self.detail_section_idx);
                 let users = (section == crate::aws::services::ecr::EcrImageDetailSection::UsedBy)
                     .then(|| self.ecr_image_users(img));
+                let drift: Vec<_> = self
+                    .ecr_digest_drift(|_| true)
+                    .into_iter()
+                    .filter(|d| d.digest == img.digest && d.repo_name == img.repo_name)
+                    .collect();
                 return crate::ui::widgets::details_pane::ecr_image_section_lines(
                     img,
                     section,
                     self.lazy.ecr_image_findings.get(&img.key),
                     users.as_ref().map(|(u, warm)| (u.as_slice(), *warm)),
+                    &drift,
                 );
             }
             if let Some(repo) = resource
@@ -26586,12 +26693,19 @@ impl App {
                 .downcast_ref::<crate::aws::services::ecr::EcrRepository>()
             {
                 let images = self.ecr_repo_sibling_images(&repo.name);
+                let drift: Vec<_> = self
+                    .ecr_digest_drift(|_| true)
+                    .into_iter()
+                    .filter(|d| d.repo_uri == repo.uri)
+                    .collect();
                 return crate::ui::widgets::details_pane::ecr_repo_section_lines(
                     repo,
                     crate::aws::services::ecr::EcrRepoDetailSection::from_index(self.detail_section_idx),
                     &images,
                     self.loading,
                     self.lazy.ecr_lifecycle.get(&repo.name),
+                    &drift,
+                    self.ecr_repo_running_users(repo),
                 );
             }
             if let Some(finding) = resource
@@ -27297,6 +27411,10 @@ impl App {
                     self.lazy.ecs_service_tasks.get(&svc.service_arn),
                     self.selected_optimizer_state(),
                     self.co_enrollment.as_ref(),
+                    &self.ecr_digest_drift(|t| {
+                        t.cluster_arn == svc.cluster_arn
+                            && t.service_name.as_deref() == Some(svc.service_name.as_str())
+                    }),
                 );
             }
             if let Some(td) = resource
@@ -27317,6 +27435,7 @@ impl App {
                 return crate::ui::widgets::details_pane::ecs_task_section_lines(
                     task,
                     crate::aws::services::ecs::EcsTaskDetailSection::from_index(self.detail_section_idx),
+                    &self.ecr_digest_drift(|t| t.task_arn == task.task_arn),
                 );
             }
             if let Some(queue) = resource

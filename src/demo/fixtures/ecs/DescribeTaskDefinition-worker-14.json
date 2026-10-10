@@ -4,7 +4,7 @@
   "taskRoleArn": "arn:aws:iam::{{account}}:role/orders-worker-task", "executionRoleArn": "arn:aws:iam::{{account}}:role/ecs-task-execution",
   "registeredAt": {{epoch:now-30d}},
   "containerDefinitions": [{
-    "name": "worker", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/orders-worker:v1.18.2", "essential": true,
+    "name": "worker", "image": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/orders-worker:latest", "essential": true,
     "cpu": 512, "memory": 1024, "portMappings": [],
     "environment": [{"name": "QUEUE", "value": "orders"}, {"name": "DATABASE_URL", "value": "postgres://orders.internal:5432/orders"}],
     "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "/ecs/orders-worker", "awslogs-region": "{{region}}", "awslogs-stream-prefix": "ecs"}}

@@ -27,9 +27,7 @@
    "registryId": "{{account}}",
    "repositoryName": "orders-worker",
    "imageDigest": "sha256:d6a4f2b5eaa738bf9bc4a5dae6abf7b8293041526d7e8f901234567d6e7f8091",
-   "imageTags": [
-    "v1.18.2"
-   ],
+   "imageTags": [],
    "imageSizeInBytes": 87031808,
    "imagePushedAt": {{epoch:now-6d}},
    "imageManifestMediaType": "application/vnd.docker.distribution.manifest.v2+json",
@@ -53,7 +51,7 @@
    "imageDigest": "sha256:e7b5a3c6fbb849c0acd5b6ebf7bc08c93a4152637e8f9012345678e7f8091a2b",
    "imageTags": [],
    "imageSizeInBytes": 86507520,
-   "imagePushedAt": {{epoch:now-30d}},
+   "imagePushedAt": {{epoch:now-6d-3h}},
    "imageManifestMediaType": "application/vnd.docker.distribution.manifest.v2+json",
    "artifactMediaType": "application/vnd.docker.container.image.v1+json",
    "imageScanStatus": {

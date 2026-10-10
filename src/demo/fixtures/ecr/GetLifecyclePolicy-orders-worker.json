@@ -1,0 +1,6 @@
+{
+ "registryId": "{{account}}",
+ "repositoryName": "orders-worker",
+ "lifecyclePolicyText": "{\"rules\": [{\"rulePriority\": 1, \"description\": \"expire untagged images after 7 days\", \"selection\": {\"tagStatus\": \"untagged\", \"countType\": \"sinceImagePushed\", \"countUnit\": \"days\", \"countNumber\": 7}, \"action\": {\"type\": \"expire\"}}]}",
+ "lastEvaluatedAt": {{epoch:now-3h}}
+}

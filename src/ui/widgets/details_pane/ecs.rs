@@ -194,10 +194,14 @@ pub fn ecs_service_section_lines(
     tasks: Option<&crate::lazy::Lazy<Vec<crate::aws::services::ecs::EcsTask>>>,
     optimizer: Option<&Lazy<Option<crate::aws::services::computeoptimizer::OptimizerRec>>>,
     enrollment: Option<&crate::aws::services::computeoptimizer::CoEnrollment>,
+    drift: &[crate::aws::services::ecr::DigestDrift],
 ) -> Vec<(String, String)> {
     match section {
         EcsServiceDetailSection::Overview => {
             let mut rows = vec![("".into(), "".into())];
+            // Where the outage is felt: a digest gone (or about to go) from
+            // its repo fails every new placement of this service.
+            rows.extend(drift_rows(drift));
             rows.push(("Service Name".into(), svc.service_name.clone()));
             rows.push(("Cluster".into(), svc.cluster_name.clone()));
             rows.push(("Status".into(), svc.status.clone()));
@@ -704,10 +708,12 @@ pub(super) fn build_ecs_task_header_lines(task: &EcsTask) -> Vec<Line<'static>> 
 pub fn ecs_task_section_lines(
     task: &EcsTask,
     section: EcsTaskDetailSection,
+    drift: &[crate::aws::services::ecr::DigestDrift],
 ) -> Vec<(String, String)> {
     match section {
         EcsTaskDetailSection::Overview => {
             let mut rows = vec![("".into(), "".into())];
+            rows.extend(drift_rows(drift));
 
             // Stop reason is the headline triage info — show it first when stopped.
             if task.is_stopped() {
