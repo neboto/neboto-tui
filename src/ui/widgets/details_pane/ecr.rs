@@ -57,17 +57,31 @@ pub fn ecr_repo_section_lines(
     images: &[&crate::aws::services::ecr::EcrImage],
     list_loading: bool,
     lifecycle: Option<&crate::lazy::Lazy<String>>,
+    drift: &[crate::aws::services::ecr::DigestDrift],
+    running_users: usize,
 ) -> Vec<(String, String)> {
-    
+    use crate::aws::services::ecr::DigestStatus;
     match section {
         EcrRepoDetailSection::Details => {
-            let mut rows = vec![
+            // Mutable tags are only a live risk once something runs a digest
+            // from here: re-pushing a tag then strands that digest untagged.
+            let mutability = if repo.tags_mutable() && running_users > 0 {
+                format!(
+                    "⚠ {} — {running_users} running container{} pull from here; re-pushing a tag leaves their digest untagged",
+                    repo.image_tag_mutability,
+                    if running_users == 1 { "" } else { "s" },
+                )
+            } else {
+                repo.image_tag_mutability.clone()
+            };
+            let mut rows = drift_rows(drift);
+            rows.extend([
                 ("Repository".to_string(), repo.name.clone()),
                 ("URI".to_string(), repo.uri.clone()),
-                ("Tag Mutability".to_string(), repo.image_tag_mutability.clone()),
+                ("Tag Mutability".to_string(), mutability),
                 ("Scan on Push".to_string(), if repo.scan_on_push { "✓ enabled" } else { "✗ disabled" }.to_string()),
                 ("Encryption".to_string(), repo.encryption_type.clone()),
-            ];
+            ]);
             if let Some(k) = &repo.kms_key {
                 rows.push(("KMS Key".to_string(), k.clone()));
             }
@@ -113,6 +127,9 @@ pub fn ecr_repo_section_lines(
 
                 rows.push(("  URI".to_string(), img.image_ref()));
                 rows.push(("  Digest".to_string(), img.digest.clone()));
+                if drift.iter().any(|d| d.digest == img.digest && d.status == DigestStatus::Untagged) {
+                    rows.push((String::new(), "⚠ untagged but running — an untagged-expiry rule can delete it".to_string()));
+                }
                 if let Some(p) = &img.pushed_at {
                     rows.push(("  Pushed".to_string(), p.clone()));
                 }
@@ -184,12 +201,14 @@ pub fn ecr_image_section_lines(
     section: crate::aws::services::ecr::EcrImageDetailSection,
     findings: Option<&crate::lazy::Lazy<crate::aws::services::ecr::EcrScanFindings>>,
     users: Option<(&[crate::aws::services::ecr::EcrImageUser], bool)>,
+    drift: &[crate::aws::services::ecr::DigestDrift],
 ) -> Vec<(String, String)> {
     use crate::aws::services::ecr::EcrImageDetailSection as S;
     use crate::lazy::Lazy;
     match section {
         S::Overview => {
-            let mut rows = vec![
+            let mut rows = drift_rows(drift);
+            rows.extend([
                 ("Repository".to_string(), img.repo_name.clone()),
                 (
                     "Tags".to_string(),
@@ -198,7 +217,7 @@ pub fn ecr_image_section_lines(
                 ("Digest".to_string(), img.digest.clone()),
                 ("URI".to_string(), img.image_ref()),
                 ("Size".to_string(), img.size_display()),
-            ];
+            ]);
             if let Some(p) = &img.pushed_at {
                 rows.push(("Pushed".to_string(), p.clone()));
             }
@@ -241,7 +260,7 @@ pub fn ecr_image_section_lines(
         },
         S::UsedBy => {
             let (list, warm) = users.unwrap_or((&[][..], false));
-            let mut rows = Vec::new();
+            let mut rows = drift_rows(drift);
             if list.is_empty() {
                 rows.push((" No ECS task or task definition found using this image".to_string(), String::new()));
             } else {
@@ -268,6 +287,16 @@ pub fn ecr_image_section_lines(
             rows
         }
     }
+}
+
+/// Digest-drift warnings (#156) as a block that leads a section, followed
+/// by a spacer; nothing when there's no drift.
+pub(super) fn drift_rows(drift: &[crate::aws::services::ecr::DigestDrift]) -> Vec<(String, String)> {
+    let mut rows: Vec<(String, String)> = drift.iter().map(|d| (String::new(), d.warning())).collect();
+    if !rows.is_empty() {
+        rows.push((String::new(), String::new()));
+    }
+    rows
 }
 
 /// The Findings section body: a summary, then one group per finding,

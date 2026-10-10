@@ -4864,14 +4864,14 @@ mod ecr_jump_tests {
             "web",
             "123456789012.dkr.ecr.us-east-1.amazonaws.com/web",
         );
-        let ov = ecr_image_section_lines(&img, S::Overview, None, None);
+        let ov = ecr_image_section_lines(&img, S::Overview, None, None, &[]);
         assert!(ov.iter().any(|(k, v)| k == "Tags" && v == "<untagged>"));
         assert!(ov.iter().any(|(k, v)| k == "Last Pulled" && v == "Never"));
 
-        let loading = ecr_image_section_lines(&img, S::Findings, None, None);
+        let loading = ecr_image_section_lines(&img, S::Findings, None, None, &[]);
         assert!(loading.iter().any(|(_, v)| v.starts_with("Loading")));
         let err = crate::lazy::Lazy::Error("denied".to_string());
-        let rows = ecr_image_section_lines(&img, S::Findings, Some(&err), None);
+        let rows = ecr_image_section_lines(&img, S::Findings, Some(&err), None, &[]);
         assert!(rows.iter().any(|(k, _)| k.contains("denied")));
         let loaded = crate::lazy::Lazy::Loaded(EcrScanFindings {
             scan_status: "COMPLETE".into(),
@@ -4886,7 +4886,7 @@ mod ecr_jump_tests {
             }],
             ..Default::default()
         });
-        let rows = ecr_image_section_lines(&img, S::Findings, Some(&loaded), None);
+        let rows = ecr_image_section_lines(&img, S::Findings, Some(&loaded), None, &[]);
         assert!(rows.iter().any(|(k, _)| k == "HIGH CVE-1"));
         assert!(rows.iter().any(|(k, v)| k == "  Package" && v == "openssl 3.0"));
         assert!(rows.iter().any(|(k, v)| k == "  Fixed In" && v == "3.1"));
@@ -4898,9 +4898,9 @@ mod ecr_jump_tests {
             container: "web".into(),
             status: "RUNNING".into(),
         }];
-        let rows = ecr_image_section_lines(&img, S::UsedBy, None, Some((&users[..], true)));
+        let rows = ecr_image_section_lines(&img, S::UsedBy, None, Some((&users[..], true)), &[]);
         assert!(rows.iter().any(|(k, v)| k == "  Task" && v.ends_with("/0f1e")));
-        let cold = ecr_image_section_lines(&img, S::UsedBy, None, Some((&[][..], false)));
+        let cold = ecr_image_section_lines(&img, S::UsedBy, None, Some((&[][..], false)), &[]);
         assert!(cold.iter().any(|(k, _)| k.contains("ECS not loaded")));
     }
 
@@ -4929,17 +4929,17 @@ mod ecr_jump_tests {
             &repo.uri,
         );
         img.repo_images_seen = 1;
-        let rows = ecr_repo_section_lines(&repo, S::Images, &[&img], false, None);
+        let rows = ecr_repo_section_lines(&repo, S::Images, &[&img], false, None, &[], 0);
         assert_eq!(rows[0].0, "Images (1, newest first)");
         assert!(rows.iter().any(|(k, v)| k == "  Digest" && v == "sha256:abc"));
         // A cut list says so.
         img.repo_images_seen = 250;
-        let rows = ecr_repo_section_lines(&repo, S::Images, &[&img], false, None);
+        let rows = ecr_repo_section_lines(&repo, S::Images, &[&img], false, None, &[], 0);
         assert_eq!(rows[0].0, "Images (newest 1 of 250)");
         // Empty: loading while the list streams, "none" once it's done.
-        let rows = ecr_repo_section_lines(&repo, S::Images, &[], true, None);
+        let rows = ecr_repo_section_lines(&repo, S::Images, &[], true, None, &[], 0);
         assert!(rows.iter().any(|(_, v)| v.starts_with("Loading")));
-        let rows = ecr_repo_section_lines(&repo, S::Images, &[], false, None);
+        let rows = ecr_repo_section_lines(&repo, S::Images, &[], false, None, &[], 0);
         assert!(rows.iter().any(|(k, _)| k.contains("No images")));
     }
 

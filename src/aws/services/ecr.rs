@@ -381,6 +381,92 @@ pub struct EcrImageUser {
     pub status: String,
 }
 
+/// What became of the image a running container pulled (#156).
+#[derive(Debug, Clone, PartialEq)]
+pub enum DigestStatus {
+    Tagged,
+    /// Still in the repo, but no tag points at it any more (a re-pushed
+    /// mutable tag moved on) — an untagged-expiry lifecycle rule can delete
+    /// it while tasks still run it.
+    Untagged,
+    /// Not among the repo's loaded images. `cut` is how many newest images
+    /// were loaded when the repo's list was cut: the digest may just be
+    /// older than the cut, so callers must not say it was deleted.
+    Missing { cut: Option<usize> },
+}
+
+/// Where a running container's pulled digest stands in its repository.
+/// `None` when it isn't ours to judge: not an ECR ref, the repo isn't
+/// loaded (another account / region, or ECR not opened yet), or the repo
+/// has no image rows — which is also what a repo whose image fetch failed
+/// looks like, and "not found" must never be a guess.
+pub fn digest_status(
+    repos: &[&EcrRepository],
+    images: &[&EcrImage],
+    image_ref: &str,
+    digest: &str,
+) -> Option<DigestStatus> {
+    let repo = repos.iter().find(|r| r.holds_ref(image_ref))?;
+    let own: Vec<&&EcrImage> = images
+        .iter()
+        .filter(|i| i.repo_name == repo.name && i.repo_uri.eq_ignore_ascii_case(&repo.uri))
+        .collect();
+    let first = own.first()?;
+    if let Some(img) = own.iter().find(|i| i.digest == digest) {
+        return Some(if img.tags.is_empty() { DigestStatus::Untagged } else { DigestStatus::Tagged });
+    }
+    let cut = (first.repo_images_seen > own.len() || !first.repo_images_complete).then_some(own.len());
+    Some(DigestStatus::Missing { cut })
+}
+
+/// A running container whose image digest is untagged or missing from its
+/// repo — the drift behind `CannotPullContainerError` on the next placement.
+#[derive(Debug, Clone)]
+pub struct DigestDrift {
+    /// The service the task belongs to, else the task's display name.
+    pub owner: String,
+    pub container: String,
+    pub repo_name: String,
+    pub repo_uri: String,
+    pub digest: String,
+    pub status: DigestStatus,
+    /// Running tasks with this same owner/container/digest — one line, not
+    /// one per replica.
+    pub tasks: usize,
+}
+
+impl DigestDrift {
+    /// The warning line, e.g. `⚠ orders-worker/app runs orders-worker@sha256:3c4d…
+    /// — untagged: an untagged-expiry lifecycle rule can delete it`.
+    pub fn warning(&self) -> String {
+        let short = self.digest.get(..19).unwrap_or(&self.digest);
+        let count = if self.tasks > 1 { format!(" ({} tasks)", self.tasks) } else { String::new() };
+        let what = format!("⚠ {}/{}{count} runs {}@{}…", self.owner, self.container, self.repo_name, short);
+        match &self.status {
+            DigestStatus::Untagged => format!("{what} — untagged; an untagged-expiry rule can delete it"),
+            DigestStatus::Missing { cut: None } => {
+                format!("{what} — not in {}: new tasks can't pull it", self.repo_name)
+            }
+            DigestStatus::Missing { cut: Some(n) } => {
+                format!("{what} — not among the newest {n} images loaded for {}", self.repo_name)
+            }
+            DigestStatus::Tagged => what,
+        }
+    }
+}
+
+/// Split an ECR image reference into `(registry host, repo name)`;
+/// `None` for anything that isn't `<acct>.dkr.ecr.<region>.amazonaws.com/<repo>…`.
+pub fn ecr_ref_repo(image_ref: &str) -> Option<(&str, &str)> {
+    let (host, path) = image_ref.trim().split_once(".amazonaws.com/")?;
+    if !host.contains(".dkr.ecr.") {
+        return None;
+    }
+    let repo_tag = path.split_once('@').map_or(path, |(rt, _)| rt);
+    let repo = repo_tag.rsplit_once(':').map_or(repo_tag, |(r, _)| r);
+    Some((host, repo))
+}
+
 /// Severity rank for sorting, worst first.
 pub fn severity_rank(sev: &str) -> u8 {
     match sev.to_ascii_uppercase().as_str() {
@@ -536,6 +622,24 @@ pub struct EcrRepository {
 }
 
 impl EcrRepository {
+    /// Whether `image_ref` names this repository: same registry host
+    /// (account *and* region — a same-named repo elsewhere never matches)
+    /// and same repo name.
+    pub fn holds_ref(&self, image_ref: &str) -> bool {
+        let (Some((host, repo)), Some((own_host, _))) =
+            (ecr_ref_repo(image_ref), self.uri.split_once(".amazonaws.com/"))
+        else {
+            return false;
+        };
+        repo == self.name && host.eq_ignore_ascii_case(own_host)
+    }
+
+    /// Tags can be re-pushed onto a new image (`MUTABLE`, or
+    /// `MUTABLE_WITH_EXCLUSION` for all but the excluded tags).
+    pub fn tags_mutable(&self) -> bool {
+        self.image_tag_mutability.starts_with("MUTABLE")
+    }
+
     fn from_sdk(r: &aws_sdk_ecr::types::Repository) -> Self {
         Self {
             name: r.repository_name().unwrap_or_default().to_string(),
@@ -1172,5 +1276,98 @@ mod image_tests {
         sort_findings(&mut v);
         let ids: Vec<&str> = v.iter().map(|x| x.id.as_str()).collect();
         assert_eq!(ids, ["crit", "high-8", "high-5", "low", "odd"]);
+    }
+}
+
+#[cfg(test)]
+mod drift_tests {
+    use super::*;
+
+    const HOST: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com";
+    const LIVE: &str = "sha256:1111111111110000000000000000000000000000000000000000000000000000";
+    const GONE: &str = "sha256:2222222222220000000000000000000000000000000000000000000000000000";
+
+    fn repo(name: &str, mutability: &str) -> EcrRepository {
+        EcrRepository::from_sdk(
+            &aws_sdk_ecr::types::Repository::builder()
+                .repository_name(name)
+                .repository_uri(format!("{HOST}/{name}"))
+                .image_tag_mutability(aws_sdk_ecr::types::ImageTagMutability::from(mutability))
+                .build(),
+        )
+    }
+
+    fn image(name: &str, digest: &str, tags: &[&str]) -> EcrImage {
+        let mut b = aws_sdk_ecr::types::ImageDetail::builder()
+            .registry_id("123456789012")
+            .repository_name(name)
+            .image_digest(digest);
+        for t in tags {
+            b = b.image_tags(*t);
+        }
+        EcrImage::from_sdk(&b.build(), name, &format!("{HOST}/{name}"))
+    }
+
+    #[test]
+    fn classifies_a_running_digest_against_its_repo() {
+        let web = repo("web", "MUTABLE");
+        let tagged = image("web", LIVE, &["v2"]);
+        let untagged = image("web", LIVE, &[]);
+        let r = format!("{HOST}/web:v2");
+        assert_eq!(digest_status(&[&web], &[&tagged], &r, LIVE), Some(DigestStatus::Tagged));
+        // The tag moved on: the running digest is still there, untagged.
+        assert_eq!(digest_status(&[&web], &[&untagged], &r, LIVE), Some(DigestStatus::Untagged));
+        // The digest is gone from a fully read repo.
+        assert_eq!(
+            digest_status(&[&web], &[&tagged], &r, GONE),
+            Some(DigestStatus::Missing { cut: None })
+        );
+    }
+
+    #[test]
+    fn a_cut_list_never_claims_the_digest_is_gone() {
+        let web = repo("web", "MUTABLE");
+        let mut newest = image("web", LIVE, &["v2"]);
+        newest.repo_images_seen = 250;
+        let status = digest_status(&[&web], &[&newest], &format!("{HOST}/web:v2"), GONE);
+        assert_eq!(status, Some(DigestStatus::Missing { cut: Some(1) }));
+        let drift = DigestDrift {
+            owner: "api".into(),
+            container: "app".into(),
+            repo_name: "web".into(),
+            repo_uri: format!("{HOST}/web"),
+            digest: GONE.into(),
+            status: status.unwrap(),
+            tasks: 2,
+        };
+        let w = drift.warning();
+        assert!(w.starts_with("⚠ api/app (2 tasks) runs web@sha256:222222222222…"), "{w}");
+        assert!(w.contains("not among the newest 1"), "{w}");
+        assert!(!w.contains("not in web"), "{w}");
+    }
+
+    #[test]
+    fn says_nothing_when_it_cannot_know() {
+        let web = repo("web", "MUTABLE");
+        let img = image("web", LIVE, &["v2"]);
+        // Repo not loaded (another region's same-named repo, or none at all).
+        let other_region = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/web:v2";
+        assert_eq!(digest_status(&[&web], &[&img], other_region, GONE), None);
+        assert_eq!(digest_status(&[], &[&img], &format!("{HOST}/web:v2"), GONE), None);
+        // Not ECR at all.
+        assert_eq!(digest_status(&[&web], &[&img], "docker.io/library/nginx:1", GONE), None);
+        // No image rows for the repo — an empty repo looks like a failed fetch.
+        assert_eq!(digest_status(&[&web], &[], &format!("{HOST}/web:v2"), GONE), None);
+    }
+
+    #[test]
+    fn repo_holds_refs_by_host_and_exact_name() {
+        let web = repo("team/web", "IMMUTABLE");
+        assert!(web.holds_ref(&format!("{HOST}/team/web:v1")));
+        assert!(web.holds_ref(&format!("{HOST}/team/web@{LIVE}")));
+        assert!(web.holds_ref(&format!("{HOST}/team/web")));
+        assert!(!web.holds_ref(&format!("{HOST}/team/webapp:v1")));
+        assert!(!web.tags_mutable());
+        assert!(repo("x", "MUTABLE_WITH_EXCLUSION").tags_mutable());
     }
 }
