@@ -197,7 +197,7 @@ Rich resources render a console-style split pane —
 flat `details()`. Most rich resource types use it — grep `sections! {` for the
 current set rather than trusting a count here. Simple eager panes (the U13
 batch: Vpc, NatGateway, TgwAttachment, DxLag, RdsSnapshot, FsxVolume,
-GdDetector) share the `render_simple_split` skeleton in details_pane.rs; the
+GdDetector) share the `render_simple_split` skeleton in `details_pane/mod.rs`; the
 Vpc and DxLag panes fill their Subnets/Gateways/Connections sections by
 **filtering sibling resources** already in `self.resources` (no extra
 fetches). Deliberately still flat: `ElasticIp` (the flat view is complete),
@@ -213,7 +213,7 @@ derives generically from the descriptor — digit keys, `Tab` cycling, reset
 on focus, the snapshot walk (export/flat view/bookmarks), the tab bar
 (`descriptor_tabs`), and bookmark restore — so label/order agreement holds
 by construction. The render path:
-1. `render_details_pane()` (`details_pane.rs`) downcasts the selected resource
+1. `render_details_pane()` (`details_pane/mod.rs`) downcasts the selected resource
    and early-returns to a per-type `render_*_split()`, whose tab bar renders
    `descriptor_tabs(app, &THE_SECTIONS)`.
 2. `App::get_detail_lines()` is the **single source of truth** for body content
@@ -242,7 +242,7 @@ cache).
 
 **Detail wrap** (`Ctrl-W`, config `detail_wrap`): render-only — long rows
 continue on hanging-indent screen rows under the value column. All three
-body renderers go through `layout_detail_body` (details_pane.rs), which
+body renderers go through `layout_detail_body` (`details_pane/mod.rs`), which
 takes the per-renderer row styling as a closure, scrolls in **screen** rows
 bottom-up from the cursor (the log tail's trick; never `Paragraph::wrap`),
 wraps by display width, and records the screen-row → logical-row map
@@ -573,7 +573,7 @@ in `any_pane_overlay_active` (which gates the mouse).
 
 ### Cross-service "go to resource" jump (`Enter`)
 
-`resource_jump_target(key, value, current)` in `details_pane.rs` recognizes ARNs
+`resource_jump_target(key, value, current)` in `details_pane/mod.rs` recognizes ARNs
 and id prefixes (`vol-`/`eni-`→EC2, `subnet-`/`vpc-`→VPC, IAM ARNs, an
 `arn_jump_target` fallback for full service ARNs, ECR image URIs
 `…dkr.ecr….amazonaws.com/<repo>[:tag]` via `ecr_repo_from_image_uri`, plus
@@ -819,7 +819,10 @@ and the approaches you rejected are the part nobody can recover from your code.
    `docs/adr/0002-section-descriptor-table.md`), return it from
    `Resource::detail_sections()`, add the `*_section_lines` renderer (take
    the enum via `from_index(app.detail_section_idx)`) + a `render_*_split`
-   that passes `descriptor_tabs(app, &THE_SECTIONS)` to the pane skeleton.
+   that passes `descriptor_tabs(app, &THE_SECTIONS)` to the pane skeleton,
+   both in `src/ui/widgets/details_pane/<svc>.rs` (a new file needs a
+   `mod <svc>;` + `pub use <svc>::*;` pair in `details_pane/mod.rs`), plus
+   the downcast arm in `render_details_pane`'s dispatch there.
    Digit keys, Tab cycling, reset, the snapshot walk, the tab bar, and the
    flat view all derive from the descriptor — there is no per-pane wiring in
    `app.rs` to add (the legacy per-type cycle/reset/digit chains and the
@@ -1117,8 +1120,16 @@ and the approaches you rejected are the part nobody can recover from your code.
   helpers + lazy `*State` types. **Read the file for a service's specifics**,
   and [`docs/SERVICES.md`](docs/SERVICES.md) for the quirks the file can't tell
   you.
-- **`src/ui/widgets/details_pane.rs`**: all split-pane renderers,
-  `*_section_lines`, `resource_jump_target`/`jump_indicator`, `detail_footer`.
+- **`src/ui/widgets/details_pane/`**: the split-pane renderers, one file
+  per service named like `src/aws/services/<svc>.rs` (its `render_*_split`
+  + `*_section_lines`). `mod.rs` holds what they share: the
+  `render_details_pane` dispatch, the split skeletons, `style_detail_row` /
+  `key_col_widths` / `error_rows` / `tag_rows`, `layout_detail_body`,
+  `detail_footer`, and `resource_jump_target` with its classifiers. Children
+  reach `mod.rs` and each other through `use super::*`, and `mod.rs`
+  re-exports them (`pub use <svc>::*`), so `details_pane::foo` paths
+  elsewhere don't care which file `foo` is in. A helper one service uses
+  lives in that service's file; one several use goes in `mod.rs`.
 - **`src/ui/widgets/`**: `metrics_overlay.rs`, `s3_object_browser.rs`,
   `ddb_item_browser.rs`, `memory_browser.rs`, `log_tail.rs` (rich views);
   `*_tabs.rs` (one per multi-resource service); the `*_selector.rs` modals

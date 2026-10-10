@@ -657,7 +657,7 @@ src/
   search/          # fuzzy matcher + @prefix / tag: query parser
   ui/
     layout.rs theme.rs
-    widgets/       # details_pane.rs, resource_list.rs, *_tabs.rs,
+    widgets/       # details_pane/, resource_list.rs, *_tabs.rs,
                    # metrics_overlay.rs, log_tail.rs, trail_lens.rs,
                    # s3_object_browser.rs, ddb_item_browser.rs, selectors
   harness_tests/   # offline wiring harness (no creds, no network)

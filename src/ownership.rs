@@ -6,7 +6,7 @@
 //! - **CloudFormation**: the `aws:cloudformation:stack-name` /
 //!   `:logical-id` tags CFN stamps on every resource it creates. The
 //!   stack-name tag row also gets a jump classifier arm in
-//!   `details_pane.rs` (→ the owning stack), and the `:stack-id` tag's ARN
+//!   `details_pane/mod.rs` (→ the owning stack), and the `:stack-id` tag's ARN
 //!   value already jumped via the generic `:stack/` rule.
 //! - **ManagedBy**: the `ManagedBy`/`managed-by`/`managed_by` convention
 //!   (values like `terraform`, `cdk`, `pulumi`). Matched case-insensitively
@@ -17,7 +17,7 @@
 //!   case-insensitively so `Owner`/`Team` variants hit too.
 //!
 //! Rendered as the dim ribbon on the detail pane's bottom border
-//! (`render_ownership_ribbon` in `details_pane.rs`) — one central hook, so
+//! (`render_ownership_ribbon` in `details_pane/mod.rs`) — one central hook, so
 //! no per-pane wiring. The planned change-timeline lens will reuse
 //! `resource_ownership` to pick which stack's events to merge.
 
