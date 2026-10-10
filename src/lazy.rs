@@ -568,8 +568,13 @@ pub struct LazyStore {
     /// A workgroup's tags, keyed by workgroup name.
     pub athena_workgroup_tags: LazyMap<Vec<(String, String)>>,
     /// A cost row's drill-down, keyed by `App::cost_drilldown_key` (period +
-    /// row key — never the bare row key).
+    /// grouping + tag/category key + row value — never the bare row key).
     pub cost_drilldown: LazyMap<Box<crate::aws::services::cost::CostDrilldown>>,
+    /// The Cost `5` / `6` picker's lists — cost-allocation tag keys under
+    /// `"tags"`, cost category names under `"categories"`
+    /// (`App::cost_group_keys_lazy_key`). Billed CE calls, fetched on the
+    /// picker's first open.
+    pub cost_group_keys: LazyMap<Vec<String>>,
     /// A budget's notifications + subscribers, keyed by budget name.
     pub budget_notifications: LazyMap<Vec<crate::aws::services::budgets::BudgetNotification>>,
     /// A budget's tags, keyed by budget name.

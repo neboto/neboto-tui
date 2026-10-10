@@ -167,8 +167,10 @@ Variations on the pattern:
   rows read by name (the "KMS-alias pattern" — e.g. WorkSpaces resolves bundle
   and directory maps before `DescribeWorkspaces`).
 - **Toggle rows** (rebuild + variant-cache the service, not resource filters):
-  Cost (`cost_group_by` keys 1–4 + `cost_period` keys 5–7, `t` cycles; key
-  `8` is the Anomalies view, `cost_anomalies`, its own cache variant), WAF
+  Cost (`cost_group_by` keys 1–6 — 5/6 are tag/cost-category, keyed — and
+  key `7` the Anomalies view, `cost_anomalies`, its own cache variant;
+  `cost_period` isn't a tab: `[`/`]` step it, `t` cycles, chips on the
+  detail pane's border), WAF
   (`waf_scope`), RAM (`ram_owner` SELF/OTHER via `t`), Service Quotas
   (`quota_service_code`, `c` picker), X-Ray (`xray_window`, `[`/`]` in
   the list pane), CloudTrail (`ct_query`, `f` filter

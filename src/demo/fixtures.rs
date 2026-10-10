@@ -40,10 +40,12 @@
 //!   `legacy-admin-alb`), `portal-next` is Green on a shared EKS cluster
 //! - a Secrets Manager secret `prod/orders/db` and a SecureString parameter
 //!   `/orders/db/password` — metadata only, for proving no value is fetched
-//! - Cost Anomaly Detection (`@cost`, `8`) flagged CloudWatch six days ago
+//! - Cost Anomaly Detection (`@cost`, `7`) flagged CloudWatch six days ago
 //!   — DataProcessing-Bytes, i.e. log ingestion, and `nightly-report`'s
 //!   never-expiring group is the story behind it — plus Fargate vCPU from
 //!   the `orders-worker` restart loop; a closed EC2 spike was marked planned
+//! - Cost's `5` / `6` pickers list the `team` tag (plus `env`, `CostCenter`)
+//!   and a `Team` cost category over the same three teams
 //!
 //! Order matters: the first entry whose `when` substrings all appear in the
 //! request body wins, so put narrow matches before the catch-all. (Batch
@@ -280,9 +282,13 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("secretsmanager", "ListSecrets", "ListSecrets.json"),
     fx!("ssm", "DescribeParameters", "DescribeParameters.json"),
     // ── Cost Explorer (Cost Anomaly Detection) ──────────────────────────────
-    // Only the Anomalies view (`8`): the spend view's daily CE series isn't
+    // Only the Anomalies view (`7`): the spend view's daily CE series isn't
     // in the dataset yet.
     fx!("ce", "GetAnomalies", "GetAnomalies.json"),
+    // The `5` / `6` group-key pickers: the `team` tag the CloudWatch fixtures
+    // carry, and a `Team` cost category over the same three teams.
+    fx!("ce", "GetTags", "GetTags.json"),
+    fx!("ce", "ListCostCategoryDefinitions", "ListCostCategoryDefinitions.json"),
     // ── S3 / Route 53 (restXml) ──────────────────────────────────────────────
     // Not in the dataset yet, but their list calls need a root element the
     // empty-success reply can't supply (it varies per operation).

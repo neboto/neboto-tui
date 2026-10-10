@@ -7,6 +7,11 @@ pub(super) fn render_cost_split(app: &App, item: &CostLineItem, area: Rect, fram
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("Cost", focused);
+    // The period chips (`5`–`7`) ride this border: the Cost tab row is full,
+    // and this pane is the wide one.
+    if let Some(periods) = crate::ui::widgets::cost_tabs::cost_period_title(app, area, 6) {
+        block = block.title_top(periods);
+    }
     block = block.title_bottom(
         Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
             .right_aligned(),
@@ -76,8 +81,10 @@ pub(super) fn build_cost_header_lines(item: &CostLineItem) -> Vec<Line<'static>>
 }
 
 pub(super) fn render_cost_section_tabs(app: &App, area: Rect, frame: &mut Frame) {
-    // Section 2's label adapts: a region row breaks down into services.
-    let secondary = if app.cost_group_by == crate::aws::services::cost::CostGroupBy::Region {
+    // Section 2's label adapts: a region / tag / category row breaks down
+    // into services (`fetch_cost_drilldown`'s secondary dimension).
+    use crate::aws::services::cost::CostGroupBy as G;
+    let secondary = if matches!(app.cost_group_by, G::Region | G::Tag | G::CostCategory) {
         "Services"
     } else {
         "Regions"

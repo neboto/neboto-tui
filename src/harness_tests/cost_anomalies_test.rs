@@ -25,13 +25,13 @@ fn screen_of(app: &App) -> String {
 }
 
 #[tokio::test]
-async fn eight_opens_anomalies_and_digits_return_to_spend() {
+async fn seven_opens_anomalies_and_digits_return_to_spend() {
     let (mut app, tx, _rx) = test_app().await;
     select_mock(&mut app, ServiceType::Cost, Box::new(CostAnomaly::mock()));
     app.cost_group_by = CostGroupBy::Region;
     app.cost_period = CostPeriod::LastMonth;
 
-    app.handle_event(press('8'), &tx).await.unwrap();
+    app.handle_event(press('7'), &tx).await.unwrap();
     assert!(app.cost_anomalies);
     assert_eq!(app.cache_variant_for_test(ServiceType::Cost).as_deref(), Some("Anomalies"));
     assert_eq!(app.cost_group_by, CostGroupBy::Region, "grouping kept for the way back");
@@ -45,19 +45,41 @@ async fn eight_opens_anomalies_and_digits_return_to_spend() {
         Some("Region-LastMonth")
     );
 
-    app.handle_event(press('8'), &tx).await.unwrap();
+    app.handle_event(press('7'), &tx).await.unwrap();
     app.handle_event(press('1'), &tx).await.unwrap();
     assert!(!app.cost_anomalies);
     assert_eq!(app.cost_group_by, CostGroupBy::Service);
 }
 
+#[tokio::test]
+async fn brackets_step_the_period_and_stop_at_the_ends() {
+    let (mut app, tx, _rx) = test_app().await;
+    select_mock(&mut app, ServiceType::Cost, Box::new(CostAnomaly::mock()));
+    app.cost_anomalies = false;
+    assert_eq!(app.cost_period, CostPeriod::Mtd);
+
+    app.handle_event(press(']'), &tx).await.unwrap();
+    assert_eq!(app.cost_period, CostPeriod::LastMonth);
+    app.handle_event(press(']'), &tx).await.unwrap();
+    app.handle_event(press(']'), &tx).await.unwrap();
+    assert_eq!(app.cost_period, CostPeriod::Last3Months, "] stops at the widest");
+    app.handle_event(press('['), &tx).await.unwrap();
+    assert_eq!(app.cost_period, CostPeriod::LastMonth);
+
+    // From Anomalies a bracket returns to spend at the period left.
+    app.handle_event(press('7'), &tx).await.unwrap();
+    app.handle_event(press('['), &tx).await.unwrap();
+    assert!(!app.cost_anomalies);
+    assert_eq!(app.cost_period, CostPeriod::LastMonth);
+}
+
 #[test]
-fn tab_cycle_includes_anomalies_as_a_fifth_stop() {
+fn tab_cycle_includes_anomalies_as_the_last_stop() {
     use CostGroupBy as G;
-    assert_eq!(App::cost_tab_step(G::UsageType, false, true), (G::UsageType, true));
-    assert_eq!(App::cost_tab_step(G::UsageType, true, true), (G::Service, false));
+    assert_eq!(App::cost_tab_step(G::CostCategory, false, true), (G::CostCategory, true));
+    assert_eq!(App::cost_tab_step(G::CostCategory, true, true), (G::Service, false));
     assert_eq!(App::cost_tab_step(G::Service, false, false), (G::Service, true));
-    assert_eq!(App::cost_tab_step(G::Service, true, false), (G::UsageType, false));
+    assert_eq!(App::cost_tab_step(G::Service, true, false), (G::CostCategory, false));
     assert_eq!(App::cost_tab_step(G::Region, false, true), (G::UsageType, false));
 }
 

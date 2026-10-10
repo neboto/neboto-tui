@@ -5,8 +5,8 @@ use crate::error::Result;
 use crate::event::{Event, LoadProgress};
 use async_trait::async_trait;
 use aws_sdk_costexplorer::types::{
-    AnomalyDateInterval, DateInterval, Dimension, DimensionValues, Expression, Granularity, GroupDefinition,
-    GroupDefinitionType, Metric,
+    AnomalyDateInterval, CostCategoryValues, DateInterval, Dimension, DimensionValues, Expression, Granularity,
+    GroupDefinition, GroupDefinitionType, MatchOption, Metric, TagValues,
 };
 use aws_sdk_costexplorer::Client as CeClient;
 use chrono::{Datelike, Duration as ChronoDuration, Months, NaiveDate, Utc};
@@ -17,7 +17,8 @@ use tokio::sync::mpsc;
 /// Cost & Billing service, backed by AWS Cost Explorer (`ce`).
 ///
 /// The list groups unblended spend by a selectable dimension (service / linked
-/// account / region / usage type) over a selectable period (MTD / last month /
+/// account / region / usage type), a cost-allocation tag key, or a cost
+/// category over a selectable period (MTD / last month /
 /// last 3 months), ranked descending. Drilling into a row fetches its usage-type
 /// and region breakdowns plus a month-end forecast.
 ///
@@ -61,7 +62,7 @@ impl AwsService for CostService {
                 .map(|a| Box::new(a) as Box<dyn Resource>)
                 .collect());
         }
-        let items = fetch_cost(&self.client, self.query).await?;
+        let items = fetch_cost(&self.client, &self.query).await?;
         Ok(items
             .into_iter()
             .map(|i| Box::new(i) as Box<dyn Resource>)
@@ -76,7 +77,7 @@ impl AwsService for CostService {
         if self.query.anomalies {
             return self.stream_anomalies(event_tx, service_type).await;
         }
-        match fetch_cost(&self.client, self.query).await {
+        match fetch_cost(&self.client, &self.query).await {
             Ok(items) => {
                 let total = items.len();
                 if total > 0 {
@@ -119,7 +120,7 @@ impl AwsService for CostService {
 }
 
 impl CostService {
-    /// The Anomalies view (key `8`): one paginated `GetAnomalies` walk over
+    /// The Anomalies view (key `7`): one paginated `GetAnomalies` walk over
     /// the last [`ANOMALY_LOOKBACK_DAYS`], streamed as a single batch like the
     /// spend view (each page is a billed CE request, so there is no point
     /// showing a partial list for the second it takes).
@@ -187,27 +188,44 @@ pub enum CostGroupBy {
     LinkedAccount,
     Region,
     UsageType,
+    /// A cost-allocation tag key (key `5`); the key itself rides
+    /// `CostQuery.group_key` / `App.cost_tag_key`.
+    Tag,
+    /// A cost category (key `6`); the category name rides
+    /// `CostQuery.group_key` / `App.cost_category`.
+    CostCategory,
 }
 
 impl CostGroupBy {
-    /// Cost Explorer `GroupBy` dimension key.
+    /// Cost Explorer `GroupBy` key for the four dimensions; `TAG` /
+    /// `COST_CATEGORY` for the keyed groupings (stored on each row as
+    /// `CostLineItem.dimension`, read back by `from_dimension_key`).
     pub fn dimension_key(&self) -> &'static str {
         match self {
             CostGroupBy::Service => "SERVICE",
             CostGroupBy::LinkedAccount => "LINKED_ACCOUNT",
             CostGroupBy::Region => "REGION",
             CostGroupBy::UsageType => "USAGE_TYPE",
+            CostGroupBy::Tag => "TAG",
+            CostGroupBy::CostCategory => "COST_CATEGORY",
         }
     }
 
-    /// SDK `Dimension` enum (for filter expressions).
-    fn dimension(&self) -> Dimension {
+    /// SDK `Dimension` enum (for filter expressions). None for the keyed
+    /// groupings, which filter on `Tags` / `CostCategories` instead.
+    fn dimension(&self) -> Option<Dimension> {
         match self {
-            CostGroupBy::Service => Dimension::Service,
-            CostGroupBy::LinkedAccount => Dimension::LinkedAccount,
-            CostGroupBy::Region => Dimension::Region,
-            CostGroupBy::UsageType => Dimension::UsageType,
+            CostGroupBy::Service => Some(Dimension::Service),
+            CostGroupBy::LinkedAccount => Some(Dimension::LinkedAccount),
+            CostGroupBy::Region => Some(Dimension::Region),
+            CostGroupBy::UsageType => Some(Dimension::UsageType),
+            CostGroupBy::Tag | CostGroupBy::CostCategory => None,
         }
+    }
+
+    /// Whether this grouping needs a key (tag key / category name).
+    pub fn is_keyed(&self) -> bool {
+        matches!(self, CostGroupBy::Tag | CostGroupBy::CostCategory)
     }
 
     pub fn label(&self) -> &'static str {
@@ -216,6 +234,8 @@ impl CostGroupBy {
             CostGroupBy::LinkedAccount => "Account",
             CostGroupBy::Region => "Region",
             CostGroupBy::UsageType => "Usage Type",
+            CostGroupBy::Tag => "Tag",
+            CostGroupBy::CostCategory => "Category",
         }
     }
 
@@ -225,8 +245,25 @@ impl CostGroupBy {
             CostGroupBy::LinkedAccount => "account",
             CostGroupBy::Region => "region",
             CostGroupBy::UsageType => "usage type",
+            CostGroupBy::Tag => "tag",
+            CostGroupBy::CostCategory => "cost category",
         }
     }
+
+    /// Row label for spend with no value for the tag / category.
+    fn absent_label(&self) -> &'static str {
+        match self {
+            CostGroupBy::CostCategory => "(uncategorized)",
+            _ => "(untagged)",
+        }
+    }
+}
+
+/// Split a keyed `GetCostAndUsage` group key (`"team$payments"`,
+/// `"Team$"` for spend without a value) into its value; a key without a
+/// `$` is taken whole. An empty value means "absent".
+pub(crate) fn keyed_group_value(raw: &str) -> &str {
+    raw.split_once('$').map(|(_, v)| v).unwrap_or(raw)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,11 +283,14 @@ impl CostPeriod {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CostQuery {
     pub group_by: CostGroupBy,
+    /// The tag key / cost category name for a keyed `group_by`
+    /// (`CostGroupBy::is_keyed`); ignored otherwise.
+    pub group_key: Option<String>,
     pub period: CostPeriod,
-    /// The Anomalies view (key `8`): list Cost Anomaly Detection anomalies
+    /// The Anomalies view (key `7`): list Cost Anomaly Detection anomalies
     /// instead of grouped spend. `group_by`/`period` are kept (not used) so
     /// leaving the view returns to the grouping the user had.
     pub anomalies: bool,
@@ -260,6 +300,7 @@ impl Default for CostQuery {
     fn default() -> Self {
         Self {
             group_by: CostGroupBy::Service,
+            group_key: None,
             period: CostPeriod::Mtd,
             anomalies: false,
         }
@@ -357,9 +398,18 @@ fn resolve_windows_on(period: CostPeriod, today: NaiveDate) -> Windows {
 
 #[derive(Debug, Clone)]
 pub struct CostLineItem {
-    /// Cost Explorer dimension key this row was grouped by (e.g. `"SERVICE"`).
+    /// Cost Explorer dimension key this row was grouped by (e.g. `"SERVICE"`,
+    /// or `"TAG"` / `"COST_CATEGORY"` for the keyed groupings).
     pub dimension: String,
-    /// The grouped value — service name, account id, region, or usage type.
+    /// The tag key / cost category name for a keyed grouping; empty for the
+    /// four dimensions.
+    pub group_key: String,
+    /// The grouped value as Cost Explorer filters on it — equal to `key` for
+    /// the dimensions; for keyed groupings the bare value, empty when the
+    /// spend has no value for the tag / category.
+    pub filter_value: String,
+    /// The grouped value as shown — service name, account id, region, usage
+    /// type, tag / category value, or `(untagged)` / `(uncategorized)`.
     pub key: String,
     /// Current-window unblended cost.
     pub current: f64,
@@ -389,6 +439,8 @@ impl CostLineItem {
     pub(crate) fn mock() -> Self {
         Self {
             dimension: "SERVICE".to_string(),
+            group_key: String::new(),
+            filter_value: "Mock Service".to_string(),
             key: "Mock Service".to_string(),
             current: 12.34,
             prior: 10.0,
@@ -564,7 +616,7 @@ type CostAccum = (f64, f64, Vec<(String, f64)>, String);
 /// One `GetCostAndUsage` call (DAILY, grouped by the query dimension) spanning
 /// both the current and prior windows. From the daily buckets we derive, per
 /// group: current-window total, prior-window total, and the daily series.
-pub async fn fetch_cost(client: &CeClient, query: CostQuery) -> Result<Vec<CostLineItem>> {
+pub async fn fetch_cost(client: &CeClient, query: &CostQuery) -> Result<Vec<CostLineItem>> {
     let w = resolve_windows(query.period);
     let has_prior = w.prior_end > w.prior_start;
 
@@ -586,10 +638,27 @@ pub async fn fetch_cost(client: &CeClient, query: CostQuery) -> Result<Vec<CostL
         .build()
         .map_err(|e| crate::error::Error::AwsSdk(e.to_string()))?;
 
-    let group_by = GroupDefinition::builder()
-        .r#type(GroupDefinitionType::Dimension)
-        .key(query.group_by.dimension_key())
-        .build();
+    let group_key = query.group_key.clone().unwrap_or_default();
+    let group_by = match query.group_by {
+        // A keyed stop reached by `Tab` before any key was picked: nothing to
+        // group by yet, so no (billed) call — the list's empty state asks
+        // for a key instead.
+        CostGroupBy::Tag | CostGroupBy::CostCategory if group_key.is_empty() => {
+            return Ok(Vec::new());
+        }
+        CostGroupBy::Tag => GroupDefinition::builder()
+            .r#type(GroupDefinitionType::Tag)
+            .key(&group_key)
+            .build(),
+        CostGroupBy::CostCategory => GroupDefinition::builder()
+            .r#type(GroupDefinitionType::CostCategory)
+            .key(&group_key)
+            .build(),
+        _ => GroupDefinition::builder()
+            .r#type(GroupDefinitionType::Dimension)
+            .key(query.group_by.dimension_key())
+            .build(),
+    };
 
     let mut accum: HashMap<String, CostAccum> = HashMap::new();
     let mut next_token: Option<String> = None;
@@ -657,10 +726,25 @@ pub async fn fetch_cost(client: &CeClient, query: CostQuery) -> Result<Vec<CostL
     let cur_ym = fmt_date(w.cur_end - ChronoDuration::days(1))[..7].to_string();
     let mut items: Vec<CostLineItem> = accum
         .into_iter()
-        .map(|(key, (current, prior, mut daily, currency))| {
+        .map(|(raw_key, (current, prior, mut daily, currency))| {
             daily.sort_by(|a, b| a.0.cmp(&b.0));
+            // Keyed groupings come back as `key$value`; the dimensions are
+            // the bare value.
+            let (filter_value, key) = if query.group_by.is_keyed() {
+                let v = keyed_group_value(&raw_key).to_string();
+                let shown = if v.is_empty() {
+                    query.group_by.absent_label().to_string()
+                } else {
+                    v.clone()
+                };
+                (v, shown)
+            } else {
+                (raw_key.clone(), raw_key)
+            };
             let mut item = CostLineItem {
                 dimension: dimension.clone(),
+                group_key: if query.group_by.is_keyed() { group_key.clone() } else { String::new() },
+                filter_value,
                 key,
                 current,
                 prior,
@@ -700,7 +784,79 @@ pub async fn fetch_cost(client: &CeClient, query: CostQuery) -> Result<Vec<CostL
     Ok(items)
 }
 
-// ── Anomalies (key 8: Cost Anomaly Detection) ─────────────────────────────────
+// ── Group-key pickers (keys 9 / 0) ────────────────────────────────────────────
+
+/// Cost-allocation tag keys with spend in the last three months (the
+/// longest period the list offers) — `GetTags` without a `TagKey` lists
+/// keys. Only *activated* cost-allocation tags appear, so an empty list is
+/// the normal answer for an account that never activated any. Every page is
+/// a billed CE request; fetched only when the `5` picker opens.
+pub async fn fetch_cost_tag_keys(client: CeClient) -> Result<Vec<String>> {
+    let today = Utc::now().date_naive();
+    let start = resolve_windows_on(CostPeriod::Last3Months, today).cur_start;
+    let interval = DateInterval::builder()
+        .start(fmt_date(start))
+        .end(fmt_date(today + ChronoDuration::days(1)))
+        .build()
+        .map_err(|e| crate::error::Error::AwsSdk(e.to_string()))?;
+    let mut keys: Vec<String> = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let mut req = client.get_tags().time_period(interval.clone());
+        if let Some(t) = &token {
+            req = req.next_page_token(t);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+        keys.extend(resp.tags().iter().filter(|k| !k.is_empty()).cloned());
+        token = crate::aws::pagination::next_page_token(resp.next_page_token(), &token);
+        if token.is_none() {
+            break;
+        }
+    }
+    keys.sort_by_key(|k| k.to_lowercase());
+    keys.dedup();
+    Ok(keys)
+}
+
+/// Cost category names (`ListCostCategoryDefinitions`, the definitions in
+/// effect today). Fetched only when the `6` picker opens.
+pub async fn fetch_cost_category_names(client: CeClient) -> Result<Vec<String>> {
+    let mut names: Vec<String> = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let mut req = client.list_cost_category_definitions();
+        if let Some(t) = &token {
+            req = req.next_token(t);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+        names.extend(
+            resp.cost_category_references()
+                .iter()
+                .filter_map(|r| r.name())
+                .map(str::to_string),
+        );
+        token = crate::aws::pagination::next_page_token(resp.next_token(), &token);
+        if token.is_none() {
+            break;
+        }
+    }
+    names.sort_by_key(|k| k.to_lowercase());
+    names.dedup();
+    Ok(names)
+}
+
+/// The picker's error text for a failed key-list fetch.
+pub fn group_keys_error(raw: &str, action: &str) -> String {
+    friendly_error(raw, action)
+}
+
+// ── Anomalies (key 7: Cost Anomaly Detection) ─────────────────────────────────
 
 /// How far back the Anomalies view looks. Cost Anomaly Detection keeps 90
 /// days of history in the console's default view; older anomalies are rarely
@@ -1072,13 +1228,34 @@ pub struct CostDrilldown {
     pub mtd_spent: Option<f64>,
 }
 
-/// Build a single-dimension filter expression (`dimension = key`).
-fn dim_filter(dimension: Dimension, value: &str) -> Result<Expression> {
-    let dv = DimensionValues::builder()
-        .key(dimension)
-        .values(value.to_string())
-        .build();
-    Ok(Expression::builder().dimensions(dv).build())
+/// Build the filter expression scoping a drill-down to one row: `dimension =
+/// value` for the four dimensions, `tag key = value` / `category = value`
+/// for the keyed groupings — where an empty value (the `(untagged)` row)
+/// becomes an `ABSENT` match, the only way CE filters "no value".
+fn row_filter(group_by: CostGroupBy, group_key: &str, value: &str) -> Expression {
+    if let Some(dimension) = group_by.dimension() {
+        let dv = DimensionValues::builder()
+            .key(dimension)
+            .values(value.to_string())
+            .build();
+        return Expression::builder().dimensions(dv).build();
+    }
+    if group_by == CostGroupBy::CostCategory {
+        let mut b = CostCategoryValues::builder().key(group_key);
+        b = if value.is_empty() {
+            b.match_options(MatchOption::Absent)
+        } else {
+            b.values(value)
+        };
+        return Expression::builder().cost_categories(b.build()).build();
+    }
+    let mut b = TagValues::builder().key(group_key);
+    b = if value.is_empty() {
+        b.match_options(MatchOption::Absent)
+    } else {
+        b.values(value)
+    };
+    Expression::builder().tags(b.build()).build()
 }
 
 /// Fetch the usage-type + secondary breakdowns (over the active period's
@@ -1089,11 +1266,11 @@ fn dim_filter(dimension: Dimension, value: &str) -> Result<Expression> {
 pub async fn fetch_cost_drilldown(
     client: CeClient,
     dimension_key: String,
+    group_key: String,
     key: String,
     period: CostPeriod,
 ) -> Result<CostDrilldown> {
     let group_by = CostGroupBy::from_dimension_key(&dimension_key);
-    let dim = group_by.dimension();
 
     let w = resolve_windows(period);
     let today = Utc::now().date_naive();
@@ -1112,12 +1289,14 @@ pub async fn fetch_cost_drilldown(
         .map_err(|e| crate::error::Error::AwsSdk(e.to_string()))?;
 
     // Secondary dimension: region, unless this row IS a region → services.
+    // A tag / category row reads best by service (which services make up
+    // `team=payments`), the console's default for those groupings.
     let (sec_key, sec_label): (&str, &'static str) = match group_by {
-        CostGroupBy::Region => ("SERVICE", "Services"),
+        CostGroupBy::Region | CostGroupBy::Tag | CostGroupBy::CostCategory => ("SERVICE", "Services"),
         _ => ("REGION", "Regions"),
     };
 
-    let filter = dim_filter(dim.clone(), &key)?;
+    let filter = row_filter(group_by, &group_key, &key);
 
     let usage_fut = client
         .get_cost_and_usage()
@@ -1292,6 +1471,8 @@ impl CostGroupBy {
             "LINKED_ACCOUNT" => CostGroupBy::LinkedAccount,
             "REGION" => CostGroupBy::Region,
             "USAGE_TYPE" => CostGroupBy::UsageType,
+            "TAG" => CostGroupBy::Tag,
+            "COST_CATEGORY" => CostGroupBy::CostCategory,
             _ => CostGroupBy::Service,
         }
     }
@@ -1451,11 +1632,52 @@ mod tests {
         assert_eq!(w.prior_label, "—");
     }
 
+    // ── Keyed groupings (tags / cost categories) ─────────────────────────────
+
+    #[test]
+    fn keyed_group_value_strips_the_key_and_keeps_absent_empty() {
+        assert_eq!(keyed_group_value("team$payments"), "payments");
+        assert_eq!(keyed_group_value("team$"), "");
+        assert_eq!(keyed_group_value("Team$a$b"), "a$b", "only the first $ splits");
+        assert_eq!(keyed_group_value("bare"), "bare");
+    }
+
+    #[test]
+    fn row_filter_uses_tags_categories_and_absent() {
+        let f = row_filter(CostGroupBy::Tag, "team", "payments");
+        let t = f.tags().expect("tag filter");
+        assert_eq!(t.key(), Some("team"));
+        assert_eq!(t.values(), ["payments".to_string()]);
+        assert!(f.dimensions().is_none());
+
+        let f = row_filter(CostGroupBy::Tag, "team", "");
+        let t = f.tags().unwrap();
+        assert!(t.values().is_empty());
+        assert_eq!(t.match_options(), [MatchOption::Absent]);
+
+        let f = row_filter(CostGroupBy::CostCategory, "Team", "");
+        let c = f.cost_categories().expect("category filter");
+        assert_eq!(c.key(), Some("Team"));
+        assert_eq!(c.match_options(), [MatchOption::Absent]);
+
+        let f = row_filter(CostGroupBy::Region, "", "us-east-1");
+        assert_eq!(f.dimensions().unwrap().key(), Some(&Dimension::Region));
+    }
+
+    #[test]
+    fn keyed_dimension_keys_round_trip() {
+        for g in [CostGroupBy::Tag, CostGroupBy::CostCategory, CostGroupBy::UsageType] {
+            assert_eq!(CostGroupBy::from_dimension_key(g.dimension_key()), g);
+        }
+    }
+
     // ── CostLineItem derived metrics ─────────────────────────────────────────
 
     fn item(current: f64, prior: f64, has_prior: bool, daily: Vec<(String, f64)>) -> CostLineItem {
         CostLineItem {
             dimension: "SERVICE".into(),
+            group_key: String::new(),
+            filter_value: "Amazon EC2".into(),
             key: "Amazon EC2".into(),
             current,
             prior,
