@@ -634,6 +634,27 @@ the service you're touching.
   task count. Not a row state (`F`/`--state`): `state()` can't see the
   other service's cache, and a filter that depends on which services you
   happened to open would be a lie.
+  **Lifecycle section (#157)** evaluates the policy against the loaded
+  images (`ecr::evaluate_lifecycle`) above the raw JSON — one plain line
+  per rule, what's eligible now / due within 7 days / pushed out by the
+  next push, `⚠` for any of those a running task uses, and a callout for
+  the incident pattern (MUTABLE tags + an untagged `sinceImagePushed`
+  rule + running digests). **No `GetLifecyclePolicyPreview`**, on purpose:
+  it's a start/poll job, and the rules are simple enough to follow
+  exactly — ECR's "Lifecycle policy evaluation rules" page is the spec,
+  and the semantics people get wrong are pinned by tests: rules apply
+  lowest priority number first; a rule **claims** every image matching
+  its tagging requirements, *including the ones it keeps*, so a later
+  catch-all can't expire them; prefix/pattern lists **AND** their
+  entries (each against any tag); ages count from **push** (or the last
+  restore from the archive), not from when the image lost its tag — which
+  is why a re-pushed tag can strand a digest that's already past the
+  limit. Archive-class rules (`storageClass: archive`,
+  `sinceImageTransitioned`, `transition` actions) are evaluated against
+  `imageStatus: ARCHIVED` rows; an unknown `countType` is shown, not
+  evaluated. Against a list cut to the newest 100 it says so, and a count
+  rule there won't claim "nothing expires". The pane says it's a preview
+  (manifest lists and referrers can change ECR's result).
   **No Layers section, on purpose**: layers need `BatchGetImage` (the
   manifest), and ECR bumps an image's `lastRecordedPullTime` on that call —
   merely *looking* at an image would move the "Last Pulled" date people use
