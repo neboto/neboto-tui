@@ -56,6 +56,7 @@ pub mod xray_tabs;
 pub mod beanstalk_tabs;
 pub mod dms_tabs;
 pub mod quota_service_selector;
+pub mod cost_key_picker;
 pub mod region_selector;
 pub mod resource_list;
 pub mod s3_object_browser;

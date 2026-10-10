@@ -12,8 +12,8 @@ use ratatui::{
     Frame,
 };
 
-/// Sub-tab row for the Cost service: a GroupBy selector (keys 1–4) on the
-/// left, a Period selector (keys 5–7 direct, `t` cycles) beside it, then the
+/// Sub-tab row for the Cost service: a GroupBy selector (keys 1–4, then `9`
+/// Tag / `0` Category, whose chips name the chosen key) on the left, a Period selector (keys 5–7 direct, `t` cycles) beside it, then the
 /// `8 Anomalies` view chip — all rendered with the shared chip bar so every
 /// chip is individually clickable — and a right-aligned `Σ` total headline
 /// summed from the loaded rows. While Anomalies is active the grouping and
@@ -28,6 +28,8 @@ pub fn render_cost_tabs(app: &App, area: Rect, frame: &mut Frame) {
         ('3', CostGroupBy::Region.label(), spend && g == CostGroupBy::Region),
         ('4', CostGroupBy::UsageType.label(), spend && g == CostGroupBy::UsageType),
     ];
+    let tag_label = keyed_chip_label(CostGroupBy::Tag, app.cost_tag_key.as_deref());
+    let cat_label = keyed_chip_label(CostGroupBy::CostCategory, app.cost_category.as_deref());
 
     // A dim " By" prefix before the chips; the bar (and its click regions)
     // renders into the rect shifted past it.
@@ -38,6 +40,23 @@ pub fn render_cost_tabs(app: &App, area: Rect, frame: &mut Frame) {
         ..area
     };
     spans.extend(subtab_bar_spans(app, bar_area, &tabs));
+
+    // `9` Tag / `0` Category — their own bar so the click regions land
+    // where they are drawn (the labels carry the chosen key, so widths vary).
+    let used = Line::from(spans.clone()).width() as u16;
+    let keyed_area = Rect {
+        x: area.x + used,
+        width: area.width.saturating_sub(used),
+        ..area
+    };
+    spans.extend(subtab_bar_spans(
+        app,
+        keyed_area,
+        &[
+            ('9', tag_label.as_str(), spend && g == CostGroupBy::Tag),
+            ('0', cat_label.as_str(), spend && g == CostGroupBy::CostCategory),
+        ],
+    ));
 
     // Period chips: same chip language and per-chip click regions as the
     // group-by tabs. `t` still cycles; clicking the label does too.
@@ -91,6 +110,22 @@ pub fn render_cost_tabs(app: &App, area: Rect, frame: &mut Frame) {
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// `Tag` until a key is picked, then `Tag:team` (long keys ellipsised so the
+/// row keeps room for the period chips).
+fn keyed_chip_label(kind: CostGroupBy, key: Option<&str>) -> String {
+    match key {
+        None => kind.label().to_string(),
+        Some(k) => {
+            let k: String = if k.chars().count() > 16 {
+                format!("{}…", k.chars().take(15).collect::<String>())
+            } else {
+                k.to_string()
+            };
+            format!("{}:{}", kind.label(), k)
+        }
+    }
 }
 
 /// `Σ $412.80 over · 3 ongoing` — the anomalies' summed impact over the

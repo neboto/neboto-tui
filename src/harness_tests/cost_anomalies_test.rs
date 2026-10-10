@@ -54,11 +54,11 @@ async fn eight_opens_anomalies_and_digits_return_to_spend() {
 #[test]
 fn tab_cycle_includes_anomalies_as_a_fifth_stop() {
     use CostGroupBy as G;
-    assert_eq!(App::cost_tab_step(G::UsageType, false, true), (G::UsageType, true));
-    assert_eq!(App::cost_tab_step(G::UsageType, true, true), (G::Service, false));
-    assert_eq!(App::cost_tab_step(G::Service, false, false), (G::Service, true));
-    assert_eq!(App::cost_tab_step(G::Service, true, false), (G::UsageType, false));
-    assert_eq!(App::cost_tab_step(G::Region, false, true), (G::UsageType, false));
+    assert_eq!(App::cost_tab_step(G::UsageType, false, true, false, false), (G::UsageType, true));
+    assert_eq!(App::cost_tab_step(G::UsageType, true, true, false, false), (G::Service, false));
+    assert_eq!(App::cost_tab_step(G::Service, false, false, false, false), (G::Service, true));
+    assert_eq!(App::cost_tab_step(G::Service, true, false, false, false), (G::UsageType, false));
+    assert_eq!(App::cost_tab_step(G::Region, false, true, false, false), (G::UsageType, false));
 }
 
 #[tokio::test]

@@ -1,0 +1,12 @@
+{
+  "CostCategoryReferences": [
+    {
+      "CostCategoryArn": "arn:aws:ce::{{account}}:costcategory/3b1f7c2e-5a4d-4e8b-9f60-1c2d3e4f5a6b",
+      "Name": "Team",
+      "EffectiveStart": "2026-01-01T00:00:00Z",
+      "NumberOfRules": 3,
+      "Values": ["storefront", "data", "platform"],
+      "DefaultValue": "unassigned"
+    }
+  ]
+}

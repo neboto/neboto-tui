@@ -229,6 +229,17 @@ async fn rest_json_fixtures_route_by_path_and_can_fail() {
 }
 
 #[tokio::test]
+async fn cost_group_key_fixtures_deserialize() {
+    let ce = aws_sdk_costexplorer::Client::new(&demo_config().await);
+    let keys = crate::aws::services::cost::fetch_cost_tag_keys(ce.clone()).await.expect("GetTags");
+    assert_eq!(keys, ["CostCenter", "env", "team"]);
+    let cats = crate::aws::services::cost::fetch_cost_category_names(ce)
+        .await
+        .expect("ListCostCategoryDefinitions");
+    assert_eq!(cats, ["Team"]);
+}
+
+#[tokio::test]
 async fn cost_anomalies_fixture_deserializes() {
     let ce = aws_sdk_costexplorer::Client::new(&demo_config().await);
     let interval = aws_sdk_costexplorer::types::AnomalyDateInterval::builder()

@@ -277,6 +277,22 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                         .to_string(),
                 )
             }
+            // Grouping by a tag key / cost category that has no spend in the
+            // window: usually the tag isn't activated for cost allocation.
+            else if app.current_service == Some(crate::aws::service::ServiceType::Cost)
+                && app.cost_group_by.is_keyed()
+            {
+                let key = app.cost_group_key_for(app.cost_group_by).unwrap_or_default();
+                (
+                    format!("No spend grouped by {} \"{}\" in {}", app.cost_group_by.label().to_lowercase(), key, app.cost_period.label()),
+                    if app.cost_group_by == crate::aws::services::cost::CostGroupBy::Tag {
+                        "Tags only group cost once activated in Billing → Cost allocation tags (~24h) · 9 pick another key"
+                    } else {
+                        "Check the name in Billing → Cost categories · 0 pick another category"
+                    }
+                    .to_string(),
+                )
+            }
             // X-Ray with nothing at all in the window: tracing is off, or the
             // window is too short for the sampling rate — not a permission gap.
             else if app.current_service == Some(crate::aws::service::ServiceType::XRay) {

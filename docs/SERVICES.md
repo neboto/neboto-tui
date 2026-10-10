@@ -2469,6 +2469,30 @@ the service you're touching.
   ≥ $10 yellow). `GetAnomalies` can't filter by id, so `C` copies a
   monitor + start-date scoped command. Rejected: `GetAnomalyMonitors` for a
   monitor *name* — a second billed call per open for one row.
+- **Cost by tag / cost category** (`@cost`, keys `9` / `0`, #101) — two
+  more `CostGroupBy` variants (`Tag`, `CostCategory`) on the same toggle row,
+  each carrying a key (tag key / category name) in `CostQuery.group_key`
+  and remembered on `App.cost_tag_key` / `App.cost_category`. The first
+  press, or a press while that view is already showing, opens a picker
+  (`cost_key_picker.rs`); otherwise the key returns to the remembered key.
+  The picker list is `GetTags` (no `TagKey`, over the 3-month window — it
+  lists only **activated** cost-allocation tags with spend) or
+  `ListCostCategoryDefinitions`, held on `LazyStore.cost_group_keys` and
+  fetched on first open only, because each page is a billed CE request.
+  `⏎` with no match groups by the typed text, so a denied `GetTags` or a
+  freshly activated tag isn't a dead end. CE returns keyed groups as
+  `key$value` and **`key$`** for spend with no value; the row shows
+  `(untagged)` / `(uncategorized)` and keeps the bare value in
+  `CostLineItem.filter_value`, and the drill-down filters that row with
+  `MatchOption::Absent` (the only way CE filters "no value" — `values([""])`
+  doesn't). The cache variant and the `cost_drilldown` key both include the
+  key: `Tag:team-Mtd`, or `team` and `env` would share a result set. Tag and
+  Category rows break down by **Services** (not Regions), the console's
+  default for those groupings. `Tab` adds Tag / Category as stops only once
+  a key is chosen (`App::cost_tab_step`). Rejected: grouping by two things
+  at once (tag × service — CE allows two `GroupBy`s, but the list model is
+  one dimension per row; that's its own issue), and prefetching the key
+  lists on Cost load (a billed call per open for a view most loads never use).
 - **Budgets** (`@budgets`, `budgets.rs`) — a separate `ServiceType` from Cost,
   not a sub-tab of it: Cost's digit keys 1–7 are already claimed by its own
   group-by/period toggles, so a second resource shape can't share the tab

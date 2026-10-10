@@ -557,6 +557,18 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
         );
     }
 
+    // Render the Cost `9` / `0` group-key picker if visible
+    if app.cost_key_picker.visible {
+        let kind = app.cost_key_picker.kind;
+        crate::ui::widgets::cost_key_picker::render_cost_key_picker(
+            &app.cost_key_picker,
+            app.lazy.cost_group_keys.get(crate::app::App::cost_group_keys_lazy_key(kind)),
+            app.cost_group_key_for(kind).as_deref(),
+            &app.popup_hits,
+            frame,
+        );
+    }
+
     // Render the CloudTrail event-filter modal if visible
     if app.ct_filter_modal.visible {
         ct_filter_modal::render_ct_filter_modal(&app.ct_filter_modal, &app.popup_hits, frame);
