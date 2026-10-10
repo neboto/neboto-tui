@@ -580,6 +580,9 @@ impl Resource for CloudTrailTrail {
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
     }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((self.arn.clone(), &mut self.tags))
+    }
 
     fn as_any(&self) -> &dyn Any {
         self

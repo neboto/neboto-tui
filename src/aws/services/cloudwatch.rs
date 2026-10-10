@@ -536,6 +536,9 @@ impl Resource for CwAlarm {
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
     }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((self.alarm_arn.clone(), &mut self.tags))
+    }
 
     fn search_text(&self) -> String {
         // Include the state so "alarm"/"ok"/"insufficient" filter the list (mirrors
@@ -712,6 +715,9 @@ impl Resource for CwCompositeAlarm {
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
     }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((self.alarm_arn.clone(), &mut self.tags))
+    }
 
     fn search_text(&self) -> String {
         let state_label = match self.state.as_str() {
@@ -816,6 +822,9 @@ impl Resource for CwDashboard {
 
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
+    }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((self.arn.clone(), &mut self.tags))
     }
 
     fn search_text(&self) -> String {
@@ -2081,6 +2090,10 @@ impl Resource for CwLogGroup {
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
     }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        // DescribeLogGroups' ARN ends `:*`; the Tagging API's doesn't.
+        Some((self.arn.trim_end_matches(":*").to_string(), &mut self.tags))
+    }
 
     fn search_text(&self) -> String {
         format!("{} {}", self.log_group_name, self.arn)
@@ -2842,6 +2855,9 @@ impl Resource for CwMetricStream {
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
     }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((self.arn.clone(), &mut self.tags))
+    }
 
     fn search_text(&self) -> String {
         format!(
@@ -3208,6 +3224,9 @@ impl Resource for CwInsightRule {
 
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
+    }
+    fn list_tags_slot(&mut self) -> Option<(String, &mut HashMap<String, String>)> {
+        Some((format!("insight-rule/{}", self.name), &mut self.tags))
     }
 
     fn search_text(&self) -> String {

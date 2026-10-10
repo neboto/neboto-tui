@@ -66,6 +66,13 @@ pub enum Event {
         service: ServiceType,
         warning: String,
     },
+    /// List-time tags for the rows this load streamed (#29), sent by
+    /// `crate::aws::tags::ListTimeTags` just before `ResourcesFullyLoaded`,
+    /// so the cache stamps rows that already carry them.
+    ListTagsLoaded {
+        service: ServiceType,
+        tags: std::sync::Arc<crate::aws::tags::TagIndex>,
+    },
     /// A list-load stream event (`ResourcesLoaded` / `PartiallyLoaded` /
     /// `FullyLoaded` / `LoadError` / `LoadWarning`) tagged by the forwarder in
     /// `App::load_resources_async` with the `load_generation` it belongs to.

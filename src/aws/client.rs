@@ -458,6 +458,12 @@ impl AwsClients {
         aws_sdk_sfn::Client::new(&self.config)
     }
 
+    /// Resource Groups Tagging API — list-time tags for services whose own
+    /// tag APIs are per-resource (`crate::aws::tags::ListTimeTags`, #29).
+    pub fn tagging_client(&self) -> aws_sdk_resourcegroupstagging::Client {
+        aws_sdk_resourcegroupstagging::Client::new(&self.config)
+    }
+
     pub fn cloudwatch_client(&self) -> aws_sdk_cloudwatch::Client {
         aws_sdk_cloudwatch::Client::new(&self.config)
     }

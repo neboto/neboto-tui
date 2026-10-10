@@ -905,6 +905,16 @@ and the approaches you rejected are the part nobody can recover from your code.
   `eq`/`gte` condition aliases, insight filters' `severity_normalized` /
   `keyword`. Read the current field first, then the alias, behind
   `#[allow(deprecated)]`.
+- **List-time tags for services without a cheap tag call** (#29): wrap the
+  service in `aws::tags::ListTimeTags::wrap(svc, clients, &["<tagging
+  prefix>"])` in `build_services` and give each taggable type a
+  `Resource::list_tags_slot` (its ARN, or the ARN's resource part like
+  `job/NAME` when the type has none). One `tag:GetResources` runs beside the
+  list and lands as `Event::ListTagsLoaded` **between the last batch and
+  `ResourcesFullyLoaded`** — that order is what lets the completion handler
+  cache tagged rows, so don't forward the completion early. Bedrock,
+  CloudTrail, CloudWatch and Glue use it; services that already fill tags at
+  list time don't need it.
 - **`search_text()` runs per resource per keystroke.** For services with
   large per-resource blobs (GuardDuty, Security Hub findings) build a
   **precomputed** `search_blob` at ingestion instead of walking the structure

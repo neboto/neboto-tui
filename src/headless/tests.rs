@@ -463,3 +463,60 @@ async fn get_iam_policies_carries_the_documents() {
     let text = v["sections"]["Policies"]["orders-dynamodb"]["content"].to_string();
     assert!(text.contains("123456789012"), "placeholders filled: {text}");
 }
+
+#[tokio::test]
+async fn list_time_tags_reach_rows_without_a_pane() {
+    // #29: CloudWatch has no tag call of its own; the Tagging API fills
+    // alarms and log groups (by their `:*`-less ARN) during the list load.
+    let (rows, warnings) = demo_list(ServiceType::CloudWatch).await.unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let a = LsArgs { filter: Some("tag:team=storefront".into()), ..args("cw") };
+    let mut got: Vec<(String, String)> = filter(rows, &a)
+        .iter()
+        .map(|r| (r.resource_type().to_string(), r.name().to_string()))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("CW Alarm".to_string(), "orders-api-errors".to_string()),
+            ("CW Alarm".to_string(), "storefront-alb-5xx".to_string()),
+            ("CW Log Group".to_string(), "/aws/lambda/orders-api".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn get_carries_list_time_tags_through_the_app() {
+    // `get` runs the TUI's own load path, so this covers the
+    // `ListTagsLoaded` handler, not just `ls`'s drain loop.
+    let v = demo_get_json(get_args("cw", &["orders-api-errors"])).await;
+    assert_eq!(v["tags"]["team"], "storefront", "{}", v["tags"]);
+}
+
+#[tokio::test]
+async fn list_time_tags_land_after_the_last_batch_and_before_completion() {
+    // The TUI patches whichever list the stream filled when the tags arrive,
+    // and the completion handler caches it — so the order is the contract.
+    let clients = AwsClients::new_demo_for_test().await;
+    let roles = vec!["OrganizationAccountAccessRole".to_string()];
+    let services = App::build_services(&clients, None, &roles);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    services[&ServiceType::CloudWatch]
+        .list_resources_streaming(tx, ServiceType::CloudWatch)
+        .await
+        .unwrap();
+    let mut order = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        order.push(match event {
+            Event::ResourcesPartiallyLoaded { .. } => "batch",
+            Event::ListTagsLoaded { .. } => "tags",
+            Event::ResourcesFullyLoaded { .. } => "done",
+            _ => "other",
+        });
+    }
+    let tags = order.iter().position(|e| *e == "tags").expect("tags sent");
+    let last_batch = order.iter().rposition(|e| *e == "batch").expect("batches");
+    assert!(last_batch < tags, "{order:?}");
+    assert_eq!(order.last(), Some(&"done"), "{order:?}");
+}

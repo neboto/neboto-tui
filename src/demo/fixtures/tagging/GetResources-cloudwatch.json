@@ -1,0 +1,32 @@
+{
+ "PaginationToken": "",
+ "ResourceTagMappingList": [
+  {
+   "ResourceARN": "arn:aws:cloudwatch:{{region}}:{{account}}:alarm:orders-api-errors",
+   "Tags": [
+    { "Key": "team", "Value": "storefront" },
+    { "Key": "severity", "Value": "page" }
+   ]
+  },
+  {
+   "ResourceARN": "arn:aws:cloudwatch:{{region}}:{{account}}:alarm:storefront-alb-5xx",
+   "Tags": [
+    { "Key": "team", "Value": "storefront" },
+    { "Key": "aws:cloudformation:stack-name", "Value": "storefront-prod" }
+   ]
+  },
+  {
+   "ResourceARN": "arn:aws:logs:{{region}}:{{account}}:log-group:/aws/lambda/orders-api",
+   "Tags": [
+    { "Key": "team", "Value": "storefront" }
+   ]
+  },
+  {
+   "ResourceARN": "arn:aws:logs:{{region}}:{{account}}:log-group:/aws/lambda/nightly-report",
+   "Tags": [
+    { "Key": "team", "Value": "data" },
+    { "Key": "ManagedBy", "Value": "terraform" }
+   ]
+  }
+ ]
+}

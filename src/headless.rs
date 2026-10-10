@@ -230,6 +230,10 @@ pub(crate) async fn list_all(
                 done = true;
             }
             Event::ResourcesFullyLoaded { .. } => done = true,
+            // List-time tags (#29) land after the last batch.
+            Event::ListTagsLoaded { tags, .. } => {
+                tags.apply(&mut rows);
+            }
             Event::ResourceLoadWarning { warning, .. } => warnings.push(warning),
             Event::ResourceLoadError { error, .. } => return Err(Failure::Error(error)),
             _ => {}
