@@ -29,20 +29,27 @@ async-trait = "0.1"
 futures = "0.3"
 
 # AWS SDK
+# Every aws-sdk-* crate takes its default features minus `rustls`, which only
+# adds the SDK's *legacy* connector (rustls 0.21 / hyper 0.14 / h2 0.3) — never
+# used to send a request, but compiled in and flagged by `cargo audit` (#145).
+# The default client is `default-https-client` (rustls 0.23 / hyper 1). A new
+# SDK crate goes in the same way; `cargo tree -i rustls@0.21.12` should stay
+# empty. aws-config's defaults don't include the legacy stack, so it keeps them
+# (they carry `sso` and `credentials-process`, which fail at runtime if lost).
 aws-config = "1.1"
 aws-credential-types = "1.1"
-aws-sdk-ec2 = "1.17"
-aws-sdk-ecr = "1.17"
-aws-sdk-rds = "1.17"
-aws-sdk-ecs = "1.17"
-aws-sdk-cloudtrail = "1.17"
-aws-sdk-s3 = "1.17"
-aws-sdk-ssoadmin = "1.17"
-aws-sdk-identitystore = "1.17"
-aws-sdk-cloudformation = "1.17"
-aws-sdk-lambda = "1.17"
-aws-sdk-route53 = "1.17"
-aws-sdk-acm = "1.17"
+aws-sdk-ec2 = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-ecr = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-rds = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-ecs = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-cloudtrail = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-s3 = { version = "1.17", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
+aws-sdk-ssoadmin = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-identitystore = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-cloudformation = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-lambda = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-route53 = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-acm = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-smithy-runtime-api = "1"
 aws-smithy-types = "1"
 
@@ -80,93 +87,93 @@ flate2 = "1"
 thousands = "0.2"
 # Display-width padding for the detail pane key column (CJK / emoji / glyphs)
 unicode-width = "0.2"
-aws-sdk-cloudwatch = "1.17"
-aws-sdk-cloudwatchlogs = "1.17"
-aws-sdk-sts = "1.17"
-aws-sdk-iam = "1.17"
-aws-sdk-organizations = "1.17"
-aws-sdk-elasticloadbalancingv2 = "1.17"
-aws-sdk-autoscaling = "1.17"
-aws-sdk-computeoptimizer = "1.17"
-aws-sdk-sqs = "1.17"
-aws-sdk-sns = "1.17"
-aws-sdk-secretsmanager = "1.17"
-aws-sdk-ssm = "1.17"
-aws-sdk-costexplorer = "1"
+aws-sdk-cloudwatch = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-cloudwatchlogs = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-sts = { version = "1.17", default-features = false, features = ["sigv4a", "default-https-client", "rt-tokio"] }
+aws-sdk-iam = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-organizations = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-elasticloadbalancingv2 = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-autoscaling = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-computeoptimizer = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-sqs = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-sns = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-secretsmanager = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-ssm = { version = "1.17", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-costexplorer = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 
 # Date math for billing periods
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-aws-sdk-cloudfront = "1"
-aws-sdk-kms = "1"
-aws-sdk-config = "1"
-aws-sdk-wafv2 = "1"
-aws-sdk-support = "1"
-aws-sdk-trustedadvisor = "1"
-aws-sdk-directconnect = "1"
-aws-sdk-globalaccelerator = "1"
-aws-sdk-apigateway = "1"
-aws-sdk-apigatewayv2 = "1"
-aws-sdk-servicequotas = "1"
-aws-sdk-dynamodb = "1"
-aws-sdk-eks = "1"
-aws-sdk-efs = "1"
-aws-sdk-eventbridge = "1.109.0"
-aws-sdk-guardduty = "1"
-aws-sdk-securityhub = "1"
-aws-sdk-cognitoidentityprovider = "1"
-aws-sdk-cognitoidentity = "1"
-aws-sdk-inspector2 = "1"
-aws-sdk-backup = "1"
-aws-sdk-networkfirewall = "1"
-aws-sdk-sfn = "1"
-aws-sdk-codecommit = "1"
-aws-sdk-codebuild = "1"
-aws-sdk-codepipeline = "1"
-aws-sdk-codedeploy = "1"
-aws-sdk-codeartifact = "1"
-aws-sdk-fsx = "1"
-aws-sdk-health = "1"
-aws-sdk-resourceexplorer2 = "1"
-aws-sdk-resourcegroups = "1"
-aws-sdk-resourcegroupstagging = "1"
-aws-sdk-transfer = "1"
-aws-sdk-route53resolver = "1"
-aws-sdk-route53profiles = "1"
-aws-sdk-ram = "1"
-aws-sdk-workspaces = "1"
-aws-sdk-accessanalyzer = "1"
-aws-sdk-elasticache = "1"
-aws-sdk-opensearch = "1"
-aws-sdk-kinesis = "1"
-aws-sdk-firehose = "1"
-aws-sdk-bedrock = "1"
-aws-sdk-bedrockagent = "1"
-aws-sdk-bedrockagentcorecontrol = "1"
-aws-sdk-bedrockagentcore = "1"
+aws-sdk-cloudfront = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-kms = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-config = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-wafv2 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-support = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-trustedadvisor = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-directconnect = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-globalaccelerator = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-apigateway = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-apigatewayv2 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-servicequotas = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-dynamodb = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-eks = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-efs = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-eventbridge = { version = "1.109.0", default-features = false, features = ["sigv4a", "default-https-client", "rt-tokio"] }
+aws-sdk-guardduty = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-securityhub = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-cognitoidentityprovider = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-cognitoidentity = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-inspector2 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-backup = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-networkfirewall = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-sfn = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-codecommit = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-codebuild = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-codepipeline = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-codedeploy = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-codeartifact = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-fsx = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-health = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-resourceexplorer2 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-resourcegroups = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-resourcegroupstagging = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-transfer = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-route53resolver = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-route53profiles = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-ram = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-workspaces = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-accessanalyzer = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-elasticache = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-opensearch = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-kinesis = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-firehose = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-bedrock = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-bedrockagent = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-bedrockagentcorecontrol = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-bedrockagentcore = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 clap = { version = "4.6.1", features = ["derive"] }
-aws-sdk-pi = "1"
-aws-sdk-athena = "1"
-aws-sdk-glue = "1"
-aws-sdk-sesv2 = "1"
-aws-sdk-kafka = "1"
-aws-sdk-batch = "1"
-aws-sdk-xray = "1"
-aws-sdk-databasemigration = "1"
-aws-sdk-elasticbeanstalk = "1.114"
-aws-sdk-scheduler = "1"
-aws-sdk-pipes = "1"
-aws-sdk-fms = "1"
-aws-sdk-redshift = "1"
-aws-sdk-redshiftserverless = "1"
-aws-sdk-budgets = "1"
-aws-sdk-invoicing = "1"
-aws-sdk-controltower = "1"
-aws-sdk-controlcatalog = "1"
-aws-sdk-servicecatalog = "1"
-aws-sdk-s3files = "1"
-aws-sdk-s3tables = "1.62.0"
+aws-sdk-pi = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-athena = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-glue = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-sesv2 = { version = "1", default-features = false, features = ["sigv4a", "default-https-client", "rt-tokio"] }
+aws-sdk-kafka = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-batch = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-xray = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-databasemigration = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-elasticbeanstalk = { version = "1.114", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-scheduler = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-pipes = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-fms = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-redshift = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-redshiftserverless = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-budgets = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-invoicing = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-controltower = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-controlcatalog = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-servicecatalog = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-s3files = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-s3tables = { version = "1.62.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 similar = "3"
-aws-sdk-oam = "1.111.0"
+aws-sdk-oam = { version = "1.111.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 
 # Dev builds carry full DWARF debuginfo by default (`debug = 2`). With 60+
 # machine-generated `aws-sdk-*` crates, that debuginfo — which we never step into
