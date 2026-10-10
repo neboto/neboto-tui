@@ -2201,6 +2201,12 @@ pub struct App {
     pub session_requested: bool,
     // (program, args) for the inline session to spawn while the TUI is down.
     pub pending_session_cmd: Option<(String, Vec<String>)>,
+    /// Config `session_launch` / `--session-launch` (#146): where sessions open.
+    pub session_launch: crate::session_launch::SessionLaunch,
+    /// Credential handover files a `window`-mode launch wrote, with when.
+    /// The window's shell deletes its file once read; dropping the
+    /// `TempPath` here is the backstop (after `HANDOVER_TTL`, or on exit).
+    pub session_handover_files: Vec<(tempfile::TempPath, Instant)>,
 
     // Route53 sub-tab and detail section state
     pub r53_view: R53View,
@@ -2598,6 +2604,25 @@ fn is_secret_aws_var(name: &str) -> bool {
         || (name.ends_with("_TOKEN") && name.starts_with("AWS_"))
 }
 
+/// The shell command a session runs (in a window or inline): the env
+/// prefix — `unset` of the inherited creds when a named profile is active
+/// (its `--profile` is then authoritative), else `aws_env_exports_from` — then
+/// the `aws …` command itself. Never holds a credential (#120).
+fn session_shell_cmd(
+    named_profile: bool,
+    cmd_str: &str,
+    vars: impl Iterator<Item = (String, String)>,
+) -> String {
+    let env_prefix = if named_profile {
+        "unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+         AWS_PROFILE AWS_DEFAULT_PROFILE; "
+            .to_string()
+    } else {
+        aws_env_exports_from(vars)
+    };
+    format!("{}{}", env_prefix, cmd_str)
+}
+
 /// Build a shell `export K='V'; …` prefix that forwards neboto's own `AWS_*`
 /// environment (profile, region, `AWS_CONFIG_FILE` /
 /// `AWS_SHARED_CREDENTIALS_FILE`, SSO / web-identity / container settings)
@@ -2609,11 +2634,9 @@ fn is_secret_aws_var(name: &str) -> bool {
 /// `do script` path), `ps -E` and scrollback (#120). A session whose
 /// credentials *are* static env keys runs inline instead, where the child
 /// inherits them without their ever being written down
-/// (`env_has_static_keys`). Returns "" when nothing is left to forward.
-fn aws_env_exports() -> String {
-    aws_env_exports_from(std::env::vars())
-}
-
+/// (`env_has_static_keys`) — or, under `session_launch = "window"` (#146),
+/// gets them through a 0600 temp file whose path is all the command holds
+/// (`crate::session_launch`). Returns "" when nothing is left to forward.
 fn aws_env_exports_from(vars: impl Iterator<Item = (String, String)>) -> String {
     let mut pairs: Vec<(String, String)> = vars
         .filter(|(k, _)| k.starts_with("AWS_") && !is_secret_aws_var(k))
@@ -2627,7 +2650,7 @@ fn aws_env_exports_from(vars: impl Iterator<Item = (String, String)>) -> String 
     out
 }
 
-/// Whether the ambient credentials include something `aws_env_exports` won't
+/// Whether the ambient credentials include something `aws_env_exports_from` won't
 /// forward — so a session in a new window couldn't authenticate, and has to
 /// run inline (inheriting the environment) instead.
 fn env_has_static_keys(mut vars: impl Iterator<Item = (String, String)>) -> bool {
@@ -2794,6 +2817,9 @@ impl App {
             startup_warnings.push(format!("theme: {}", theme_warnings.join("; ")));
         }
         startup_warnings.extend(export_warnings);
+        startup_warnings.extend(
+            crate::session_launch::SessionLaunch::from_config(config.session_launch.as_deref()).1,
+        );
         if !startup_warnings.is_empty() {
             let msg = startup_warnings.join("; ");
             config.load_warning = Some(match config.load_warning.take() {
@@ -3078,6 +3104,11 @@ impl App {
             ssm_info_fetched: false,
             session_requested: false,
             pending_session_cmd: None,
+            session_launch: crate::session_launch::SessionLaunch::from_config(
+                config.session_launch.as_deref(),
+            )
+            .0,
+            session_handover_files: Vec::new(),
             r53_view: R53View::Zones,
             r53_records_skipped: (0, 0),
             r53_health_metrics: HashMap::new(),
@@ -4013,6 +4044,7 @@ impl App {
                 self.tick_count = self.tick_count.wrapping_add(1);
                 self.watch_tick(event_tx);
                 self.cfn_progress_tick(event_tx);
+                self.session_handover_tick();
             }
         }
         Ok(())
@@ -22562,6 +22594,7 @@ impl App {
     /// Shared tiered launcher for interactive `aws` sessions (SSM Session
     /// Manager, ECS Exec): a new tmux window when inside tmux, else a new OS
     /// terminal window, else suspend the TUI and run inline (via the main loop).
+    /// Config `session_launch` picks the tiers (`crate::session_launch`).
     /// Copies the command to the clipboard when the `aws` CLI isn't on PATH.
     fn spawn_aws_session(&mut self, mut args: Vec<String>, win_name: String, what: String) {
         if self.session_blocked_by_assumed_role() {
@@ -22595,62 +22628,118 @@ impl App {
         //   credential_process freshly from ~/.aws);
         // - otherwise (ambient chain: env creds / instance profile) → forward
         //   neboto's non-secret AWS_* env so the session resolves the same
-        //   credentials; static keys force the inline path below instead.
-        let env_prefix = if profile.is_some() {
-            "unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
-             AWS_PROFILE AWS_DEFAULT_PROFILE; "
-                .to_string()
-        } else {
-            aws_env_exports()
-        };
-        let full_cmd = format!("{}{}", env_prefix, cmd_str);
+        //   credentials; static keys go inline or through the handover file
+        //   below, never into the command.
+        let full_cmd = session_shell_cmd(profile.is_some(), &cmd_str, std::env::vars());
         // Hold the window open if the command fails so the error is legible.
         let launch_cmd = hold_shell_on_error(&full_cmd);
 
-        // Static env keys can't go to a new window without writing them into
-        // its command (#120), so such a session runs inline, inheriting them.
-        let inline_only = profile.is_none() && env_has_static_keys(std::env::vars());
-
-        // 1. Inside tmux → open the session in a fresh tmux window.
-        if !inline_only && std::env::var("TMUX").is_ok() && which_in_path("tmux").is_some() {
-            match std::process::Command::new("tmux")
-                .args(["new-window", "-n", &win_name, &launch_cmd])
-                .spawn()
-            {
-                Ok(_) => {
-                    self.success_message = Some(format!("Opened {} in new tmux window", what));
-                    self.success_message_time = Some(Instant::now());
-                    return;
+        // Where the session opens (config `session_launch`, #146). Static env
+        // keys can't go to a new window by being written into its command
+        // (#120): `auto` runs such a session inline, where the child inherits
+        // them; `window` hands them over through a 0600 temp file instead.
+        use crate::session_launch::{LaunchPlan, SessionLaunch};
+        let static_keys = profile.is_none() && env_has_static_keys(std::env::vars());
+        let mode = self.session_launch;
+        // Why a `window`-mode launch ended up inline, for the status bar.
+        let mut fallback: Option<String> = None;
+        if let LaunchPlan::Window { handover } = crate::session_launch::plan(mode, static_keys) {
+            let mut handover_file = None;
+            let window_cmd = if handover {
+                let body = crate::session_launch::handover_contents(
+                    std::env::vars(),
+                    is_secret_aws_var,
+                );
+                match crate::session_launch::write_handover_file(&body) {
+                    Ok(path) => {
+                        let cmd = hold_shell_on_error(&crate::session_launch::with_handover(
+                            &path, &full_cmd,
+                        ));
+                        handover_file = Some(path);
+                        Some(cmd)
+                    }
+                    Err(e) => {
+                        fallback = Some(format!("couldn't write the credential handover file ({e})"));
+                        None
+                    }
                 }
-                Err(e) => {
-                    self.error_message = Some(format!("tmux new-window failed: {}", e));
-                    return;
+            } else {
+                Some(launch_cmd)
+            };
+
+            if let Some(window_cmd) = window_cmd {
+                // 1. Inside tmux → open the session in a fresh tmux window.
+                if std::env::var("TMUX").is_ok() && which_in_path("tmux").is_some() {
+                    match std::process::Command::new("tmux")
+                        .args(["new-window", "-n", &win_name, &window_cmd])
+                        .spawn()
+                    {
+                        Ok(_) => {
+                            self.keep_handover_file(handover_file);
+                            self.success_message = Some(format!("Opened {} in new tmux window", what));
+                            self.success_message_time = Some(Instant::now());
+                            return;
+                        }
+                        // `auto` keeps its pre-#146 behaviour: report, don't
+                        // fall through. `window` promised a window, so it tries
+                        // the next one and only then goes inline.
+                        Err(e) if mode == SessionLaunch::Auto => {
+                            self.error_message = Some(format!("tmux new-window failed: {}", e));
+                            return;
+                        }
+                        Err(e) => fallback = Some(format!("tmux new-window failed: {e}")),
+                    }
+                }
+
+                // 2. A graphical terminal is available → open a new OS window.
+                if let Some((prog, spawn_args)) = new_terminal_window_command(&window_cmd) {
+                    match std::process::Command::new(&prog).args(&spawn_args).spawn() {
+                        Ok(_) => {
+                            self.keep_handover_file(handover_file);
+                            self.success_message =
+                                Some(format!("Opened {} in new terminal window", what));
+                            self.success_message_time = Some(Instant::now());
+                            return;
+                        }
+                        Err(e) => fallback = Some(format!("{prog} failed: {e}")),
+                    }
+                } else if fallback.is_none() {
+                    fallback = Some("no tmux or graphical terminal to open a window in".to_string());
                 }
             }
-        }
-
-        // 2. A graphical terminal is available → open a new OS window.
-        if let Some((prog, spawn_args)) =
-            new_terminal_window_command(&launch_cmd).filter(|_| !inline_only)
-        {
-            if std::process::Command::new(&prog)
-                .args(&spawn_args)
-                .spawn()
-                .is_ok()
-            {
-                self.success_message = Some(format!("Opened {} in new terminal window", what));
-                self.success_message_time = Some(Instant::now());
-                return;
-            }
-            // else fall through to inline
+            // `handover_file` drops here: no window will read it.
         }
 
         // 3. Fallback: suspend the TUI and run the session inline. The main
         //    loop tears down the terminal, runs this, and redraws on exit. Run
-        //    through `sh -c` so the same profile/env handling applies.
+        //    through `sh -c` so the same profile/env handling applies; the
+        //    child inherits any static keys without their being written down.
+        if mode == SessionLaunch::Window {
+            if let Some(why) = fallback {
+                self.error_message =
+                    Some(format!("session_launch = window: {why} — opened in this terminal"));
+            }
+        }
         self.pending_session_cmd =
             Some(("sh".to_string(), vec!["-c".to_string(), full_cmd]));
         self.session_requested = true;
+    }
+
+    /// Hold a launched window's credential handover file until its shell has
+    /// had time to read it (`session_handover_tick` drops it after
+    /// `HANDOVER_TTL` — the shell normally deletes it itself first).
+    fn keep_handover_file(&mut self, file: Option<tempfile::TempPath>) {
+        if let Some(path) = file {
+            self.session_handover_files.push((path, Instant::now()));
+        }
+    }
+
+    /// Backstop delete for handover files whose window never ran the command.
+    fn session_handover_tick(&mut self) {
+        if !self.session_handover_files.is_empty() {
+            self.session_handover_files
+                .retain(|(_, at)| at.elapsed() < crate::session_launch::HANDOVER_TTL);
+        }
     }
 
     /// Run the pending inline session synchronously (the TUI is already torn
@@ -33255,7 +33344,10 @@ pub(crate) mod harness_tests;
 
 #[cfg(test)]
 mod session_env_tests {
-    use super::{aws_env_exports_from, env_has_static_keys};
+    use super::{
+        aws_env_exports_from, env_has_static_keys, hold_shell_on_error, is_secret_aws_var,
+        session_shell_cmd,
+    };
 
     fn vars(pairs: &[(&str, &str)]) -> impl Iterator<Item = (String, String)> {
         pairs
@@ -33304,6 +33396,55 @@ mod session_env_tests {
         assert!(!env_has_static_keys(vars(&[("AWS_PROFILE", "dev"), ("AWS_REGION", "us-east-1")])));
         assert!(!env_has_static_keys(vars(&[("AWS_WEB_IDENTITY_TOKEN_FILE", "/t")])));
         assert!(!env_has_static_keys(vars(&[("AWS_SESSION_TOKEN", "")])));
+    }
+
+    /// #146: whatever `session_launch` picks, the command a session is
+    /// launched with holds no credential — only the handover file does, and
+    /// in `window` mode its path is the one new thing in the command.
+    #[test]
+    fn no_launch_mode_puts_a_credential_in_the_command() {
+        use crate::session_launch::{
+            handover_contents, plan, with_handover, write_handover_file, LaunchPlan,
+            SessionLaunch,
+        };
+        let env = [
+            ("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE"),
+            ("AWS_SECRET_ACCESS_KEY", "s3cr3t"),
+            ("AWS_SESSION_TOKEN", "tok3n"),
+            ("AWS_REGION", "eu-west-1"),
+        ];
+        let secrets = ["AKIAEXAMPLE", "s3cr3t", "tok3n"];
+        let cmd_str = "aws ssm start-session --target i-0abc --region eu-west-1";
+        let full_cmd = session_shell_cmd(false, cmd_str, vars(&env));
+        let static_keys = env_has_static_keys(vars(&env));
+        assert!(static_keys);
+        for mode in [SessionLaunch::Auto, SessionLaunch::Window, SessionLaunch::Inline] {
+            let launched = match plan(mode, static_keys) {
+                LaunchPlan::Inline => full_cmd.clone(),
+                LaunchPlan::Window { handover: false } => hold_shell_on_error(&full_cmd),
+                LaunchPlan::Window { handover: true } => {
+                    let body = handover_contents(vars(&env), is_secret_aws_var);
+                    for s in secrets {
+                        assert!(body.contains(s), "the file carries {s}");
+                    }
+                    let file = write_handover_file(&body).unwrap();
+                    let cmd = hold_shell_on_error(&with_handover(&file, &full_cmd));
+                    let p = crate::aws::resource::shell_quote(&file.to_string_lossy());
+                    let expected = hold_shell_on_error(&format!(". {p} && rm -f {p} && {{ {full_cmd}; }}"));
+                    assert_eq!(cmd, expected, "the path is the only addition");
+                    cmd
+                }
+            };
+            for s in secrets {
+                assert!(!launched.contains(s), "{mode:?} leaked {s}: {launched}");
+            }
+        }
+        // Named profile: the inherited creds are unset, never forwarded.
+        let named = session_shell_cmd(true, cmd_str, vars(&env));
+        assert!(named.starts_with("unset AWS_ACCESS_KEY_ID"));
+        for s in secrets {
+            assert!(!named.contains(s));
+        }
     }
 }
 

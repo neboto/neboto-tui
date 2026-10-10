@@ -19,6 +19,7 @@ mod references;
 mod timeline;
 mod search;
 mod sections;
+mod session_launch;
 mod terraform;
 mod tui;
 mod ui;

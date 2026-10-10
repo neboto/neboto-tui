@@ -76,6 +76,12 @@ pub struct Cli {
     /// catppuccin-mocha, catppuccin-latte.
     #[arg(long, value_name = "THEME")]
     pub theme: Option<String>,
+
+    /// Where SSM / ECS Exec sessions open: auto (tmux window → new terminal
+    /// window → current terminal), window, or inline. Overrides config
+    /// `session_launch` for this run.
+    #[arg(long, value_name = "MODE")]
+    pub session_launch: Option<String>,
 }
 
 /// The one-shot subcommands. Each makes the same read-only calls the TUI
@@ -209,6 +215,9 @@ impl Cli {
         if self.no_update_check {
             config.update_check = Some(false);
         }
+        if self.session_launch.is_some() {
+            config.session_launch = self.session_launch.clone();
+        }
         // Demo mode never touches real credentials or a configured emulator,
         // and opens on a service with data rather than the splash.
         if self.demo {
@@ -242,7 +251,18 @@ mod tests {
             theme: None,
             demo: false,
             no_update_check: false,
+            session_launch: None,
         }
+    }
+
+    #[test]
+    fn session_launch_flag_overrides_config() {
+        let mut cfg = Config { session_launch: Some("window".into()), ..Config::default() };
+        Cli { session_launch: Some("inline".into()), ..empty() }.apply_to(&mut cfg);
+        assert_eq!(cfg.session_launch.as_deref(), Some("inline"));
+        let mut cfg = Config { session_launch: Some("window".into()), ..Config::default() };
+        empty().apply_to(&mut cfg);
+        assert_eq!(cfg.session_launch.as_deref(), Some("window"));
     }
 
     #[test]

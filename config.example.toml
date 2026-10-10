@@ -48,6 +48,20 @@
 # working directory. The NEBOTO_EXPORT_DIR environment variable overrides it.
 # export_dir = "~/neboto-exports"
 
+# ── Sessions ─────────────────────────────────────────────────────────────────
+
+# Where SSM / ECS Exec sessions (`s`) open. --session-launch overrides it.
+#   "auto"   (default) a new tmux window, else a new terminal window, else this
+#            terminal (the TUI suspends). Static env keys with no named profile
+#            always run in this terminal.
+#   "window" always a new tmux / terminal window. Static env keys are handed to
+#            it through a temp file only you can read (0600), which the new
+#            shell sources and deletes — never through the command, its
+#            history, ps or the screen. Falls back to this terminal, with a
+#            status note, if the file or the window can't be made.
+#   "inline" always this terminal — no windows piling up, even inside tmux.
+# session_launch = "inline"
+
 # ── Theme ────────────────────────────────────────────────────────────────────
 
 # Preset: dark (default), light, solarized-dark, solarized-light, gruvbox-dark,
