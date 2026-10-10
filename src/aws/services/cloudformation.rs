@@ -63,7 +63,7 @@ impl AwsService for CloudFormationService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to describe CloudFormation stacks: {}", e),
+                        error: format!("Failed to describe CloudFormation stacks: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }

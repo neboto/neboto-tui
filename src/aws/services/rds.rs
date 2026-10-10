@@ -74,7 +74,7 @@ impl AwsService for RdsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list RDS instances: {}", e),
+                        error: format!("Failed to list RDS instances: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }
@@ -108,7 +108,7 @@ impl AwsService for RdsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list RDS clusters: {}", e),
+                        error: format!("Failed to list RDS clusters: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }

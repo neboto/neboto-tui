@@ -84,7 +84,7 @@ impl AwsService for GlobalAcceleratorService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list accelerators: {}", e),
+                        error: format!("Failed to list accelerators: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }

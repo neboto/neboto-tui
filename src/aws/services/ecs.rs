@@ -60,7 +60,7 @@ impl AwsService for EcsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list ECS clusters: {}", e),
+                        error: format!("Failed to list ECS clusters: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }
@@ -87,7 +87,7 @@ impl AwsService for EcsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to describe ECS clusters: {}", e),
+                        error: format!("Failed to describe ECS clusters: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }
@@ -1317,7 +1317,7 @@ pub async fn fetch_task_logs(
                 }
             }
             Err(e) => {
-                out.push_str(&format!("  error fetching logs: {}\n", e));
+                out.push_str(&format!("  error fetching logs: {}\n", crate::error::sdk_error_message(&e)));
             }
         }
         out.push('\n');

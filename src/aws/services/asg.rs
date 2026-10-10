@@ -75,7 +75,7 @@ impl AwsService for AutoScalingService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list Auto Scaling groups: {}", e),
+                        error: format!("Failed to list Auto Scaling groups: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }

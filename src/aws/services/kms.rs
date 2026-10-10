@@ -104,7 +104,7 @@ impl AwsService for KmsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list KMS keys: {}", e),
+                        error: format!("Failed to list KMS keys: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }

@@ -664,7 +664,7 @@ pub async fn run_ddb_read(client: DdbClient, spec: DdbQuerySpec) -> Result<DdbPa
         let resp = req
             .send()
             .await
-            .map_err(|e| crate::error::Error::AwsSdk(friendly_query_error(&e.to_string())))?;
+            .map_err(|e| crate::error::Error::AwsSdk(friendly_query_error(&crate::error::sdk_error_message(&e))))?;
         Ok(DdbPage {
             items: resp.items().to_vec(),
             last_key: resp.last_evaluated_key().cloned(),
@@ -688,7 +688,7 @@ pub async fn run_ddb_read(client: DdbClient, spec: DdbQuerySpec) -> Result<DdbPa
         let resp = req
             .send()
             .await
-            .map_err(|e| crate::error::Error::AwsSdk(friendly_query_error(&e.to_string())))?;
+            .map_err(|e| crate::error::Error::AwsSdk(friendly_query_error(&crate::error::sdk_error_message(&e))))?;
         Ok(DdbPage {
             items: resp.items().to_vec(),
             last_key: resp.last_evaluated_key().cloned(),

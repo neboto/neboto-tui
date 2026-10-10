@@ -82,7 +82,7 @@ impl AwsService for CloudWatchService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list CloudWatch alarms: {}", e),
+                        error: format!("Failed to list CloudWatch alarms: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }
@@ -117,7 +117,7 @@ impl AwsService for CloudWatchService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list CloudWatch log groups: {}", e),
+                        error: format!("Failed to list CloudWatch log groups: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }

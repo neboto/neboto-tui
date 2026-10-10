@@ -448,7 +448,7 @@ impl AwsService for Ec2Service {
                     Err(e) => {
                         let _ = event_tx.send(Event::ResourceLoadError {
                             service: service_type,
-                            error: e.to_string(),
+                            error: crate::error::sdk_error_message(&e),
                         });
                         return Err(e.into());
                     }

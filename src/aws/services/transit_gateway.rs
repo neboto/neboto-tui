@@ -81,7 +81,7 @@ impl AwsService for TransitGatewayService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list transit gateways: {}", e),
+                        error: format!("Failed to list transit gateways: {}", crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }

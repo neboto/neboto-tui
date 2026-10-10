@@ -200,9 +200,18 @@ impl AwsClients {
     /// other test's dead-endpoint clients onto fixture data too.
     #[cfg(test)]
     pub(crate) async fn new_demo_for_test() -> Self {
+        Self::new_with_http_for_test(crate::demo::http_client()).await
+    }
+
+    /// Test-only clients on a caller-supplied HTTP client — for a test that
+    /// needs AWS to answer something no demo fixture should (an error, say).
+    #[cfg(test)]
+    pub(crate) async fn new_with_http_for_test(
+        http: aws_smithy_runtime_api::client::http::SharedHttpClient,
+    ) -> Self {
         let config = sdk_defaults()
             .region(Region::UsEast1.to_sdk_region())
-            .http_client(crate::demo::http_client())
+            .http_client(http)
             .credentials_provider(mock_credentials())
             .load()
             .await;
