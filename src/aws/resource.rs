@@ -12,6 +12,10 @@ pub enum ResourceState {
     Unavailable,
     Creating,
     Deleting,
+    /// Deliberately switched off but not broken — an ECS service scaled to
+    /// 0/0. Its own look (a muted `◌`) so it reads as neither healthy green
+    /// nor failure red, and distinct from the dim `○` of `stateless()`.
+    Idle,
     Unknown(String),
 }
 
@@ -38,6 +42,7 @@ impl std::fmt::Display for ResourceState {
             ResourceState::Unavailable => write!(f, "unavailable"),
             ResourceState::Creating => write!(f, "creating"),
             ResourceState::Deleting => write!(f, "deleting"),
+            ResourceState::Idle => write!(f, "idle"),
             ResourceState::Unknown(s) => write!(f, "{}", s),
         }
     }

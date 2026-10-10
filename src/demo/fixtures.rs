@@ -10,6 +10,8 @@
 //!   circuit breaker rolled it back. The stopped task and its log say why
 //!   (missing `DATABASE_URL`), revision 15's env says `DB_URL`, and `W`
 //!   shows the CI role deployed it
+//! - ECS service `reports-nightly` is scaled to 0/0: the Services list
+//!   shows it as `◌ scaled to 0` rather than a healthy green row
 //! - `storefront-web` → its target group → `storefront-alb` → `alb-sg` →
 //!   `web-sg` is the Enter-to-follow chain; everything on it is owned by
 //!   the `storefront-prod` stack, which has drifted (the target group's
@@ -96,6 +98,7 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("ecs", "DescribeTaskDefinition", "DescribeTaskDefinition-web.json"),
     // A service's own tasks (its Tasks section) vs the cluster-wide load.
     // Stopped tasks exist only for orders-worker (the failed rollout).
+    fx!("ecs", "ListTasks", when ["reports-nightly"], "ListTasks-none.json"),
     fx!("ecs", "ListTasks", when ["STOPPED", "storefront-web"], "ListTasks-none.json"),
     fx!("ecs", "ListTasks", when ["STOPPED"], "ListTasks-stopped.json"),
     fx!("ecs", "ListTasks", when ["orders-worker"], "ListTasks-worker.json"),

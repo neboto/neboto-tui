@@ -619,7 +619,9 @@ capped, most-recent-first window of recently-stopped tasks** (ECS retains them
 ~1h) so a failed/cycled-out task doesn't vanish before you read its stop reason
 / exit codes. The ECS **service** pane has a lazy Tasks section; the cluster-wide
 Tasks sub-tab has an `f` status filter (All/Running/Stopped).
-`EcsServiceInfo::state()` reflects rollout health (FAILED→red, IN_PROGRESS→yellow).
+`EcsServiceInfo::state()` reflects rollout health (FAILED→red, IN_PROGRESS→yellow);
+past that, an ACTIVE service at 0/0 is `ResourceState::Idle` (muted `◌`,
+label `scaled to 0`, sorted next to stopped) — not a healthy green row.
 
 ### `$EDITOR`
 

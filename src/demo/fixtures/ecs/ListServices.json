@@ -1,4 +1,5 @@
 {"serviceArns": [
   "arn:aws:ecs:{{region}}:{{account}}:service/acme-prod/storefront-web",
-  "arn:aws:ecs:{{region}}:{{account}}:service/acme-prod/orders-worker"
+  "arn:aws:ecs:{{region}}:{{account}}:service/acme-prod/orders-worker",
+  "arn:aws:ecs:{{region}}:{{account}}:service/acme-prod/reports-nightly"
 ]}

@@ -476,12 +476,13 @@ fn state_sort_rank(state: &crate::aws::resource::ResourceState) -> u8 {
         Unavailable => 0,
         Terminated => 1,
         Stopped => 2,
-        Deleting => 3,
-        Pending => 4,
-        Creating => 5,
-        Unknown(_) => 6,
-        Running => 7,
-        Available => 8}
+        Idle => 3,
+        Deleting => 4,
+        Pending => 5,
+        Creating => 6,
+        Unknown(_) => 7,
+        Running => 8,
+        Available => 9}
 }
 
 /// Epoch-millis an execution row started, for the newest-first default order on
