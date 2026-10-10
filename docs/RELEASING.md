@@ -80,17 +80,13 @@ Dependabot refresh (#63) went through — but the shape can recur, so check
 arrive monthly as one `crates` PR; majors come one per PR (see
 `.github/dependabot.yml`).
 
-Known leftovers that a `cargo update` cannot clear, and why they're accepted:
-
-- `rustls 0.21` / `rustls-webpki 0.101` / `h2 0.3`: the AWS SDK's legacy
-  hyper-0.14 client, pulled in by the default `rustls` feature of `aws-config`
-  and every `aws-sdk-*` crate. The SDK talks TLS through the modern
-  hyper-1 / rustls-0.23 client at runtime; the old stack is compiled in but
-  idle. Clearing it means `default-features = false` + an explicit feature
-  list on all ~80 SDK crates.
-- `lru 0.16` (unsound: `LruCache::pop` isn't panic-safe): via `aws-sdk-s3`,
-  which uses it internally; neboto never touches an `LruCache`. Clears when
-  the SDK moves off it.
+There are no accepted leftovers as of v0.4.0 — the scan should come back
+clean. The last ones were the AWS SDK's legacy hyper-0.14 client
+(`rustls 0.21` / `rustls-webpki 0.101` / `h2 0.3`), dropped in #145 by
+taking every `aws-sdk-*` crate's default features minus `rustls` (see the
+comment above the SDK block in `Cargo.toml`; a new SDK crate must follow it,
+and `cargo tree -i rustls@0.21.12` should stay empty), and `lru 0.16`, which
+cleared when `aws-sdk-s3` moved off it.
 
 ## Cutting a release
 
