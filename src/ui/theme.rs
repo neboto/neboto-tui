@@ -501,6 +501,7 @@ pub fn state_indicator(state: &ResourceState) -> (&'static str, Color) {
         ResourceState::Pending | ResourceState::Creating => ("◐", warning()),
         ResourceState::Deleting => ("◑", error()),
         ResourceState::Terminated => ("✗", text_dim()),
+        ResourceState::Idle => ("◌", text_muted()),
         ResourceState::Unknown(_) => ("○", text_dim()),
     }
 }

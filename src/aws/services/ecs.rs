@@ -741,6 +741,15 @@ crate::sections! {
     ]
 }
 
+impl EcsServiceInfo {
+    /// Switched off on purpose: nothing desired, nothing running. It has
+    /// "reached desired count", so without its own state it reads as a
+    /// healthy green service in the list.
+    fn scaled_to_zero(&self) -> bool {
+        self.desired_count == 0 && self.running_count == 0
+    }
+}
+
 impl Resource for EcsServiceInfo {
     fn references(&self) -> Vec<(String, String)> {
         let mut v = sg_refs(self.security_group_ids());
@@ -836,6 +845,7 @@ impl Resource for EcsServiceInfo {
             }
         }
         match self.status.as_str() {
+            "ACTIVE" if self.scaled_to_zero() => ResourceState::Idle,
             "ACTIVE" => ResourceState::Available,
             "INACTIVE" => ResourceState::Unavailable,
             _ => ResourceState::Unknown(self.status.clone()),
@@ -853,6 +863,9 @@ impl Resource for EcsServiceInfo {
             if self.deployments.len() > 1 {
                 return "draining".to_string();
             }
+        }
+        if self.state() == ResourceState::Idle {
+            return "scaled to 0".to_string();
         }
         native_state_label(&self.status, || self.state())
     }
@@ -2088,5 +2101,60 @@ pub async fn resolve_ecs_task_log_streams(
         None => Err(crate::error::Error::AwsSdk(
             "No awslogs containers on this task".to_string(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_sdk_ecs::types::{Deployment, DeploymentRolloutState, Service};
+    use crate::ui::theme;
+
+    fn service(desired: i32, running: i32, rollout: Option<DeploymentRolloutState>) -> EcsServiceInfo {
+        let mut primary = Deployment::builder().status("PRIMARY");
+        if let Some(r) = rollout {
+            primary = primary.rollout_state(r);
+        }
+        EcsServiceInfo::from_sdk(
+            &Service::builder()
+                .service_name("svc")
+                .status("ACTIVE")
+                .desired_count(desired)
+                .running_count(running)
+                .deployments(primary.build())
+                .build(),
+        )
+    }
+
+    #[test]
+    fn scaled_to_zero_service_reads_idle_not_healthy() {
+        let s = service(0, 0, Some(DeploymentRolloutState::Completed));
+        assert_eq!(s.state(), ResourceState::Idle);
+        assert_eq!(s.state_label(), "scaled to 0");
+        assert_ne!(theme::state_indicator(&s.state()).0, "●");
+    }
+
+    #[test]
+    fn rollout_health_outranks_scaled_to_zero() {
+        let failed = service(0, 0, Some(DeploymentRolloutState::Failed));
+        assert_eq!(failed.state(), ResourceState::Unavailable);
+        assert_eq!(failed.state_label(), "rollout failed");
+        let rolling = service(0, 0, Some(DeploymentRolloutState::InProgress));
+        assert_eq!(rolling.state(), ResourceState::Pending);
+        assert_eq!(rolling.state_label(), "rollout in progress");
+    }
+
+    #[test]
+    fn running_service_stays_available() {
+        let s = service(2, 2, Some(DeploymentRolloutState::Completed));
+        assert_eq!(s.state(), ResourceState::Available);
+        assert_eq!(s.state_label(), "active");
+    }
+
+    #[test]
+    fn inactive_service_at_zero_keeps_its_status() {
+        let s = EcsServiceInfo::from_sdk(&Service::builder().status("INACTIVE").build());
+        assert_eq!(s.state(), ResourceState::Unavailable);
+        assert_eq!(s.state_label(), "inactive");
     }
 }

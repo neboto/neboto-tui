@@ -51,5 +51,26 @@
     "loadBalancers": [], "schedulingStrategy": "REPLICA", "enableExecuteCommand": false,
     "createdAt": {{epoch:now-120d}},
     "tags": [{"key": "team", "value": "orders"}, {"key": "ManagedBy", "value": "terraform"}]
+  },
+  {
+    "serviceArn": "arn:aws:ecs:{{region}}:{{account}}:service/acme-prod/reports-nightly",
+    "serviceName": "reports-nightly", "clusterArn": "arn:aws:ecs:{{region}}:{{account}}:cluster/acme-prod", "status": "ACTIVE",
+    "desiredCount": 0, "runningCount": 0, "pendingCount": 0, "launchType": "FARGATE", "platformVersion": "LATEST",
+    "taskDefinition": "arn:aws:ecs:{{region}}:{{account}}:task-definition/storefront-web:42",
+    "deploymentConfiguration": {"deploymentCircuitBreaker": {"enable": true, "rollback": true}, "maximumPercent": 200, "minimumHealthyPercent": 100},
+    "deployments": [{
+      "id": "ecs-svc/5555555555555555555", "status": "PRIMARY", "taskDefinition": "arn:aws:ecs:{{region}}:{{account}}:task-definition/storefront-web:42",
+      "desiredCount": 0, "pendingCount": 0, "runningCount": 0, "failedTasks": 0,
+      "createdAt": {{epoch:now-30d}}, "updatedAt": {{epoch:now-9d}}, "launchType": "FARGATE",
+      "rolloutState": "COMPLETED", "rolloutStateReason": "ECS deployment ecs-svc/5555555555555555555 completed."
+    }],
+    "events": [
+      {"id": "e-rn-2", "createdAt": {{epoch:now-9d}}, "message": "(service reports-nightly) has reached a steady state."},
+      {"id": "e-rn-1", "createdAt": {{epoch:now-9d}}, "message": "(service reports-nightly) has stopped 1 running tasks: (task 7f3a2e9c1d0b6a4f8e2c0d4b6a8f1e3c)."}
+    ],
+    "networkConfiguration": {"awsvpcConfiguration": {"subnets": ["subnet-0a11prv00000001a", "subnet-0a11prv00000002b"], "securityGroups": ["sg-0web0000000000001"], "assignPublicIp": "DISABLED"}},
+    "loadBalancers": [], "schedulingStrategy": "REPLICA", "enableExecuteCommand": false,
+    "createdAt": {{epoch:now-30d}},
+    "tags": [{"key": "team", "value": "storefront"}, {"key": "ManagedBy", "value": "terraform"}]
   }
 ], "failures": []}
