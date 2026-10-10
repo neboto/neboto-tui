@@ -120,7 +120,7 @@ impl AwsService for CostService {
 }
 
 impl CostService {
-    /// The Anomalies view (key `8`): one paginated `GetAnomalies` walk over
+    /// The Anomalies view (key `7`): one paginated `GetAnomalies` walk over
     /// the last [`ANOMALY_LOOKBACK_DAYS`], streamed as a single batch like the
     /// spend view (each page is a billed CE request, so there is no point
     /// showing a partial list for the second it takes).
@@ -188,10 +188,10 @@ pub enum CostGroupBy {
     LinkedAccount,
     Region,
     UsageType,
-    /// A cost-allocation tag key (key `9`); the key itself rides
+    /// A cost-allocation tag key (key `5`); the key itself rides
     /// `CostQuery.group_key` / `App.cost_tag_key`.
     Tag,
-    /// A cost category (key `0`); the category name rides
+    /// A cost category (key `6`); the category name rides
     /// `CostQuery.group_key` / `App.cost_category`.
     CostCategory,
 }
@@ -290,7 +290,7 @@ pub struct CostQuery {
     /// (`CostGroupBy::is_keyed`); ignored otherwise.
     pub group_key: Option<String>,
     pub period: CostPeriod,
-    /// The Anomalies view (key `8`): list Cost Anomaly Detection anomalies
+    /// The Anomalies view (key `7`): list Cost Anomaly Detection anomalies
     /// instead of grouped spend. `group_by`/`period` are kept (not used) so
     /// leaving the view returns to the grouping the user had.
     pub anomalies: bool,
@@ -640,11 +640,11 @@ pub async fn fetch_cost(client: &CeClient, query: &CostQuery) -> Result<Vec<Cost
 
     let group_key = query.group_key.clone().unwrap_or_default();
     let group_by = match query.group_by {
+        // A keyed stop reached by `Tab` before any key was picked: nothing to
+        // group by yet, so no (billed) call — the list's empty state asks
+        // for a key instead.
         CostGroupBy::Tag | CostGroupBy::CostCategory if group_key.is_empty() => {
-            return Err(crate::error::Error::AwsSdk(format!(
-                "no {} chosen to group by",
-                query.group_by.noun()
-            )));
+            return Ok(Vec::new());
         }
         CostGroupBy::Tag => GroupDefinition::builder()
             .r#type(GroupDefinitionType::Tag)
@@ -790,7 +790,7 @@ pub async fn fetch_cost(client: &CeClient, query: &CostQuery) -> Result<Vec<Cost
 /// longest period the list offers) — `GetTags` without a `TagKey` lists
 /// keys. Only *activated* cost-allocation tags appear, so an empty list is
 /// the normal answer for an account that never activated any. Every page is
-/// a billed CE request; fetched only when the `9` picker opens.
+/// a billed CE request; fetched only when the `5` picker opens.
 pub async fn fetch_cost_tag_keys(client: CeClient) -> Result<Vec<String>> {
     let today = Utc::now().date_naive();
     let start = resolve_windows_on(CostPeriod::Last3Months, today).cur_start;
@@ -822,7 +822,7 @@ pub async fn fetch_cost_tag_keys(client: CeClient) -> Result<Vec<String>> {
 }
 
 /// Cost category names (`ListCostCategoryDefinitions`, the definitions in
-/// effect today). Fetched only when the `0` picker opens.
+/// effect today). Fetched only when the `6` picker opens.
 pub async fn fetch_cost_category_names(client: CeClient) -> Result<Vec<String>> {
     let mut names: Vec<String> = Vec::new();
     let mut token: Option<String> = None;
@@ -856,7 +856,7 @@ pub fn group_keys_error(raw: &str, action: &str) -> String {
     friendly_error(raw, action)
 }
 
-// ── Anomalies (key 8: Cost Anomaly Detection) ─────────────────────────────────
+// ── Anomalies (key 7: Cost Anomaly Detection) ─────────────────────────────────
 
 /// How far back the Anomalies view looks. Cost Anomaly Detection keeps 90
 /// days of history in the console's default view; older anomalies are rarely

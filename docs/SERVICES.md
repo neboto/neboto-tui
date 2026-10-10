@@ -2447,14 +2447,14 @@ the service you're touching.
   (`JumpView::Dx`/`JumpView::Tgw`). Gateways have **no CloudWatch metrics** —
   traffic lives on the VIFs (`m` on a VIF) and the physical connection.
 
-- **Cost anomalies** (`@cost`, key `8`, `cost.rs` `CostAnomaly`) — a third
-  *view* on Cost's toggle row, not a second service: `8` was the only free
-  digit (1–4 grouping, 5–7 period), and the Budgets precedent below split
-  out because it needed a whole tab strip, which anomalies don't.
+- **Cost anomalies** (`@cost`, key `7`, `cost.rs` `CostAnomaly`) — a third
+  *view* on Cost's toggle row, not a second service (the Budgets precedent
+  below split out because it needed a whole tab strip, which anomalies
+  don't). It was `8` until #101 renumbered the row (see below).
   `App.cost_anomalies` is a flag beside `cost_group_by`/`cost_period`, which
-  stay untouched so `1`–`7` (or `t`) drop back to the exact spend view the
-  user left; the cache variant is plain `"Anomalies"` (group/period don't
-  apply). `Tab`/`Shift-Tab` treat Anomalies as a fifth stop after Usage Type
+  stay untouched so `1`–`6` (or `t` / `[` / `]`) drop back to the exact
+  spend view the user left; the cache variant is plain `"Anomalies"` (group/period don't
+  apply). `Tab`/`Shift-Tab` treat Anomalies as the last stop, after Category
   (`App::cost_tab_step`) so `H`/`L` reach it. One paginated
   `GetAnomalies` walk over the last `ANOMALY_LOOKBACK_DAYS` (90) — every
   page is walked, since the API has no sort and a cut list would hide the
@@ -2469,7 +2469,7 @@ the service you're touching.
   ≥ $10 yellow). `GetAnomalies` can't filter by id, so `C` copies a
   monitor + start-date scoped command. Rejected: `GetAnomalyMonitors` for a
   monitor *name* — a second billed call per open for one row.
-- **Cost by tag / cost category** (`@cost`, keys `9` / `0`, #101) — two
+- **Cost by tag / cost category** (`@cost`, keys `5` / `6`, #101) — two
   more `CostGroupBy` variants (`Tag`, `CostCategory`) on the same toggle row,
   each carrying a key (tag key / category name) in `CostQuery.group_key`
   and remembered on `App.cost_tag_key` / `App.cost_category`. The first
@@ -2488,14 +2488,31 @@ the service you're touching.
   doesn't). The cache variant and the `cost_drilldown` key both include the
   key: `Tag:team-Mtd`, or `team` and `env` would share a result set. Tag and
   Category rows break down by **Services** (not Regions), the console's
-  default for those groupings. `Tab` adds Tag / Category as stops only once
-  a key is chosen (`App::cost_tab_step`). Rejected: grouping by two things
+  default for those groupings. `Tab` walks Tag / Category like any other tab, key or
+  no key — skipping them until a key was chosen felt like a broken cycle. A
+  keyless stop fetches nothing (`fetch_cost` answers empty, no billed call)
+  and the list's empty state asks for a key; `⏎` there opens the picker,
+  since `Tab` itself never pops a modal. Rejected: grouping by two things
   at once (tag × service — CE allows two `GroupBy`s, but the list model is
   one dimension per row; that's its own issue), and prefetching the key
   lists on Cost load (a billed call per open for a view most loads never use).
+  **Layout and keys**: six groupings + three periods + Anomalies on one tab
+  row needs ~125 columns, so the period chips moved to the Cost detail pane's
+  top border (`cost_tabs::cost_period_title`, also drawn on the empty
+  "Details" placeholder so an empty tag view can still change period). The
+  row's digits are then renumbered in screen order like every other strip
+  (VPC's): `1`–`4` dimensions, `5` Tag, `6` Category, `7` Anomalies — it used
+  to read `1 2 3 4 9 0 8` with `5`–`7` on the periods. The period has no
+  digit: `[`/`]` step it (X-Ray's window keys), `t` cycles, and a chip click
+  sets it directly (`ClickAction::CostPeriod`, since there's no key to
+  replay). Breaking change for muscle memory and recorded macros that press
+  `5`–`8` on Cost.
+  Rejected: one collapsed `t MTD` chip (hides the other periods), the list pane's
+  border (only ~38% wide in Split, so the chips vanished below ~140
+  columns), and a second tab row (breaks the one-row strip).
 - **Budgets** (`@budgets`, `budgets.rs`) — a separate `ServiceType` from Cost,
   not a sub-tab of it: Cost's digit keys 1–7 are already claimed by its own
-  group-by/period toggles, so a second resource shape can't share the tab
+  group-by/Anomalies toggles, so a second resource shape can't share the tab
   strip. Global (`us-east-1`) like Cost Explorer. `DescribeBudgets` requires
   the caller's account id explicitly (budgets are designed for a payer
   account managing budgets on linked accounts), so the list load resolves it

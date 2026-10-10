@@ -277,6 +277,24 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                         .to_string(),
                 )
             }
+            // A Tag / Category tab reached before any key was picked.
+            else if app.current_service == Some(crate::aws::service::ServiceType::Cost)
+                && !app.cost_anomalies
+                && app.cost_group_by.is_keyed()
+                && app.cost_group_key_for(app.cost_group_by).is_none()
+            {
+                if app.cost_group_by == crate::aws::services::cost::CostGroupBy::Tag {
+                    (
+                        "Group cost by a tag — pick which tag key".to_string(),
+                        "⏎ or 5 choose a cost-allocation tag key".to_string(),
+                    )
+                } else {
+                    (
+                        "Group cost by a cost category — pick which one".to_string(),
+                        "⏎ or 6 choose a cost category".to_string(),
+                    )
+                }
+            }
             // Grouping by a tag key / cost category that has no spend in the
             // window: usually the tag isn't activated for cost allocation.
             else if app.current_service == Some(crate::aws::service::ServiceType::Cost)
@@ -286,9 +304,9 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                 (
                     format!("No spend grouped by {} \"{}\" in {}", app.cost_group_by.label().to_lowercase(), key, app.cost_period.label()),
                     if app.cost_group_by == crate::aws::services::cost::CostGroupBy::Tag {
-                        "Tags only group cost once activated in Billing → Cost allocation tags (~24h) · 9 pick another key"
+                        "Tags only group cost once activated in Billing → Cost allocation tags (~24h) · 5 pick another key"
                     } else {
-                        "Check the name in Billing → Cost categories · 0 pick another category"
+                        "Check the name in Billing → Cost categories · 6 pick another category"
                     }
                     .to_string(),
                 )

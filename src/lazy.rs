@@ -570,7 +570,7 @@ pub struct LazyStore {
     /// A cost row's drill-down, keyed by `App::cost_drilldown_key` (period +
     /// grouping + tag/category key + row value — never the bare row key).
     pub cost_drilldown: LazyMap<Box<crate::aws::services::cost::CostDrilldown>>,
-    /// The Cost `9` / `0` picker's lists — cost-allocation tag keys under
+    /// The Cost `5` / `6` picker's lists — cost-allocation tag keys under
     /// `"tags"`, cost category names under `"categories"`
     /// (`App::cost_group_keys_lazy_key`). Billed CE calls, fetched on the
     /// picker's first open.

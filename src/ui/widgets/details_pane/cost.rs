@@ -7,6 +7,11 @@ pub(super) fn render_cost_split(app: &App, item: &CostLineItem, area: Rect, fram
     let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("Cost", focused);
+    // The period chips (`5`–`7`) ride this border: the Cost tab row is full,
+    // and this pane is the wide one.
+    if let Some(periods) = crate::ui::widgets::cost_tabs::cost_period_title(app, area, 6) {
+        block = block.title_top(periods);
+    }
     block = block.title_bottom(
         Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
             .right_aligned(),

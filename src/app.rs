@@ -150,7 +150,11 @@ pub enum ClickAction {
     /// its link, as `⏎` does. One click, since the arrow says "go there".
     FollowJump(usize),
     /// The service strip's `↑ vX.Y.Z` chip: show how to upgrade.
-    UpdateNotice}
+    UpdateNotice,
+    /// A Cost period chip on the detail pane's border: show spend over that
+    /// period. Periods have no digit of their own (`[`/`]` step them), so a
+    /// replayed key can't pick one directly.
+    CostPeriod(crate::aws::services::cost::CostPeriod)}
 
 /// A clickable region in the service/sub-tab bars, recorded each frame by the
 /// (read-only) tab widgets so `handle_mouse` can map a click to an action.
@@ -2568,16 +2572,16 @@ pub struct App {
     // Cost & Billing: query toggles, detail section, lazy drill-down, `m` overlay
     pub cost_group_by: crate::aws::services::cost::CostGroupBy,
     pub cost_period: crate::aws::services::cost::CostPeriod,
-    /// The Anomalies view (key `8`) — Cost Anomaly Detection anomalies in
+    /// The Anomalies view (key `7`) — Cost Anomaly Detection anomalies in
     /// place of grouped spend. The group-by/period above are kept so `1`–`7`
     /// return to the spend view the user left.
     pub cost_anomalies: bool,
-    /// The cost-allocation tag key the `9` view groups by — chosen in the
-    /// picker, then remembered so `9` (and the Tab cycle) returns to it.
+    /// The cost-allocation tag key the `5` view groups by — chosen in the
+    /// picker, then remembered so `5` (and the Tab cycle) returns to it.
     pub cost_tag_key: Option<String>,
-    /// The cost category the `0` view groups by (same model as the tag key).
+    /// The cost category the `6` view groups by (same model as the tag key).
     pub cost_category: Option<String>,
-    /// The `9` / `0` picker over tag keys / cost category names.
+    /// The `5` / `6` picker over tag keys / cost category names.
     pub cost_key_picker: crate::ui::widgets::cost_key_picker::CostKeyPickerState,
     // Cache
     pub cache: ResourceCache,
@@ -4491,7 +4495,7 @@ impl App {
             return Ok(());
         }
 
-        // Cost `9` / `0` group-key picker (same type-to-filter model; `⏎`
+        // Cost `5` / `6` group-key picker (same type-to-filter model; `⏎`
         // with no match groups by the typed key).
         if self.cost_key_picker.visible {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -7862,77 +7866,78 @@ impl App {
             }
         }
 
-        // Cost grouping / period toggles (list pane). 1–4 pick the GroupBy
-        // dimension, 5–7 pick the period directly, `t` cycles it, `8` opens
-        // the Anomalies view (any of 1–7 / `t` leaves it). Each rebuilds the
-        // Cost service with new query params and refetches (variant-cached,
-        // so revisiting a combination is instant). `Tab` walks the four
-        // groupings, then Tag / Category once a key is chosen, then Anomalies.
+        // Cost grouping / period toggles (list pane). The digits are the tab
+        // row in screen order, as on every sub-tab strip: 1–4 the dimension
+        // groupings, 5 Tag / 6 Category, 7 the Anomalies view (any grouping
+        // key leaves it). The period isn't a tab — its chips ride the detail
+        // pane's border — so it's `[`/`]` (the X-Ray window keys) to step it
+        // and `t` to cycle. Each rebuilds the Cost service with new query
+        // params and refetches (variant-cached, so revisiting a combination
+        // is instant). `Tab` walks the tabs in the same order, 1 → 7; a Tag /
+        // Category stop with no key yet shows a "pick a key" empty state
+        // (no fetch), and `⏎` there opens the picker.
         if !self.search_active
             && !self.details_focused
             && self.current_service == Some(ServiceType::Cost)
         {
             use crate::aws::services::cost::{CostGroupBy, CostPeriod};
             match key.code {
-                KeyCode::Char('1') => {
+                KeyCode::Char(c @ '1'..='4') => {
                     self.cost_anomalies = false;
-                    self.cost_group_by = CostGroupBy::Service;
+                    self.cost_group_by = match c {
+                        '1' => CostGroupBy::Service,
+                        '2' => CostGroupBy::LinkedAccount,
+                        '3' => CostGroupBy::Region,
+                        _ => CostGroupBy::UsageType,
+                    };
                     self.apply_cost_query();
                     return Ok(());
                 }
-                KeyCode::Char('2') => {
-                    self.cost_anomalies = false;
-                    self.cost_group_by = CostGroupBy::LinkedAccount;
-                    self.apply_cost_query();
+                // `5` tag / `6` cost category: the first press (or a press
+                // while that view is already showing) opens the key picker;
+                // otherwise it returns to the remembered key.
+                KeyCode::Char(c @ ('5' | '6')) => {
+                    let kind = if c == '5' { CostGroupBy::Tag } else { CostGroupBy::CostCategory };
+                    let showing = !self.cost_anomalies && self.cost_group_by == kind;
+                    match self.cost_group_key_for(kind) {
+                        Some(k) if !showing => self.select_cost_group_key(kind, k),
+                        _ => self.open_cost_key_picker(kind, event_tx),
+                    }
                     return Ok(());
                 }
-                KeyCode::Char('3') => {
-                    self.cost_anomalies = false;
-                    self.cost_group_by = CostGroupBy::Region;
-                    self.apply_cost_query();
-                    return Ok(());
-                }
-                KeyCode::Char('4') => {
-                    self.cost_anomalies = false;
-                    self.cost_group_by = CostGroupBy::UsageType;
-                    self.apply_cost_query();
-                    return Ok(());
-                }
-                KeyCode::Char('5') => {
-                    self.cost_anomalies = false;
-                    self.cost_period = CostPeriod::Mtd;
-                    self.apply_cost_query();
-                    return Ok(());
-                }
-                KeyCode::Char('6') => {
-                    self.cost_anomalies = false;
-                    self.cost_period = CostPeriod::LastMonth;
-                    self.apply_cost_query();
+                // `⏎` on a keyless Tag / Category tab (an empty list, so
+                // nothing to drill into) opens its picker.
+                KeyCode::Enter
+                    if !self.cost_anomalies
+                        && self.cost_group_by.is_keyed()
+                        && self.cost_group_key_for(self.cost_group_by).is_none() =>
+                {
+                    self.open_cost_key_picker(self.cost_group_by, event_tx);
                     return Ok(());
                 }
                 KeyCode::Char('7') => {
-                    self.cost_anomalies = false;
-                    self.cost_period = CostPeriod::Last3Months;
-                    self.apply_cost_query();
-                    return Ok(());
-                }
-                KeyCode::Char('8') => {
                     if !self.cost_anomalies {
                         self.cost_anomalies = true;
                         self.apply_cost_query();
                     }
                     return Ok(());
                 }
-                // `9` tag / `0` cost category: the first press (or a press
-                // while that view is already showing) opens the key picker;
-                // otherwise it returns to the remembered key.
-                KeyCode::Char(c @ ('9' | '0')) => {
-                    let kind = if c == '9' { CostGroupBy::Tag } else { CostGroupBy::CostCategory };
-                    let showing = !self.cost_anomalies && self.cost_group_by == kind;
-                    match self.cost_group_key_for(kind) {
-                        Some(k) if !showing => self.select_cost_group_key(kind, k),
-                        _ => self.open_cost_key_picker(kind, event_tx),
+                // `[` / `]` step the period (MTD ← Last Mo ← 3 Mo), stopping
+                // at the ends. From Anomalies they return to spend at the
+                // period the user left, as `t` does.
+                KeyCode::Char(c @ ('[' | ']')) => {
+                    if self.cost_anomalies {
+                        self.cost_anomalies = false;
+                    } else {
+                        let order = [CostPeriod::Mtd, CostPeriod::LastMonth, CostPeriod::Last3Months];
+                        let i = order.iter().position(|p| *p == self.cost_period).unwrap_or(0);
+                        let next = if c == ']' { (i + 1).min(order.len() - 1) } else { i.saturating_sub(1) };
+                        if order[next] == self.cost_period {
+                            return Ok(());
+                        }
+                        self.cost_period = order[next];
                     }
+                    self.apply_cost_query();
                     return Ok(());
                 }
                 KeyCode::Char('t') => {
@@ -7951,15 +7956,10 @@ impl App {
                 }
                 KeyCode::BackTab | KeyCode::Tab => {
                     let forward = matches!(key.code, KeyCode::Tab);
-                    // The cycle is the four groupings + Anomalies (as the
-                    // fifth stop), so `H`/`L` reach the Anomalies tab too.
-                    let (group, anomalies) = Self::cost_tab_step(
-                        self.cost_group_by,
-                        self.cost_anomalies,
-                        forward,
-                        self.cost_tag_key.is_some(),
-                        self.cost_category.is_some(),
-                    );
+                    // The cycle is every tab in screen order, Anomalies last,
+                    // so `H`/`L` reach all seven.
+                    let (group, anomalies) =
+                        Self::cost_tab_step(self.cost_group_by, self.cost_anomalies, forward);
                     self.cost_group_by = group;
                     self.cost_anomalies = anomalies;
                     self.apply_cost_query();
@@ -24294,6 +24294,16 @@ impl App {
     ) -> Result<()> {
         match action {
             ClickAction::UpdateNotice => self.open_update_notice(),
+            ClickAction::CostPeriod(period) => {
+                // A stale region from before a service switch does nothing.
+                if self.current_service == Some(ServiceType::Cost)
+                    && (self.cost_anomalies || self.cost_period != period)
+                {
+                    self.cost_anomalies = false;
+                    self.cost_period = period;
+                    self.apply_cost_query();
+                }
+            }
             ClickAction::AllSearchFilter(filter) => {
                 // Only while the results are on screen; a stale region from
                 // the frame before @all ended does nothing.
@@ -29567,26 +29577,17 @@ impl App {
         self.update_search();
     }
 
-    /// One `Tab` (forward) / `Shift-Tab` step through Cost's tab cycle:
-    /// Service → Account → Region → Usage Type → [Tag] → [Category] →
-    /// Anomalies → Service. Tag / Category are stops only once a key has been
-    /// picked for them (a keyless stop would have nothing to fetch). The
-    /// grouping is unchanged while Anomalies is the stop.
+    /// One `Tab` (forward) / `Shift-Tab` step through Cost's tab cycle — the
+    /// tab row in screen order: Service → Account → Region → Usage Type →
+    /// Tag → Category → Anomalies → Service. The grouping is unchanged while
+    /// Anomalies is the stop.
     pub(crate) fn cost_tab_step(
         group: crate::aws::services::cost::CostGroupBy,
         anomalies: bool,
         forward: bool,
-        has_tag: bool,
-        has_category: bool,
     ) -> (crate::aws::services::cost::CostGroupBy, bool) {
         use crate::aws::services::cost::CostGroupBy as G;
-        let mut stops = vec![G::Service, G::LinkedAccount, G::Region, G::UsageType];
-        if has_tag {
-            stops.push(G::Tag);
-        }
-        if has_category {
-            stops.push(G::CostCategory);
-        }
+        let stops = [G::Service, G::LinkedAccount, G::Region, G::UsageType, G::Tag, G::CostCategory];
         // Index `stops.len()` is the Anomalies stop.
         let n = stops.len() + 1;
         let cur = if anomalies {

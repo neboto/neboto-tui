@@ -1,4 +1,4 @@
-//! The Cost `9` / `0` picker: choose the cost-allocation tag key or cost
+//! The Cost `5` / `6` picker: choose the cost-allocation tag key or cost
 //! category the spend list groups by. The key list itself lives on the
 //! `LazyStore` (`cost_group_keys`, fetched when the picker opens — each page
 //! is a billed Cost Explorer request); this state is only the modal's cursor

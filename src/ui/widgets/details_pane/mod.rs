@@ -1639,6 +1639,18 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
     };
 
     let mut block = theme::pane_block(&title, focused);
+    // An empty Cost list (a tag with no spend this period) still needs its
+    // period chips, which otherwise ride the Cost pane's border.
+    if resource.is_none()
+        && app.current_service == Some(crate::aws::service::ServiceType::Cost)
+        && !app.cost_anomalies
+        && !app.all_search_mode
+    {
+        let title_w = Line::from(format!(" {} ", title)).width() as u16;
+        if let Some(periods) = crate::ui::widgets::cost_tabs::cost_period_title(app, area, title_w) {
+            block = block.title_top(periods);
+        }
+    }
     if !footer.is_empty() {
         block = block.title_bottom(
             Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
