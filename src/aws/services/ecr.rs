@@ -467,6 +467,267 @@ pub fn ecr_ref_repo(image_ref: &str) -> Option<(&str, &str)> {
     Some((host, repo))
 }
 
+/// A running container's use of a digest in a repo, replicas collapsed.
+#[derive(Debug, Clone)]
+pub struct DigestUse {
+    pub owner: String,
+    pub container: String,
+    pub digest: String,
+    pub tasks: usize,
+}
+
+impl DigestUse {
+    /// `orders-worker/worker (2 tasks)`.
+    pub fn who(&self) -> String {
+        let count = if self.tasks > 1 { format!(" ({} tasks)", self.tasks) } else { String::new() };
+        format!("{}/{}{count}", self.owner, self.container)
+    }
+}
+
+// ── Lifecycle policy evaluation (#157) ──────────────────────────────────────
+//
+// What the repo's lifecycle rules will do to the images loaded right now —
+// zero API (no `GetLifecyclePolicyPreview`). Follows ECR's evaluation rules
+// (userguide "Lifecycle policy evaluation rules"): rules apply in priority
+// order, lowest number first; an image that matches a rule's *tagging
+// requirements* is claimed by it and can't be acted on by a later rule, even
+// if this rule keeps it; prefix / pattern lists AND their entries, each
+// matched against any of the image's tags; count rules sort newest first by
+// push time; ages count from push (or the last restore from the archive),
+// not from when an image lost its tag.
+
+/// How far ahead "due soon" looks.
+pub const LIFECYCLE_DUE_DAYS: i64 = 7;
+const DAY: i64 = 86_400;
+
+/// One rule of a lifecycle policy.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LcRule {
+    pub priority: i64,
+    pub description: Option<String>,
+    /// `tagged` / `untagged` / `any`.
+    pub tag_status: String,
+    pub prefixes: Vec<String>,
+    pub patterns: Vec<String>,
+    /// `imageCountMoreThan` / `sinceImagePushed` / `sinceImagePulled` /
+    /// `sinceImageTransitioned`; anything else is shown but not evaluated.
+    pub count_type: String,
+    pub count_number: i64,
+    /// Which images the rule selects from: `standard` (default) or `archive`.
+    pub storage_class: String,
+    /// `expire` or `transition` (to the archive).
+    pub action: String,
+}
+
+/// Parse a lifecycle policy's JSON into its rules, sorted by priority.
+pub fn parse_lifecycle(text: &str) -> std::result::Result<Vec<LcRule>, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let rules = v.get("rules").and_then(|r| r.as_array()).ok_or("no \"rules\" array")?;
+    let strs = |x: Option<&serde_json::Value>| -> Vec<String> {
+        x.and_then(|a| a.as_array())
+            .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+            .unwrap_or_default()
+    };
+    let mut out: Vec<LcRule> = rules
+        .iter()
+        .map(|r| {
+            let sel = r.get("selection");
+            let field = |k: &str| sel.and_then(|s| s.get(k)).and_then(|v| v.as_str()).unwrap_or_default();
+            LcRule {
+                priority: r.get("rulePriority").and_then(|p| p.as_i64()).unwrap_or_default(),
+                description: r.get("description").and_then(|d| d.as_str()).map(String::from),
+                tag_status: field("tagStatus").to_string(),
+                prefixes: strs(sel.and_then(|s| s.get("tagPrefixList"))),
+                patterns: strs(sel.and_then(|s| s.get("tagPatternList"))),
+                count_type: field("countType").to_string(),
+                count_number: sel.and_then(|s| s.get("countNumber")).and_then(|n| n.as_i64()).unwrap_or_default(),
+                storage_class: Some(field("storageClass")).filter(|c| !c.is_empty()).unwrap_or("standard").to_string(),
+                action: r
+                    .get("action")
+                    .and_then(|a| a.get("type"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("expire")
+                    .to_string(),
+            }
+        })
+        .collect();
+    out.sort_by_key(|r| r.priority);
+    Ok(out)
+}
+
+/// `*` wildcard match (ECR's `tagPatternList`), case-sensitive.
+fn wildcard_match(pat: &str, s: &str) -> bool {
+    let parts: Vec<&str> = pat.split('*').collect();
+    if parts.len() == 1 {
+        return pat == s;
+    }
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if !s.starts_with(first) || !s[first.len()..].ends_with(last) || s.len() < first.len() + last.len() {
+        return false;
+    }
+    let mut rest = &s[first.len()..s.len() - last.len()];
+    for mid in &parts[1..parts.len() - 1] {
+        match rest.find(mid) {
+            Some(i) => rest = &rest[i + mid.len()..],
+            None => return false,
+        }
+    }
+    true
+}
+
+impl LcRule {
+    pub fn verb(&self) -> &'static str {
+        if self.action == "transition" { "archive" } else { "expire" }
+    }
+
+    pub fn verb_past(&self) -> &'static str {
+        if self.action == "transition" { "is archived" } else { "expires" }
+    }
+
+    pub fn evaluable(&self) -> bool {
+        matches!(
+            self.count_type.as_str(),
+            "imageCountMoreThan" | "sinceImagePushed" | "sinceImagePulled" | "sinceImageTransitioned"
+        )
+    }
+
+    /// The rule's tagging requirements (plus storage class) — what claims an
+    /// image for this rule.
+    pub fn selects(&self, img: &EcrImage) -> bool {
+        if img.archived != (self.storage_class == "archive") {
+            return false;
+        }
+        match self.tag_status.as_str() {
+            "untagged" => img.tags.is_empty(),
+            "any" => true,
+            "tagged" => {
+                !img.tags.is_empty()
+                    && self.prefixes.iter().all(|p| img.tags.iter().any(|t| t.starts_with(p.as_str())))
+                    && self.patterns.iter().all(|p| img.tags.iter().any(|t| wildcard_match(p, t)))
+            }
+            _ => false,
+        }
+    }
+
+    /// One readable line, e.g. `expire untagged images 7 days after push`.
+    pub fn summary(&self) -> String {
+        let archived = if self.storage_class == "archive" { "archived " } else { "" };
+        let subject = match self.tag_status.as_str() {
+            "untagged" => format!("{archived}untagged images"),
+            "any" => format!("all {archived}images"),
+            _ => {
+                let mut list: Vec<String> = self.prefixes.iter().map(|p| format!("{p}*")).collect();
+                list.extend(self.patterns.iter().cloned());
+                if list.is_empty() {
+                    format!("{archived}tagged images")
+                } else {
+                    format!("{archived}images tagged {}", list.join(" + "))
+                }
+            }
+        };
+        let n = self.count_number;
+        let days = if n == 1 { "1 day".to_string() } else { format!("{n} days") };
+        let verb = self.verb();
+        match self.count_type.as_str() {
+            "imageCountMoreThan" => format!("keep the newest {n} {subject}; {verb} the rest"),
+            "sinceImagePushed" => format!("{verb} {subject} {days} after push"),
+            "sinceImagePulled" => format!("{verb} {subject} {days} after their last pull"),
+            "sinceImageTransitioned" => format!("{verb} {subject} {days} after archiving"),
+            other => format!("{} {subject} ({other} {n}) — not evaluated", self.action),
+        }
+    }
+
+    /// The time an age rule counts from, per ECR: a restored image counts
+    /// from its restore; `sinceImagePulled` from the last pull (else push).
+    fn age_ref(&self, img: &EcrImage) -> Option<i64> {
+        let active_since = img.last_activated_secs.or(img.pushed_secs);
+        match self.count_type.as_str() {
+            "sinceImagePushed" => active_since,
+            "sinceImagePulled" => match (img.last_pulled_secs, active_since) {
+                (Some(p), Some(a)) => Some(p.max(a)),
+                (p, a) => p.or(a),
+            },
+            "sinceImageTransitioned" => img.last_archived_secs,
+            _ => None,
+        }
+    }
+
+    /// Count rules order newest first by push (archive class: by archiving).
+    fn order_key(&self, img: &EcrImage) -> i64 {
+        let t = if self.storage_class == "archive" { img.last_archived_secs } else { None };
+        t.or(img.last_activated_secs).or(img.pushed_secs).unwrap_or(i64::MIN)
+    }
+}
+
+/// An image a rule acts on: `days_left <= 0` is eligible now (ECR acts
+/// within 24 hours), otherwise due in that many days.
+#[derive(Debug, Clone)]
+pub struct ImageFate<'a> {
+    pub image: &'a EcrImage,
+    pub days_left: i64,
+}
+
+/// What one rule does to the loaded images.
+#[derive(Debug, Clone)]
+pub struct RuleOutcome<'a> {
+    pub rule: LcRule,
+    /// Loaded images this rule claims (its tagging requirements match and no
+    /// earlier rule claimed them).
+    pub matched: usize,
+    pub eligible: Vec<ImageFate<'a>>,
+    /// Due within `LIFECYCLE_DUE_DAYS`, soonest first.
+    pub due: Vec<ImageFate<'a>>,
+    /// A count rule exactly at its limit: the image the next matching push
+    /// pushes out.
+    pub next_push_expires: Option<&'a EcrImage>,
+}
+
+/// Apply `rules` (sorted by priority) to `images` at `now` (epoch seconds).
+pub fn evaluate_lifecycle<'a>(rules: &[LcRule], images: &[&'a EcrImage], now: i64) -> Vec<RuleOutcome<'a>> {
+    let mut claimed = vec![false; images.len()];
+    let mut out = Vec::new();
+    for rule in rules {
+        let mut matched: Vec<usize> =
+            (0..images.len()).filter(|&i| !claimed[i] && rule.selects(images[i])).collect();
+        for &i in &matched {
+            claimed[i] = true;
+        }
+        let mut o = RuleOutcome {
+            rule: rule.clone(),
+            matched: matched.len(),
+            eligible: Vec::new(),
+            due: Vec::new(),
+            next_push_expires: None,
+        };
+        if rule.count_type == "imageCountMoreThan" {
+            matched.sort_by_key(|&i| std::cmp::Reverse(rule.order_key(images[i])));
+            let keep = rule.count_number.max(0) as usize;
+            o.eligible =
+                matched.iter().skip(keep).map(|&i| ImageFate { image: images[i], days_left: 0 }).collect();
+            if keep > 0 && matched.len() == keep {
+                o.next_push_expires = matched.last().map(|&i| images[i]);
+            }
+        } else if rule.evaluable() {
+            for &i in &matched {
+                let Some(since) = rule.age_ref(images[i]) else {
+                    continue;
+                };
+                let left = since + rule.count_number * DAY - now;
+                let fate = ImageFate { image: images[i], days_left: if left <= 0 { 0 } else { (left + DAY - 1) / DAY } };
+                if left <= 0 {
+                    o.eligible.push(fate);
+                } else if fate.days_left <= LIFECYCLE_DUE_DAYS {
+                    o.due.push(fate);
+                }
+            }
+            o.eligible.sort_by_key(|f| rule.age_ref(f.image));
+            o.due.sort_by_key(|f| f.days_left);
+        }
+        out.push(o);
+    }
+    out
+}
+
 /// Severity rank for sorting, worst first.
 pub fn severity_rank(sev: &str) -> u8 {
     match sev.to_ascii_uppercase().as_str() {
@@ -640,6 +901,11 @@ impl EcrRepository {
         self.image_tag_mutability.starts_with("MUTABLE")
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_sdk_for_test(r: &aws_sdk_ecr::types::Repository) -> Self {
+        Self::from_sdk(r)
+    }
+
     fn from_sdk(r: &aws_sdk_ecr::types::Repository) -> Self {
         Self {
             name: r.repository_name().unwrap_or_default().to_string(),
@@ -764,6 +1030,16 @@ pub struct EcrImage {
     /// Push time in epoch seconds — the Images tab's newest-first order.
     pub pushed_secs: Option<i64>,
     pub last_pulled_at: Option<String>,
+    /// Epoch seconds behind `last_pulled_at` — `sinceImagePulled` rules.
+    pub last_pulled_secs: Option<i64>,
+    /// In the archive storage class (`imageStatus: ARCHIVED`), where only
+    /// archive-class lifecycle rules act on it.
+    pub archived: bool,
+    /// When it was moved to the archive — `sinceImageTransitioned` rules.
+    pub last_archived_secs: Option<i64>,
+    /// When it was last restored from the archive; ECR ages a restored image
+    /// from here instead of its push time.
+    pub last_activated_secs: Option<i64>,
     pub size_bytes: Option<i64>,
     pub artifact_media_type: Option<String>,
     pub manifest_media_type: Option<String>,
@@ -806,6 +1082,10 @@ impl EcrImage {
             pushed_at: d.image_pushed_at().map(|t| fmt_epoch(t.secs())),
             pushed_secs: d.image_pushed_at().map(|t| t.secs()),
             last_pulled_at: d.last_recorded_pull_time().map(|t| fmt_epoch(t.secs())),
+            last_pulled_secs: d.last_recorded_pull_time().map(|t| t.secs()),
+            archived: d.image_status().is_some_and(|s| s.as_str() == "ARCHIVED"),
+            last_archived_secs: d.last_archived_at().map(|t| t.secs()),
+            last_activated_secs: d.last_activated_at().map(|t| t.secs()),
             size_bytes: d.image_size_in_bytes(),
             artifact_media_type: d.artifact_media_type().map(|s| s.to_string()),
             manifest_media_type: d.image_manifest_media_type().map(|s| s.to_string()),
@@ -1369,5 +1649,103 @@ mod drift_tests {
         assert!(!web.holds_ref(&format!("{HOST}/team/webapp:v1")));
         assert!(!web.tags_mutable());
         assert!(repo("x", "MUTABLE_WITH_EXCLUSION").tags_mutable());
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    const NOW: i64 = 1_800_000_000;
+    const HOST: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com";
+
+    fn img(n: u32, tags: &[&str], age_days: f64) -> EcrImage {
+        let mut b = aws_sdk_ecr::types::ImageDetail::builder()
+            .repository_name("web")
+            .image_digest(format!("sha256:{n:064}"))
+            .image_pushed_at(aws_smithy_types::DateTime::from_secs(NOW - (age_days * 86_400.0) as i64));
+        for t in tags {
+            b = b.image_tags(*t);
+        }
+        EcrImage::from_sdk(&b.build(), "web", &format!("{HOST}/web"))
+    }
+
+    fn policy(rules: &str) -> Vec<LcRule> {
+        parse_lifecycle(&format!(r#"{{"rules":[{rules}]}}"#)).unwrap()
+    }
+
+    const UNTAGGED_7D: &str = r#"{"rulePriority":1,"description":"untagged","selection":{"tagStatus":"untagged","countType":"sinceImagePushed","countUnit":"days","countNumber":7},"action":{"type":"expire"}}"#;
+
+    #[test]
+    fn age_rule_splits_eligible_due_and_untouched() {
+        let (old, soon, later, tagged) = (img(1, &[], 8.0), img(2, &[], 6.5), img(3, &[], 1.0), img(4, &["v1"], 30.0));
+        let out = evaluate_lifecycle(&policy(UNTAGGED_7D), &[&old, &soon, &later, &tagged], NOW);
+        assert_eq!(out[0].matched, 3, "the tagged image isn't the rule's");
+        assert_eq!(out[0].eligible.iter().map(|f| f.image.digest.as_str()).collect::<Vec<_>>(), [old.digest.as_str()]);
+        // 6.5 days old under a 7-day rule: due in 1 day; 1 day old: due in 6.
+        assert_eq!(out[0].due.iter().map(|f| f.days_left).collect::<Vec<_>>(), [1, 6]);
+        assert_eq!(out[0].rule.summary(), "expire untagged images 7 days after push");
+    }
+
+    #[test]
+    fn a_rule_claims_what_it_keeps_from_later_rules() {
+        // Priority 1 keeps the newest 2 `v*`; priority 2 expires anything a
+        // day old. The two kept `v*` images are priority 1's — priority 2
+        // must not expire them, however old they are.
+        let rules = policy(concat!(
+            r#"{"rulePriority":2,"selection":{"tagStatus":"any","countType":"sinceImagePushed","countUnit":"days","countNumber":1},"action":{"type":"expire"}},"#,
+            r#"{"rulePriority":1,"selection":{"tagStatus":"tagged","tagPrefixList":["v"],"countType":"imageCountMoreThan","countNumber":2},"action":{"type":"expire"}}"#,
+        ));
+        assert_eq!(rules[0].priority, 1, "sorted by priority");
+        let (v3, v2, v1, dev) = (img(1, &["v3"], 10.0), img(2, &["v2"], 20.0), img(3, &["v1"], 30.0), img(4, &["dev"], 5.0));
+        let out = evaluate_lifecycle(&rules, &[&v3, &v2, &v1, &dev], NOW);
+        assert_eq!(out[0].matched, 3);
+        assert_eq!(out[0].eligible.len(), 1);
+        assert_eq!(out[0].eligible[0].image.tags, ["v1"], "the oldest beyond the count");
+        assert_eq!(out[1].matched, 1, "only `dev` is left for priority 2");
+        assert_eq!(out[1].eligible[0].image.tags, ["dev"]);
+        assert_eq!(out[0].rule.summary(), "keep the newest 2 images tagged v*; expire the rest");
+    }
+
+    #[test]
+    fn a_count_rule_at_its_limit_names_the_next_casualty() {
+        let rules = policy(r#"{"rulePriority":1,"selection":{"tagStatus":"tagged","tagPrefixList":["v"],"countType":"imageCountMoreThan","countNumber":2},"action":{"type":"expire"}}"#);
+        let (new, old) = (img(1, &["v2"], 1.0), img(2, &["v1"], 9.0));
+        let out = evaluate_lifecycle(&rules, &[&new, &old], NOW);
+        assert!(out[0].eligible.is_empty());
+        assert_eq!(out[0].next_push_expires.map(|i| i.tags.clone()), Some(vec!["v1".to_string()]));
+    }
+
+    #[test]
+    fn tag_lists_and_every_entry_against_any_tag() {
+        let rule = |sel: &str| {
+            policy(&format!(r#"{{"rulePriority":1,"selection":{{"tagStatus":"tagged",{sel},"countType":"imageCountMoreThan","countNumber":1}},"action":{{"type":"expire"}}}}"#)).remove(0)
+        };
+        let both = rule(r#""tagPrefixList":["prod","v"]"#);
+        assert!(both.selects(&img(1, &["prod-2", "v2"], 1.0)));
+        assert!(!both.selects(&img(1, &["prod-2"], 1.0)), "every prefix must match some tag");
+        let pat = rule(r#""tagPatternList":["*prod*"]"#);
+        assert!(pat.selects(&img(1, &["repo-production"], 1.0)));
+        assert!(!pat.selects(&img(1, &["staging"], 1.0)));
+        assert!(wildcard_match("v*-rc*", "v1.2-rc3"));
+        assert!(!wildcard_match("v*-rc", "v1.2-rc3"));
+        assert!(wildcard_match("latest", "latest"));
+        assert!(!wildcard_match("ab*b", "ab"));
+        // Untagged / any; archive-class rules never touch active images.
+        assert!(!both.selects(&img(1, &[], 1.0)));
+        let archive = policy(r#"{"rulePriority":1,"selection":{"tagStatus":"any","storageClass":"archive","countType":"sinceImageTransitioned","countUnit":"days","countNumber":30},"action":{"type":"expire"}}"#).remove(0);
+        assert!(!archive.selects(&img(1, &["v1"], 400.0)));
+        assert_eq!(archive.summary(), "expire all archived images 30 days after archiving");
+    }
+
+    #[test]
+    fn unknown_count_types_are_shown_not_evaluated() {
+        let r = policy(r#"{"rulePriority":1,"selection":{"tagStatus":"any","countType":"sinceSomethingNew","countNumber":3},"action":{"type":"expire"}}"#).remove(0);
+        assert!(!r.evaluable());
+        assert!(r.summary().ends_with("— not evaluated"), "{}", r.summary());
+        let old = img(1, &[], 100.0);
+        let out = evaluate_lifecycle(&[r], &[&old], NOW);
+        assert!(out[0].eligible.is_empty() && out[0].due.is_empty());
+        assert!(parse_lifecycle("{}").is_err());
     }
 }

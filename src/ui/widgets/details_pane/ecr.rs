@@ -58,8 +58,9 @@ pub fn ecr_repo_section_lines(
     list_loading: bool,
     lifecycle: Option<&crate::lazy::Lazy<String>>,
     drift: &[crate::aws::services::ecr::DigestDrift],
-    running_users: usize,
+    running: &[crate::aws::services::ecr::DigestUse],
 ) -> Vec<(String, String)> {
+    let running_users: usize = running.iter().map(|u| u.tasks).sum();
     use crate::aws::services::ecr::DigestStatus;
     match section {
         EcrRepoDetailSection::Details => {
@@ -176,12 +177,13 @@ pub fn ecr_repo_section_lines(
                 if text.is_empty() {
                     return vec![(" No lifecycle policy configured".to_string(), String::new())];
                 }
-                // Pretty-print the JSON
+                let mut rows = lifecycle_rows(repo, text, images, running, chrono::Utc::now().timestamp());
+                // The policy itself, below what it means.
                 let pretty = serde_json::from_str::<serde_json::Value>(text)
                     .ok()
                     .and_then(|v| serde_json::to_string_pretty(&v).ok())
                     .unwrap_or_else(|| text.clone());
-                let mut rows = vec![("Lifecycle Policy".to_string(), String::new())];
+                rows.push(("Lifecycle Policy".to_string(), String::new()));
                 rows.push((String::new(), String::new()));
                 for line in pretty.lines() {
                     rows.push((format!("  {}", line), String::new()));
@@ -289,6 +291,161 @@ pub fn ecr_image_section_lines(
     }
 }
 
+/// `5h` / `6d` — a compact age or wait.
+fn span(secs: i64) -> String {
+    let secs = secs.max(0);
+    if secs < 86_400 { format!("{}h", secs / 3_600) } else { format!("{}d", secs / 86_400) }
+}
+
+/// What the lifecycle policy does to the loaded images (#157), above the raw
+/// JSON: warnings first (in-use images it will act on, and the
+/// mutable-tags + untagged-expiry + running-digest combination), then one
+/// block per rule. Zero API — evaluated from the Images rows and the warm
+/// ECS tasks; `now` is a parameter so tests can pin the clock.
+pub(super) fn lifecycle_rows(
+    repo: &EcrRepository,
+    text: &str,
+    images: &[&crate::aws::services::ecr::EcrImage],
+    running: &[crate::aws::services::ecr::DigestUse],
+    now: i64,
+) -> Vec<(String, String)> {
+    use crate::aws::services::ecr::{evaluate_lifecycle, parse_lifecycle, LIFECYCLE_DUE_DAYS};
+    let rules = match parse_lifecycle(text) {
+        Ok(r) => r,
+        Err(e) => return vec![(String::new(), format!("⚠ couldn't read the policy ({e}) — raw JSON below")), (String::new(), String::new())],
+    };
+    let outcomes = evaluate_lifecycle(&rules, images, now);
+    let users = |digest: &str| -> Vec<&crate::aws::services::ecr::DigestUse> {
+        running.iter().filter(|u| u.digest == digest).collect()
+    };
+    let when = |days_left: i64| if days_left <= 0 { "now".to_string() } else { format!("in {days_left}d") };
+    let mut rows: Vec<(String, String)> = Vec::new();
+
+    // The incident pattern: mutable tags + an untagged age rule + a consumer
+    // running a digest. Ages count from *push*, so a digest a re-push
+    // untags may already be past the limit — gone at the next run.
+    if repo.tags_mutable() && !running.is_empty() {
+        if let Some(r) = rules.iter().find(|r| {
+            r.action == "expire" && r.tag_status == "untagged" && r.count_type == "sinceImagePushed"
+        }) {
+            rows.push((
+                String::new(),
+                format!(
+                    "⚠ Tags are {} and priority {} expires untagged images {} days after push, while running tasks pin digests here: \
+                     re-pushing a tag they use leaves their digest untagged, and if it was pushed over {} days ago the next lifecycle run (within 24h) deletes it",
+                    repo.image_tag_mutability, r.priority, r.count_number, r.count_number
+                ),
+            ));
+        }
+    }
+    for o in &outcomes {
+        for f in o.eligible.iter().chain(o.due.iter()) {
+            for u in users(&f.image.digest) {
+                rows.push((
+                    String::new(),
+                    format!(
+                        "⚠ {} — {} under priority {} {}, in use by {}",
+                        f.image.label,
+                        o.rule.verb_past(),
+                        o.rule.priority,
+                        when(f.days_left),
+                        u.who()
+                    ),
+                ));
+            }
+        }
+        if let Some(img) = o.next_push_expires {
+            for u in users(&img.digest) {
+                rows.push((
+                    String::new(),
+                    format!("⚠ {} — the next matching push {}s it (priority {}), in use by {}", img.label, o.rule.verb(), o.rule.priority, u.who()),
+                ));
+            }
+        }
+    }
+    if !rows.is_empty() {
+        rows.push((String::new(), String::new()));
+    }
+
+    let partial = images
+        .first()
+        .map(|i| i.repo_images_seen > images.len() || !i.repo_images_complete)
+        .unwrap_or(false);
+    rows.push((format!("Rules ({})", rules.len()), String::new()));
+    rows.push((String::new(), String::new()));
+    for o in &outcomes {
+        let r = &o.rule;
+        rows.push((format!("Priority {}", r.priority), r.summary()));
+        if let Some(d) = r.description.as_ref().filter(|d| !d.is_empty()) {
+            rows.push(("  Description".to_string(), d.clone()));
+        }
+        if !r.evaluable() {
+            rows.push((String::new(), "· not evaluated — an unknown count type".to_string()));
+            rows.push((String::new(), String::new()));
+            continue;
+        }
+        rows.push(("  Matches".to_string(), format!("{} loaded image{}", o.matched, if o.matched == 1 { "" } else { "s" })));
+        if !o.eligible.is_empty() {
+            rows.push((
+                "  Eligible Now".to_string(),
+                format!("{} — ECR acts within 24h", o.eligible.len()),
+            ));
+            for f in &o.eligible {
+                rows.push((image_fate_line(f.image, now, None, &users(&f.image.digest)), String::new()));
+            }
+        }
+        if !o.due.is_empty() {
+            rows.push((format!("  Due in {LIFECYCLE_DUE_DAYS} Days"), o.due.len().to_string()));
+            for f in &o.due {
+                let line = image_fate_line(f.image, now, Some(when(f.days_left)), &users(&f.image.digest));
+                rows.push((line, String::new()));
+            }
+        }
+        if let Some(img) = o.next_push_expires {
+            rows.push(("  Next Push".to_string(), format!("{}s {} (the oldest of {} kept)", r.verb(), img.label, r.count_number)));
+        }
+        if r.count_type == "imageCountMoreThan" && partial && o.eligible.is_empty() {
+            rows.push((String::new(), format!("· list cut to the newest {} — can't tell what this rule keeps", images.len())));
+        } else if o.eligible.is_empty() && o.due.is_empty() && o.next_push_expires.is_none() {
+            rows.push((String::new(), format!("✓ nothing to {} in the next {LIFECYCLE_DUE_DAYS} days", r.verb())));
+        }
+        rows.push((String::new(), String::new()));
+    }
+    if partial {
+        rows.push((
+            String::new(),
+            format!(
+                "· partial: evaluated over the newest {} of {} images — older images beyond the cut may match too",
+                images.len(),
+                images.first().map(|i| i.repo_images_seen).unwrap_or_default()
+            ),
+        ));
+    }
+    rows.push((
+        String::new(),
+        "· a preview from the loaded images; ECR's own run can differ (manifest lists, referrers) — the console's lifecycle preview is authoritative".to_string(),
+    ));
+    rows.push((String::new(), String::new()));
+    rows
+}
+
+/// `    orders-worker@d6a4f2b5eaa7 · pushed 6d ago · in 1d`, ⚠-prefixed and
+/// `· in use` when running tasks use it.
+fn image_fate_line(
+    img: &crate::aws::services::ecr::EcrImage,
+    now: i64,
+    when: Option<String>,
+    users: &[&crate::aws::services::ecr::DigestUse],
+) -> String {
+    let age = img.pushed_secs.map(|p| format!(" · pushed {} ago", span(now - p))).unwrap_or_default();
+    let when = when.map(|w| format!(" · {w}")).unwrap_or_default();
+    if users.is_empty() {
+        format!("    {}{age}{when}", img.label)
+    } else {
+        format!("    ⚠ {}{age}{when} · in use", img.label)
+    }
+}
+
 /// Digest-drift warnings (#156) as a block that leads a section, followed
 /// by a spacer; nothing when there's no drift.
 pub(super) fn drift_rows(drift: &[crate::aws::services::ecr::DigestDrift]) -> Vec<(String, String)> {
@@ -371,4 +528,74 @@ pub(super) fn ecr_findings_rows(f: &crate::aws::services::ecr::EcrScanFindings) 
         rows.push((String::new(), String::new()));
     }
     rows
+}
+
+#[cfg(test)]
+mod lifecycle_rows_tests {
+    use super::*;
+    use crate::aws::services::ecr::DigestUse;
+
+    const NOW: i64 = 1_800_000_000;
+    const HOST: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com";
+    const POLICY: &str = r#"{"rules":[{"rulePriority":1,"description":"expire untagged after 7 days","selection":{"tagStatus":"untagged","countType":"sinceImagePushed","countUnit":"days","countNumber":7},"action":{"type":"expire"}}]}"#;
+
+    fn image(n: u32, tags: &[&str], age_days: i64) -> crate::aws::services::ecr::EcrImage {
+        let mut b = aws_sdk_ecr::types::ImageDetail::builder()
+            .repository_name("web")
+            .image_digest(format!("sha256:{n:064}"))
+            .image_pushed_at(aws_smithy_types::DateTime::from_secs(NOW - age_days * 86_400));
+        for t in tags {
+            b = b.image_tags(*t);
+        }
+        crate::aws::services::ecr::EcrImage::from_sdk(&b.build(), "web", &format!("{HOST}/web"))
+    }
+
+    fn repo(mutability: &str) -> EcrRepository {
+        let r = aws_sdk_ecr::types::Repository::builder()
+            .repository_name("web")
+            .repository_uri(format!("{HOST}/web"))
+            .image_tag_mutability(aws_sdk_ecr::types::ImageTagMutability::from(mutability))
+            .build();
+        // `from_sdk` is private to the service module; the list load is its
+        // only caller, so build through the same path the harness mocks use.
+        crate::aws::services::ecr::EcrRepository::from_sdk_for_test(&r)
+    }
+
+    fn text(rows: &[(String, String)]) -> String {
+        rows.iter().map(|(k, v)| format!("{k}|{v}\n")).collect()
+    }
+
+    #[test]
+    fn the_incident_pattern_is_called_out_with_the_image_at_risk() {
+        let stale = image(1, &[], 8);
+        let current = image(2, &["latest"], 0);
+        let running = [DigestUse { owner: "api".into(), container: "app".into(), digest: stale.digest.clone(), tasks: 2 }];
+        let rows = lifecycle_rows(&repo("MUTABLE"), POLICY, &[&current, &stale], &running, NOW);
+        let t = text(&rows);
+        assert!(t.contains("⚠ Tags are MUTABLE and priority 1 expires untagged images 7 days after push"), "{t}");
+        assert!(t.contains("expires under priority 1 now, in use by api/app (2 tasks)"), "{t}");
+        assert!(t.contains("Priority 1|expire untagged images 7 days after push"), "{t}");
+        assert!(t.contains("  Eligible Now|1 — ECR acts within 24h"), "{t}");
+        assert!(t.contains("⚠ web@"), "the image line is flagged as in use: {t}");
+    }
+
+    #[test]
+    fn quiet_when_nothing_is_at_risk() {
+        let fresh = image(1, &[], 1);
+        let rows = lifecycle_rows(&repo("IMMUTABLE"), POLICY, &[&fresh], &[], NOW);
+        let t = text(&rows);
+        assert!(!t.contains("⚠"), "{t}");
+        assert!(t.contains("  Due in 7 Days|1"), "{t}");
+    }
+
+    #[test]
+    fn a_cut_list_says_it_is_partial() {
+        let mut newest = image(1, &["v9"], 1);
+        newest.repo_images_seen = 250;
+        let policy = r#"{"rules":[{"rulePriority":1,"selection":{"tagStatus":"tagged","tagPrefixList":["v"],"countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}"#;
+        let t = text(&lifecycle_rows(&repo("MUTABLE"), policy, &[&newest], &[], NOW));
+        assert!(t.contains("can't tell what this rule keeps"), "{t}");
+        assert!(t.contains("· partial: evaluated over the newest 1 of 250 images"), "{t}");
+        assert!(!t.contains("✓ nothing to expire"), "a cut list must not promise nothing expires: {t}");
+    }
 }
