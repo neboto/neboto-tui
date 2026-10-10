@@ -4929,17 +4929,17 @@ mod ecr_jump_tests {
             &repo.uri,
         );
         img.repo_images_seen = 1;
-        let rows = ecr_repo_section_lines(&repo, S::Images, &[&img], false, None, &[], 0);
+        let rows = ecr_repo_section_lines(&repo, S::Images, &[&img], false, None, &[], &[]);
         assert_eq!(rows[0].0, "Images (1, newest first)");
         assert!(rows.iter().any(|(k, v)| k == "  Digest" && v == "sha256:abc"));
         // A cut list says so.
         img.repo_images_seen = 250;
-        let rows = ecr_repo_section_lines(&repo, S::Images, &[&img], false, None, &[], 0);
+        let rows = ecr_repo_section_lines(&repo, S::Images, &[&img], false, None, &[], &[]);
         assert_eq!(rows[0].0, "Images (newest 1 of 250)");
         // Empty: loading while the list streams, "none" once it's done.
-        let rows = ecr_repo_section_lines(&repo, S::Images, &[], true, None, &[], 0);
+        let rows = ecr_repo_section_lines(&repo, S::Images, &[], true, None, &[], &[]);
         assert!(rows.iter().any(|(_, v)| v.starts_with("Loading")));
-        let rows = ecr_repo_section_lines(&repo, S::Images, &[], false, None, &[], 0);
+        let rows = ecr_repo_section_lines(&repo, S::Images, &[], false, None, &[], &[]);
         assert!(rows.iter().any(|(k, _)| k.contains("No images")));
     }
 

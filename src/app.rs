@@ -15668,15 +15668,27 @@ impl App {
         out
     }
 
-    /// Running containers that pull from `repo` — what makes a MUTABLE tag
-    /// setting a live risk rather than a neutral fact.
-    pub(crate) fn ecr_repo_running_users(&self, repo: &crate::aws::services::ecr::EcrRepository) -> usize {
-        self.loaded_ecs_tasks()
-            .into_iter()
-            .filter(|t| !t.is_stopped())
-            .flat_map(|t| t.containers.iter())
-            .filter(|c| repo.holds_ref(&c.image))
-            .count()
+    /// Running containers that pull from `repo`, by digest, replicas
+    /// collapsed — what makes a MUTABLE tag setting a live risk rather than a
+    /// neutral fact, and what the Lifecycle section checks eligible images
+    /// against.
+    pub(crate) fn ecr_repo_running(
+        &self,
+        repo: &crate::aws::services::ecr::EcrRepository,
+    ) -> Vec<crate::aws::services::ecr::DigestUse> {
+        use crate::aws::services::ecr::DigestUse;
+        let mut out: Vec<DigestUse> = Vec::new();
+        for t in self.loaded_ecs_tasks().into_iter().filter(|t| !t.is_stopped()) {
+            for c in t.containers.iter().filter(|c| repo.holds_ref(&c.image)) {
+                let digest = c.image_digest.clone().unwrap_or_default();
+                let owner = t.service_name.clone().unwrap_or_else(|| t.display_name.clone());
+                match out.iter_mut().find(|u| u.owner == owner && u.container == c.name && u.digest == digest) {
+                    Some(u) => u.tasks += 1,
+                    None => out.push(DigestUse { owner, container: c.name.clone(), digest, tasks: 1 }),
+                }
+            }
+        }
+        out
     }
 
     pub(crate) fn trigger_ecr_lifecycle_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
@@ -26705,7 +26717,7 @@ impl App {
                     self.loading,
                     self.lazy.ecr_lifecycle.get(&repo.name),
                     &drift,
-                    self.ecr_repo_running_users(repo),
+                    &self.ecr_repo_running(repo),
                 );
             }
             if let Some(finding) = resource
