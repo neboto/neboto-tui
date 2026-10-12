@@ -80,7 +80,7 @@ Dependabot refresh (#63) went through — but the shape can recur, so check
 arrive monthly as one `crates` PR; majors come one per PR (see
 `.github/dependabot.yml`).
 
-There are no accepted leftovers as of v0.4.0 — the scan should come back
+There are no accepted leftovers as of v0.5.0 — the scan should come back
 clean. The last ones were the AWS SDK's legacy hyper-0.14 client
 (`rustls 0.21` / `rustls-webpki 0.101` / `h2 0.3`), dropped in #145 by
 taking every `aws-sdk-*` crate's default features minus `rustls` (see the
