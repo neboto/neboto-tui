@@ -533,6 +533,16 @@ pub struct EcsDeployment {
     pub updated_at_secs: i64,
 }
 
+/// Service Connect as the PRIMARY deployment runs it: the Cloud Map
+/// namespace, and per exposed port the discovery name and the `dns:port`
+/// aliases clients reach it by.
+#[derive(Clone, Debug)]
+pub struct EcsServiceConnect {
+    pub namespace: Option<String>,
+    /// (port name, discovery name, client aliases as `dns:port`).
+    pub services: Vec<(String, Option<String>, Vec<String>)>,
+}
+
 #[derive(Clone, Debug)]
 pub struct EcsServiceEvent {
     pub created_at: String,
@@ -577,6 +587,8 @@ pub struct EcsServiceInfo {
     // Networking
     pub load_balancers: Vec<EcsServiceLb>,
     pub service_registries: Vec<String>,
+    /// The PRIMARY deployment's Service Connect config (None when off).
+    pub service_connect: Option<EcsServiceConnect>,
     pub awsvpc_subnets: Vec<String>,
     pub awsvpc_security_groups: Vec<String>,
     pub assign_public_ip: Option<String>,
@@ -607,6 +619,28 @@ impl EcsServiceInfo {
             ),
             None => (None, None, None),
         };
+
+        let service_connect = svc
+            .deployments()
+            .iter()
+            .find(|d| d.status() == Some("PRIMARY"))
+            .and_then(|d| d.service_connect_configuration())
+            .filter(|c| c.enabled())
+            .map(|c| EcsServiceConnect {
+                namespace: c.namespace().map(short_arn),
+                services: c
+                    .services()
+                    .iter()
+                    .map(|s| {
+                        let aliases = s
+                            .client_aliases()
+                            .iter()
+                            .map(|a| format!("{}:{}", a.dns_name().unwrap_or(s.port_name()), a.port()))
+                            .collect();
+                        (s.port_name().to_string(), s.discovery_name().map(|d| d.to_string()), aliases)
+                    })
+                    .collect(),
+            });
 
         let deployments = svc
             .deployments()
@@ -718,6 +752,7 @@ impl EcsServiceInfo {
             deployments,
             load_balancers,
             service_registries,
+            service_connect,
             awsvpc_subnets,
             awsvpc_security_groups,
             assign_public_ip,
@@ -2156,5 +2191,33 @@ mod tests {
         let s = EcsServiceInfo::from_sdk(&Service::builder().status("INACTIVE").build());
         assert_eq!(s.state(), ResourceState::Unavailable);
         assert_eq!(s.state_label(), "inactive");
+    }
+
+    #[test]
+    fn service_connect_comes_from_the_primary_deployment() {
+        use aws_sdk_ecs::types::{ServiceConnectClientAlias, ServiceConnectConfiguration, ServiceConnectService};
+        let sc = ServiceConnectConfiguration::builder()
+            .enabled(true)
+            .namespace("arn:aws:servicediscovery:us-east-1:1:namespace/ns-abc")
+            .services(
+                ServiceConnectService::builder()
+                    .port_name("http")
+                    .discovery_name("orders")
+                    .client_aliases(ServiceConnectClientAlias::builder().port(80).dns_name("orders.local").build().unwrap())
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        let s = EcsServiceInfo::from_sdk(
+            &Service::builder()
+                .deployments(Deployment::builder().status("ACTIVE").build())
+                .deployments(Deployment::builder().status("PRIMARY").service_connect_configuration(sc).build())
+                .build(),
+        );
+        let c = s.service_connect.expect("primary deployment's config");
+        assert_eq!(c.namespace.as_deref(), Some("ns-abc"));
+        assert_eq!(c.services, vec![("http".to_string(), Some("orders".to_string()), vec!["orders.local:80".to_string()])]);
+        // Off → no section at all.
+        assert!(service(1, 1, None).service_connect.is_none());
     }
 }

@@ -521,7 +521,62 @@ pub(super) fn ec2_details_lines(
         let platform = instance.platform.as_deref().unwrap_or("Linux/UNIX");
         rows.push(("  Platform".to_string(), format!("{platform}  ({arch})")));
     }
+    if let Some((cores, threads)) = instance.cpu_options {
+        rows.push((
+            "  CPU".to_string(),
+            format!("{cores} cores × {threads} threads = {} vCPUs", cores * threads),
+        ));
+    }
+    let lifecycle = match instance.lifecycle.as_deref() {
+        None => "On-Demand".to_string(),
+        Some("spot") => match &instance.spot_request_id {
+            Some(id) => format!("Spot ({id})"),
+            None => "Spot".to_string(),
+        },
+        Some(other) => other.to_string(),
+    };
+    rows.push(("  Lifecycle".to_string(), lifecycle));
+    if let Some(t) = &instance.tenancy {
+        rows.push(("  Tenancy".to_string(), t.clone()));
+    }
+    if let Some(g) = &instance.placement_group {
+        rows.push(("  Placement Group".to_string(), g.clone()));
+    }
+    if let Some(cr) = &instance.capacity_reservation_id {
+        rows.push(("  Capacity Reservation".to_string(), cr.clone()));
+    }
 
+    rows
+}
+
+/// The IMDS block: `http_tokens = optional` still answers IMDSv1, the
+/// SSRF-to-credentials path IMDSv2 closes, so it's flagged.
+fn ec2_metadata_rows(meta: &crate::aws::services::ec2::InstanceMetadata) -> Vec<(String, String)> {
+    let mut rows = vec![
+        ("".to_string(), "".to_string()),
+        ("Instance Metadata (IMDS)".to_string(), "".to_string()),
+        ("".to_string(), "".to_string()),
+    ];
+    if meta.http_endpoint.as_deref() == Some("disabled") {
+        rows.push(("  Endpoint".to_string(), "disabled".to_string()));
+        return rows;
+    }
+    let tokens = match meta.http_tokens.as_deref() {
+        Some("required") => "✓ IMDSv2 required".to_string(),
+        Some("optional") => "⚠ IMDSv1 allowed (tokens optional)".to_string(),
+        Some(other) => other.to_string(),
+        None => "—".to_string(),
+    };
+    rows.push(("  Tokens".to_string(), tokens));
+    if let Some(e) = &meta.http_endpoint {
+        rows.push(("  Endpoint".to_string(), e.clone()));
+    }
+    if let Some(h) = meta.hop_limit {
+        rows.push(("  Hop Limit".to_string(), h.to_string()));
+    }
+    if let Some(t) = &meta.instance_metadata_tags {
+        rows.push(("  Tags in Metadata".to_string(), t.clone()));
+    }
     rows
 }
 
@@ -565,6 +620,9 @@ pub(super) fn ec2_security_lines(
     if let Some(mon) = &instance.monitoring_state {
         rows.push(("".to_string(), "".to_string()));
         rows.push(("  Monitoring".to_string(), mon.clone()));
+    }
+    if let Some(meta) = &instance.metadata {
+        rows.extend(ec2_metadata_rows(meta));
     }
 
     // Security groups block
@@ -701,6 +759,7 @@ pub(super) fn render_security_group_split(
     name: &str,
     group_id: &str,
     vpc_id: Option<&str>,
+    owner_id: Option<&str>,
     description: &str,
     area: Rect,
     frame: &mut Frame,
@@ -715,10 +774,13 @@ pub(super) fn render_security_group_split(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let subtitle = match vpc_id {
+    let mut subtitle = match vpc_id {
         Some(v) if !v.is_empty() => format!("{}  ·  {}", group_id, v),
         _ => group_id.to_string(),
     };
+    if let Some(owner) = owner_id.filter(|o| !o.is_empty()) {
+        subtitle.push_str(&format!("  ·  owner {owner}"));
+    }
     let mut header = vec![
         Line::raw(""),
         Line::from(vec![

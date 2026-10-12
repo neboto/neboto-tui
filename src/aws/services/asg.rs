@@ -130,6 +130,10 @@ pub struct AsgGroup {
     pub created_time: String,
     pub instances: Vec<AsgInstance>,
     pub tags: HashMap<String, String>,
+    /// Which instances a scale-in removes first, in evaluation order.
+    pub termination_policies: Vec<String>,
+    /// `NewInstancesProtectedFromScaleIn`.
+    pub scale_in_protection: bool,
 }
 
 impl AsgGroup {
@@ -194,6 +198,8 @@ impl AsgGroup {
                 .unwrap_or_default(),
             instances,
             tags,
+            termination_policies: g.termination_policies().to_vec(),
+            scale_in_protection: g.new_instances_protected_from_scale_in().unwrap_or(false),
         }
     }
 
@@ -497,4 +503,23 @@ pub async fn fetch_asg_metrics(
         pending: parse_avg(&dps(pending), start_secs),
         x_max: time_range.duration_secs() as f64,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn termination_policies_keep_their_evaluation_order() {
+        let g = AsgGroup::from_sdk(
+            &aws_sdk_autoscaling::types::AutoScalingGroup::builder()
+                .auto_scaling_group_name("web")
+                .termination_policies("OldestLaunchTemplate")
+                .termination_policies("ClosestToNextInstanceHour")
+                .new_instances_protected_from_scale_in(true)
+                .build(),
+        );
+        assert_eq!(g.termination_policies, ["OldestLaunchTemplate", "ClosestToNextInstanceHour"]);
+        assert!(g.scale_in_protection);
+    }
 }

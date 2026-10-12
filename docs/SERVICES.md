@@ -1861,6 +1861,19 @@ the service you're touching.
   thousandfold), and anything still not UTF-8 falls back to the raw base64,
   never an empty row. A gzipped MIME multipart is shown as the MIME text;
   its parts aren't split out.
+- **EC2 instance IMDS block** (Security section) — straight off
+  `DescribeInstances`' `MetadataOptions`; `http_tokens = optional` is
+  flagged `⚠` because it still answers IMDSv1, the SSRF-to-credentials path.
+  An `http_endpoint = disabled` instance shows only that row (the token
+  setting is moot). CPU options / lifecycle / tenancy / placement group /
+  capacity reservation ride the same response into Launch Config (#193).
+- **ELB Attributes "Key Settings"** — the LB and target-group Attributes
+  sections lead with named rows looked up by AWS's dotted key
+  (`deletion_protection.enabled`, `stickiness.*`,
+  `deregistration_delay.timeout_seconds`, …) above the unchanged raw list.
+  A key the LB type doesn't have (ALBs carry no
+  `load_balancing.cross_zone.enabled`; it's always on) just omits its row —
+  don't synthesize a default, the value would be a guess.
 - **EC2 instance Load Balancing section** (key 4,
   `elb::fetch_instance_lb_membership`) — "is this instance behind a load
   balancer?". **There is no reverse API** (nothing answers "which target

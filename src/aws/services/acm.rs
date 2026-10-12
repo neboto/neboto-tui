@@ -265,6 +265,12 @@ pub struct AcmCertDetails {
     pub subject_alternative_names: Vec<String>,
     pub key_algorithm: String,
     pub renewal_eligibility: String,
+    /// Managed renewal's progress — only present once ACM has started one.
+    pub renewal: Option<AcmRenewal>,
+    /// The issuing CA's name (`Amazon`, or a private CA's subject).
+    pub issuer: Option<String>,
+    /// The private CA (ACM PCA) that issued a `PRIVATE` cert.
+    pub ca_arn: Option<String>,
     pub in_use_by: Vec<String>,
     pub issued_at: Option<String>,
     pub not_before: Option<String>,
@@ -273,6 +279,18 @@ pub struct AcmCertDetails {
     /// Set when `ListTagsForCertificate` failed — rendered instead of
     /// "No tags" (#28).
     pub tags_error: Option<String>,
+}
+
+/// `RenewalSummary`: where managed renewal stands, and which domains are
+/// still holding it up (a renewal stalls on a domain whose validation
+/// record was removed).
+#[derive(Debug, Clone)]
+pub struct AcmRenewal {
+    pub status: String,
+    pub reason: Option<String>,
+    pub updated_at: String,
+    /// (domain, validation status) for every domain not yet SUCCESS.
+    pub pending_domains: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -319,6 +337,22 @@ pub async fn fetch_cert_details(client: AcmClient, arn: String) -> Result<AcmCer
         .unwrap_or_default();
 
     let in_use_by = cert.in_use_by().iter().map(|s| s.to_string()).collect();
+
+    let renewal = cert.renewal_summary().map(|r| AcmRenewal {
+        status: r.renewal_status().as_str().to_string(),
+        reason: r.renewal_status_reason().map(|f| f.as_str().to_string()),
+        updated_at: fmt_epoch_secs(r.updated_at().secs()),
+        pending_domains: r
+            .domain_validation_options()
+            .iter()
+            .filter_map(|d| {
+                let status = d.validation_status().map(|s| s.as_str()).unwrap_or("UNKNOWN");
+                (status != "SUCCESS").then(|| (d.domain_name().to_string(), status.to_string()))
+            })
+            .collect(),
+    });
+    let issuer = cert.issuer().map(|s| s.to_string());
+    let ca_arn = cert.certificate_authority_arn().map(|s| s.to_string());
 
     let issued_at = cert.issued_at().map(|d| fmt_epoch_secs(d.secs()));
     let not_before = cert.not_before().map(|d| fmt_epoch_secs(d.secs()));
@@ -371,6 +405,9 @@ pub async fn fetch_cert_details(client: AcmClient, arn: String) -> Result<AcmCer
         subject_alternative_names,
         key_algorithm,
         renewal_eligibility,
+        renewal,
+        issuer,
+        ca_arn,
         in_use_by,
         issued_at,
         not_before,

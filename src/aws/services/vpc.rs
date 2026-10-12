@@ -1446,6 +1446,8 @@ pub struct VpcSecurityGroup {
     pub inbound_rules: Vec<crate::aws::services::ec2::SgRule>,
     pub outbound_rules: Vec<crate::aws::services::ec2::SgRule>,
     pub tags: HashMap<String, String>,
+    /// See `ec2::SecurityGroup::owner_id`.
+    pub owner_id: Option<String>,
 }
 
 impl VpcSecurityGroup {
@@ -1473,6 +1475,7 @@ impl VpcSecurityGroup {
             inbound_rules,
             outbound_rules,
             tags,
+            owner_id: sg.owner_id().map(|s| s.to_string()),
         }
     }
 }
@@ -1538,6 +1541,9 @@ impl Resource for VpcSecurityGroup {
             ),
             ("Description".to_string(), self.description.clone()),
         ];
+        if let Some(owner) = &self.owner_id {
+            details.push(("Owner".to_string(), owner.clone()));
+        }
         details.push(("".to_string(), "".to_string()));
         details.extend(crate::aws::services::ec2::sg_rule_rows(
             "Inbound",

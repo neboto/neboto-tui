@@ -181,10 +181,32 @@ pub(super) fn acm_details_lines(
         }
         Some(crate::lazy::Lazy::Loaded(d)) => {
             rows.push(("Key Algorithm".to_string(), d.key_algorithm.clone()));
+            if let Some(issuer) = &d.issuer {
+                rows.push(("Issuer".to_string(), issuer.clone()));
+            }
+            if let Some(ca) = &d.ca_arn {
+                // A full ACM PCA ARN → the generic ARN jump.
+                rows.push(("Private CA".to_string(), ca.clone()));
+            }
             rows.push((
                 "Renewal Eligibility".to_string(),
                 d.renewal_eligibility.clone(),
             ));
+            if let Some(r) = &d.renewal {
+                let status = match (r.status.as_str(), &r.reason) {
+                    ("FAILED", Some(reason)) => format!("✗ FAILED — {reason}"),
+                    ("PENDING_VALIDATION", _) => "⚠ PENDING_VALIDATION".to_string(),
+                    ("SUCCESS", _) => "✓ SUCCESS".to_string(),
+                    (s, _) => s.to_string(),
+                };
+                // The domains holding it up sit indented under it, so an
+                // export nests them in the Renewal object.
+                rows.push(("Renewal".to_string(), status));
+                for (domain, status) in &r.pending_domains {
+                    rows.push((format!("  {domain}"), format!("⚠ {status}")));
+                }
+                rows.push(("Renewal Updated".to_string(), r.updated_at.clone()));
+            }
             if let Some(issued) = &d.issued_at {
                 rows.push(("Issued At".to_string(), issued.clone()));
             }
@@ -293,5 +315,41 @@ pub(super) fn acm_tags_lines(details_state: Option<&crate::lazy::Lazy<crate::aws
             rows.push(("".to_string(), "".to_string()));
             rows
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::aws::services::acm::{AcmCertDetails, AcmRenewal};
+
+    #[test]
+    fn a_stalled_renewal_names_the_domain_holding_it_up() {
+        let cert = AcmCertificate::from_summary(&aws_sdk_acm::types::CertificateSummary::builder().certificate_arn("arn:aws:acm:us-east-1:1:certificate/x").domain_name("api.example.com").build());
+        let d = AcmCertDetails {
+            subject_alternative_names: vec![],
+            key_algorithm: "RSA_2048".into(),
+            renewal_eligibility: "ELIGIBLE".into(),
+            renewal: Some(AcmRenewal {
+                status: "PENDING_VALIDATION".into(),
+                reason: None,
+                updated_at: "2026-10-01 00:00".into(),
+                pending_domains: vec![("api.example.com".into(), "PENDING_VALIDATION".into())],
+            }),
+            issuer: Some("Amazon".into()),
+            ca_arn: None,
+            in_use_by: vec![],
+            issued_at: None,
+            not_before: None,
+            validation_options: vec![],
+            tags: Default::default(),
+            tags_error: None,
+        };
+        let rows = acm_details_lines(&cert, Some(&crate::lazy::Lazy::Loaded(d)));
+        let at = |k: &str| rows.iter().position(|(key, _)| key == k).unwrap_or_else(|| panic!("{k}: {rows:?}"));
+        assert_eq!(rows[at("Issuer")].1, "Amazon");
+        assert_eq!(rows[at("Renewal")].1, "⚠ PENDING_VALIDATION");
+        // The domain sits indented right under Renewal, so an export nests it there.
+        assert_eq!(rows[at("Renewal") + 1], ("  api.example.com".to_string(), "⚠ PENDING_VALIDATION".to_string()));
     }
 }

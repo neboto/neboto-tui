@@ -124,6 +124,12 @@ pub(super) fn asg_capacity_lines(group: &AsgGroup) -> Vec<(String, String)> {
         rows.push(("Grace Period".to_string(), format!("{}s", grace)));
     }
     rows.push(("Default Cooldown".to_string(), format!("{}s", group.default_cooldown)));
+    if !group.termination_policies.is_empty() {
+        rows.push(("Termination Policies".to_string(), group.termination_policies.join(" → ")));
+    }
+    if group.scale_in_protection {
+        rows.push(("Scale-in Protection".to_string(), "new instances protected".to_string()));
+    }
 
     rows.push(("".to_string(), "".to_string()));
     if !group.availability_zones.is_empty() {

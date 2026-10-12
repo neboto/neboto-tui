@@ -594,6 +594,7 @@ mod tests {
             inbound_rules: inbound,
             outbound_rules: outbound,
             tags: HashMap::new(),
+            owner_id: None,
         }
     }
 

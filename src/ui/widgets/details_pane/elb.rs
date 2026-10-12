@@ -195,9 +195,8 @@ pub(super) fn lb_attributes_lines(state: Option<&crate::lazy::Lazy<crate::aws::s
             if details.attributes.is_empty() {
                 rows.push(("  No attributes".to_string(), "".to_string()));
             } else {
-                for (key, value) in &details.attributes {
-                    rows.push((key.clone(), value.clone()));
-                }
+                rows.extend(lb_key_setting_rows(&details.attributes));
+                rows.extend(raw_attribute_rows(&details.attributes));
             }
         }
         Some(crate::lazy::Lazy::Error(e)) => {
@@ -309,6 +308,103 @@ pub fn target_group_section_lines(
     }
 }
 
+/// Look up one raw ELB attribute by its dotted key.
+fn attr<'a>(attrs: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    attrs.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+}
+
+/// `86400` → `86400s (1d)`: the attribute's own unit, plus the reading.
+fn secs_label(v: &str) -> String {
+    match v.parse::<u64>() {
+        Ok(s) if s >= 86_400 && s % 86_400 == 0 => format!("{s}s ({}d)", s / 86_400),
+        Ok(s) if s >= 3_600 && s % 3_600 == 0 => format!("{s}s ({}h)", s / 3_600),
+        Ok(s) if s >= 60 && s % 60 == 0 => format!("{s}s ({}m)", s / 60),
+        _ => format!("{v}s"),
+    }
+}
+
+fn on_off(v: &str) -> String {
+    match v {
+        "true" => "✓ enabled".to_string(),
+        "false" => "disabled".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// The settings people look for on a load balancer, by name, above the raw
+/// dotted-key list (which stays, for everything else).
+fn lb_key_setting_rows(attrs: &[(String, String)]) -> Vec<(String, String)> {
+    let mut rows = vec![("Key Settings".to_string(), String::new())];
+    if let Some(v) = attr(attrs, "deletion_protection.enabled") {
+        rows.push(("  Deletion Protection".to_string(), on_off(v)));
+    }
+    if let Some(v) = attr(attrs, "load_balancing.cross_zone.enabled") {
+        rows.push(("  Cross-Zone".to_string(), on_off(v)));
+    }
+    if let Some(v) = attr(attrs, "idle_timeout.timeout_seconds") {
+        rows.push(("  Idle Timeout".to_string(), secs_label(v)));
+    }
+    match (attr(attrs, "access_logs.s3.enabled"), attr(attrs, "access_logs.s3.bucket")) {
+        (Some("true"), Some(b)) => rows.push(("  Access Logs".to_string(), format!("✓ s3://{b}"))),
+        (Some(v), _) => rows.push(("  Access Logs".to_string(), on_off(v))),
+        _ => {}
+    }
+    if rows.len() == 1 {
+        return Vec::new();
+    }
+    rows.push((String::new(), String::new()));
+    rows
+}
+
+/// The target group's routing behaviour — stickiness, drain time, algorithm,
+/// slow start — by name, above the raw list.
+fn tg_key_setting_rows(attrs: &[(String, String)]) -> Vec<(String, String)> {
+    let mut rows = vec![("Key Settings".to_string(), String::new())];
+    if let Some(v) = attr(attrs, "stickiness.enabled") {
+        let label = if v == "true" {
+            let kind = attr(attrs, "stickiness.type").unwrap_or("lb_cookie");
+            let duration = match kind {
+                "app_cookie" => attr(attrs, "stickiness.app_cookie.duration_seconds"),
+                "source_ip" | "source_ip_dest_ip" | "source_ip_dest_ip_proto" => None,
+                _ => attr(attrs, "stickiness.lb_cookie.duration_seconds"),
+            };
+            let cookie = attr(attrs, "stickiness.app_cookie.cookie_name")
+                .filter(|_| kind == "app_cookie")
+                .map(|c| format!(" ({c})"))
+                .unwrap_or_default();
+            match duration {
+                Some(d) => format!("✓ {kind}{cookie}, {}", secs_label(d)),
+                None => format!("✓ {kind}{cookie}"),
+            }
+        } else {
+            "off".to_string()
+        };
+        rows.push(("  Stickiness".to_string(), label));
+    }
+    if let Some(v) = attr(attrs, "deregistration_delay.timeout_seconds") {
+        rows.push(("  Deregistration Delay".to_string(), secs_label(v)));
+    }
+    if let Some(v) = attr(attrs, "load_balancing.algorithm.type") {
+        rows.push(("  Algorithm".to_string(), v.to_string()));
+    }
+    if let Some(v) = attr(attrs, "slow_start.duration_seconds") {
+        let label = if v == "0" { "off".to_string() } else { secs_label(v) };
+        rows.push(("  Slow Start".to_string(), label));
+    }
+    if rows.len() == 1 {
+        return Vec::new();
+    }
+    rows.push((String::new(), String::new()));
+    rows
+}
+
+/// Every attribute as AWS names it, under its own heading.
+fn raw_attribute_rows(attrs: &[(String, String)]) -> Vec<(String, String)> {
+    let mut rows = vec![("All Attributes".to_string(), String::new())];
+    rows.extend(attrs.iter().map(|(k, v)| (format!("  {k}"), v.clone())));
+    rows
+}
+
 pub(super) fn target_group_attributes_lines(
     state: Option<&crate::lazy::Lazy<Vec<(String, String)>>>,
 ) -> Vec<(String, String)> {
@@ -322,9 +418,8 @@ pub(super) fn target_group_attributes_lines(
             if attributes.is_empty() {
                 rows.push(("  No attributes".to_string(), "".to_string()));
             } else {
-                for (key, value) in attributes {
-                    rows.push((key.clone(), value.clone()));
-                }
+                rows.extend(tg_key_setting_rows(attributes));
+                rows.extend(raw_attribute_rows(attributes));
             }
         }
         Some(crate::lazy::Lazy::Error(e)) => {

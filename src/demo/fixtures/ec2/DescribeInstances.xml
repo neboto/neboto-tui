@@ -15,6 +15,7 @@
           <keyName>acme-ops</keyName>
           <amiLaunchIndex>0</amiLaunchIndex>
           <instanceType>t3.large</instanceType>
+          <cpuOptions><coreCount>1</coreCount><threadsPerCore>2</threadsPerCore></cpuOptions>
           <launchTime>{{iso:now-21d}}</launchTime>
           <placement><availabilityZone>{{region}}a</availabilityZone><tenancy>default</tenancy></placement>
           <monitoring><state>enabled</state></monitoring>
@@ -56,6 +57,7 @@
           <keyName>acme-ops</keyName>
           <amiLaunchIndex>1</amiLaunchIndex>
           <instanceType>t3.large</instanceType>
+          <cpuOptions><coreCount>1</coreCount><threadsPerCore>2</threadsPerCore></cpuOptions>
           <launchTime>{{iso:now-21d}}</launchTime>
           <placement><availabilityZone>{{region}}b</availabilityZone><tenancy>default</tenancy></placement>
           <monitoring><state>enabled</state></monitoring>
@@ -104,6 +106,7 @@
           <reason>User initiated ({{iso:now-9d}})</reason>
           <amiLaunchIndex>0</amiLaunchIndex>
           <instanceType>r5.2xlarge</instanceType>
+          <cpuOptions><coreCount>4</coreCount><threadsPerCore>2</threadsPerCore></cpuOptions>
           <launchTime>{{iso:now-60d}}</launchTime>
           <placement><availabilityZone>{{region}}a</availabilityZone><tenancy>default</tenancy></placement>
           <monitoring><state>disabled</state></monitoring>

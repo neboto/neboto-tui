@@ -507,6 +507,49 @@ async fn get_bodies_have_stable_keys() {
     assert!(streams.as_object().unwrap().len() >= 3, "{streams}");
 }
 
+/// #193: fields already in a response we fetch, surfaced in the panes.
+#[tokio::test]
+async fn get_surfaces_fields_the_responses_already_carry() {
+    // EC2: CPU options, lifecycle and tenancy in Details; IMDS in Security.
+    let v = demo_get_json(GetArgs {
+        sections: vec!["details".into(), "security".into()],
+        ..get_args("ec2", &["i-0a1b2c3d4e5f60001", "i-0a1b2c3d4e5f60002"])
+    })
+    .await;
+    let web1 = &v["resources"][0]["sections"];
+    let launch = &web1["Details"]["Launch Config"];
+    assert_eq!(launch["CPU"], "1 cores × 2 threads = 2 vCPUs", "{launch}");
+    assert_eq!(launch["Lifecycle"], "On-Demand");
+    assert_eq!(launch["Tenancy"], "default");
+    assert_eq!(web1["Security"]["Instance Metadata (IMDS)"]["Tokens"], "IMDSv2 required");
+    let web2 = &v["resources"][1]["sections"];
+    assert_eq!(web2["Security"]["Instance Metadata (IMDS)"]["Tokens"], "⚠ IMDSv1 allowed (tokens optional)");
+
+    // Security groups carry their owning account.
+    let (rows, _) = demo_list(ServiceType::EC2).await.unwrap();
+    let sg = rows.iter().find(|r| r.id().starts_with("sg-")).expect("a demo security group");
+    assert!(sg.details().iter().any(|(k, v)| k == "Owner" && v == "123456789012"), "{:?}", sg.details());
+
+    // ELB: the settings people look for, by name, above the raw list.
+    let v = demo_get_json(GetArgs { sections: vec!["attributes".into()], ..get_args("elb", &["storefront-alb"]) }).await;
+    let key = &v["sections"]["Attributes"]["Key Settings"];
+    assert_eq!(key["Deletion Protection"], "enabled", "{key}");
+    assert_eq!(key["Idle Timeout"], "60s (1m)");
+    assert_eq!(v["sections"]["Attributes"]["All Attributes"]["deletion_protection.enabled"], "true");
+
+    let v = demo_get_json(GetArgs {
+        sections: vec!["attributes".into()],
+        resource_type: Some("Target Group".into()),
+        ..get_args("elb", &["storefront-web"])
+    })
+    .await;
+    let key = &v["sections"]["Attributes"]["Key Settings"];
+    assert_eq!(key["Stickiness"], "off", "{key}");
+    assert_eq!(key["Deregistration Delay"], "300s (5m)");
+    assert_eq!(key["Algorithm"], "round_robin");
+    assert_eq!(key["Slow Start"], "off");
+}
+
 #[tokio::test]
 async fn list_time_tags_reach_rows_without_a_pane() {
     // #29: CloudWatch has no tag call of its own; the Tagging API fills

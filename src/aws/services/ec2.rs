@@ -821,6 +821,26 @@ pub struct Ec2Instance {
     pub security_groups: Vec<(String, String)>, // (id, name)
     pub network_interfaces: Vec<EmbeddedNic>,
     pub block_devices: Vec<EmbeddedVolume>,
+    /// `default` / `dedicated` / `host` (Placement.Tenancy).
+    pub tenancy: Option<String>,
+    pub placement_group: Option<String>,
+    /// (cores, threads per core).
+    pub cpu_options: Option<(i32, i32)>,
+    /// `spot` / `scheduled` / `capacity-block`; None is on-demand.
+    pub lifecycle: Option<String>,
+    pub spot_request_id: Option<String>,
+    pub capacity_reservation_id: Option<String>,
+    pub metadata: Option<InstanceMetadata>,
+}
+
+/// The instance's IMDS settings (`MetadataOptions`) — `http_tokens =
+/// required` is IMDSv2-only, the hardening most audits ask about first.
+#[derive(Debug, Clone, Default)]
+pub struct InstanceMetadata {
+    pub http_tokens: Option<String>,
+    pub http_endpoint: Option<String>,
+    pub hop_limit: Option<i32>,
+    pub instance_metadata_tags: Option<String>,
 }
 
 impl Ec2Instance {
@@ -942,6 +962,28 @@ impl Ec2Instance {
             })
             .collect();
 
+        let tenancy = instance
+            .placement()
+            .and_then(|p| p.tenancy())
+            .map(|t| t.as_str().to_string());
+        let placement_group = instance
+            .placement()
+            .and_then(|p| p.group_name())
+            .filter(|g| !g.is_empty())
+            .map(|g| g.to_string());
+        let cpu_options = instance
+            .cpu_options()
+            .and_then(|c| Some((c.core_count()?, c.threads_per_core()?)));
+        let lifecycle = instance.instance_lifecycle().map(|l| l.as_str().to_string());
+        let spot_request_id = instance.spot_instance_request_id().map(|s| s.to_string());
+        let capacity_reservation_id = instance.capacity_reservation_id().map(|s| s.to_string());
+        let metadata = instance.metadata_options().map(|m| InstanceMetadata {
+            http_tokens: m.http_tokens().map(|t| t.as_str().to_string()),
+            http_endpoint: m.http_endpoint().map(|t| t.as_str().to_string()),
+            hop_limit: m.http_put_response_hop_limit(),
+            instance_metadata_tags: m.instance_metadata_tags().map(|t| t.as_str().to_string()),
+        });
+
         // Parse tags
         let mut tags = HashMap::new();
         for tag in instance.tags() {
@@ -973,6 +1015,13 @@ impl Ec2Instance {
             security_groups,
             network_interfaces,
             block_devices,
+            tenancy,
+            placement_group,
+            cpu_options,
+            lifecycle,
+            spot_request_id,
+            capacity_reservation_id,
+            metadata,
         }
     }
 }
@@ -1328,6 +1377,9 @@ pub struct SecurityGroup {
     pub inbound_rules: Vec<SgRule>,
     pub outbound_rules: Vec<SgRule>,
     pub tags: HashMap<String, String>,
+    /// The owning account — differs from the session's for a group shared
+    /// into this VPC (RAM) or referenced across a peering.
+    pub owner_id: Option<String>,
 }
 
 impl SecurityGroup {
@@ -1336,6 +1388,7 @@ impl SecurityGroup {
         let group_name = sg.group_name().unwrap_or("unknown").to_string();
         let description = sg.description().unwrap_or("").to_string();
         let vpc_id = sg.vpc_id().map(|s| s.to_string());
+        let owner_id = sg.owner_id().map(|s| s.to_string());
 
         let mut tags = HashMap::new();
         for tag in sg.tags() {
@@ -1345,6 +1398,7 @@ impl SecurityGroup {
         }
 
         Self {
+            owner_id,
             group_id,
             group_name,
             description,
@@ -1427,6 +1481,9 @@ impl Resource for SecurityGroup {
         ];
         if let Some(vpc) = &self.vpc_id {
             details.push(("VPC ID".to_string(), vpc.clone()));
+        }
+        if let Some(owner) = &self.owner_id {
+            details.push(("Owner".to_string(), owner.clone()));
         }
         details.push(("".to_string(), "".to_string()));
         details.extend(sg_rule_rows("Inbound", &self.inbound_rules));

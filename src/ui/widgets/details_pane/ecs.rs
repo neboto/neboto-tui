@@ -416,6 +416,22 @@ pub fn ecs_service_section_lines(
                 }
             }
 
+            if let Some(sc) = &svc.service_connect {
+                rows.push(("".into(), "".into()));
+                rows.push(("Service Connect".into(), "".into()));
+                if let Some(ns) = &sc.namespace {
+                    rows.push(("  Namespace".into(), ns.clone()));
+                }
+                if sc.services.is_empty() {
+                    rows.push(("  Mode".into(), "client only (exposes no ports)".into()));
+                }
+                for (port, discovery, aliases) in &sc.services {
+                    let name = discovery.as_deref().unwrap_or(port);
+                    let reach = if aliases.is_empty() { "—".to_string() } else { aliases.join(", ") };
+                    rows.push((format!("  {name} ({port})"), reach));
+                }
+            }
+
             if !svc.awsvpc_subnets.is_empty()
                 || !svc.awsvpc_security_groups.is_empty()
                 || svc.assign_public_ip.is_some()
