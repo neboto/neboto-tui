@@ -553,20 +553,32 @@ pub(crate) fn detail_value(
     Value::Object(root)
 }
 
-/// Names of the captured sections still showing a lazy-load placeholder.
+/// True when one row of an otherwise loaded section is still a lazy
+/// placeholder — `("  Last Activity", "Loading…")`, the IAM role's last-used
+/// date riding a separate `GetRole`. `is_unloaded` only sees a section that
+/// is *nothing but* placeholders, so an export used to stop waiting with
+/// this row still spinning.
+fn has_loading_row(lines: &[(String, String)]) -> bool {
+    lines.iter().any(|(k, v)| {
+        let text = if v.is_empty() { k.trim() } else { v.trim() };
+        text.starts_with("Loading") && text.ends_with('…')
+    })
+}
+
+/// Names of the captured sections still loading, wholly or in part.
 pub(crate) fn unloaded_sections(sections: &[(String, Vec<(String, String)>)]) -> Vec<String> {
     sections
         .iter()
-        .filter(|(_, lines)| is_unloaded(lines))
+        .filter(|(_, lines)| is_unloaded(lines) || has_loading_row(lines))
         .map(|(name, _)| name.trim().to_string())
         .collect()
 }
 
-/// True when any captured section is still a lazy-load placeholder — the
-/// signal that a deep export fired triggers and should wait for them to
-/// land, rather than exporting "not loaded" notes.
+/// True when any captured section is still loading — a whole-section
+/// placeholder or a single `Loading…` row — the signal that an export (or
+/// `neboto get`) fired triggers and should wait for them to land.
 pub fn any_section_unloaded(sections: &[(String, Vec<(String, String)>)]) -> bool {
-    sections.iter().any(|(_, lines)| is_unloaded(lines))
+    sections.iter().any(|(_, lines)| is_unloaded(lines) || has_loading_row(lines))
 }
 
 /// One resource as a Markdown document: a title + identity line, then a
@@ -628,27 +640,25 @@ pub(crate) fn detail_markdown(resource: &dyn Resource, sections: &[(String, Vec<
     detail_markdown_at(resource, sections, 1)
 }
 
-/// A homogeneous list as a Markdown table over the same columns as the CSV.
-/// The list Markdown is a *readable* summary, so it sticks to core columns
-/// (the full per-field union lives in the `.csv` / `.json`). A wide
-/// union-of-all-detail-keys table is unreadable for rich resources like S3.
+/// A homogeneous list as a Markdown table over the same columns as the CSV
+/// (`list_columns`). It used to keep to Type/ID/Name/State/Tags for
+/// readability, which silently dropped every list-level field the `.json`
+/// and `.csv` beside it carried; the union is ~10–20 columns (S3 is the
+/// widest), which a Markdown viewer scrolls. Also what `y` copies for a list
+/// selection and `neboto ls --format md` prints.
 pub fn list_markdown(resources: &[&dyn Resource], label: &str) -> String {
-    const COLUMNS: [&str; 5] = ["Type", "ID", "Name", "State", "Tags"];
+    let columns = list_columns(resources);
     let mut md = format!("# {} ({})\n\n", label, resources.len());
+    let header: Vec<String> = columns.iter().map(|c| md_cell(c)).collect();
     md.push_str(&format!(
         "| {} |\n|{}\n",
-        COLUMNS.join(" | "),
-        " --- |".repeat(COLUMNS.len())
+        header.join(" | "),
+        " --- |".repeat(columns.len())
     ));
     for r in resources {
-        let row = [
-            r.resource_type().to_string(),
-            r.id().to_string(),
-            r.name().to_string(),
-            r.state_label(),
-            flatten_tags(*r),
-        ];
-        let cells: Vec<String> = row.iter().map(|c| md_cell(c)).collect();
+        let fields: std::collections::HashMap<String, String> =
+            resource_fields(*r).into_iter().collect();
+        let cells: Vec<String> = columns.iter().map(|c| md_cell(&list_cell(*r, &fields, c))).collect();
         md.push_str(&format!("| {} |\n", cells.join(" | ")));
     }
     md
@@ -797,7 +807,10 @@ pub fn export_list(
 
 /// The list export's CSV: core columns + union of detail keys (first-seen
 /// order) + Tags.
-pub(crate) fn list_csv(resources: &[&dyn Resource]) -> String {
+/// The list exports' columns: identity, then every list-level field any row
+/// carries (first-seen order), then Tags — shared by the CSV and Markdown
+/// so the two never disagree on what a row holds.
+fn list_columns(resources: &[&dyn Resource]) -> Vec<String> {
     let mut columns: Vec<String> = vec![
         "Type".into(),
         "ID".into(),
@@ -813,7 +826,23 @@ pub(crate) fn list_csv(resources: &[&dyn Resource]) -> String {
         }
     }
     columns.push("Tags".into());
+    columns
+}
 
+/// One list row's cell for `col` (see `list_columns`).
+fn list_cell(r: &dyn Resource, fields: &std::collections::HashMap<String, String>, col: &str) -> String {
+    match col {
+        "Type" => r.resource_type().to_string(),
+        "ID" => r.id().to_string(),
+        "Name" => r.name().to_string(),
+        "State" => r.state_label(),
+        "Tags" => flatten_tags(r),
+        other => fields.get(other).cloned().unwrap_or_default(),
+    }
+}
+
+pub(crate) fn list_csv(resources: &[&dyn Resource]) -> String {
+    let columns = list_columns(resources);
     let mut out = String::new();
     out.push_str(&columns.iter().map(|c| csv_escape(c)).collect::<Vec<_>>().join(","));
     out.push('\n');
@@ -822,15 +851,7 @@ pub(crate) fn list_csv(resources: &[&dyn Resource]) -> String {
             resource_fields(*r).into_iter().collect();
         let mut row: Vec<String> = Vec::with_capacity(columns.len());
         for col in &columns {
-            let cell = match col.as_str() {
-                "Type" => r.resource_type().to_string(),
-                "ID" => r.id().to_string(),
-                "Name" => r.name().to_string(),
-                "State" => r.state_label(),
-                "Tags" => flatten_tags(*r),
-                other => fields.get(other).cloned().unwrap_or_default(),
-            };
-            row.push(csv_escape(&cell));
+            row.push(csv_escape(&list_cell(*r, &fields, col)));
         }
         out.push_str(&row.join(","));
         out.push('\n');
@@ -838,8 +859,9 @@ pub(crate) fn list_csv(resources: &[&dyn Resource]) -> String {
     out
 }
 
-/// Export one resource to `<slug>-<ts>.json` (object) + `.csv` (Key,Value) +
-/// `.md` (a document mirroring the detail pane) — the formats `opts`
+/// Export one resource to `<slug>-<ts>.json` (the `detail_json` object) +
+/// `.csv` (long `ID,Section,Key,Value`) + `.md` (a document mirroring the
+/// detail pane) — all three from the same captured sections, — the formats `opts`
 /// enables. `sections` is the per-section `(name, lines)` captured from
 /// `get_detail_lines`; for a flat resource it's a single "Details" section.
 pub fn export_detail(
@@ -853,32 +875,13 @@ pub fn export_detail(
     write_formats(
         &base,
         opts.formats,
-        || Ok(serde_json::to_string_pretty(&resource_object(resource))?),
-        || detail_csv(resource),
+        // JSON: the `neboto get` / `e` object — identity, every section, tags.
+        || Ok(detail_json(resource, sections)),
+        // CSV: long format, as the deep export writes it.
+        || multi_detail_csv(&[(resource, sections.to_vec())]),
         // Markdown: the detail pane mirrored as a document.
         || detail_markdown(resource, sections),
     )
-}
-
-/// The single-resource export's CSV: `Key,Value` rows.
-fn detail_csv(resource: &dyn Resource) -> String {
-    let mut out = String::from("Key,Value\n");
-    let core = [
-        ("Type", resource.resource_type().to_string()),
-        ("ID", resource.id().to_string()),
-        ("Name", resource.name().to_string()),
-        ("State", resource.state_label()),
-    ];
-    for (k, v) in core {
-        out.push_str(&format!("{},{}\n", csv_escape(k), csv_escape(&v)));
-    }
-    for (k, v) in resource_fields(resource) {
-        out.push_str(&format!("{},{}\n", csv_escape(&k), csv_escape(&v)));
-    }
-    for (k, v) in tags_sorted(resource) {
-        out.push_str(&format!("{},{}\n", csv_escape(&format!("tag:{}", k)), csv_escape(&v)));
-    }
-    out
 }
 
 /// Captured detail-pane sections for one resource: `(section name, rows)` as
@@ -1195,6 +1198,45 @@ mod tests {
         assert!(!is_unloaded(&[("Cost".into(), "$10.00".into())]));
         // Genuinely empty section is not flagged as unloaded.
         assert!(!is_unloaded(&[("".into(), "".into())]));
+    }
+
+    #[test]
+    fn a_single_loading_row_keeps_the_export_waiting() {
+        let partial = vec![(
+            "Overview".to_string(),
+            vec![
+                ("  Created".to_string(), "2024-04-25".to_string()),
+                ("  Last Activity".to_string(), "Loading…".to_string()),
+            ],
+        )];
+        assert!(any_section_unloaded(&partial));
+        assert_eq!(unloaded_sections(&partial), ["Overview"]);
+        // Prose that merely starts with the word isn't a placeholder.
+        let loaded = vec![("Overview".to_string(), vec![
+            ("Name".to_string(), "warehouse".to_string()),
+            ("Note".to_string(), "Loading dock B".to_string()),
+        ])];
+        assert!(!any_section_unloaded(&loaded));
+    }
+
+    #[test]
+    fn single_export_json_and_csv_carry_the_sections() {
+        let r = MockResource { tags: Default::default() };
+        let sections = vec![(
+            "Trust Policy".to_string(),
+            vec![("  {\"Version\": \"2012-10-17\"}".to_string(), String::new())],
+        )];
+        let dir = tempfile::tempdir().unwrap();
+        let opts = ExportOptions { formats: ExportFormats::default(), dir: Some(dir.path().to_path_buf()) };
+        let paths = export_detail(&r, &sections, "SingleSections", &opts).unwrap();
+        let read = |ext: &str| {
+            std::fs::read_to_string(paths.iter().find(|p| p.extension().unwrap() == ext).unwrap()).unwrap()
+        };
+        let v: Value = serde_json::from_str(&read("json")).unwrap();
+        assert_eq!(v["sections"]["Trust Policy"]["content"], json!(["{\"Version\": \"2012-10-17\"}"]));
+        assert!(read("csv").starts_with("ID,Section,Key,Value\n"));
+        assert!(read("csv").contains("Trust Policy"));
+        assert!(read("md").contains("## Trust Policy"));
     }
 
     #[test]

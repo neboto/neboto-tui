@@ -78,9 +78,11 @@ async fn json_output_is_a_versioned_document() {
     }
 
     let md = render_list(ServiceType::EC2, "us-east-1", &rows, OutputFormat::Md);
-    assert!(md.contains("| Type | ID | Name | State | Tags |"));
     let csv = render_list(ServiceType::EC2, "us-east-1", &rows, OutputFormat::Csv);
     assert!(csv.starts_with("Type,ID,Name,State,"));
+    // The Markdown table carries the same columns as the CSV, not a subset.
+    let csv_header = csv.lines().next().unwrap().replace(',', " | ");
+    assert!(md.contains(&format!("| {csv_header} |")), "{md}");
     let table = render_list(ServiceType::EC2, "us-east-1", &rows, OutputFormat::Table);
     assert!(table.lines().next().unwrap().starts_with("TYPE"));
     assert_eq!(table.lines().count(), rows.len() + 1);
