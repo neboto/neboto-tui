@@ -83,10 +83,14 @@ terminal.
 - `get`, several ids: `{"schema", "service", "region", "count", "resources": [ <the one-id shape without schema/service/region> ]}`
 
 Section values mirror the UI: human-readable labels and formatted values
-(`"Memory": "512 MB"`), not raw API fields. Sub-groups nest as objects,
-repeated keys get ` (2)`, ` (3)` suffixes, and verbatim text (templates,
-policies, rule tables) is a `"content"` array of lines. A section that is
-`null` didn't load.
+(`"Memory": "512 MB"`), not raw API fields. Sub-groups nest as objects
+keyed without the count the pane shows (`"Inbound"`, not `"Inbound (2
+rules)"`); a row heading indented rows becomes an object with the row's
+value as `"summary"` (`"Roles": {"summary": "(2)", "content": [...]}`); a
+key that repeats — a stack's events per logical id, task ids per status —
+is an **array** of its values, so one occurrence is a plain value and
+several are a list; and verbatim text (templates, policies, rule tables)
+is a `"content"` array of lines. A section that is `null` didn't load.
 
 **What's stable.** The envelopes above, the `type`/`id`/`name`/`state`/`tags`
 keys, section names, type names, service prefixes, flags and exit codes only

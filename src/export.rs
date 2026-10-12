@@ -339,7 +339,8 @@ fn lines_to_markdown(lines: &[(String, String)]) -> String {
 }
 
 /// Insert into `map` under `key`, suffixing `" (2)"`, `" (3)"`, … on a
-/// collision so repeated detail keys (e.g. several `Rule` rows) all survive.
+/// collision. Only for section names (a contract key, so never an array);
+/// rows inside a section use `insert_repeated`.
 fn insert_unique(map: &mut Map<String, Value>, key: &str, value: Value) {
     if !map.contains_key(key) {
         map.insert(key.to_string(), value);
@@ -354,23 +355,53 @@ fn insert_unique(map: &mut Map<String, Value>, key: &str, value: Value) {
     }
 }
 
+/// Insert into `map` under `key`; a repeated key collects its values into
+/// an array in row order, so a section that is really a list of records
+/// (stack events per logical id, task ids per status) reads as one.
+fn insert_repeated(map: &mut Map<String, Value>, key: &str, value: Value) {
+    match map.get_mut(key) {
+        None => {
+            map.insert(key.to_string(), value);
+        }
+        Some(Value::Array(arr)) => arr.push(value),
+        Some(prev) => {
+            let first = prev.take();
+            *prev = Value::Array(vec![first, value]);
+        }
+    }
+}
+
+/// A group header's name without the count the pane shows beside it —
+/// `Inbound (2 rules)`, `Streams (3, newest first)`, `Members (1)` — so the
+/// JSON key doesn't change whenever the count does. Only a parenthetical
+/// that starts with a number goes: `Size (GiB)` keeps its unit.
+fn strip_count(name: &str) -> &str {
+    let Some(body) = name.strip_suffix(')') else { return name };
+    let Some(open) = body.rfind(" (") else { return name };
+    let inner = &body[open + 2..];
+    let digits = inner.len() - inner.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    let rest = &inner[digits..];
+    if digits > 0 && (rest.is_empty() || rest.starts_with(' ') || rest.starts_with(',')) {
+        name[..open].trim_end()
+    } else {
+        name
+    }
+}
+
 /// One detail-pane section's rows as a JSON value, honouring the
 /// `style_detail_row` conventions:
-/// - group header (`("X", "")`)    → a nested object under that name
-/// - key/value row                 → a string field (duplicates suffixed)
+/// - group header (`("X", "")`)    → a nested object under that name, its
+///   count suffix dropped (`strip_count`)
+/// - key/value row                 → a string field
+/// - key/value row followed by indented rows (`("Roles", "(2)")` then
+///   `("  orders-api", "")`) → an object: the row's value as `"summary"`,
+///   the indented rows inside it
+/// - a repeated key (in any of the above) → an array of its values
 /// - empty-key note (`("", "No tags")`) → a `"note"` field
 /// - plain content line (`(" …", "")`) → collected into a `"content"` array
 ///   (verbatim, so fixed-width tables keep their alignment)
-/// - blank spacer                  → dropped
+/// - blank spacer                  → dropped (and ends an indented block)
 fn lines_to_json(lines: &[(String, String)]) -> Value {
-    let mut root = Map::new();
-    let mut group: Option<(String, Map<String, Value>)> = None;
-
-    fn flush(group: &mut Option<(String, Map<String, Value>)>, root: &mut Map<String, Value>) {
-        if let Some((name, map)) = group.take() {
-            insert_unique(root, &name, Value::Object(map));
-        }
-    }
     fn push_content(map: &mut Map<String, Value>, line: &str) {
         // Render the SG-rule tab marker as the same inline note the UI shows.
         let line = line.replace('\t', "  — ");
@@ -381,29 +412,67 @@ fn lines_to_json(lines: &[(String, String)]) -> Value {
             }
         }
     }
-
-    for (k, v) in &export_rows(lines) {
-        let blank = k.trim().is_empty() && v.is_empty();
-        let plain = v.is_empty() && k.starts_with(' ');
-        let header = v.is_empty() && !k.is_empty() && !k.starts_with(' ');
-        if blank {
-            continue;
-        }
-        if header {
-            flush(&mut group, &mut root);
-            group = Some((k.trim().to_string(), Map::new()));
-        } else if plain {
-            let target = group.as_mut().map(|(_, m)| m).unwrap_or(&mut root);
-            push_content(target, k.trim_end());
+    fn push_row(map: &mut Map<String, Value>, k: &str, v: &str) {
+        if v.is_empty() {
+            push_content(map, k.trim_end());
         } else {
-            let target = group.as_mut().map(|(_, m)| m).unwrap_or(&mut root);
             // An empty-key note ("No tags", "No policies attached") would
             // otherwise land under the key "".
             let key = if k.trim().is_empty() { "note" } else { k.trim() };
-            insert_unique(target, key, json!(strip_status_glyph(v)));
+            insert_repeated(map, key, json!(strip_status_glyph(v)));
         }
     }
-    flush(&mut group, &mut root);
+    let indented = |k: &str| k.starts_with(' ') && !k.trim().is_empty();
+
+    let rows = export_rows(lines);
+    let mut root = Map::new();
+    let mut group: Option<(String, Map<String, Value>)> = None;
+    // A key/value row heading the indented rows under it.
+    let mut parent: Option<(String, Map<String, Value>)> = None;
+
+    fn flush_parent(
+        parent: &mut Option<(String, Map<String, Value>)>,
+        group: &mut Option<(String, Map<String, Value>)>,
+        root: &mut Map<String, Value>,
+    ) {
+        if let Some((key, map)) = parent.take() {
+            let target = group.as_mut().map(|(_, m)| m).unwrap_or(root);
+            insert_repeated(target, &key, Value::Object(map));
+        }
+    }
+
+    for (i, (k, v)) in rows.iter().enumerate() {
+        let blank = k.trim().is_empty() && v.is_empty();
+        let header = v.is_empty() && !k.is_empty() && !k.starts_with(' ');
+        if parent.is_some() && !indented(k) {
+            flush_parent(&mut parent, &mut group, &mut root);
+        }
+        if blank {
+            continue;
+        }
+        if let Some((_, map)) = parent.as_mut() {
+            push_row(map, k, v);
+        } else if header {
+            if let Some((name, map)) = group.take() {
+                insert_repeated(&mut root, &name, Value::Object(map));
+            }
+            group = Some((strip_count(k.trim()).to_string(), Map::new()));
+        } else if !k.trim().is_empty()
+            && !indented(k)
+            && rows.get(i + 1).is_some_and(|(nk, _)| indented(nk))
+        {
+            let mut map = Map::new();
+            map.insert("summary".into(), json!(strip_status_glyph(v)));
+            parent = Some((k.trim().to_string(), map));
+        } else {
+            let target = group.as_mut().map(|(_, m)| m).unwrap_or(&mut root);
+            push_row(target, k, v);
+        }
+    }
+    flush_parent(&mut parent, &mut group, &mut root);
+    if let Some((name, map)) = group.take() {
+        insert_repeated(&mut root, &name, Value::Object(map));
+    }
     let mut root = Value::Object(root);
     dedent_content(&mut root);
     root
@@ -427,6 +496,8 @@ fn dedent_content(v: &mut Value) {
                     *arr = lines.into_iter().map(Value::String).collect();
                 }
                 Value::Object(_) => dedent_content(child),
+                // A repeated group's objects (see `insert_repeated`).
+                Value::Array(arr) => arr.iter_mut().for_each(dedent_content),
                 _ => {}
             }
         }
@@ -1080,8 +1151,7 @@ mod tests {
         let v = lines_to_json(&lines);
         assert_eq!(v["State"], "running");
         assert_eq!(v["Identity"]["Instance ID"], "i-123");
-        assert_eq!(v["Identity"]["Rule"], "allow 80");
-        assert_eq!(v["Identity"]["Rule (2)"], "allow 443");
+        assert_eq!(v["Identity"]["Rule"], json!(["allow 80", "allow 443"]));
         let content = v["Ports"]["content"].as_array().unwrap();
         assert!(content[0].as_str().unwrap().contains("TCP    443"));
         assert!(content[1].as_str().unwrap().contains("desc  — my home ip"));
@@ -1313,5 +1383,61 @@ mod tests {
         assert_eq!(v["Status"], "UPDATE_COMPLETE");
         assert_eq!(v["Encrypted"], "✓");
         assert_eq!(v["Template"]["content"], json!(["Resources:", "  Bucket: {}"]));
+    }
+
+    #[test]
+    fn repeated_keys_and_groups_become_arrays() {
+        let v = lines_to_json(&[
+            ("RUNNING".into(), "task-a".into()),
+            ("RUNNING".into(), "task-b".into()),
+            ("RUNNING".into(), "task-c".into()),
+            ("OrdersQueue".into(), "".into()),
+            ("Status".into(), "UPDATE_COMPLETE".into()),
+            ("OrdersQueue".into(), "".into()),
+            ("Status".into(), "UPDATE_IN_PROGRESS".into()),
+        ]);
+        assert_eq!(v["RUNNING"], json!(["task-a", "task-b", "task-c"]));
+        assert_eq!(
+            v["OrdersQueue"],
+            json!([{"Status": "UPDATE_COMPLETE"}, {"Status": "UPDATE_IN_PROGRESS"}])
+        );
+    }
+
+    #[test]
+    fn group_names_drop_their_count() {
+        assert_eq!(strip_count("Inbound (2 rules)"), "Inbound");
+        assert_eq!(strip_count("Streams (3, newest first)"), "Streams");
+        assert_eq!(strip_count("Running / Active (5)"), "Running / Active");
+        assert_eq!(strip_count("Size (GiB)"), "Size (GiB)");
+        assert_eq!(strip_count("Retention (7d)"), "Retention (7d)");
+        assert_eq!(strip_count("(3)"), "(3)");
+        let v = lines_to_json(&[("Members (1)".into(), "".into()), ("  jsmith".into(), "".into())]);
+        assert_eq!(v["Members"]["content"], json!(["jsmith"]));
+    }
+
+    #[test]
+    fn a_row_heading_indented_rows_nests_them() {
+        let v = lines_to_json(&[
+            ("Roles".into(), "(2)".into()),
+            ("  orders-api".into(), "".into()),
+            ("  reports".into(), "".into()),
+            ("".into(), "".into()),
+            ("Users".into(), "None".into()),
+            ("Rules".into(), "".into()),
+            ("Priority 1".into(), "expire untagged after 7 days".into()),
+            ("  Matches".into(), "2 loaded images".into()),
+            ("  Due in 7 Days".into(), "2".into()),
+            ("Priority 2".into(), "keep the last 10 images".into()),
+            ("  Matches".into(), "5 loaded images".into()),
+            ("Policy".into(), "set".into()),
+        ]);
+        assert_eq!(v["Roles"], json!({"summary": "(2)", "content": ["orders-api", "reports"]}));
+        assert_eq!(v["Users"], "None", "no indented rows → stays a plain field");
+        assert_eq!(
+            v["Rules"]["Priority 1"],
+            json!({"summary": "expire untagged after 7 days", "Matches": "2 loaded images", "Due in 7 Days": "2"})
+        );
+        assert_eq!(v["Rules"]["Priority 2"]["Matches"], "5 loaded images");
+        assert_eq!(v["Rules"]["Policy"], "set", "a non-indented row ends the block");
     }
 }

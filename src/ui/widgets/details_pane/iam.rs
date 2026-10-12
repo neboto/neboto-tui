@@ -652,27 +652,27 @@ pub(super) fn iam_policy_attachment_rows(
     managed: &[(String, String)],
     inline: &[String],
 ) -> Vec<(String, String)> {
-    // Group headers without a count in the label, so an export's keys don't
-    // change with the number of policies (`"Managed Policies": {…}`); a
-    // principal with none gets a plain `Managed Policies: None` row instead.
+    // Both groups are always headers without a count in the label, so an
+    // export's keys don't change with the number of policies
+    // (`"Managed Policies": {…}`). An empty one says `(none)` under its
+    // header: a `Inline Policies: None` row after the managed group would
+    // export *inside* it, the exporter having no way to tell it isn't one
+    // of the group's rows.
     // Inline rows say `inline` — `iam_permissions_row_target` keys on it.
-    let mut rows = vec![];
+    let mut rows = vec![("Managed Policies".to_string(), "".to_string())];
     if managed.is_empty() {
-        rows.push(("Managed Policies".to_string(), "None".to_string()));
-    } else {
-        rows.push(("Managed Policies".to_string(), "".to_string()));
-        for (name, arn) in managed {
-            rows.push((format!("  {}", name), arn.clone()));
-        }
+        rows.push(("  (none)".to_string(), "".to_string()));
+    }
+    for (name, arn) in managed {
+        rows.push((format!("  {}", name), arn.clone()));
     }
     rows.push(("".to_string(), "".to_string()));
+    rows.push(("Inline Policies".to_string(), "".to_string()));
     if inline.is_empty() {
-        rows.push(("Inline Policies".to_string(), "None".to_string()));
-    } else {
-        rows.push(("Inline Policies".to_string(), "".to_string()));
-        for name in inline {
-            rows.push((format!("  {}", name), "inline".to_string()));
-        }
+        rows.push(("  (none)".to_string(), "".to_string()));
+    }
+    for name in inline {
+        rows.push((format!("  {}", name), "inline".to_string()));
     }
     rows
 }
@@ -1344,7 +1344,8 @@ mod iam_permissions_tests {
         assert!(rows.contains(&("Inline Policies".into(), "".into())));
 
         let none = iam_policy_attachment_rows(&[], &[]);
-        assert!(none.contains(&("Managed Policies".into(), "None".into())));
+        assert!(none.contains(&("Managed Policies".into(), "".into())));
+        assert!(none.contains(&("  (none)".into(), "".into())));
         assert!(none.iter().all(|(k, v)| iam_permissions_row_target(k, v).is_none()));
         // A group's Members rows (`("  alice", "")`) aren't inline policies.
         assert!(iam_permissions_row_target("  alice", "").is_none());

@@ -560,7 +560,7 @@ pub fn cw_log_group_section_lines(
                     rows.push(("  (no streams)".to_string(), "".to_string()));
                 } else {
                     rows.push((
-                        "  ⏎/t tails · f searches the selected stream".to_string(),
+                        "  press t (or ⏎) to tail · f to search the selected stream".to_string(),
                         "".to_string(),
                     ));
                     rows.push(("".to_string(), "".to_string()));

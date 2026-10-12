@@ -464,6 +464,47 @@ async fn get_iam_policies_carries_the_documents() {
     assert!(text.contains("123456789012"), "placeholders filled: {text}");
 }
 
+/// #71: the exporter's shape rules, against real panes — a repeated key is
+/// an array (not `"X (2)"`), a group's count stays out of its key, and a row
+/// heading indented rows nests them.
+#[tokio::test]
+async fn get_bodies_have_stable_keys() {
+    // Stack events repeat the logical id: one array per resource.
+    let v = demo_get_json(GetArgs { sections: vec!["events".into()], ..get_args("cfn", &["storefront-prod"]) }).await;
+    let events = &v["sections"]["Events"];
+    assert!(events["storefront-prod"].as_array().unwrap().len() > 1, "{events}");
+    assert!(events.as_object().unwrap().keys().all(|k| !k.ends_with(" (2)")), "{events}");
+
+    // Tasks: the group drops its count, each task id nests its detail.
+    let v = demo_get_json(GetArgs { sections: vec!["tasks".into()], resource_type: Some("ECS Service".into()), ..get_args("ecs", &["storefront-web"]) }).await;
+    let running = v["sections"]["Tasks"]["Running / Active"]["RUNNING"].as_array().unwrap();
+    assert!(running.len() > 1);
+    assert_eq!(running[0]["content"][0], "health: HEALTHY");
+
+    // A policy's attachments: count as the summary, names inside.
+    let v = demo_get_json(GetArgs { sections: vec!["attached to".into()], ..get_args("iam", &["storefront-web-s3"]) }).await;
+    assert_eq!(v["sections"]["Attached To"]["Roles"]["content"], serde_json::json!(["storefront-web-task"]));
+    assert_eq!(v["sections"]["Attached To"]["Users"], "None");
+
+    // An empty inline group is its own key, not a row of the managed one.
+    let v = demo_get_json(GetArgs { sections: vec!["permissions".into()], ..get_args("iam", &["storefront-web-task"]) }).await;
+    let perms = &v["sections"]["Permissions"];
+    assert!(perms["Managed Policies"].get("Inline Policies").is_none(), "{perms}");
+    assert_eq!(perms["Inline Policies"]["content"], serde_json::json!(["(none)"]));
+
+    // Lifecycle rules: each priority is an object with its evaluation.
+    let v = demo_get_json(GetArgs { sections: vec!["lifecycle".into()], ..get_args("ecr", &["orders-worker"]) }).await;
+    let rule = &v["sections"]["Lifecycle"]["Rules"]["Priority 1"];
+    assert_eq!(rule["summary"], "expire untagged images 7 days after push");
+    assert_eq!(rule["Matches"], "2 loaded images");
+
+    // Log streams: no count in the key, no key hint in the content.
+    let v = demo_get_json(GetArgs { sections: vec!["streams".into()], ..get_args("cw", &["/aws/lambda/orders-api"]) }).await;
+    let streams = &v["sections"]["Streams"]["Streams"];
+    assert!(streams.get("content").is_none(), "hint row dropped: {streams}");
+    assert!(streams.as_object().unwrap().len() >= 3, "{streams}");
+}
+
 #[tokio::test]
 async fn list_time_tags_reach_rows_without_a_pane() {
     // #29: CloudWatch has no tag call of its own; the Tagging API fills

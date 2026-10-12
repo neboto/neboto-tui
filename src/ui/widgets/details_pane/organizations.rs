@@ -21,7 +21,7 @@ pub(super) fn render_org_account_split(app: &App, account: &OrgAccount, area: Re
         focused,
         3,
         if on_scp_row {
-            "⏎ expand · e edit · s assume role"
+            "⏎ open policy · e edit · s assume role"
         } else {
             "s assume role"
         },
