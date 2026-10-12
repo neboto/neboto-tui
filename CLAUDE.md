@@ -1138,7 +1138,10 @@ and the approaches you rejected are the part nobody can recover from your code.
   (`S`/`R`/`P`/`c` pickers); `splash.rs` (welcome screen).
 - **`src/export.rs`**: `X` export (detail) / `Ctrl-X` (list) → JSON + CSV +
   Markdown (the formats config `export_formats` enables), via
-  `detail_sections_snapshot()`; also `detail_json()` — the sections-as-JSON
+  `detail_sections_snapshot()`. A single-resource `X` waits for every lazy
+  section like the selection deep export does (`pending_deep_export` with
+  `single`; `Esc` cancels) — never an export of only the sections you
+  opened. Also `detail_json()` — the sections-as-JSON
   serializer behind the default `e` editor view. Files land in the working
   directory, or config `export_dir`; `NEBOTO_EXPORT_DIR` overrides both (the
   test harness sets it to a temp dir). The detail Markdown synthesizes

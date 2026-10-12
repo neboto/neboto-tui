@@ -174,3 +174,59 @@ async fn ctrl_a_is_not_eaten_by_the_hide_noise_toggle() {
     press(&mut app, &tx, KeyCode::Char('a'), KeyModifiers::NONE).await;
     assert_eq!(app.hide_noise, !hide_noise);
 }
+
+#[tokio::test]
+async fn single_x_waits_for_lazy_sections_instead_of_exporting_nulls() {
+    // One resource's `X` used to snapshot at once, so every lazy section not
+    // yet opened exported as `null`. It now rides the deep-export wait.
+    let (mut app, tx, _rx) = test_app().await;
+    accounts(&mut app, 3);
+    app.selected_index = Some(1);
+
+    press(&mut app, &tx, KeyCode::Char('X'), KeyModifiers::SHIFT).await;
+    assert!(
+        app.pending_deep_export.as_ref().is_some_and(|p| p.single && p.ids == [account_id(1)]),
+        "X arms a one-resource export"
+    );
+    assert!(app.deep_export_progress.as_deref().is_some_and(|p| p.contains("waiting on details")));
+    assert!(app.success_message.is_none(), "nothing written while a section loads");
+    // A second press while waiting neither restarts nor stacks it.
+    press(&mut app, &tx, KeyCode::Char('X'), KeyModifiers::SHIFT).await;
+    assert!(app.success_message.is_none());
+
+    land_details(&mut app, 3);
+    app.deep_export_tick(&tx);
+    assert!(app.pending_deep_export.is_none() && app.deep_export_progress.is_none());
+    let msg = app.success_message.clone().unwrap_or_default();
+    assert!(msg.starts_with("Exported acct1 → "), "the single-resource toast, got {msg:?}");
+    assert!(!msg.contains("incomplete"), "{msg}");
+    assert_eq!(app.selected_index, Some(1), "the walk leaves the cursor where it was");
+}
+
+#[tokio::test]
+async fn single_x_with_everything_loaded_exports_at_once() {
+    let (mut app, tx, _rx) = test_app().await;
+    accounts(&mut app, 2);
+    land_details(&mut app, 2);
+
+    press(&mut app, &tx, KeyCode::Char('X'), KeyModifiers::SHIFT).await;
+    assert!(app.pending_deep_export.is_none(), "no wait when nothing is loading");
+    assert!(app.success_message.as_deref().is_some_and(|m| m.starts_with("Exported acct0 → ")));
+}
+
+#[tokio::test]
+async fn esc_in_the_detail_pane_cancels_a_waiting_single_export() {
+    let (mut app, tx, _rx) = test_app().await;
+    accounts(&mut app, 2);
+    app.focus_details_panel(&tx);
+
+    press(&mut app, &tx, KeyCode::Char('X'), KeyModifiers::SHIFT).await;
+    assert!(app.pending_deep_export.is_some());
+    press(&mut app, &tx, KeyCode::Esc, KeyModifiers::NONE).await;
+    assert!(app.pending_deep_export.is_none() && app.deep_export_progress.is_none());
+    assert!(app.details_focused, "the first Esc cancels; it doesn't also leave the pane");
+
+    land_details(&mut app, 2);
+    app.deep_export_tick(&tx);
+    assert!(app.success_message.is_none(), "a cancelled export must not fire later");
+}

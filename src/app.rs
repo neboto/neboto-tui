@@ -1252,6 +1252,9 @@ pub struct PendingDeepExport {
     pub ids: Vec<String>,
     /// When `X` was pressed — the wait-limit clock.
     pub started: Instant,
+    /// One resource's `X` (no list selection): writes the single-resource
+    /// files and toast rather than the combined `-deep-` trio.
+    pub single: bool,
 }
 
 /// Watch-mode (auto-refresh) state. The "is a refresh due" decision lives here,
@@ -5925,6 +5928,10 @@ impl App {
                 // pane); a further Esc (nothing pending) falls through to nav-back.
                 KeyCode::Esc if self.detail_visual_anchor.is_some() => {
                     self.clear_detail_visual();
+                }
+                // …then an export still waiting on lazy sections.
+                KeyCode::Esc if self.pending_deep_export.is_some() => {
+                    self.cancel_pending_deep_export();
                 }
                 // Spatial nav: Esc / h / ← move left, back to the list pane.
                 KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => {
@@ -31400,63 +31407,52 @@ impl App {
     }
 
     /// `X` — export the **selected resource's detail** (works from the list pane
-    /// too, not just the detail pane). For S3 the Tier-2 sections are lazy, so we
-    /// ensure they're loaded first and ask the user to press `X` again once the
-    /// fetch lands — otherwise the export would capture empty "not loaded"
-    /// sections. The whole-list export lives in `export_list_all` (`Ctrl-X`).
+    /// too, not just the detail pane). Every section is exported loaded: this
+    /// arms the same wait the deep export uses (`run_pending_deep_export`),
+    /// which fires each lazy section's trigger and writes once none reads
+    /// `Loading…` — immediately when they're all warm. An export of only the
+    /// sections you happened to open is never what's wanted; the costly
+    /// key-gated fetches (Route 53 test answer, agent card, secret values)
+    /// have no on-enter hook, so they stay unfired. The whole-list export
+    /// lives in `export_list_all` (`Ctrl-X`).
     fn export_current(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        let meta = self
-            .get_selected_resource()
-            .map(|r| (r.resource_type().to_string(), r.name().to_string()));
-        let Some((label, name)) = meta else {
+        if self.pending_deep_export.is_some() {
+            // Already waiting — a second press neither restarts nor stacks it.
+            return;
+        }
+        let Some(id) = self.get_selected_resource().map(|r| r.id().to_string()) else {
             self.error_message = Some("Nothing to export".to_string());
             return;
         };
+        self.pending_deep_export = Some(PendingDeepExport {
+            ids: vec![id],
+            started: Instant::now(),
+            single: true,
+        });
+        self.error_message = None;
+        self.run_pending_deep_export(event_tx);
+    }
 
-        // S3 Tier-2 detail (Security/Operations/Website/Advanced/Metadata) is
-        // lazy-loaded per bucket. If it isn't loaded yet, kick off the fetch and
-        // tell the user to press X again, so the export carries the full posture
-        // rather than empty placeholders.
-        if self.is_selected_s3_bucket() {
-            let loaded = self
-                .get_selected_resource()
-                .and_then(|r| {
-                    r.as_any()
-                        .downcast_ref::<crate::aws::services::s3::S3Bucket>()
-                        .map(|b| b.name.clone())
-                })
-                .map(|n| {
-                    matches!(
-                        self.lazy.s3_bucket_details.get(&n),
-                        Some(crate::lazy::Lazy::Loaded(_))
-                    )
-                })
-                .unwrap_or(false);
-            if !loaded {
-                self.trigger_s3_details_load(event_tx);
-                self.trigger_s3_storage_metrics_load(event_tx);
-                self.error_message = None;
-                self.success_message =
-                    Some(format!("Loading {} details — press X again to export", name));
-                self.success_message_time = Some(Instant::now());
-                return;
-            }
-        }
-
-        // Snapshot all sections first (this mutates+restores the section
-        // field), then export — the resource borrow can't overlap the walk.
-        let sections = self.detail_sections_snapshot();
+    /// Write one resource's export trio and report it (the single-`X` tail of
+    /// `run_pending_deep_export`).
+    fn write_single_export(&mut self, pos: usize, sections: &crate::export::DetailSections) {
         let result = self
-            .get_selected_resource()
-            .map(|r| crate::export::export_detail(r, &sections, &label, &self.export_options));
+            .filtered_resources
+            .get(pos)
+            .and_then(|&i| self.resources.get(i))
+            .map(|r| {
+                let name = r.name().to_string();
+                let label = r.resource_type().to_string();
+                (name, crate::export::export_detail(r.as_ref(), sections, &label, &self.export_options))
+            });
         match result {
-            Some(Ok(paths)) => {
+            Some((name, Ok(paths))) => {
                 self.error_message = None;
                 self.success_message =
                     Some(format!("Exported {} → {}", name, format_export_paths(&paths)));
                 self.success_message_time = Some(Instant::now());
             }
-            Some(Err(e)) => {
+            Some((_, Err(e))) => {
                 self.error_message = Some(format!("Export failed: {}", e));
             }
             None => {
@@ -31578,6 +31574,7 @@ impl App {
         self.pending_deep_export = Some(PendingDeepExport {
             ids,
             started: Instant::now(),
+            single: false,
         });
         self.error_message = None;
         self.run_pending_deep_export(event_tx);
@@ -31612,6 +31609,7 @@ impl App {
             return;
         };
         let started = pending.started;
+        let single = pending.single;
         let ids = pending.ids.clone();
         let total = ids.len();
 
@@ -31636,8 +31634,11 @@ impl App {
             }
             self.pending_deep_export = None;
             self.deep_export_progress = None;
-            self.error_message =
-                Some("Deep export cancelled — the selected rows are no longer listed".to_string());
+            self.error_message = Some(if single {
+                "Export cancelled — the resource is no longer listed".to_string()
+            } else {
+                "Deep export cancelled — the selected rows are no longer listed".to_string()
+            });
             return;
         }
 
@@ -31652,7 +31653,7 @@ impl App {
         for pos in positions {
             self.selected_index = Some(pos);
             // The list-nav triggers (S3 Tier-2 et al.) live outside the
-            // descriptor hooks — fire them too, like single-`X` does.
+            // descriptor hooks — fire them too.
             self.list_selection_side_effects(event_tx);
             self.reset_detail_section_to_default(event_tx);
             let sections = self.selected_descriptor().map(|d| d.len()).unwrap_or(0);
@@ -31674,11 +31675,30 @@ impl App {
         if waiting > 0 && !timed_out {
             // Its own status-bar slot, not a toast: this repaints several times
             // a second, and `success_message` would flood the `M` history.
-            self.deep_export_progress = Some(format!(
-                "Deep export: {}/{} ready — waiting on details (Esc to cancel)",
-                total - waiting,
-                total
-            ));
+            self.deep_export_progress = Some(if single {
+                "Export: waiting on details (Esc to cancel)".to_string()
+            } else {
+                format!(
+                    "Deep export: {}/{} ready — waiting on details (Esc to cancel)",
+                    total - waiting,
+                    total
+                )
+            });
+            return;
+        }
+
+        if single {
+            self.pending_deep_export = None;
+            self.deep_export_progress = None;
+            if let Some((pos, sections)) = snapshots.first() {
+                self.write_single_export(*pos, sections);
+            }
+            if waiting > 0 {
+                if let Some(msg) = self.success_message.take() {
+                    self.success_message =
+                        Some(format!("{} (still loading after 2m — some sections are incomplete)", msg));
+                }
+            }
             return;
         }
 

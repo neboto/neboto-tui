@@ -353,8 +353,8 @@ fn smash_sequence() -> Vec<KeyEvent> {
         key(KeyCode::Char('a')), // noise toggle
         key(KeyCode::Char('a')),
         // List-pane visual selection: toggle, extend, copy, select-all,
-        // deep-export (mock lazy sections leave it on the press-again toast
-        // for split panes; flat mocks export), cancel.
+        // deep-export (mock lazy sections leave it waiting for split panes;
+        // flat mocks export), cancel.
         key(KeyCode::Char('V')),
         key(KeyCode::Char('j')),
         key(KeyCode::Char('J')),
