@@ -606,3 +606,15 @@ async fn list_time_tags_land_after_the_last_batch_and_before_completion() {
     assert!(last_batch < tags, "{order:?}");
     assert_eq!(order.last(), Some(&"done"), "{order:?}");
 }
+
+/// #193 part 2: Secrets Manager version stages ride `ListSecrets` — ids and
+/// labels only, never a value.
+#[tokio::test]
+async fn get_secret_lists_its_version_stages() {
+    let v = demo_get_json(GetArgs { sections: vec!["rotation".into()], ..get_args("secrets", &["prod/orders/db"]) }).await;
+    let versions = &v["sections"]["Rotation"]["Versions"];
+    assert_eq!(versions["AWSCURRENT"], "a1b2c3d4-0000-4000-8000-00000000c0de", "{versions}");
+    assert_eq!(versions["AWSPREVIOUS"], "a1b2c3d4-0000-4000-8000-0000000000aa");
+    let keys: Vec<&String> = versions.as_object().unwrap().keys().collect();
+    assert_eq!(keys[0], "AWSCURRENT", "current first");
+}

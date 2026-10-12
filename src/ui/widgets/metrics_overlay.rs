@@ -2428,9 +2428,34 @@ pub fn render_ses_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
 }
 
 fn render_ses_charts(data: &SesMetricsData, area: Rect, frame: &mut Frame) {
+    use crate::aws::services::ses::{SES_BOUNCE_RATE_LIMITS, SES_COMPLAINT_RATE_LIMITS};
     let start_label = data.time_range.start_label();
     let x_max = data.x_max;
-    let cells = grid_3x2(area);
+    let cells = grid_4x2(area);
+    // The reputation rates against AWS's review line (the pause line is in
+    // the title — one reference line is all the chart draws).
+    let rate_title = |name: &str, latest: Option<f64>, (review, pause): (f64, f64)| {
+        let now = latest.map(|v| format!(" {v:.2}%")).unwrap_or_default();
+        format!("{name}{now} — review {review}% · pause {pause}%")
+    };
+    render_threshold_chart(
+        &rate_title("Bounce Rate", data.bounce_rate.last().map(|p| p.1), SES_BOUNCE_RATE_LIMITS),
+        &data.bounce_rate,
+        x_max,
+        Some(SES_BOUNCE_RATE_LIMITS.0),
+        start_label,
+        cells[6],
+        frame,
+    );
+    render_threshold_chart(
+        &rate_title("Complaint Rate", data.complaint_rate.last().map(|p| p.1), SES_COMPLAINT_RATE_LIMITS),
+        &data.complaint_rate,
+        x_max,
+        Some(SES_COMPLAINT_RATE_LIMITS.0),
+        start_label,
+        cells[7],
+        frame,
+    );
     render_value_chart("Send", &data.send, x_max, start_label, crate::ui::theme::accent(), cells[0], frame);
     render_value_chart("Delivery", &data.delivery, x_max, start_label, crate::ui::theme::success(), cells[1], frame);
     render_value_chart("Bounce", &data.bounce, x_max, start_label, crate::ui::theme::error(), cells[2], frame);

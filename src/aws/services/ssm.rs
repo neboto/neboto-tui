@@ -422,6 +422,54 @@ pub struct SsmParameter {
     pub last_modified: String,
     pub last_modified_user: Option<String>,
     pub tags: HashMap<String, String>,
+    /// Parameter policies (Advanced tier only): (type, status, raw JSON).
+    pub policies: Vec<(String, String, String)>,
+}
+
+/// One parameter policy in words. The JSON shapes are AWS's
+/// (`Attributes.Timestamp` for Expiration, `Before`/`After` + `Unit` for the
+/// two notifications); anything unrecognised falls back to the raw text
+/// rather than a guess. `now` is epoch seconds.
+pub fn ssm_policy_summary(policy_type: &str, text: &str, now: i64) -> String {
+    let v: serde_json::Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(_) => return text.to_string(),
+    };
+    let attrs = &v["Attributes"];
+    let s = |k: &str| attrs[k].as_str().map(|x| x.to_string());
+    let span = |n: Option<String>| match (n, s("Unit")) {
+        (Some(n), Some(u)) => Some(format!("{n} {}", u.to_lowercase())),
+        (Some(n), None) => Some(n),
+        _ => None,
+    };
+    match policy_type {
+        "Expiration" => match s("Timestamp") {
+            Some(ts) => match chrono::DateTime::parse_from_rfc3339(&ts) {
+                Ok(t) => {
+                    let days = (t.timestamp() - now).div_euclid(86_400);
+                    let when = t.format("%Y-%m-%d %H:%M UTC");
+                    if t.timestamp() <= now {
+                        format!("⚠ expired {when} — the parameter is deleted")
+                    } else if days < 7 {
+                        format!("⚠ expires {when} (in {days}d)")
+                    } else {
+                        format!("expires {when} (in {days}d)")
+                    }
+                }
+                Err(_) => format!("expires {ts}"),
+            },
+            None => text.to_string(),
+        },
+        "ExpirationNotification" => match span(s("Before")) {
+            Some(b) => format!("notify {b} before expiry"),
+            None => text.to_string(),
+        },
+        "NoChangeNotification" => match span(s("After")) {
+            Some(a) => format!("notify if unchanged for {a}"),
+            None => text.to_string(),
+        },
+        _ => text.to_string(),
+    }
 }
 
 impl SsmParameter {
@@ -439,6 +487,17 @@ impl SsmParameter {
             last_modified: fmt_dt(p.last_modified_date()),
             last_modified_user: p.last_modified_user().map(|u| u.to_string()),
             tags: HashMap::new(),
+            policies: p
+                .policies()
+                .iter()
+                .map(|pol| {
+                    (
+                        pol.policy_type().unwrap_or("").to_string(),
+                        pol.policy_status().unwrap_or("").to_string(),
+                        pol.policy_text().unwrap_or("").to_string(),
+                    )
+                })
+                .collect(),
         }
     }
 
@@ -3352,5 +3411,28 @@ mod tests {
         for s in ["INSTALLED", "INSTALLED_OTHER", "NOT_APPLICABLE"] {
             assert!(!is_actionable_patch(s), "{s} is noise");
         }
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::ssm_policy_summary;
+
+    #[test]
+    fn parameter_policies_read_in_words() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-01T00:00:00Z").unwrap().timestamp();
+        let exp = r#"{"Type":"Expiration","Version":"1.0","Attributes":{"Timestamp":"2026-10-31T00:00:00.000Z"}}"#;
+        assert_eq!(ssm_policy_summary("Expiration", exp, now), "expires 2026-10-31 00:00 UTC (in 30d)");
+        let soon = r#"{"Type":"Expiration","Attributes":{"Timestamp":"2026-10-03T00:00:00Z"}}"#;
+        assert!(ssm_policy_summary("Expiration", soon, now).starts_with("⚠ expires"));
+        let gone = r#"{"Type":"Expiration","Attributes":{"Timestamp":"2026-09-01T00:00:00Z"}}"#;
+        assert!(ssm_policy_summary("Expiration", gone, now).starts_with("⚠ expired"));
+        let before = r#"{"Type":"ExpirationNotification","Version":"1.0","Attributes":{"Before":"15","Unit":"Days"}}"#;
+        assert_eq!(ssm_policy_summary("ExpirationNotification", before, now), "notify 15 days before expiry");
+        let after = r#"{"Type":"NoChangeNotification","Version":"1.0","Attributes":{"After":"20","Unit":"Days"}}"#;
+        assert_eq!(ssm_policy_summary("NoChangeNotification", after, now), "notify if unchanged for 20 days");
+        // Unknown shapes fall back to the raw text, never a guess.
+        assert_eq!(ssm_policy_summary("Future", "{\"x\":1}", now), "{\"x\":1}");
+        assert_eq!(ssm_policy_summary("Expiration", "not json", now), "not json");
     }
 }

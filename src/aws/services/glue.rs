@@ -633,6 +633,8 @@ crate::sections! {
         Overview "Overview",
         Targets "Targets",
         Configuration "Configuration",
+        // Filled at list time by `ListTimeTags` (#179) — no fetch here.
+        Tags "Tags",
     ]
 }
 
@@ -770,6 +772,7 @@ crate::sections! {
         Overview "Overview",
         Command "Command",
         Arguments "Arguments",
+        Tags "Tags",
     ]
 }
 

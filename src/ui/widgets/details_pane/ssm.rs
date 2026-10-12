@@ -118,6 +118,21 @@ pub(super) fn ssm_param_details_lines(param: &SsmParameter) -> Vec<(String, Stri
     if let Some(pattern) = &param.allowed_pattern {
         rows.push(("Allowed Pattern".to_string(), pattern.clone()));
     }
+    if !param.policies.is_empty() {
+        let now = chrono::Utc::now().timestamp();
+        rows.push(("".to_string(), "".to_string()));
+        rows.push(("Policies".to_string(), "".to_string()));
+        for (kind, status, text) in &param.policies {
+            let summary = crate::aws::services::ssm::ssm_policy_summary(kind, text, now);
+            // A policy AWS hasn't applied yet (Pending / InProgress) says so.
+            let summary = if status.is_empty() || status == "Finished" {
+                summary
+            } else {
+                format!("{summary} · {status}")
+            };
+            rows.push((format!("  {kind}"), summary));
+        }
+    }
     if !param.arn.is_empty() {
         rows.push(("".to_string(), "".to_string()));
         rows.push(("ARN".to_string(), param.arn.clone()));

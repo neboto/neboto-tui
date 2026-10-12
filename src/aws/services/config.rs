@@ -130,6 +130,12 @@ pub struct SecretEntry {
     pub created: String,
     pub owning_service: Option<String>,
     pub tags: HashMap<String, String>,
+    /// Set on a replica: the region holding the primary.
+    pub primary_region: Option<String>,
+    /// (version id, staging labels), AWSCURRENT first. Versions with no
+    /// stage are deprecated and not listed by AWS. Ids and labels only —
+    /// never a value.
+    pub versions: Vec<(String, Vec<String>)>,
 }
 
 impl SecretEntry {
@@ -141,6 +147,18 @@ impl SecretEntry {
             .collect();
 
         let rules = s.rotation_rules();
+
+        let rank = |stages: &[String]| {
+            ["AWSCURRENT", "AWSPENDING", "AWSPREVIOUS"]
+                .iter()
+                .position(|l| stages.iter().any(|s| s == l))
+                .unwrap_or(3)
+        };
+        let mut versions: Vec<(String, Vec<String>)> = s
+            .secret_versions_to_stages()
+            .map(|m| m.iter().map(|(id, stages)| (id.clone(), stages.clone())).collect())
+            .unwrap_or_default();
+        versions.sort_by(|a, b| rank(&a.1).cmp(&rank(&b.1)).then(a.0.cmp(&b.0)));
 
         Self {
             name: s.name().unwrap_or("").to_string(),
@@ -158,6 +176,8 @@ impl SecretEntry {
             created: fmt_dt(s.created_date()),
             owning_service: s.owning_service().map(|o| o.to_string()),
             tags,
+            primary_region: s.primary_region().map(|r| r.to_string()),
+            versions,
         }
     }
 }

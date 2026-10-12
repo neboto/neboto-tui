@@ -3475,7 +3475,7 @@ impl App {
             Event::SesMetricsLoaded { data } => {
                 self.ses_metrics.insert(
                     crate::aws::services::ses::SES_METRICS_KEY.to_string(),
-                    crate::aws::services::ses::SesMetricsState::Loaded(data),
+                    crate::aws::services::ses::SesMetricsState::Loaded(Box::new(data)),
                 );
             }
             Event::NatMetricsLoaded { nat_id, data } => {

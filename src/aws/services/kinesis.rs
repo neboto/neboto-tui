@@ -446,6 +446,42 @@ pub struct FirehoseDestination {
     pub processors: Vec<FirehoseProcessor>,
     pub log_group: Option<String>, // CloudWatch error-logging group (enabled)
     pub log_stream: Option<String>,
+    /// The VPC an OpenSearch / OpenSearch Serverless / Elasticsearch
+    /// destination is reached through.
+    pub vpc: Option<FirehoseVpc>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FirehoseVpc {
+    pub vpc_id: String,
+    pub subnets: Vec<String>,
+    pub security_groups: Vec<String>,
+    pub role_arn: String,
+}
+
+fn firehose_vpc(v: Option<&aws_sdk_firehose::types::VpcConfigurationDescription>) -> Option<FirehoseVpc> {
+    v.map(|v| FirehoseVpc {
+        vpc_id: v.vpc_id().to_string(),
+        subnets: v.subnet_ids().to_vec(),
+        security_groups: v.security_group_ids().to_vec(),
+        role_arn: v.role_arn().to_string(),
+    })
+}
+
+/// A database (CDC) source — Firehose reading change data from MySQL /
+/// PostgreSQL through a VPC endpoint service.
+#[derive(Debug, Clone, Default)]
+pub struct FirehoseDbSource {
+    pub engine: Option<String>,
+    pub endpoint: Option<String>,
+    pub port: Option<i32>,
+    pub ssl_mode: Option<String>,
+    /// (label, include, exclude) for Databases / Tables / Columns.
+    pub filters: Vec<(&'static str, Vec<String>, Vec<String>)>,
+    pub vpc_endpoint_service: Option<String>,
+    pub watermark_table: Option<String>,
+    /// (table, status, failure) per snapshot, as listed.
+    pub snapshots: Vec<(String, String, Option<String>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -462,6 +498,7 @@ pub struct FirehoseStream {
     pub failure: Option<(String, String)>, // (type, details) when *_FAILED
     pub created: Option<String>,
     pub tags: HashMap<String, String>,
+    pub database_source: Option<FirehoseDbSource>,
 }
 
 impl FirehoseStream {
@@ -477,10 +514,57 @@ impl FirehoseStream {
                 }
             } else if s.direct_put_source_description().is_some() {
                 Some("Direct PUT".to_string())
+            } else if let Some(db) = s.database_source_description() {
+                let engine = db.r#type().map(|t| t.as_str()).unwrap_or("database");
+                Some(match db.endpoint() {
+                    Some(ep) => format!("{engine} {ep}"),
+                    None => engine.to_string(),
+                })
             } else {
                 None
             }
         });
+        let database_source = d
+            .source()
+            .and_then(|s| s.database_source_description())
+            .map(|db| {
+                let list = |inc: &[String], exc: &[String]| (inc.to_vec(), exc.to_vec());
+                let mut filters = Vec::new();
+                if let Some(l) = db.databases() {
+                    let (i, e) = list(l.include(), l.exclude());
+                    filters.push(("Databases", i, e));
+                }
+                if let Some(l) = db.tables() {
+                    let (i, e) = list(l.include(), l.exclude());
+                    filters.push(("Tables", i, e));
+                }
+                if let Some(l) = db.columns() {
+                    let (i, e) = list(l.include(), l.exclude());
+                    filters.push(("Columns", i, e));
+                }
+                FirehoseDbSource {
+                    engine: db.r#type().map(|t| t.as_str().to_string()),
+                    endpoint: db.endpoint().map(|e| e.to_string()),
+                    port: db.port(),
+                    ssl_mode: db.ssl_mode().map(|m| m.as_str().to_string()),
+                    filters,
+                    vpc_endpoint_service: db
+                        .database_source_vpc_configuration()
+                        .map(|v| v.vpc_endpoint_service_name().to_string()),
+                    watermark_table: db.snapshot_watermark_table().map(|t| t.to_string()),
+                    snapshots: db
+                        .snapshot_info()
+                        .iter()
+                        .map(|s| {
+                            (
+                                s.table().to_string(),
+                                s.status().as_str().to_string(),
+                                s.failure_description().map(|f| f.details().to_string()),
+                            )
+                        })
+                        .collect(),
+                }
+            });
 
         // Firehose has exactly one active destination; take the first.
         let dest = d
@@ -516,6 +600,7 @@ impl FirehoseStream {
                 crate::aws::services::cloudwatch::fmt_epoch_secs(t.secs())
             }),
             tags: HashMap::new(),
+            database_source,
         }
     }
 
@@ -696,6 +781,7 @@ fn parse_destination(d: &aws_sdk_firehose::types::DestinationDescription) -> Fir
         let (g, s) = logging_group(os.cloud_watch_logging_options());
         out.log_group = g;
         out.log_stream = s;
+        out.vpc = firehose_vpc(os.vpc_configuration_description());
     } else if let Some(http) = d.http_endpoint_destination_description() {
         out.kind = "HTTP Endpoint".to_string();
         if let Some(ep) = http.endpoint_configuration() {
@@ -741,13 +827,16 @@ fn parse_destination(d: &aws_sdk_firehose::types::DestinationDescription) -> Fir
         out.kind = "Snowflake".to_string();
     } else if d.iceberg_destination_description().is_some() {
         out.kind = "Apache Iceberg".to_string();
-    } else if d.elasticsearch_destination_description().is_some() {
+    } else if let Some(es) = d.elasticsearch_destination_description() {
         out.kind = "Elasticsearch".to_string();
-    } else if d
-        .amazon_open_search_serverless_destination_description()
-        .is_some()
-    {
+        out.arn = es.domain_arn().map(|a| a.to_string());
+        out.vpc = firehose_vpc(es.vpc_configuration_description());
+    } else if let Some(sl) = d.amazon_open_search_serverless_destination_description() {
         out.kind = "OpenSearch Serverless".to_string();
+        if let Some(ep) = sl.collection_endpoint() {
+            out.extra.push(("Collection Endpoint".to_string(), ep.to_string()));
+        }
+        out.vpc = firehose_vpc(sl.vpc_configuration_description());
     } else {
         out.kind = "Unknown".to_string();
     }
@@ -1044,4 +1133,77 @@ fn parse_points<E>(
         .collect();
     pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     pts
+}
+
+#[cfg(test)]
+mod firehose_tests {
+    use super::*;
+    use aws_sdk_firehose::types as t;
+
+    fn stream(source: Option<t::SourceDescription>, dest: t::DestinationDescription) -> FirehoseStream {
+        FirehoseStream::from_sdk(
+            &t::DeliveryStreamDescription::builder()
+                .delivery_stream_name("cdc")
+                .delivery_stream_arn("arn:aws:firehose:us-east-1:1:deliverystream/cdc")
+                .delivery_stream_status(t::DeliveryStreamStatus::Active)
+                .delivery_stream_type(t::DeliveryStreamType::DatabaseAsSource)
+                .version_id("1")
+                .set_source(source)
+                .destinations(dest)
+                .has_more_destinations(false)
+                .build()
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn database_source_and_destination_vpc_come_off_the_description() {
+        let db = t::DatabaseSourceDescription::builder()
+            .r#type(t::DatabaseType::MySql)
+            .endpoint("orders.cluster-x.us-east-1.rds.amazonaws.com")
+            .port(3306)
+            .databases(t::DatabaseList::builder().include("orders").build())
+            .tables(t::DatabaseTableList::builder().include("orders.*").exclude("orders.audit").build())
+            .database_source_vpc_configuration(
+                t::DatabaseSourceVpcConfiguration::builder()
+                    .vpc_endpoint_service_name("com.amazonaws.vpce.us-east-1.vpce-svc-1")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        let vpc = t::VpcConfigurationDescription::builder()
+            .vpc_id("vpc-1")
+            .subnet_ids("subnet-a")
+            .subnet_ids("subnet-b")
+            .security_group_ids("sg-1")
+            .role_arn("arn:aws:iam::1:role/fh")
+            .build()
+            .unwrap();
+        let dest = t::DestinationDescription::builder()
+            .destination_id("d-1")
+            .amazon_open_search_serverless_destination_description(
+                t::AmazonOpenSearchServerlessDestinationDescription::builder()
+                    .collection_endpoint("https://abc.aoss.amazonaws.com")
+                    .vpc_configuration_description(vpc)
+                    .build(),
+            )
+            .build()
+            .unwrap();
+        let st = stream(Some(t::SourceDescription::builder().database_source_description(db).build()), dest);
+
+        assert_eq!(st.source.as_deref(), Some("MySQL orders.cluster-x.us-east-1.rds.amazonaws.com"));
+        let db = st.database_source.expect("database source");
+        assert_eq!(db.port, Some(3306));
+        assert_eq!(db.vpc_endpoint_service.as_deref(), Some("com.amazonaws.vpce.us-east-1.vpce-svc-1"));
+        assert_eq!(
+            db.filters,
+            vec![
+                ("Databases", vec!["orders".to_string()], vec![]),
+                ("Tables", vec!["orders.*".to_string()], vec!["orders.audit".to_string()]),
+            ]
+        );
+        assert_eq!(st.dest.kind, "OpenSearch Serverless");
+        let v = st.dest.vpc.expect("destination VPC");
+        assert_eq!((v.vpc_id.as_str(), v.subnets.len(), v.security_groups.as_slice()), ("vpc-1", 2, &["sg-1".to_string()][..]));
+    }
 }

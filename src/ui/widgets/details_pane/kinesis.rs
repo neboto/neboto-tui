@@ -231,6 +231,47 @@ pub fn firehose_section_lines(
                 rows.push(("Source".to_string(), src.clone())); // jumpable (Kinesis/MSK ARN)
             }
 
+            if let Some(db) = &st.database_source {
+                rows.push((String::new(), String::new()));
+                rows.push(("Database Source".to_string(), String::new())); // group header
+                if let Some(e) = &db.engine {
+                    rows.push(("  Engine".to_string(), e.clone()));
+                }
+                if let Some(ep) = &db.endpoint {
+                    let port = db.port.map(|p| format!(":{p}")).unwrap_or_default();
+                    rows.push(("  Endpoint".to_string(), format!("{ep}{port}")));
+                }
+                if let Some(m) = &db.ssl_mode {
+                    rows.push(("  SSL".to_string(), m.clone()));
+                }
+                if let Some(svc) = &db.vpc_endpoint_service {
+                    rows.push(("  VPC Endpoint Service".to_string(), svc.clone()));
+                }
+                for (label, include, exclude) in &db.filters {
+                    let mut parts = Vec::new();
+                    if !include.is_empty() {
+                        parts.push(format!("include {}", include.join(", ")));
+                    }
+                    if !exclude.is_empty() {
+                        parts.push(format!("exclude {}", exclude.join(", ")));
+                    }
+                    if !parts.is_empty() {
+                        rows.push((format!("  {label}"), parts.join(" · ")));
+                    }
+                }
+                if let Some(t) = &db.watermark_table {
+                    rows.push(("  Watermark Table".to_string(), t.clone()));
+                }
+                for (table, status, failure) in &db.snapshots {
+                    let status = match (status.as_str(), failure) {
+                        (_, Some(f)) => format!("✗ {status} — {f}"),
+                        ("COMPLETE", None) => format!("✓ {status}"),
+                        _ => status.clone(),
+                    };
+                    rows.push((format!("  Snapshot {table}"), status));
+                }
+            }
+
             if let Some((kind, details)) = &st.failure {
                 rows.push((String::new(), String::new()));
                 rows.push(("Failure".to_string(), String::new())); // group header
@@ -280,6 +321,14 @@ pub fn firehose_section_lines(
             }
             for (k, v) in &d.extra {
                 rows.push((k.clone(), v.clone()));
+            }
+            if let Some(vpc) = &d.vpc {
+                rows.push((String::new(), String::new()));
+                rows.push(("VPC Delivery".to_string(), String::new())); // group header
+                rows.push(("  VPC".to_string(), vpc.vpc_id.clone()));
+                rows.push(("  Subnets".to_string(), vpc.subnets.join(", ")));
+                rows.push(("  Security Groups".to_string(), vpc.security_groups.join(", ")));
+                rows.push(("  Role".to_string(), vpc.role_arn.clone())); // jumpable
             }
 
             rows.push((String::new(), String::new()));

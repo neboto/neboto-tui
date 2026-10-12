@@ -225,6 +225,7 @@ pub fn glue_crawler_section_lines(
             }
             rows
         }
+        GlueCrawlerDetailSection::Tags => tag_rows(&c.tags),
     }
 }
 
@@ -328,6 +329,7 @@ pub fn glue_job_section_lines(
             }
             rows
         }
+        GlueJobDetailSection::Tags => tag_rows(&j.tags),
     }
 }
 

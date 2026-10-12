@@ -110,25 +110,30 @@ impl AwsService for CognitoService {
             _ => {}
         }
 
-        // Fetch users (sample of up to 50 across all pools)
+        // Users, up to MAX_COGNITO_USERS across all pools.
         if !pool_ids.is_empty() {
-            if let Ok(users) = self.fetch_users(&pool_ids).await {
-                if !users.is_empty() {
-                    let batch: Vec<Box<dyn Resource>> = users
-                        .into_iter()
-                        .map(|u| Box::new(u) as Box<dyn Resource>)
-                        .collect();
-                    total += batch.len();
-                    let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
-                        service: service_type,
-                        resources: batch,
-                        progress: LoadProgress {
-                            loaded_count: total,
-                            total_count: None,
-                            status_message: None,
-                        },
-                    });
-                }
+            let (users, failures) = self.fetch_users(&pool_ids).await;
+            for (pool, e) in failures {
+                let _ = event_tx.send(Event::ResourceLoadWarning {
+                    service: service_type,
+                    warning: format!("users in {}: {}", pool, e),
+                });
+            }
+            if !users.is_empty() {
+                let batch: Vec<Box<dyn Resource>> = users
+                    .into_iter()
+                    .map(|u| Box::new(u) as Box<dyn Resource>)
+                    .collect();
+                total += batch.len();
+                let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                    service: service_type,
+                    resources: batch,
+                    progress: LoadProgress {
+                        loaded_count: total,
+                        total_count: None,
+                        status_message: None,
+                    },
+                });
             }
         }
 
@@ -232,35 +237,45 @@ impl CognitoService {
         Ok(pools)
     }
 
-    /// Fetch users from ALL user pools (capped at 50 total). This is a sample only.
-    async fn fetch_users(&self, pool_ids: &[String]) -> Result<Vec<CognitoUser>> {
+    /// Users from every pool, paginated, up to `MAX_COGNITO_USERS` in total
+    /// (a consumer pool can hold millions; this is a browser, not an export
+    /// job). A pool whose `ListUsers` fails is reported, not skipped silently
+    /// — an empty Users tab would otherwise read as "no users".
+    async fn fetch_users(&self, pool_ids: &[String]) -> (Vec<CognitoUser>, Vec<(String, String)>) {
         let mut users: Vec<CognitoUser> = Vec::new();
-        let remaining = 50usize;
-        for pool_id in pool_ids {
-            if users.len() >= remaining {
-                break;
-            }
-            let limit = (remaining - users.len()).min(50) as i32;
-            match self
-                .idp
-                .list_users()
-                .user_pool_id(pool_id)
-                .limit(limit)
-                .send()
-                .await
-            {
-                Ok(page) => {
-                    for u in page.users() {
-                        users.push(CognitoUser::from_sdk(u, pool_id));
-                        if users.len() >= 50 {
+        let mut failures = Vec::new();
+        'pools: for pool_id in pool_ids {
+            let mut token: Option<String> = None;
+            loop {
+                let room = MAX_COGNITO_USERS - users.len();
+                if room == 0 {
+                    break 'pools;
+                }
+                let mut req = self
+                    .idp
+                    .list_users()
+                    .user_pool_id(pool_id)
+                    .limit(room.min(60) as i32);
+                if let Some(t) = &token {
+                    req = req.pagination_token(t);
+                }
+                match req.send().await {
+                    Ok(page) => {
+                        users.extend(page.users().iter().map(|u| CognitoUser::from_sdk(u, pool_id)));
+                        token = next_page_token(page.pagination_token(), &token);
+                        if token.is_none() {
                             break;
                         }
                     }
+                    Err(e) => {
+                        failures.push((pool_id.clone(), crate::error::sdk_error_message(&e)));
+                        break;
+                    }
                 }
-                Err(_) => continue,
             }
         }
-        Ok(users)
+        users.truncate(MAX_COGNITO_USERS);
+        (users, failures)
     }
 }
 
@@ -583,10 +598,16 @@ impl Resource for CognitoIdentityPool {
     }
 }
 
-// ── CognitoUser (sample, capped at 50) ───────────────────────────────────────
+// ── CognitoUser (capped at MAX_COGNITO_USERS) ─────────────────────────────────
+
+/// Users listed across all pools before the load stops (~9 `ListUsers`
+/// pages of 60).
+pub const MAX_COGNITO_USERS: usize = 500;
 
 #[derive(Debug, Clone)]
 pub struct CognitoUser {
+    /// `pool_id/username` — a username is only unique within its pool.
+    pub key: String,
     pub username: String,
     pub pool_id: String,
     pub status: String,
@@ -597,7 +618,13 @@ pub struct CognitoUser {
     pub phone: Option<String>,
     pub email_verified: bool,
     pub phone_verified: bool,
+    /// Every other attribute `ListUsers` returned (`sub`, `name`,
+    /// `custom:*`, …), sorted; the ones shown above as fields are left out.
+    pub attributes: std::collections::BTreeMap<String, String>,
 }
+
+/// Attributes the pane already shows as named fields.
+const COGNITO_FIELD_ATTRS: [&str; 4] = ["email", "phone_number", "email_verified", "phone_number_verified"];
 
 impl CognitoUser {
     fn from_sdk(
@@ -612,8 +639,15 @@ impl CognitoUser {
             })
             .collect();
 
+        let username = u.username().unwrap_or_default().to_string();
         Self {
-            username: u.username().unwrap_or_default().to_string(),
+            key: format!("{}/{}", pool_id, username),
+            attributes: attrs
+                .iter()
+                .filter(|(k, _)| !COGNITO_FIELD_ATTRS.contains(&k.as_str()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            username,
             pool_id: pool_id.to_string(),
             status: u
                 .user_status()
@@ -632,7 +666,7 @@ impl CognitoUser {
 
 impl Resource for CognitoUser {
     fn id(&self) -> &str {
-        &self.username
+        &self.key
     }
     fn name(&self) -> &str {
         // Show email if available, else username
@@ -665,11 +699,12 @@ impl Resource for CognitoUser {
     }
     fn search_text(&self) -> String {
         format!(
-            "{} {} {} {}",
+            "{} {} {} {} {}",
             self.username,
             self.email.as_deref().unwrap_or(""),
             self.phone.as_deref().unwrap_or(""),
             self.status,
+            self.attributes.get("sub").map(String::as_str).unwrap_or(""),
         )
     }
     fn details(&self) -> Vec<(String, String)> {
@@ -692,6 +727,13 @@ impl Resource for CognitoUser {
         }
         if let Some(m) = &self.last_modified {
             rows.push(("Last Modified".to_string(), m.clone()));
+        }
+        // `sub` (the stable id tokens carry) first, then the rest A–Z
+        // (`custom:*` sort after the standard ones by their prefix).
+        let mut attrs: Vec<(&String, &String)> = self.attributes.iter().collect();
+        attrs.sort_by_key(|(k, _)| (k.as_str() != "sub", k.starts_with("custom:"), k.as_str()));
+        for (k, v) in attrs {
+            rows.push((k.clone(), v.clone()));
         }
         rows
     }
@@ -875,4 +917,32 @@ pub async fn fetch_cognito_metrics(
         federation_ok: take("m5"),
         x_max: time_range.duration_secs() as f64,
     })
+}
+
+#[cfg(test)]
+mod user_tests {
+    use super::*;
+    use aws_sdk_cognitoidentityprovider::types::{AttributeType, UserType};
+
+    #[test]
+    fn users_keep_every_attribute_and_are_keyed_by_pool() {
+        let attr = |n: &str, v: &str| AttributeType::builder().name(n).value(v).build().unwrap();
+        let u = CognitoUser::from_sdk(
+            &UserType::builder()
+                .username("alice")
+                .attributes(attr("email", "a@example.com"))
+                .attributes(attr("custom:tenant", "acme"))
+                .attributes(attr("name", "Alice"))
+                .attributes(attr("sub", "1111-2222"))
+                .build(),
+            "us-east-1_ABC",
+        );
+        assert_eq!(u.id(), "us-east-1_ABC/alice", "a username is only unique per pool");
+        assert_eq!(u.name(), "a@example.com");
+        assert!(u.search_text().contains("1111-2222"));
+        let keys: Vec<String> = u.details().into_iter().map(|(k, _)| k).collect();
+        let tail: Vec<&str> = keys.iter().map(String::as_str).skip_while(|k| *k != "sub").collect();
+        assert_eq!(tail, ["sub", "name", "custom:tenant"], "sub first, custom:* last: {keys:?}");
+        assert!(!keys.iter().any(|k| k == "email"), "shown as Email, not repeated raw");
+    }
 }

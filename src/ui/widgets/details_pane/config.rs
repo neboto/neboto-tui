@@ -98,6 +98,9 @@ pub(super) fn secret_details_lines(secret: &SecretEntry) -> Vec<(String, String)
     if let Some(svc) = &secret.owning_service {
         rows.push(("Managed By".to_string(), svc.clone()));
     }
+    if let Some(region) = &secret.primary_region {
+        rows.push(("Primary Region".to_string(), region.clone()));
+    }
 
     rows.push(("".to_string(), "".to_string()));
     let encryption = secret
@@ -154,6 +157,23 @@ pub(super) fn secret_rotation_lines(secret: &SecretEntry) -> Vec<(String, String
     }
     if !secret.next_rotation.is_empty() {
         rows.push(("Next Rotation".to_string(), secret.next_rotation.clone()));
+    }
+
+    // Which version each staging label points at. An AWSPENDING that
+    // outlives a rotation is the classic stuck-rotation tell.
+    if !secret.versions.is_empty() {
+        rows.push(("".to_string(), "".to_string()));
+        rows.push(("Versions".to_string(), "".to_string()));
+        let rotating = secret.versions.iter().any(|(_, st)| st.iter().any(|s| s == "AWSPENDING"));
+        for (id, stages) in &secret.versions {
+            rows.push((format!("  {}", stages.join(", ")), id.clone()));
+        }
+        if rotating {
+            rows.push((
+                "".to_string(),
+                "· AWSPENDING is set: a rotation is in progress, or one failed and left it".to_string(),
+            ));
+        }
     }
 
     rows.push(("".to_string(), "".to_string()));

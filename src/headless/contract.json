@@ -749,12 +749,14 @@
     "Glue Crawler": [
       "Overview",
       "Targets",
-      "Configuration"
+      "Configuration",
+      "Tags"
     ],
     "Glue Job": [
       "Overview",
       "Command",
-      "Arguments"
+      "Arguments",
+      "Tags"
     ],
     "Glue Job Run": [
       "Overview",

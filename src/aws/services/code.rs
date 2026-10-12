@@ -246,7 +246,22 @@ impl AwsService for CodeService {
                         }
                     }
                 }
-                if grp_err || group_names.is_empty() {
+                if grp_err {
+                    continue;
+                }
+                if group_names.is_empty() {
+                    // An application nothing can deploy from — half-built or
+                    // abandoned. One row, so it doesn't silently vanish.
+                    total += 1;
+                    let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                        service: service_type,
+                        resources: vec![Box::new(CodeDeployApp { name: app.clone() })],
+                        progress: LoadProgress {
+                            loaded_count: total,
+                            total_count: None,
+                            status_message: None,
+                        },
+                    });
                     continue;
                 }
                 // batch_get_deployment_groups accepts up to 100 names per call.
@@ -983,7 +998,7 @@ impl CodeView {
             CodeView::Repositories => "CodeCommit Repository",
             CodeView::BuildProjects => "CodeBuild Project",
             CodeView::Pipelines => "CodePipeline",
-            CodeView::Deployments => "CodeDeploy Group",
+            CodeView::Deployments => "CodeDeploy Group|CodeDeploy Application",
             CodeView::Artifacts => "CodeArtifact Repository",
             CodeView::Executions => "Pipeline Execution",
             CodeView::PullRequests => "Pull Request",
@@ -3447,6 +3462,57 @@ impl Resource for CodeDeployGroup {
         Some(format!(
             "https://{}.console.aws.amazon.com/codesuite/codedeploy/applications/{}/deployment-groups/{}?region={}",
             region, self.app_name, self.group_name, region
+        ))
+    }
+    fn clone_box(&self) -> Box<dyn Resource> {
+        Box::new(self.clone())
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// A CodeDeploy application with **no deployment groups** — listed on the
+/// Deployments tab (whose rows are otherwise groups) so it doesn't vanish.
+/// Flat: everything worth saying is that it has nothing to deploy to.
+#[derive(Debug, Clone)]
+pub struct CodeDeployApp {
+    pub name: String,
+}
+
+impl Resource for CodeDeployApp {
+    fn id(&self) -> &str {
+        &self.name
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn resource_type(&self) -> &str {
+        "CodeDeploy Application"
+    }
+    fn state(&self) -> ResourceState {
+        ResourceState::Idle
+    }
+    fn state_label(&self) -> String {
+        "no deployment groups".to_string()
+    }
+    fn tags(&self) -> &HashMap<String, String> {
+        static EMPTY: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(HashMap::new)
+    }
+    fn search_text(&self) -> String {
+        format!("{} codedeploy application", self.name)
+    }
+    fn details(&self) -> Vec<(String, String)> {
+        vec![
+            ("Application".to_string(), self.name.clone()),
+            ("Deployment Groups".to_string(), "none — nothing can deploy from this application".to_string()),
+        ]
+    }
+    fn console_url(&self, region: &str) -> Option<String> {
+        Some(format!(
+            "https://{}.console.aws.amazon.com/codesuite/codedeploy/applications/{}?region={}",
+            region, self.name, region
         ))
     }
     fn clone_box(&self) -> Box<dyn Resource> {

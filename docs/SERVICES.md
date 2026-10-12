@@ -1038,7 +1038,9 @@ the service you're touching.
 - **Glue** (`@glue`, `glue.rs`) — browse-only, one `ServiceType`, five sub-tabs
   streamed as sequential error-tolerant batches (a permission gap on any one API
   records a status and moves on). **All sub-tabs load eagerly — no lazy sections,
-  so no `*State` HashMaps or `*Loaded` events.** **Databases** (`GetDatabases`,
+  so no `*State` HashMaps or `*Loaded` events.** Tags arrive at list time
+  (`ListTimeTags`, `tag:GetResources`, #179) and render in the crawler and job
+  panes' Tags sections (databases are flat, so `details()` carries them). **Databases** (`GetDatabases`,
   flat `details()`); **Tables** (first-class + fuzzy-searchable, an N+1
   `GetTables` per database **capped at `MAX_TABLES=2000`** total — when hit it
   logs how many databases went unscanned; split pane Overview / Schema (columns +
@@ -1401,7 +1403,9 @@ the service you're touching.
     state = last-attempted deployment status. 3-section split pane Overview /
     Targets (EC2 tag filters, ASGs, ECS services) / **Deployments** (lazy
     `ListDeployments`+`BatchGetDeployments`, keyed by group id — status, instance
-    summary counts, error, rollback). Apps with zero groups don't appear.
+    summary counts, error, rollback). An app with **zero** groups is one flat
+    `CodeDeploy Application` row (state `no deployment groups`, the tab's
+    filter is `CodeDeploy Group|CodeDeploy Application`) — it used to vanish.
   - **Artifacts** (CodeArtifact) — one row per repo (`ListRepositories`, all
     domains). 2-section split pane Overview / **Packages** (lazy `ListPackages`,
     each enriched with its default display version via `ListPackageVersions`,
