@@ -1,0 +1,9 @@
+<ListStackInstancesResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <ListStackInstancesResult>
+    <Summaries>
+      <member><StackSetId>org-guardrails:9d8e7f6a-5b4c-4d3e-9f2a-0b1c2d3e4f50</StackSetId><Region>{{region}}</Region><Account>222233334444</Account><OrganizationalUnitId>ou-acme-workloads</OrganizationalUnitId><Status>CURRENT</Status><StackInstanceStatus><DetailedStatus>SUCCEEDED</DetailedStatus></StackInstanceStatus><DriftStatus>IN_SYNC</DriftStatus></member>
+      <member><StackSetId>org-guardrails:9d8e7f6a-5b4c-4d3e-9f2a-0b1c2d3e4f50</StackSetId><Region>{{region}}</Region><Account>555566667777</Account><OrganizationalUnitId>ou-acme-workloads</OrganizationalUnitId><Status>OUTDATED</Status><StatusReason>Account 555566667777 should have 'AWSCloudFormationStackSetExecutionRole' role with trust relationship to Role 'AWSCloudFormationStackSetAdministrationRole'.</StatusReason><StackInstanceStatus><DetailedStatus>FAILED</DetailedStatus></StackInstanceStatus><DriftStatus>NOT_CHECKED</DriftStatus></member>
+    </Summaries>
+  </ListStackInstancesResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListStackInstancesResponse>

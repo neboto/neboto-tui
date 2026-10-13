@@ -1,0 +1,8 @@
+<ListStackSetsResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <ListStackSetsResult>
+    <Summaries>
+      <member><StackSetName>acme-config-baseline</StackSetName><StackSetId>acme-config-baseline:6f1a2b3c-4d5e-4f60-8a7b-1c2d3e4f5a6b</StackSetId><Description>Config recorder + conformance pack, self-managed across our three regions</Description><Status>ACTIVE</Status><PermissionModel>SELF_MANAGED</PermissionModel></member>
+    </Summaries>
+  </ListStackSetsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListStackSetsResponse>

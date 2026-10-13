@@ -1,0 +1,15 @@
+<DescribeStackSetResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <DescribeStackSetResult>
+    <StackSet>
+      <StackSetName>acme-config-baseline</StackSetName>
+      <StackSetId>acme-config-baseline:6f1a2b3c-4d5e-4f60-8a7b-1c2d3e4f5a6b</StackSetId>
+      <StackSetARN>arn:aws:cloudformation:{{region}}:{{account}}:stackset/acme-config-baseline:6f1a2b3c-4d5e-4f60-8a7b-1c2d3e4f5a6b</StackSetARN>
+      <Description>Config recorder + conformance pack, self-managed across our three regions</Description>
+      <Status>ACTIVE</Status>
+      <PermissionModel>SELF_MANAGED</PermissionModel>
+      <AdministrationRoleARN>arn:aws:iam::{{account}}:role/AWSCloudFormationStackSetAdministrationRole</AdministrationRoleARN>
+      <ExecutionRoleName>AWSCloudFormationStackSetExecutionRole</ExecutionRoleName>
+    </StackSet>
+  </DescribeStackSetResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeStackSetResponse>

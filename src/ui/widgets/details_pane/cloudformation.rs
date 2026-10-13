@@ -1167,7 +1167,7 @@ pub fn cfn_stackset_section_lines(
         CfnStackSetDetailSection::Config => cfn_stackset_config_lines(ss, detail_state),
         CfnStackSetDetailSection::Instances => cfn_stackset_instances_lines(instances_state),
         CfnStackSetDetailSection::Operations => {
-            cfn_stackset_operations_lines(&ss.stack_set_name, operations_state, op_results)
+            cfn_stackset_operations_lines(ss.api_key(), operations_state, op_results)
         }
         CfnStackSetDetailSection::Tags => cfn_stackset_tags_lines(detail_state),
     }
@@ -1181,6 +1181,12 @@ pub(super) fn cfn_stackset_config_lines(
     rows.push(("Stack Set Name".to_string(), ss.stack_set_name.clone()));
     rows.push(("Stack Set ID".to_string(), ss.stack_set_id.clone()));
     rows.push(("Status".to_string(), ss.status.clone()));
+    if ss.delegated_admin {
+        rows.push((
+            "Access".to_string(),
+            crate::aws::services::cloudformation::DELEGATED_ADMIN_LABEL.to_string(),
+        ));
+    }
     match detail_state {
         None | Some(Lazy::Loading) => {
             rows.push(("".to_string(), "".to_string()));

@@ -23861,73 +23861,37 @@ impl App {
         section: CfnStackSetDetailSection,
         event_tx: &mpsc::UnboundedSender<Event>,
     ) {
-        let name = match self
+        use crate::aws::services::cloudformation as cfn;
+        let (key, call_as) = match self
             .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::cloudformation::CfnStackSet>())
+            .and_then(|r| r.as_any().downcast_ref::<cfn::CfnStackSet>())
         {
-            Some(ss) => ss.stack_set_name.clone(),
+            Some(ss) => (ss.api_key().to_string(), ss.call_as()),
             None => return};
         let client = self.aws_clients.cloudformation_client();
         match section {
             CfnStackSetDetailSection::Config | CfnStackSetDetailSection::Tags => {
                 self.trigger_lazy(
                     |app| &mut app.lazy.cfn_stackset_detail,
-                    name.clone(),
+                    key.clone(),
                     event_tx,
-                    async move {
-                        let resp = client
-                            .describe_stack_set()
-                            .stack_set_name(&name)
-                            .send()
-                            .await
-                            .map_err(|e| crate::error::sdk_error_message(&e))?;
-                        let ss = resp
-                            .stack_set()
-                            .ok_or_else(|| "no stack set data returned".to_string())?;
-                        Ok(crate::aws::services::cloudformation::CfnStackSetDetailData::from_sdk(ss))
-                    },
+                    cfn::fetch_stackset_detail(client, key, call_as),
                 );
             }
             CfnStackSetDetailSection::Instances => {
                 self.trigger_lazy(
                     |app| &mut app.lazy.cfn_stackset_instances,
-                    name.clone(),
+                    key.clone(),
                     event_tx,
-                    async move {
-                        let mut instances = Vec::new();
-                        let mut paginator = client
-                            .list_stack_instances()
-                            .stack_set_name(&name)
-                            .into_paginator()
-                            .send();
-                        while let Some(Ok(page)) = paginator.next().await {
-                            for s in page.summaries() {
-                                instances.push(crate::aws::services::cloudformation::CfnStackInstance::from_summary(s));
-                            }
-                        }
-                        Ok(instances)
-                    },
+                    cfn::fetch_stackset_instances(client, key, call_as),
                 );
             }
             CfnStackSetDetailSection::Operations => {
                 self.trigger_lazy(
                     |app| &mut app.lazy.cfn_stackset_operations,
-                    name.clone(),
+                    key.clone(),
                     event_tx,
-                    async move {
-                        let mut operations = Vec::new();
-                        let mut paginator = client
-                            .list_stack_set_operations()
-                            .stack_set_name(&name)
-                            .into_paginator()
-                            .send();
-                        while let Some(Ok(page)) = paginator.next().await {
-                            for o in page.summaries() {
-                                operations.push(crate::aws::services::cloudformation::CfnStackSetOperation::from_summary(o));
-                            }
-                        }
-                        Ok(operations)
-                    },
+                    cfn::fetch_stackset_operations(client, key, call_as),
                 );
             }
         }
@@ -24065,10 +24029,10 @@ impl App {
     /// the row isn't an operation row, so `⏎` falls through to the jump.
     fn try_toggle_cfn_op_results(&mut self, event_tx: &mpsc::UnboundedSender<Event>) -> bool {
         use crate::aws::services::cloudformation as cfn;
-        let Some(stack_set) = self
+        let Some((stack_set, call_as)) = self
             .get_selected_resource()
             .and_then(|r| r.as_any().downcast_ref::<cfn::CfnStackSet>())
-            .map(|ss| ss.stack_set_name.clone())
+            .map(|ss| (ss.api_key().to_string(), ss.call_as()))
         else {
             return false;
         };
@@ -24093,7 +24057,7 @@ impl App {
             |app| &mut app.lazy.cfn_stackset_op_results,
             key,
             event_tx,
-            cfn::fetch_stackset_op_results(client, stack_set, op_id),
+            cfn::fetch_stackset_op_results(client, stack_set, op_id, call_as),
         );
         true
     }
@@ -25317,9 +25281,9 @@ impl App {
                 .as_any()
                 .downcast_ref::<crate::aws::services::cloudformation::CfnStackSet>()
             {
-                let detail_state = self.lazy.cfn_stackset_detail.get(&ss.stack_set_name);
-                let instances_state = self.lazy.cfn_stackset_instances.get(&ss.stack_set_name);
-                let operations_state = self.lazy.cfn_stackset_operations.get(&ss.stack_set_name);
+                let detail_state = self.lazy.cfn_stackset_detail.get(ss.api_key());
+                let instances_state = self.lazy.cfn_stackset_instances.get(ss.api_key());
+                let operations_state = self.lazy.cfn_stackset_operations.get(ss.api_key());
                 return crate::ui::widgets::details_pane::cfn_stackset_section_lines(
                     ss,
                     crate::aws::services::cloudformation::CfnStackSetDetailSection::from_index(self.detail_section_idx),

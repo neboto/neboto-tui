@@ -618,3 +618,25 @@ async fn get_secret_lists_its_version_stages() {
     let keys: Vec<&String> = versions.as_object().unwrap().keys().collect();
     assert_eq!(keys[0], "AWSCURRENT", "current first");
 }
+
+/// #106: a delegated StackSets admin sees service-managed stack sets only
+/// through `CallAs=DELEGATED_ADMIN`, and every follow-up call has to repeat
+/// it — the demo fixtures answer `DescribeStackSet` / `ListStackInstances`
+/// for `org-guardrails` only when it's sent, so empty sections here mean the
+/// `CallAs` was dropped somewhere.
+#[tokio::test]
+async fn get_delegated_admin_stack_set_carries_call_as() {
+    let v = demo_get_json(get_args("cfn", &["org-guardrails"])).await;
+    let config = v["sections"]["Config"].to_string();
+    assert!(config.contains("DELEGATED_ADMIN"), "{config}");
+    assert!(config.contains("Enabled"), "auto-deployment from DescribeStackSet: {config}");
+    let instances = v["sections"]["Instances"].to_string();
+    assert!(instances.contains("555566667777"), "{instances}");
+    assert!(!instances.contains('⚠'), "{instances}");
+
+    // The self-managed set is unchanged: no Access row, its own detail.
+    let v = demo_get_json(get_args("cfn", &["acme-config-baseline"])).await;
+    let config = v["sections"]["Config"].to_string();
+    assert!(!config.contains("DELEGATED_ADMIN"), "{config}");
+    assert!(config.contains("AWSCloudFormationStackSetExecutionRole"), "{config}");
+}

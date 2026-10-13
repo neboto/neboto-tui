@@ -4,6 +4,7 @@ use crate::aws::service::{AwsService, ServiceType};
 use crate::error::Result;
 use crate::event::{Event, LoadProgress};
 use async_trait::async_trait;
+use aws_sdk_cloudformation::types::CallAs;
 use aws_sdk_cloudformation::Client as CfnClient;
 use std::any::Any;
 use std::collections::HashMap;
@@ -88,30 +89,43 @@ impl AwsService for CloudFormationService {
             });
         }
 
-        // Phase 2: List stack sets
+        // Phase 2: List stack sets — twice. `CallAs=SELF` (the default) is
+        // every stack set this account owns, which in the management account
+        // includes the service-managed ones. A *delegated administrator*
+        // account only sees service-managed stack sets with
+        // `CallAs=DELEGATED_ADMIN`, so without the second call they were
+        // invisible there (#106). Anywhere else that call is a
+        // ValidationError — expected, so it stays silent.
         let mut stackset_resources: Vec<Box<dyn Resource>> = Vec::new();
-        let mut ss_paginator = self
-            .client
-            .list_stack_sets()
-            .into_paginator()
-            .send();
-
-        while let Some(result) = ss_paginator.next().await {
-            match result {
-                Ok(page) => {
-                    for ss in page.summaries() {
-                        stackset_resources.push(Box::new(CfnStackSet::from_summary(ss)));
+        let mut seen = std::collections::HashSet::new();
+        match list_stack_sets_as(&self.client, CallAs::SelfValue).await {
+            Ok(sets) => {
+                for ss in sets {
+                    seen.insert(ss.stack_set_id.clone());
+                    stackset_resources.push(Box::new(ss));
+                }
+            }
+            Err((_, msg)) => {
+                let _ = event_tx.send(Event::ResourceLoadWarning {
+                    service: service_type,
+                    warning: format!("stack sets unavailable: {msg}"),
+                });
+            }
+        }
+        match list_stack_sets_as(&self.client, CallAs::DelegatedAdmin).await {
+            Ok(sets) => {
+                for ss in sets {
+                    if seen.insert(ss.stack_set_id.clone()) {
+                        stackset_resources.push(Box::new(ss));
                     }
                 }
-                Err(e) => {
+            }
+            Err((code, msg)) => {
+                if !not_delegated_admin(code.as_deref()) {
                     let _ = event_tx.send(Event::ResourceLoadWarning {
                         service: service_type,
-                        warning: format!(
-                            "stack sets unavailable: {}",
-                            crate::error::sdk_error_message(&e)
-                        ),
+                        warning: format!("delegated-admin stack sets unavailable: {msg}"),
                     });
-                    break;
                 }
             }
         }
@@ -950,6 +964,99 @@ fn cfn_change_from_sdk(rc: &aws_sdk_cloudformation::types::ResourceChange) -> Cf
 
 // ── StackSet detail (lazy Config / Instances / Operations sections) ───────────
 
+/// Every stack set visible under one `CallAs`, tagged with it. Errors carry
+/// the AWS error code so the caller can tell "not a delegated admin" apart.
+async fn list_stack_sets_as(
+    client: &CfnClient,
+    call_as: CallAs,
+) -> std::result::Result<Vec<CfnStackSet>, (Option<String>, String)> {
+    use aws_sdk_cloudformation::error::ProvideErrorMetadata;
+    let delegated_admin = call_as == CallAs::DelegatedAdmin;
+    let mut out = Vec::new();
+    let mut paginator = client.list_stack_sets().call_as(call_as).into_paginator().send();
+    while let Some(page) = paginator.next().await {
+        let page = page.map_err(|e| {
+            (e.code().map(str::to_string), crate::error::sdk_error_message(&e))
+        })?;
+        out.extend(page.summaries().iter().map(|ss| CfnStackSet {
+            delegated_admin,
+            ..CfnStackSet::from_summary(ss)
+        }));
+    }
+    Ok(out)
+}
+
+/// How a delegated-admin stack set says where it came from.
+pub const DELEGATED_ADMIN_LABEL: &str = "delegated administrator (CallAs DELEGATED_ADMIN)";
+
+/// `CallAs=DELEGATED_ADMIN` from an account that isn't registered as one
+/// (standalone, member, or the management account itself) fails with a
+/// ValidationError — the normal case almost everywhere, so never a warning.
+fn not_delegated_admin(code: Option<&str>) -> bool {
+    code == Some("ValidationError")
+}
+
+/// List a stack set's instances. Unlike a silent `while let Some(Ok(..))`,
+/// a failure is an error, so a wrong `CallAs` or a permission gap can't
+/// read as "no instances".
+pub async fn fetch_stackset_instances(
+    client: CfnClient,
+    stack_set: String,
+    call_as: CallAs,
+) -> std::result::Result<Vec<CfnStackInstance>, String> {
+    let mut out = Vec::new();
+    let mut paginator = client
+        .list_stack_instances()
+        .stack_set_name(&stack_set)
+        .call_as(call_as)
+        .into_paginator()
+        .send();
+    while let Some(page) = paginator.next().await {
+        let page = page.map_err(|e| crate::error::sdk_error_message(&e))?;
+        out.extend(page.summaries().iter().map(CfnStackInstance::from_summary));
+    }
+    Ok(out)
+}
+
+/// List a stack set's operations; failures are errors, as above.
+pub async fn fetch_stackset_operations(
+    client: CfnClient,
+    stack_set: String,
+    call_as: CallAs,
+) -> std::result::Result<Vec<CfnStackSetOperation>, String> {
+    let mut out = Vec::new();
+    let mut paginator = client
+        .list_stack_set_operations()
+        .stack_set_name(&stack_set)
+        .call_as(call_as)
+        .into_paginator()
+        .send();
+    while let Some(page) = paginator.next().await {
+        let page = page.map_err(|e| crate::error::sdk_error_message(&e))?;
+        out.extend(page.summaries().iter().map(CfnStackSetOperation::from_summary));
+    }
+    Ok(out)
+}
+
+/// `DescribeStackSet` under the stack set's own `CallAs`.
+pub async fn fetch_stackset_detail(
+    client: CfnClient,
+    stack_set: String,
+    call_as: CallAs,
+) -> std::result::Result<CfnStackSetDetailData, String> {
+    let resp = client
+        .describe_stack_set()
+        .stack_set_name(&stack_set)
+        .call_as(call_as)
+        .send()
+        .await
+        .map_err(|e| crate::error::sdk_error_message(&e))?;
+    let ss = resp
+        .stack_set()
+        .ok_or_else(|| "no stack set data returned".to_string())?;
+    Ok(CfnStackSetDetailData::from_sdk(ss))
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CfnStackSetDetailData {
     pub description: Option<String>,
@@ -1145,11 +1252,13 @@ pub async fn fetch_stackset_op_results(
     client: CfnClient,
     stack_set: String,
     operation_id: String,
+    call_as: CallAs,
 ) -> std::result::Result<Vec<CfnStackSetOpResult>, String> {
     let mut out = Vec::new();
     let mut paginator = client
         .list_stack_set_operation_results()
         .stack_set_name(&stack_set)
+        .call_as(call_as)
         .operation_id(&operation_id)
         .into_paginator()
         .send();
@@ -1655,9 +1764,32 @@ pub struct CfnStackSet {
     pub status: String,
     pub permission_model: Option<String>,
     pub tags: HashMap<String, String>,
+    /// Listed through `CallAs=DELEGATED_ADMIN` — a service-managed stack set
+    /// this account administers on the organization's behalf. Every
+    /// follow-up call must pass the same `CallAs`, or AWS reports it missing.
+    pub delegated_admin: bool,
 }
 
 impl CfnStackSet {
+    pub fn call_as(&self) -> CallAs {
+        if self.delegated_admin {
+            CallAs::DelegatedAdmin
+        } else {
+            CallAs::SelfValue
+        }
+    }
+
+    /// What the follow-up calls (and their lazy-map keys) name the stack set
+    /// by: the id, which the APIs accept in place of the name and which stays
+    /// unique when a self-managed and a service-managed set share a name.
+    pub fn api_key(&self) -> &str {
+        if self.stack_set_id.is_empty() {
+            &self.stack_set_name
+        } else {
+            &self.stack_set_id
+        }
+    }
+
     pub fn from_summary(ss: &aws_sdk_cloudformation::types::StackSetSummary) -> Self {
         Self {
             stack_set_id: ss.stack_set_id().unwrap_or_default().to_string(),
@@ -1671,6 +1803,7 @@ impl CfnStackSet {
                 .permission_model()
                 .map(|p| p.as_str().to_string()),
             tags: HashMap::new(),
+            delegated_admin: false,
         }
     }
 }
@@ -1726,6 +1859,9 @@ impl Resource for CfnStackSet {
         if let Some(desc) = &self.description {
             parts.push(desc.clone());
         }
+        if self.delegated_admin {
+            parts.push("delegated-admin".to_string());
+        }
         parts.join(" ")
     }
 
@@ -1740,6 +1876,9 @@ impl Resource for CfnStackSet {
         }
         if let Some(model) = &self.permission_model {
             d.push(("Permission Model".to_string(), model.clone()));
+        }
+        if self.delegated_admin {
+            d.push(("Access".to_string(), DELEGATED_ADMIN_LABEL.to_string()));
         }
         d
     }

@@ -1,0 +1,16 @@
+<DescribeStackSetResponse xmlns="http://cloudformation.amazonaws.com/doc/2010-05-15/">
+  <DescribeStackSetResult>
+    <StackSet>
+      <StackSetName>org-guardrails</StackSetName>
+      <StackSetId>org-guardrails:9d8e7f6a-5b4c-4d3e-9f2a-0b1c2d3e4f50</StackSetId>
+      <StackSetARN>arn:aws:cloudformation:{{region}}:111111111111:stackset/org-guardrails:9d8e7f6a-5b4c-4d3e-9f2a-0b1c2d3e4f50</StackSetARN>
+      <Description>Org-wide guardrail roles, deployed to every account by the organization</Description>
+      <Status>ACTIVE</Status>
+      <PermissionModel>SERVICE_MANAGED</PermissionModel>
+      <AutoDeployment><Enabled>true</Enabled><RetainStacksOnAccountRemoval>false</RetainStacksOnAccountRemoval></AutoDeployment>
+      <OrganizationalUnitIds><member>ou-acme-workloads</member></OrganizationalUnitIds>
+      <Tags><member><Key>owner</Key><Value>platform</Value></member></Tags>
+    </StackSet>
+  </DescribeStackSetResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</DescribeStackSetResponse>

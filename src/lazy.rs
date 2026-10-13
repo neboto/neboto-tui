@@ -468,12 +468,12 @@ pub struct LazyStore {
     pub cfn_stackset_op_results:
         LazyMap<Vec<crate::aws::services::cloudformation::CfnStackSetOpResult>>,
     /// A stack set's config detail (Config + Tags sections), keyed by
-    /// stack-set name.
+    /// `CfnStackSet::api_key` (the stack-set id).
     pub cfn_stackset_detail: LazyMap<crate::aws::services::cloudformation::CfnStackSetDetailData>,
-    /// A stack set's instances, keyed by stack-set name.
+    /// A stack set's instances, keyed by `CfnStackSet::api_key`.
     pub cfn_stackset_instances:
         LazyMap<Vec<crate::aws::services::cloudformation::CfnStackInstance>>,
-    /// A stack set's operation history, keyed by stack-set name.
+    /// A stack set's operation history, keyed by `CfnStackSet::api_key`.
     pub cfn_stackset_operations:
         LazyMap<Vec<crate::aws::services::cloudformation::CfnStackSetOperation>>,
 

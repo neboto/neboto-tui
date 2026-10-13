@@ -221,6 +221,14 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("cloudformation", "DescribeStackResourceDrifts", when ["storefront-prod"], "DescribeStackResourceDrifts-storefront-prod.xml"),
     fx!("cloudformation", "GetStackPolicy", when ["storefront-prod"], "GetStackPolicy-storefront-prod.xml"),
     fx!("cloudformation", "ListExports", "ListExports.xml"),
+    // Stack sets: acme-prod is the org's delegated StackSets admin, so the
+    // service-managed `org-guardrails` only answers to CallAs=DELEGATED_ADMIN
+    // (#106) — every follow-up call has to carry it too, which the `when`s pin.
+    fx!("cloudformation", "ListStackSets", when ["CallAs=SELF"], "ListStackSets-self.xml"),
+    fx!("cloudformation", "ListStackSets", when ["CallAs=DELEGATED_ADMIN"], "ListStackSets-delegated.xml"),
+    fx!("cloudformation", "DescribeStackSet", when ["CallAs=DELEGATED_ADMIN", "9d8e7f6a"], "DescribeStackSet-org-guardrails.xml"),
+    fx!("cloudformation", "DescribeStackSet", when ["CallAs=SELF", "6f1a2b3c"], "DescribeStackSet-acme-config-baseline.xml"),
+    fx!("cloudformation", "ListStackInstances", when ["CallAs=DELEGATED_ADMIN", "9d8e7f6a"], "ListStackInstances-org-guardrails.xml"),
     fx!("cloudformation", "ListImports", when ["acme-network"], "ListImports-network.xml"),
     // ── CloudTrail ───────────────────────────────────────────────────────────
     // `W` looks events up by ResourceName; the Event history tab asks for

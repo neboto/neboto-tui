@@ -1716,6 +1716,22 @@ the service you're touching.
   Deliberately **no on-enter hook** — one call per operation, and a stack
   set can have a long history. Capped at `CFN_OP_RESULTS_CAP` (500),
   sorted failures-first so the cap never hides the answer.
+- **CloudFormation StackSets and `CallAs`** (#106) — `ListStackSets` runs
+  twice: `CallAs=SELF` (owned sets; in the management account that already
+  includes the service-managed ones) and `CallAs=DELEGATED_ADMIN`, the only
+  way a **delegated StackSets administrator** sees service-managed sets.
+  The second call is a `ValidationError` in every other account, which is
+  expected, so it stays silent (`not_delegated_admin`); other failures warn.
+  Results merge by stack-set id. A set found the second way carries
+  `delegated_admin` and every follow-up call (`DescribeStackSet`,
+  `ListStackInstances`, `ListStackSetOperations`,
+  `ListStackSetOperationResults`) **must repeat the same `CallAs`**, or AWS
+  reports the set as missing — go through `CfnStackSet::call_as()`. Calls
+  and lazy keys use the stack-set **id** (`api_key()`), which the APIs
+  accept for `StackSetName` and which stays unique when a self-managed and
+  a service-managed set share a name. Rejected: a sticky `CallAs` toggle
+  (the WAF-scope shape) — nobody would know to press it, and the probe is
+  one cheap call.
 - **CloudFormation progress rollup** (`f` on the Events section, both
   descriptors) — flips the body from the chronological stream to a
   per-resource "what's left" rollup (`cfn_progress_rollup`, unit-tested):
