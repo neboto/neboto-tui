@@ -77,10 +77,12 @@ pub(super) fn render_secret_section_tabs(app: &App, area: Rect, frame: &mut Fram
 pub fn secret_section_lines(
     secret: &SecretEntry,
     section: SecretDetailSection,
+    replication: Option<&Lazy<Vec<crate::aws::services::config::SecretReplica>>>,
 ) -> Vec<(String, String)> {
     match section {
         SecretDetailSection::Details => secret_details_lines(secret),
         SecretDetailSection::Rotation => secret_rotation_lines(secret),
+        SecretDetailSection::Replication => secret_replication_lines(secret, replication),
         SecretDetailSection::Tags => secret_tags_lines(secret),
     }
 }
@@ -194,5 +196,51 @@ pub(super) fn secret_tags_lines(secret: &SecretEntry) -> Vec<(String, String)> {
     }
 
     rows.push(("".to_string(), "".to_string()));
+    rows
+}
+
+/// The Replication section. A replica only points at its primary (AWS
+/// reports replica status on the primary's `DescribeSecret`); a primary
+/// lists each replica region with its sync status.
+pub(super) fn secret_replication_lines(
+    secret: &SecretEntry,
+    replication: Option<&Lazy<Vec<crate::aws::services::config::SecretReplica>>>,
+) -> Vec<(String, String)> {
+    let mut rows = vec![(String::new(), String::new())];
+    if let Some(primary) = &secret.primary_region {
+        rows.push(("Primary Region".to_string(), primary.clone()));
+        rows.push((
+            "  This secret is a replica — replication status lives on the primary.".to_string(),
+            String::new(),
+        ));
+        return rows;
+    }
+    match replication {
+        None | Some(Lazy::Loading) => rows.push(("  Loading…".to_string(), String::new())),
+        Some(Lazy::Error(e)) => rows.extend(error_rows(e)),
+        Some(Lazy::Loaded(replicas)) if replicas.is_empty() => {
+            rows.push(("  Not replicated to other regions".to_string(), String::new()));
+        }
+        Some(Lazy::Loaded(replicas)) => {
+            rows.pop();
+            for r in replicas {
+                let status = match r.status.as_str() {
+                    "InSync" => "✓ InSync".to_string(),
+                    "Failed" => "✗ Failed".to_string(),
+                    other => other.to_string(),
+                };
+                rows.push((r.region.clone(), status));
+                if let Some(m) = &r.status_message {
+                    rows.push(("  Message".to_string(), m.clone()));
+                }
+                if let Some(k) = &r.kms_key_id {
+                    rows.push(("  KMS Key".to_string(), k.clone()));
+                }
+                if !r.last_accessed.is_empty() {
+                    rows.push(("  Last Accessed".to_string(), r.last_accessed.clone()));
+                }
+            }
+        }
+    }
     rows
 }

@@ -530,6 +530,9 @@ pub struct S3BucketDetails {
     pub analytics_configs_count: Option<usize>,
     pub metrics_configs_count: Option<usize>,
     pub intelligent_tiering_count: Option<usize>,
+    /// `GetBucketRequestPayment`: `Some(true)` when requesters pay for
+    /// requests and transfer. `None` when the call failed.
+    pub requester_pays: Option<bool>,
 }
 
 /// Lazy-load state for a bucket's Tier-2 detailed configuration.
@@ -1082,7 +1085,7 @@ pub async fn fetch_bucket_details(client: S3Client, bucket_name: String) -> Resu
         client.get_bucket_acl().bucket(&bucket_name).send(),
     );
 
-    let (inventory, analytics, metrics, intelligent_tier, policy_status) = tokio::join!(
+    let (inventory, analytics, metrics, intelligent_tier, policy_status, request_payment) = tokio::join!(
         client
             .list_bucket_inventory_configurations()
             .bucket(&bucket_name)
@@ -1100,6 +1103,7 @@ pub async fn fetch_bucket_details(client: S3Client, bucket_name: String) -> Resu
             .bucket(&bucket_name)
             .send(),
         client.get_bucket_policy_status().bucket(&bucket_name).send(),
+        client.get_bucket_request_payment().bucket(&bucket_name).send(),
     );
 
     Ok(S3BucketDetails {
@@ -1125,6 +1129,9 @@ pub async fn fetch_bucket_details(client: S3Client, bucket_name: String) -> Resu
         intelligent_tiering_count: intelligent_tier
             .ok()
             .map(|t| t.intelligent_tiering_configuration_list().len()),
+        requester_pays: request_payment
+            .ok()
+            .and_then(|r| r.payer().map(|p| *p == aws_sdk_s3::types::Payer::Requester)),
     })
 }
 

@@ -11746,6 +11746,30 @@ impl App {
         }
     }
 
+    pub(crate) fn trigger_code_artifact_upstreams_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let info = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::code::CodeArtifactRepo>()
+                .map(|repo| {
+                    (
+                        repo.arn.clone(),
+                        repo.domain_name.clone(),
+                        repo.domain_owner.clone(),
+                        repo.name.clone(),
+                    )
+                })
+        });
+        if let Some((arn, domain, domain_owner, name)) = info {
+            let client = self.aws_clients.codeartifact_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.code_artifact_upstreams,
+                arn,
+                event_tx,
+                crate::aws::services::code::fetch_repo_upstreams(client, domain, domain_owner, name),
+            );
+        }
+    }
+
     pub(crate) fn trigger_code_artifact_packages_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         let info = self.get_selected_resource().and_then(|r| {
             r.as_any()
@@ -13698,6 +13722,45 @@ impl App {
     /// Lazy-load the selected MSK cluster's applied Kafka configuration revision
     /// on first view of the Config section, keyed by cluster ARN. Clusters with
     /// no custom configuration (serverless / defaults) never fetch.
+    /// Lazy-load a secret's replica regions. `DescribeSecret` is metadata
+    /// only — it never returns the value.
+    pub(crate) fn trigger_secret_replication_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let target = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::config::SecretEntry>()
+                .map(|s| s.arn.clone())
+        });
+        if let Some(arn) = target {
+            let client = self.aws_clients.secretsmanager_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.secret_replication,
+                arn.clone(),
+                event_tx,
+                crate::aws::services::config::fetch_secret_replication(client, arn),
+            );
+        }
+    }
+
+    /// Lazy-load a provisioned cluster's brokers for the Brokers section.
+    /// Serverless clusters have none, so they never call.
+    pub(crate) fn trigger_msk_brokers_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let target = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::msk::MskCluster>()
+                .filter(|c| !c.is_serverless())
+                .map(|c| c.arn.clone())
+        });
+        if let Some(arn) = target {
+            let client = self.aws_clients.kafka_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.msk_brokers,
+                arn.clone(),
+                event_tx,
+                crate::aws::services::msk::fetch_msk_brokers(client, arn),
+            );
+        }
+    }
+
     pub(crate) fn trigger_msk_config_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if crate::aws::services::msk::MskDetailSection::from_index(self.detail_section_idx) != MskDetailSection::Config {
             return;
@@ -20031,6 +20094,23 @@ impl App {
 
     /// Trigger a lazy-load of the children + attached policies + tags for the
     /// selected OU. All four sections share the one fetch.
+    /// Lazy-load the organization Overview's Account Creation + Handshakes
+    /// bundle. Each part records its own error; a denial (not the management
+    /// account) renders as a hint, not a failure.
+    pub(crate) fn trigger_org_activity_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let target = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::organizations::OrgInfo>()
+                .map(|o| o.org_id.clone())
+        });
+        if let Some(org_id) = target {
+            let client = self.aws_clients.organizations_client();
+            self.trigger_lazy(|app| &mut app.lazy.org_activity, org_id, event_tx, async move {
+                Ok::<_, String>(crate::aws::services::organizations::fetch_org_activity(client).await)
+            });
+        }
+    }
+
     pub(crate) fn trigger_org_ou_details_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if let Some(ou) = self.get_selected_resource().and_then(|r| {
             r.as_any()
@@ -25512,6 +25592,7 @@ impl App {
                 return crate::ui::widgets::details_pane::code_artifact_repo_section_lines(
                     repo,
                     crate::aws::services::code::CodeArtifactRepoDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.code_artifact_upstreams.get(&repo.arn),
                     packages_state,
                 );
             }
@@ -25995,6 +26076,7 @@ impl App {
                     c,
                     crate::aws::services::msk::MskDetailSection::from_index(self.detail_section_idx),
                     self.lazy.msk_config.get(&c.arn),
+                    self.lazy.msk_brokers.get(&c.arn),
                 );
             }
             if let Some(b) = resource
@@ -27539,6 +27621,7 @@ impl App {
                 return crate::ui::widgets::details_pane::secret_section_lines(
                     secret,
                     crate::aws::services::config::SecretDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.secret_replication.get(&secret.arn),
                 );
             }
             if let Some(param) = resource
@@ -27781,6 +27864,16 @@ impl App {
                     crate::aws::services::organizations::OrgAccountDetailSection::from_index(self.detail_section_idx),
                     details_state,
                     assume_hint.as_deref(),
+                );
+            }
+            if let Some(org) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::organizations::OrgInfo>()
+            {
+                return crate::ui::widgets::details_pane::org_info_section_lines(
+                    org,
+                    crate::aws::services::organizations::OrgInfoDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.org_activity.get(&org.org_id),
                 );
             }
             if let Some(ou) = resource

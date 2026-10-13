@@ -832,7 +832,187 @@ pub struct OrgInfo {
     pub tags: HashMap<String, String>,
 }
 
+crate::sections! {
+    pub enum OrgInfoDetailSection,
+    pub static ORG_INFO_SECTIONS = [
+        Overview "Overview",
+        AccountCreation "Account Creation" => crate::app::App::trigger_org_activity_load,
+        Handshakes "Handshakes" => crate::app::App::trigger_org_activity_load,
+    ]
+}
+
+/// A `CreateAccount` request that hasn't finished or didn't succeed.
+#[derive(Debug, Clone)]
+pub struct OrgAccountCreation {
+    pub account_name: String,
+    pub state: String,
+    pub requested: Option<String>,
+    pub completed: Option<String>,
+    pub account_id: Option<String>,
+    pub failure_reason: Option<String>,
+}
+
+/// An invitation (or other handshake) between the organization and an
+/// account. AWS keeps closed ones for 30 days.
+#[derive(Debug, Clone)]
+pub struct OrgHandshake {
+    pub id: String,
+    pub action: String,
+    pub state: String,
+    /// "ACCOUNT 111122223333", "EMAIL x@example.com", "ORGANIZATION o-…".
+    pub parties: Vec<String>,
+    pub requested: Option<String>,
+    pub expires: Option<String>,
+}
+
+/// A failed part of the activity bundle. `denied` marks the expected case —
+/// the caller isn't the management account (or a delegated admin) — which
+/// renders as a dim hint rather than an error.
+#[derive(Debug, Clone)]
+pub struct OrgPartError {
+    pub denied: bool,
+    pub message: String,
+}
+
+/// The Overview pane's lazy Account Creation + Handshakes sections, one
+/// fetch (the OU-details bundle shape: each part keeps its own error).
+#[derive(Debug, Clone)]
+pub struct OrgActivity {
+    pub creations: std::result::Result<Vec<OrgAccountCreation>, OrgPartError>,
+    pub handshakes: std::result::Result<Vec<OrgHandshake>, OrgPartError>,
+    /// `false` when only `ListHandshakesForAccount` worked (not the
+    /// management account): the list is this account's, not the org's.
+    pub handshakes_org_wide: bool,
+}
+
+/// Cap on each activity list — enough for any real backlog.
+const ORG_ACTIVITY_CAP: usize = 50;
+
+fn org_part_error<E, R>(e: &aws_sdk_organizations::error::SdkError<E, R>) -> OrgPartError
+where
+    E: aws_sdk_organizations::error::ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+    R: std::fmt::Debug,
+{
+    use aws_sdk_organizations::error::ProvideErrorMetadata;
+    let code = e.code().unwrap_or_default();
+    OrgPartError {
+        denied: code == "AccessDeniedException" || code == "AWSOrganizationsNotInUseException",
+        message: crate::error::sdk_error_message(e),
+    }
+}
+
+pub async fn fetch_org_activity(client: OrgClient) -> OrgActivity {
+    use aws_sdk_organizations::types::CreateAccountState;
+    let creations = async {
+        let mut out = Vec::new();
+        let mut pages = client
+            .list_create_account_status()
+            .states(CreateAccountState::InProgress)
+            .states(CreateAccountState::Failed)
+            .into_paginator()
+            .send();
+        while let Some(page) = pages.next().await {
+            let page = page.map_err(|e| org_part_error(&e))?;
+            out.extend(page.create_account_statuses().iter().map(|s| OrgAccountCreation {
+                account_name: s.account_name().unwrap_or_default().to_string(),
+                state: s.state().map(|v| v.as_str().to_string()).unwrap_or_default(),
+                requested: s.requested_timestamp().map(|d| fmt_epoch_secs(d.secs())),
+                completed: s.completed_timestamp().map(|d| fmt_epoch_secs(d.secs())),
+                account_id: s.account_id().map(str::to_string),
+                failure_reason: s.failure_reason().map(|r| r.as_str().to_string()),
+            }));
+            if out.len() >= ORG_ACTIVITY_CAP {
+                out.truncate(ORG_ACTIVITY_CAP);
+                break;
+            }
+        }
+        // In-progress first, then newest.
+        out.sort_by(|a, b| {
+            (a.state != "IN_PROGRESS")
+                .cmp(&(b.state != "IN_PROGRESS"))
+                .then(b.requested.cmp(&a.requested))
+        });
+        Ok(out)
+    };
+    let handshakes = async {
+        match list_handshakes(&client, true).await {
+            Err(e) if e.denied => list_handshakes(&client, false).await.map(|h| (h, false)),
+            other => other.map(|h| (h, true)),
+        }
+    };
+    let (creations, handshakes) = tokio::join!(creations, handshakes);
+    let (handshakes, handshakes_org_wide) = match handshakes {
+        Ok((h, org_wide)) => (Ok(h), org_wide),
+        Err(e) => (Err(e), false),
+    };
+    OrgActivity { creations, handshakes, handshakes_org_wide }
+}
+
+/// `ListHandshakesForOrganization` (management account / delegated admin)
+/// or `ListHandshakesForAccount` (anywhere). Open ones first, then newest.
+async fn list_handshakes(
+    client: &OrgClient,
+    org_wide: bool,
+) -> std::result::Result<Vec<OrgHandshake>, OrgPartError> {
+    let mut raw: Vec<aws_sdk_organizations::types::Handshake> = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let page = if org_wide {
+            let r = client
+                .list_handshakes_for_organization()
+                .set_next_token(token.clone())
+                .send()
+                .await
+                .map_err(|e| org_part_error(&e))?;
+            raw.extend(r.handshakes().iter().cloned());
+            r.next_token().map(str::to_string)
+        } else {
+            let r = client
+                .list_handshakes_for_account()
+                .set_next_token(token.clone())
+                .send()
+                .await
+                .map_err(|e| org_part_error(&e))?;
+            raw.extend(r.handshakes().iter().cloned());
+            r.next_token().map(str::to_string)
+        };
+        if raw.len() >= ORG_ACTIVITY_CAP {
+            break;
+        }
+        match crate::aws::pagination::next_page_token(page.as_deref(), &token) {
+            Some(next) => token = Some(next),
+            None => break,
+        }
+    }
+    let mut out: Vec<OrgHandshake> = raw
+        .iter()
+        .take(ORG_ACTIVITY_CAP)
+        .map(|h| OrgHandshake {
+            id: h.id().unwrap_or_default().to_string(),
+            action: h.action().map(|a| a.as_str().to_string()).unwrap_or_default(),
+            state: h.state().map(|s| s.as_str().to_string()).unwrap_or_default(),
+            parties: h
+                .parties()
+                .iter()
+                .map(|p| format!("{} {}", p.r#type().as_str(), p.id()))
+                .collect(),
+            requested: h.requested_timestamp().map(|d| fmt_epoch_secs(d.secs())),
+            expires: h.expiration_timestamp().map(|d| fmt_epoch_secs(d.secs())),
+        })
+        .collect();
+    let open = |s: &str| matches!(s, "REQUESTED" | "OPEN");
+    out.sort_by(|a, b| {
+        open(&b.state)
+            .cmp(&open(&a.state))
+            .then(b.requested.cmp(&a.requested))
+    });
+    Ok(out)
+}
+
 impl Resource for OrgInfo {
+    fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
+        Some(&ORG_INFO_SECTIONS)
+    }
     fn id(&self) -> &str {
         &self.org_id
     }

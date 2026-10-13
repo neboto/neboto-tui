@@ -413,6 +413,10 @@ pub struct LazyStore {
     /// A cluster's applied Kafka configuration revision, keyed by cluster
     /// ARN. Clusters with no custom configuration never fetch.
     pub msk_config: LazyMap<crate::aws::services::msk::MskConfigRevision>,
+    /// A provisioned cluster's brokers (`ListNodes`), keyed by cluster ARN.
+    pub msk_brokers: LazyMap<Vec<crate::aws::services::msk::MskBroker>>,
+    /// A secret's replica regions (`DescribeSecret`), keyed by secret ARN.
+    pub secret_replication: LazyMap<Vec<crate::aws::services::config::SecretReplica>>,
 
     // ── Kinesis / Firehose ───────────────────────────────────────────────
     /// A data stream's enhanced fan-out consumers, keyed by stream ARN.
@@ -515,6 +519,8 @@ pub struct LazyStore {
     pub code_deploy_deployments:
         LazyMap<Vec<crate::aws::services::code::CodeDeployDeployment>>,
     /// A CodeArtifact repo's packages, keyed by repo ARN.
+    /// A repository's upstreams + external connections, keyed by repo ARN.
+    pub code_artifact_upstreams: LazyMap<crate::aws::services::code::CodeArtifactUpstreams>,
     pub code_artifact_packages:
         LazyMap<Vec<crate::aws::services::code::CodeArtifactPackage>>,
 
@@ -561,6 +567,8 @@ pub struct LazyStore {
     pub org_scp_details: LazyMap<crate::aws::services::organizations::OrgScpDetails>,
     /// An OU's child OUs + accounts, attached policies and tags, keyed by OU id.
     pub org_ou_details: LazyMap<crate::aws::services::organizations::OrgUnitDetails>,
+    /// The Overview pane's account-creation + handshake bundle, keyed by org id.
+    pub org_activity: LazyMap<crate::aws::services::organizations::OrgActivity>,
 
     // ── Athena / Cost ────────────────────────────────────────────────────
     /// A database's table metadata, keyed by `catalog/db`.

@@ -116,6 +116,19 @@ pub(super) fn mocks() -> Vec<Mock> {
         ),
         (
             ServiceType::Organizations,
+            "OrgInfo",
+            Box::new(svc::organizations::OrgInfo {
+                org_id: "o-mock01234".to_string(),
+                arn: "arn:aws:organizations::123456789012:organization/o-mock01234".to_string(),
+                feature_set: "ALL".to_string(),
+                master_account_id: "123456789012".to_string(),
+                master_account_email: "mock@example.com".to_string(),
+                enabled_policy_types: vec!["SERVICE_CONTROL_POLICY".to_string()],
+                tags: HashMap::new(),
+            }),
+        ),
+        (
+            ServiceType::Organizations,
             "OrgUnit",
             Box::new(svc::organizations::OrgUnit::new(
                 "ou-mock-0123abcd".to_string(),

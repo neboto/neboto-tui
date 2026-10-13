@@ -3558,6 +3558,7 @@ crate::sections! {
     pub enum CodeArtifactRepoDetailSection,
     pub static CODE_ARTIFACT_SECTIONS = [
         Overview "Overview",
+        Upstreams "Upstreams" => crate::app::App::trigger_code_artifact_upstreams_load,
         Packages "Packages" => crate::app::App::trigger_code_artifact_packages_load,
     ]
 }
@@ -3719,6 +3720,50 @@ pub struct CodeArtifactPackage {
     /// The repo's default display version for this package (enriched via
     /// `ListPackageVersions`; empty when not fetched / none published).
     pub latest_version: String,
+}
+
+/// Where a repository pulls packages it doesn't have (`DescribeRepository`):
+/// upstream repositories in search order, then external connections
+/// (public registries like npmjs or PyPI).
+#[derive(Debug, Clone, Default)]
+pub struct CodeArtifactUpstreams {
+    pub upstreams: Vec<String>,
+    /// (connection name, package format, status)
+    pub external: Vec<(String, String, String)>,
+}
+
+pub async fn fetch_repo_upstreams(
+    client: CaClient,
+    domain: String,
+    domain_owner: String,
+    repository: String,
+) -> std::result::Result<CodeArtifactUpstreams, String> {
+    let mut req = client.describe_repository().domain(&domain).repository(&repository);
+    if !domain_owner.is_empty() {
+        req = req.domain_owner(&domain_owner);
+    }
+    let resp = req.send().await.map_err(|e| crate::error::sdk_error_message(&e))?;
+    let Some(repo) = resp.repository() else {
+        return Ok(CodeArtifactUpstreams::default());
+    };
+    Ok(CodeArtifactUpstreams {
+        upstreams: repo
+            .upstreams()
+            .iter()
+            .filter_map(|u| u.repository_name().map(str::to_string))
+            .collect(),
+        external: repo
+            .external_connections()
+            .iter()
+            .map(|c| {
+                (
+                    c.external_connection_name().unwrap_or_default().to_string(),
+                    c.package_format().map(|f| f.as_str().to_string()).unwrap_or_default(),
+                    c.status().map(|s| s.as_str().to_string()).unwrap_or_default(),
+                )
+            })
+            .collect(),
+    })
 }
 
 /// Max packages to enrich with a `ListPackageVersions` call (bounds the N+1).

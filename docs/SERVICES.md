@@ -1096,8 +1096,12 @@ the service you're touching.
   LogsDiskUsed aggregated across brokers with the **SEARCH/SUM** (and MAX for
   disk) `GetMetricData` pattern Network Firewall uses — the schema form
   (`{AWS/Kafka,"Cluster Name","Broker ID"}`) restricts the search to broker-level
-  series so per-topic series don't double-count. `ListNodes` (per-broker ENI/IP
-  enumeration) is deferred — the section list doesn't need it.
+  series so per-topic series don't double-count. **Brokers** section (lazy
+  `ListNodes`, `lazy.msk_brokers` keyed by cluster ARN): per broker the client
+  IP, ENI and subnet (key-value rows, so the ENI/subnet jump), instance type,
+  Kafka version and endpoints — the "which broker is 10.0.3.17?" answer.
+  Controller/ZooKeeper nodes are skipped; serverless clusters have no brokers
+  and never call (`MskCluster::is_serverless`).
 - **DMS** (`@dms`, `dms.rs`, **aws-sdk-databasemigration**) — browse-only,
   four sub-tabs **Tasks / Replication Instances / Endpoints / Serverless**.
   **SDK pin**: added at `1.120.0`, the newest release whose `aws-smithy-types`
@@ -1410,7 +1414,9 @@ the service you're touching.
     domains). 2-section split pane Overview / **Packages** (lazy `ListPackages`,
     each enriched with its default display version via `ListPackageVersions`,
     capped at 40 lookups / 300 packages). Repo id is the ARN (repo names repeat
-    across domains); upstreams need `DescribeRepository` (out of v1 IAM).
+    across domains). **Upstreams** section (lazy `DescribeRepository`): upstream
+    repositories numbered in AWS's order — it is the search order, so never
+    sort it — then external connections with their status.
 - **WAF** — split panes for Web ACL / IP set / rule group, one lazy fetch each,
   run with the scope's wafv2 client (**CLOUDFRONT → us-east-1**). Every
   per-scope consumer (metrics, insights, sampled requests, log tail) keys off
@@ -1989,6 +1995,16 @@ the service you're touching.
   list item (`"  name"` → id) or an explicit "Parent" row — otherwise an OU's
   own "OU ID" row would link to itself. It also makes the account pane's SCP
   rows and the policy pane's attached-target rows Enter-jumpable for free.
+- **Organizations Overview pane** (`OrgInfo`, sections Overview / Account
+  Creation / Handshakes) — one lazy bundle (`fetch_org_activity`,
+  `lazy.org_activity` keyed by org id), each part with its own error.
+  `ListCreateAccountStatus` is filtered to IN_PROGRESS + FAILED (a succeeded
+  creation is just an account in the Accounts tab). Handshakes try
+  `ListHandshakesForOrganization` and fall back to
+  `ListHandshakesForAccount` on a denial, saying the list is this account's
+  only. Both calls work only from the management account or a delegated
+  admin, so a denial (`AccessDeniedException` /
+  `AWSOrganizationsNotInUseException`) is a dim `·` hint, not a ⚠ error.
 - **Organizations member-account switch** — `s` on an `OrgAccount` row
   assumes a configured role (`org_access_roles` list, else the single
   `org_access_role`, default `OrganizationAccountAccessRole`; Control Tower

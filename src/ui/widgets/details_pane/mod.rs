@@ -1601,6 +1601,20 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         render_org_scp_split(app, scp, area, frame);
         return;
     }
+    if let Some(org) = resource.and_then(|r| {
+        r.as_any().downcast_ref::<crate::aws::services::organizations::OrgInfo>()
+    }) {
+        render_simple_split(
+            app,
+            area,
+            frame,
+            "Organization",
+            &org.org_id,
+            &format!("{}  ·  management {}", org.feature_set, org.master_account_id),
+            &descriptor_tabs(app, &crate::aws::services::organizations::ORG_INFO_SECTIONS),
+        );
+        return;
+    }
     if let Some(ou) = resource.and_then(|r| r.as_any().downcast_ref::<OrgUnit>()) {
         render_simple_split(
             app,
@@ -2570,6 +2584,16 @@ fn render_operations_details(
     details.push((
         "Transfer Acceleration".to_string(),
         accel.unwrap_or_else(|| tier2_pending(loading)),
+    ));
+    // Requester Pays (Tier 2): who's billed for requests and transfer.
+    details.push((
+        "Requester Pays".to_string(),
+        match cfg.and_then(|c| c.requester_pays) {
+            Some(true) => "Enabled — requesters pay for requests and transfer".to_string(),
+            Some(false) => "Disabled (bucket owner pays)".to_string(),
+            None if loading => "Loading…".to_string(),
+            None => "Unknown".to_string(),
+        },
     ));
     details.push(("".to_string(), "".to_string()));
 

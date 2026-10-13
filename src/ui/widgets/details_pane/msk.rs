@@ -67,6 +67,7 @@ pub fn msk_section_lines(
     c: &MskCluster,
     section: MskDetailSection,
     config: Option<&Lazy<crate::aws::services::msk::MskConfigRevision>>,
+    brokers: Option<&Lazy<Vec<crate::aws::services::msk::MskBroker>>>,
 ) -> Vec<(String, String)> {
     let yn = |b: bool| {
         if b {
@@ -178,6 +179,7 @@ pub fn msk_section_lines(
             }
             rows
         }
+        MskDetailSection::Brokers => msk_broker_rows(c, brokers),
         MskDetailSection::Monitoring => {
             let mut rows = vec![(
                 "Enhanced Monitoring".to_string(),
@@ -236,5 +238,89 @@ pub fn msk_section_lines(
             rows
         }
         MskDetailSection::Tags => tag_rows(&c.tags),
+    }
+}
+
+/// The Brokers section: one block per broker, with its client IP, ENI and
+/// subnet as key-value rows so the generic classifier makes the ids jumpable.
+fn msk_broker_rows(
+    c: &MskCluster,
+    brokers: Option<&Lazy<Vec<crate::aws::services::msk::MskBroker>>>,
+) -> Vec<(String, String)> {
+    let mut rows = vec![(String::new(), String::new())];
+    if c.is_serverless() {
+        rows.push((
+            "  Serverless clusters have no brokers to list — AWS manages capacity.".to_string(),
+            String::new(),
+        ));
+        return rows;
+    }
+    match brokers {
+        None | Some(Lazy::Loading) => rows.push(("  Loading…".to_string(), String::new())),
+        Some(Lazy::Error(e)) => rows.extend(error_rows(e)),
+        Some(Lazy::Loaded(list)) if list.is_empty() => {
+            rows.push(("  No brokers reported".to_string(), String::new()));
+        }
+        Some(Lazy::Loaded(list)) => {
+            rows.pop();
+            for b in list {
+                rows.push((format!("Broker {}", b.id), String::new())); // group header
+                let mut kv = |k: &str, v: &Option<String>| {
+                    if let Some(v) = v {
+                        rows.push((k.to_string(), v.clone()));
+                    }
+                };
+                kv("Client IP", &b.client_ip);
+                kv("ENI", &b.eni);
+                kv("Subnet", &b.subnet);
+                kv("Instance Type", &b.instance_type);
+                kv("Kafka Version", &b.kafka_version);
+                kv("Added", &b.added);
+                for e in &b.endpoints {
+                    rows.push(("Endpoint".to_string(), e.clone()));
+                }
+                rows.push((String::new(), String::new()));
+            }
+        }
+    }
+    rows
+}
+
+#[cfg(test)]
+mod broker_tests {
+    use super::*;
+    use crate::aws::services::msk::MskBroker;
+
+    fn cluster(kind: &str) -> MskCluster {
+        let mut c = crate::app::harness_tests::all_mocks()
+            .into_iter()
+            .find_map(|(_, _, r)| r.as_any().downcast_ref::<MskCluster>().cloned())
+            .expect("an MSK mock");
+        c.cluster_type = kind.to_string();
+        c
+    }
+
+    #[test]
+    fn serverless_explains_instead_of_listing() {
+        let rows = msk_broker_rows(&cluster("SERVERLESS"), None);
+        assert!(rows.iter().any(|(k, _)| k.contains("Serverless clusters have no brokers")), "{rows:?}");
+    }
+
+    /// The ENI and subnet are key-value rows, so ⏎ follows them.
+    #[test]
+    fn a_broker_shows_where_it_sits_on_the_network() {
+        let b = MskBroker {
+            id: "2".into(),
+            client_ip: Some("10.0.3.17".into()),
+            eni: Some("eni-0abc".into()),
+            subnet: Some("subnet-0def".into()),
+            ..Default::default()
+        };
+        let state = Lazy::Loaded(vec![b]);
+        let rows = msk_broker_rows(&cluster("PROVISIONED"), Some(&state));
+        assert!(rows.contains(&("Broker 2".into(), String::new())), "{rows:?}");
+        assert!(rows.contains(&("Client IP".into(), "10.0.3.17".into())));
+        assert!(rows.contains(&("ENI".into(), "eni-0abc".into())));
+        assert!(rows.contains(&("Subnet".into(), "subnet-0def".into())));
     }
 }

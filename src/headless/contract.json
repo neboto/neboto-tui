@@ -486,6 +486,7 @@
     ],
     "CodeArtifact Repository": [
       "Overview",
+      "Upstreams",
       "Packages"
     ],
     "CodeBuild Project": [
@@ -930,6 +931,7 @@
     "MSK Cluster": [
       "Overview",
       "Networking",
+      "Brokers",
       "Monitoring",
       "Config",
       "Tags"
@@ -970,6 +972,11 @@
       "Network",
       "Security",
       "Tags"
+    ],
+    "Organization": [
+      "Overview",
+      "Account Creation",
+      "Handshakes"
     ],
     "Organizations Account": [
       "Details",
@@ -1237,6 +1244,7 @@
     "Secret": [
       "Details",
       "Rotation",
+      "Replication",
       "Tags"
     ],
     "Security Control": [

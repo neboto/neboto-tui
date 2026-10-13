@@ -41,6 +41,42 @@ fn fmt_dt(dt: Option<&aws_sdk_secretsmanager::primitives::DateTime>) -> String {
     .unwrap_or_default()
 }
 
+/// One replica region of a multi-region secret (`DescribeSecret`'s
+/// `ReplicationStatus`). Metadata only — `DescribeSecret` never returns a
+/// value.
+#[derive(Debug, Clone)]
+pub struct SecretReplica {
+    pub region: String,
+    pub status: String,
+    pub status_message: Option<String>,
+    pub kms_key_id: Option<String>,
+    pub last_accessed: String,
+}
+
+/// A secret's replica regions, in the order AWS lists them.
+pub async fn fetch_secret_replication(
+    client: SmClient,
+    arn: String,
+) -> std::result::Result<Vec<SecretReplica>, String> {
+    let resp = client
+        .describe_secret()
+        .secret_id(&arn)
+        .send()
+        .await
+        .map_err(|e| crate::error::sdk_error_message(&e))?;
+    Ok(resp
+        .replication_status()
+        .iter()
+        .map(|r| SecretReplica {
+            region: r.region().unwrap_or_default().to_string(),
+            status: r.status().map(|s| s.as_str().to_string()).unwrap_or_default(),
+            status_message: r.status_message().map(str::to_string),
+            kms_key_id: r.kms_key_id().map(str::to_string),
+            last_accessed: fmt_dt(r.last_accessed_date()),
+        })
+        .collect())
+}
+
 #[async_trait]
 impl AwsService for ConfigService {
     fn service_type(&self) -> ServiceType {
@@ -187,6 +223,7 @@ crate::sections! {
     pub static SECRET_SECTIONS = [
         Details "Details",
         Rotation "Rotation",
+        Replication "Replication" => crate::app::App::trigger_secret_replication_load,
         Tags "Tags",
     ]
 }

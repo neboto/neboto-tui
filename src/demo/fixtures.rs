@@ -288,6 +288,8 @@ pub static FIXTURES: &[Fixture] = &[
     // Metadata only: there is deliberately no GetSecretValue / GetParameter
     // fixture — `neboto get`'s guard test asserts neither is ever called.
     fx!("secretsmanager", "ListSecrets", "ListSecrets.json"),
+    // Replication section: one healthy replica, one stuck on a KMS grant.
+    fx!("secretsmanager", "DescribeSecret", when ["prod/orders/db"], "DescribeSecret-orders-db.json"),
     fx!("ssm", "DescribeParameters", "DescribeParameters.json"),
     // ── Cost Explorer (Cost Anomaly Detection) ──────────────────────────────
     // Only the Anomalies view (`7`): the spend view's daily CE series isn't

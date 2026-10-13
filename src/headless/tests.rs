@@ -607,6 +607,17 @@ async fn list_time_tags_land_after_the_last_batch_and_before_completion() {
     assert_eq!(order.last(), Some(&"done"), "{order:?}");
 }
 
+/// #106: a primary secret's Replication section lists each replica region
+/// with its sync status, from `DescribeSecret` (metadata only).
+#[tokio::test]
+async fn get_secret_shows_replica_regions() {
+    let v = demo_get_json(GetArgs { sections: vec!["replication".into()], ..get_args("secrets", &["prod/orders/db"]) }).await;
+    let rep = &v["sections"]["Replication"];
+    assert_eq!(rep["us-west-2"]["summary"], "InSync", "{rep}");
+    assert_eq!(rep["eu-west-1"]["summary"], "Failed", "{rep}");
+    assert!(rep["eu-west-1"]["Message"].as_str().unwrap().contains("KMS"), "{rep}");
+}
+
 /// #193 part 2: Secrets Manager version stages ride `ListSecrets` — ids and
 /// labels only, never a value.
 #[tokio::test]

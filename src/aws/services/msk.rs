@@ -312,11 +312,19 @@ pub fn msk_state(state: &str) -> ResourceState {
     }
 }
 
+impl MskCluster {
+    /// Serverless clusters have no brokers or configuration of their own.
+    pub fn is_serverless(&self) -> bool {
+        self.cluster_type.eq_ignore_ascii_case("SERVERLESS")
+    }
+}
+
 crate::sections! {
     pub enum MskDetailSection,
     pub static MSK_SECTIONS = [
         Overview "Overview",
         Networking "Networking",
+        Brokers "Brokers" => crate::app::App::trigger_msk_brokers_load,
         Monitoring "Monitoring",
         Config "Config" => crate::app::App::trigger_msk_config_load,
         Tags "Tags",
@@ -404,6 +412,56 @@ impl Resource for MskCluster {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+// ── Brokers (lazy section — ListNodes) ──────────────────────────────────────
+
+/// One broker of a provisioned cluster: where it sits on the network, which
+/// is what "which broker owns 10.0.3.17?" needs.
+#[derive(Debug, Clone, Default)]
+pub struct MskBroker {
+    pub id: String,
+    pub client_ip: Option<String>,
+    pub eni: Option<String>,
+    pub subnet: Option<String>,
+    pub endpoints: Vec<String>,
+    pub kafka_version: Option<String>,
+    pub instance_type: Option<String>,
+    pub added: Option<String>,
+}
+
+/// Every broker node of a provisioned cluster (`ListNodes`), ordered by
+/// broker id. Serverless clusters have no brokers to list — the caller
+/// skips the call for them.
+pub async fn fetch_msk_brokers(
+    client: KafkaClient,
+    cluster_arn: String,
+) -> std::result::Result<Vec<MskBroker>, String> {
+    let mut out = Vec::new();
+    let mut paginator = client.list_nodes().cluster_arn(&cluster_arn).into_paginator().send();
+    while let Some(page) = paginator.next().await {
+        let page = page.map_err(|e| crate::error::sdk_error_message(&e))?;
+        for node in page.node_info_list() {
+            let Some(b) = node.broker_node_info() else {
+                continue; // controller / ZooKeeper nodes
+            };
+            out.push(MskBroker {
+                id: b.broker_id().map(|id| format!("{id:.0}")).unwrap_or_default(),
+                client_ip: b.client_vpc_ip_address().map(str::to_string),
+                eni: b.attached_eni_id().map(str::to_string),
+                subnet: b.client_subnet().map(str::to_string),
+                endpoints: b.endpoints().to_vec(),
+                kafka_version: b
+                    .current_broker_software_info()
+                    .and_then(|s| s.kafka_version())
+                    .map(str::to_string),
+                instance_type: node.instance_type().map(str::to_string),
+                added: node.added_to_cluster_time().map(str::to_string),
+            });
+        }
+    }
+    out.sort_by_key(|b| b.id.parse::<u64>().unwrap_or(u64::MAX));
+    Ok(out)
 }
 
 // ── Config (lazy section — DescribeConfigurationRevision) ─────────────────────

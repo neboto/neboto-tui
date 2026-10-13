@@ -505,3 +505,149 @@ pub(super) fn org_scp_attached_targets_lines(
         }
     }
 }
+
+// ── Organization (Overview) split pane ──────────────────────────────────────
+
+pub fn org_info_section_lines(
+    org: &crate::aws::services::organizations::OrgInfo,
+    section: crate::aws::services::organizations::OrgInfoDetailSection,
+    activity: Option<&crate::lazy::Lazy<crate::aws::services::organizations::OrgActivity>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::organizations::{OrgInfoDetailSection as S, OrgPartError};
+    use crate::lazy::Lazy;
+    if section == S::Overview {
+        return org.details();
+    }
+    let a = match activity {
+        None | Some(Lazy::Loading) => {
+            return vec![(String::new(), String::new()), ("  Loading…".to_string(), String::new())];
+        }
+        Some(Lazy::Error(e)) => return error_rows(e),
+        Some(Lazy::Loaded(a)) => a,
+    };
+    // A denial is the normal answer outside the management account.
+    let part_error = |e: &OrgPartError, who: &str| -> Vec<(String, String)> {
+        if e.denied {
+            vec![
+                (String::new(), String::new()),
+                (String::new(), format!("· {who}")),
+            ]
+        } else {
+            error_rows(&e.message)
+        }
+    };
+    let mut rows = vec![(String::new(), String::new())];
+    match section {
+        S::Overview => unreachable!(),
+        S::AccountCreation => match &a.creations {
+            Err(e) => return part_error(e, "Only the management account (or a delegated admin) can list account creation requests"),
+            Ok(list) if list.is_empty() => {
+                rows.push(("  No account creations in progress or failed".to_string(), String::new()));
+            }
+            Ok(list) => {
+                rows.pop();
+                for c in list {
+                    let state = match c.state.as_str() {
+                        "FAILED" => "✗ FAILED".to_string(),
+                        other => other.to_string(),
+                    };
+                    rows.push((c.account_name.clone(), state));
+                    if let Some(r) = &c.failure_reason {
+                        rows.push(("  Reason".to_string(), r.clone()));
+                    }
+                    if let Some(id) = &c.account_id {
+                        rows.push(("  Account".to_string(), id.clone()));
+                    }
+                    if let Some(t) = &c.requested {
+                        rows.push(("  Requested".to_string(), t.clone()));
+                    }
+                    if let Some(t) = &c.completed {
+                        rows.push(("  Completed".to_string(), t.clone()));
+                    }
+                }
+            }
+        },
+        S::Handshakes => match &a.handshakes {
+            Err(e) => return part_error(e, "Handshakes aren't visible to this account"),
+            Ok(list) => {
+                if !a.handshakes_org_wide {
+                    rows.push((String::new(), "· This account's handshakes only (not the management account)".to_string()));
+                    rows.push((String::new(), String::new()));
+                }
+                if list.is_empty() {
+                    rows.push(("  No handshakes in the last 30 days".to_string(), String::new()));
+                }
+                for h in list {
+                    rows.push((h.action.clone(), h.state.clone()));
+                    for p in &h.parties {
+                        rows.push(("  Party".to_string(), p.clone()));
+                    }
+                    if let Some(t) = &h.requested {
+                        rows.push(("  Requested".to_string(), t.clone()));
+                    }
+                    if let Some(t) = &h.expires {
+                        rows.push(("  Expires".to_string(), t.clone()));
+                    }
+                    rows.push(("  Handshake ID".to_string(), h.id.clone()));
+                }
+            }
+        },
+    }
+    rows
+}
+
+#[cfg(test)]
+mod org_info_tests {
+    use super::*;
+    use crate::aws::services::organizations::{
+        OrgActivity, OrgAccountCreation, OrgInfo, OrgInfoDetailSection as S, OrgPartError,
+    };
+    use crate::lazy::Lazy;
+
+    fn org() -> OrgInfo {
+        OrgInfo {
+            org_id: "o-x".into(),
+            arn: String::new(),
+            feature_set: "ALL".into(),
+            master_account_id: "111111111111".into(),
+            master_account_email: String::new(),
+            enabled_policy_types: vec![],
+            tags: Default::default(),
+        }
+    }
+
+    /// Outside the management account both calls are denied: that's a dim
+    /// hint, not a ⚠ error, and handshakes fall back to this account's.
+    #[test]
+    fn a_member_account_gets_hints_not_errors() {
+        let a = Lazy::Loaded(OrgActivity {
+            creations: Err(OrgPartError { denied: true, message: "AccessDeniedException: no".into() }),
+            handshakes: Ok(vec![]),
+            handshakes_org_wide: false,
+        });
+        let rows = org_info_section_lines(&org(), S::AccountCreation, Some(&a));
+        assert!(rows.iter().all(|(_, v)| !v.contains('⚠')), "{rows:?}");
+        assert!(rows.iter().any(|(_, v)| v.starts_with("· Only the management account")), "{rows:?}");
+        let rows = org_info_section_lines(&org(), S::Handshakes, Some(&a));
+        assert!(rows.iter().any(|(_, v)| v.contains("This account's handshakes only")), "{rows:?}");
+    }
+
+    #[test]
+    fn a_failed_creation_names_its_reason() {
+        let a = Lazy::Loaded(OrgActivity {
+            creations: Ok(vec![OrgAccountCreation {
+                account_name: "sandbox-7".into(),
+                state: "FAILED".into(),
+                requested: None,
+                completed: None,
+                account_id: None,
+                failure_reason: Some("EMAIL_ALREADY_EXISTS".into()),
+            }]),
+            handshakes: Ok(vec![]),
+            handshakes_org_wide: true,
+        });
+        let rows = org_info_section_lines(&org(), S::AccountCreation, Some(&a));
+        assert!(rows.contains(&("sandbox-7".into(), "✗ FAILED".into())), "{rows:?}");
+        assert!(rows.contains(&("  Reason".into(), "EMAIL_ALREADY_EXISTS".into())), "{rows:?}");
+    }
+}

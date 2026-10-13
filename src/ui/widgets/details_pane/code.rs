@@ -2006,9 +2006,40 @@ pub(super) fn render_code_deploy_group_split(
 pub fn code_artifact_repo_section_lines(
     repo: &crate::aws::services::code::CodeArtifactRepo,
     section: CodeArtifactRepoDetailSection,
+    upstreams_state: Option<&Lazy<crate::aws::services::code::CodeArtifactUpstreams>>,
     packages_state: Option<&Lazy<Vec<crate::aws::services::code::CodeArtifactPackage>>>,
 ) -> Vec<(String, String)> {
     match section {
+        CodeArtifactRepoDetailSection::Upstreams => match upstreams_state {
+            None | Some(Lazy::Loading) => vec![("".to_string(), "Loading…".to_string())],
+            Some(Lazy::Error(e)) => error_rows(e),
+            Some(Lazy::Loaded(u)) => {
+                let mut rows = vec![("Upstream Repositories".to_string(), String::new())];
+                if u.upstreams.is_empty() {
+                    rows.push(("  (none)".to_string(), String::new()));
+                } else {
+                    rows.push(("".to_string(), "Searched in this order".to_string()));
+                    for (i, name) in u.upstreams.iter().enumerate() {
+                        rows.push((format!("  {}", i + 1), name.clone()));
+                    }
+                }
+                rows.push((String::new(), String::new()));
+                rows.push(("External Connections".to_string(), String::new()));
+                if u.external.is_empty() {
+                    rows.push(("  (none)".to_string(), String::new()));
+                } else {
+                    for (name, format, status) in &u.external {
+                        let status = if status == "Available" {
+                            format!("✓ {status}")
+                        } else {
+                            status.clone()
+                        };
+                        rows.push((format!("  {name}"), format!("{status} · {format}")));
+                    }
+                }
+                rows
+            }
+        },
         CodeArtifactRepoDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), repo.name.clone()),
@@ -2151,4 +2182,28 @@ pub(super) fn render_code_artifact_repo_split(
     frame.render_widget(Paragraph::new(Line::from(spans)), chunks[2]);
     render_hr(chunks[3], frame);
     render_split_section_body(app, chunks[4], frame);
+}
+
+#[cfg(test)]
+mod code_artifact_upstream_tests {
+    use super::*;
+    use crate::aws::services::code::{CodeArtifactRepo, CodeArtifactUpstreams};
+
+    /// Upstreams keep AWS's order — it's the order packages are searched in.
+    #[test]
+    fn upstreams_render_in_search_order() {
+        let repo = crate::app::harness_tests::all_mocks()
+            .into_iter()
+            .find_map(|(_, _, r)| r.as_any().downcast_ref::<CodeArtifactRepo>().cloned())
+            .expect("a CodeArtifact mock");
+        let u = Lazy::Loaded(CodeArtifactUpstreams {
+            upstreams: vec!["team-cache".into(), "shared".into()],
+            external: vec![("public:npmjs".into(), "npm".into(), "Available".into())],
+        });
+        let rows = code_artifact_repo_section_lines(&repo, CodeArtifactRepoDetailSection::Upstreams, Some(&u), None);
+        let first = rows.iter().position(|r| r == &("  1".to_string(), "team-cache".to_string()));
+        let second = rows.iter().position(|r| r == &("  2".to_string(), "shared".to_string()));
+        assert!(first.is_some() && first < second, "{rows:?}");
+        assert!(rows.contains(&("  public:npmjs".into(), "✓ Available · npm".into())), "{rows:?}");
+    }
 }
