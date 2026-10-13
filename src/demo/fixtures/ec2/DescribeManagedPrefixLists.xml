@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DescribeManagedPrefixListsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+  <requestId>neboto-demo</requestId>
+  <prefixListSet>
+    <item>
+      <prefixListId>pl-0corpvpn00000001</prefixListId>
+      <addressFamily>IPv4</addressFamily>
+      <state>create-complete</state>
+      <prefixListArn>arn:aws:ec2:{{region}}:{{account}}:prefix-list/pl-0corpvpn00000001</prefixListArn>
+      <prefixListName>corp-vpn</prefixListName>
+      <maxEntries>10</maxEntries>
+      <version>3</version>
+      <ownerId>{{account}}</ownerId>
+      <tagSet><item><key>team</key><value>network</value></item><item><key>ManagedBy</key><value>terraform</value></item></tagSet>
+    </item>
+  </prefixListSet>
+</DescribeManagedPrefixListsResponse>

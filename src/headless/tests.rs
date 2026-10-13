@@ -634,6 +634,19 @@ async fn get_security_group_expands_prefix_list_rules() {
     assert!(!inbound.contains("Loading"), "{inbound}");
 }
 
+/// …and the list itself is in @vpc's Routing tab, where ⏎ on the rule lands.
+#[tokio::test]
+async fn get_prefix_list_lists_its_entries() {
+    let v = demo_get_json(GetArgs {
+        sections: vec!["entries".into()],
+        resource_type: Some("Prefix List".into()),
+        ..get_args("vpc", &["pl-0corpvpn00000001"])
+    })
+    .await;
+    let entries = v["sections"]["Entries"].to_string();
+    assert!(entries.contains("10.201.0.0/16"), "{entries}");
+}
+
 /// #193 part 2: Secrets Manager version stages ride `ListSecrets` — ids and
 /// labels only, never a value.
 #[tokio::test]

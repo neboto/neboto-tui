@@ -3543,6 +3543,16 @@ mod prefix_list_rule_tests {
         assert!(!text.contains(&"10.8.0.0/16"), "preview stops at {PL_PREVIEW_ENTRIES}");
         assert!(text.iter().any(|t| t.starts_with("· … 112 more (120 total)")), "{text:?}");
         assert!(text.contains(&"Loading entries…"), "an unfetched list says so");
+        // ⏎ on the rule line itself goes to the list in @vpc → Routing.
+        let rule_line = &sg_rule_rows("Inbound", &[rule("pl-small")])[2].0;
+        let target = crate::ui::widgets::details_pane::resource_jump_target(
+            rule_line,
+            "",
+            crate::aws::service::ServiceType::EC2,
+        )
+        .expect("the pl- rule is jumpable");
+        assert_eq!(target.service, crate::aws::service::ServiceType::VPC);
+        assert_eq!(target.id, "pl-small");
         // The unexpanded form (flat details) is unchanged.
         assert_eq!(sg_rule_rows("Inbound", &[rule("pl-small")]).len(), 3);
     }
