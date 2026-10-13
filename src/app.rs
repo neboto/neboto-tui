@@ -10726,6 +10726,10 @@ impl App {
             Arc::new(transfer::TransferService::new(aws_clients)),
         );
         services.insert(
+            ServiceType::AppSync,
+            Arc::new(appsync::AppSyncService::new(aws_clients)),
+        );
+        services.insert(
             ServiceType::EventBridge,
             Arc::new(eventbridge::EventBridgeService::new(aws_clients)),
         );
@@ -14677,6 +14681,72 @@ impl App {
                 {
                     let _ = tx.send(crate::event::Event::CognitoMetricsLoaded { pool_id, data });
                 }
+            });
+        }
+    }
+
+    fn selected_appsync_api_id(&self) -> Option<String> {
+        self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::appsync::AppSyncApi>()
+                .map(|a| a.api_id.clone())
+        })
+    }
+
+    pub(crate) fn trigger_appsync_data_sources_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(id) = self.selected_appsync_api_id() {
+            let client = self.aws_clients.appsync_client();
+            self.trigger_lazy(|app| &mut app.lazy.appsync_data_sources, id.clone(), event_tx, async move {
+                crate::aws::services::appsync::fetch_data_sources(client, id)
+                    .await
+                    .map_err(|e| format!("Data sources unavailable: {}", e))
+            });
+        }
+    }
+
+    /// Resolvers also fire the Functions fetch: pipeline resolvers list
+    /// function *ids*, and the section names them once Functions is in.
+    pub(crate) fn trigger_appsync_resolvers_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(id) = self.selected_appsync_api_id() {
+            let client = self.aws_clients.appsync_client();
+            self.trigger_lazy(|app| &mut app.lazy.appsync_resolvers, id.clone(), event_tx, async move {
+                crate::aws::services::appsync::fetch_resolvers(client, id)
+                    .await
+                    .map_err(|e| format!("Resolvers unavailable: {}", e))
+            });
+            self.trigger_appsync_functions_load(event_tx);
+        }
+    }
+
+    pub(crate) fn trigger_appsync_functions_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(id) = self.selected_appsync_api_id() {
+            let client = self.aws_clients.appsync_client();
+            self.trigger_lazy(|app| &mut app.lazy.appsync_functions, id.clone(), event_tx, async move {
+                crate::aws::services::appsync::fetch_functions(client, id)
+                    .await
+                    .map_err(|e| format!("Functions unavailable: {}", e))
+            });
+        }
+    }
+
+    pub(crate) fn trigger_appsync_api_keys_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(id) = self.selected_appsync_api_id() {
+            let client = self.aws_clients.appsync_client();
+            self.trigger_lazy(|app| &mut app.lazy.appsync_api_keys, id.clone(), event_tx, async move {
+                crate::aws::services::appsync::fetch_api_keys(client, id)
+                    .await
+                    .map_err(|e| format!("API keys unavailable: {}", e))
+            });
+        }
+    }
+
+    pub(crate) fn trigger_appsync_schema_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(id) = self.selected_appsync_api_id() {
+            let client = self.aws_clients.appsync_client();
+            self.trigger_lazy(|app| &mut app.lazy.appsync_schema, id.clone(), event_tx, async move {
+                crate::aws::services::appsync::fetch_schema(client, id)
+                    .await
+                    .map_err(|e| format!("Schema unavailable: {}", e))
             });
         }
     }
@@ -22429,6 +22499,42 @@ impl App {
             id: value.to_string()})
     }
 
+    /// AppSync rows → the resource they name, keyed on the `APPSYNC_ROW_*`
+    /// labels (the values are bare names with no recognizable prefix): the
+    /// Cognito user pool, a DynamoDB table / OpenSearch domain data source,
+    /// and the API's log group. ARN-valued rows (Lambda, roles, WAF, RDS,
+    /// event bus) fall through to the generic classifier.
+    pub fn appsync_row_jump_target(&self, key: &str, value: &str) -> Option<JumpTarget> {
+        use crate::ui::widgets::details_pane as dp;
+        if value.is_empty() || value.starts_with('·') || self.current_service != Some(ServiceType::AppSync) {
+            return None;
+        }
+        let v = value.trim().to_string();
+        match key.trim() {
+            k if k == dp::APPSYNC_ROW_USER_POOL => Some(JumpTarget {
+                service: ServiceType::Cognito,
+                view: JumpView::None,
+                id: v,
+            }),
+            k if k == dp::APPSYNC_ROW_DDB_TABLE => Some(JumpTarget {
+                service: ServiceType::DynamoDb,
+                view: JumpView::None,
+                id: v,
+            }),
+            k if k == dp::APPSYNC_ROW_OPENSEARCH => Some(JumpTarget {
+                service: ServiceType::OpenSearch,
+                view: JumpView::None,
+                id: v,
+            }),
+            k if k == dp::APPSYNC_ROW_LOG_GROUP => Some(JumpTarget {
+                service: ServiceType::CloudWatch,
+                view: JumpView::Cw(CwView::LogGroups),
+                id: v,
+            }),
+            _ => None,
+        }
+    }
+
     /// Elastic Beanstalk rows → the resource they name. Keyed on the row
     /// labels `details_pane` exports as `EB_ROW_*` (names carry no
     /// recognizable id prefix): the application / environment / version
@@ -22770,6 +22876,7 @@ impl App {
                     .or_else(|| self.org_row_jump_target(k, v))
                     .or_else(|| self.sh_row_jump_target(k, v))
                     .or_else(|| self.eb_row_jump_target(k, v))
+                    .or_else(|| self.appsync_row_jump_target(k, v))
                     .or_else(|| {
                         crate::ui::widgets::details_pane::resource_jump_target(k, v, current)
                     })
@@ -26868,6 +26975,16 @@ impl App {
                     self.lazy.ses_event_dests.get(&cs.name),
                 );
             }
+            if let Some(api) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::appsync::AppSyncApi>()
+            {
+                return crate::ui::widgets::details_pane::appsync_api_section_lines(
+                    self,
+                    api,
+                    crate::aws::services::appsync::AppSyncApiDetailSection::from_index(self.detail_section_idx),
+                );
+            }
             if let Some(srv) = resource
                 .as_any()
                 .downcast_ref::<crate::aws::services::transfer::TransferServer>()
@@ -28743,6 +28860,58 @@ impl App {
                 ".json"
             } else {
                 ".yaml"
+            }
+        }
+
+        // AppSync API on Schema / Resolvers / Functions: the SDL, or every
+        // resolver's / function's code (JS or VTL templates) in one file.
+        if let Some(api) = any.downcast_ref::<crate::aws::services::appsync::AppSyncApi>() {
+            use crate::aws::services::appsync::AppSyncApiDetailSection as S;
+            use crate::lazy::Lazy;
+            let id = api.api_id.as_str();
+            match S::from_index(self.detail_section_idx) {
+                S::Schema => {
+                    if let Some(Lazy::Loaded(s)) = self.lazy.appsync_schema.get(id) {
+                        if !s.trim().is_empty() {
+                            return Some((s.clone(), ".graphql"));
+                        }
+                    }
+                }
+                S::Resolvers => {
+                    if let Some(Lazy::Loaded(r)) = self.lazy.appsync_resolvers.get(id) {
+                        if !r.resolvers.is_empty() {
+                            let doc = crate::ui::widgets::details_pane::appsync_code_document(
+                                r.resolvers.iter().map(|x| {
+                                    (
+                                        format!("{}.{}", x.type_name, x.field_name),
+                                        x.code.clone(),
+                                        x.request_template.clone(),
+                                        x.response_template.clone(),
+                                    )
+                                }),
+                            );
+                            return Some((doc, ".js"));
+                        }
+                    }
+                }
+                S::Functions => {
+                    if let Some(Lazy::Loaded(fs)) = self.lazy.appsync_functions.get(id) {
+                        if !fs.is_empty() {
+                            let doc = crate::ui::widgets::details_pane::appsync_code_document(
+                                fs.iter().map(|f| {
+                                    (
+                                        f.name.clone(),
+                                        f.code.clone(),
+                                        f.request_template.clone(),
+                                        f.response_template.clone(),
+                                    )
+                                }),
+                            );
+                            return Some((doc, ".js"));
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 

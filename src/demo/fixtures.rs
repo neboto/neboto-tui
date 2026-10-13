@@ -38,6 +38,10 @@
 //! - Beanstalk app `acme-portal` runs one Standard and one Cluster Mode
 //!   environment: `portal-legacy` is Red (it sits behind the target-less
 //!   `legacy-admin-alb`), `portal-next` is Green on a shared EKS cluster
+//! - AppSync API `storefront-graphql`: one of its three API keys expired
+//!   yesterday and another expires in three days (`@appsync`, API Keys —
+//!   masked); `placeOrder` is a pipeline (validateCart → createOrder) over
+//!   the `orders-api` Lambda, and field logging is off
 //! - a Secrets Manager secret `prod/orders/db` and a SecureString parameter
 //!   `/orders/db/password` — metadata only, for proving no value is fetched
 //! - Cost Anomaly Detection (`@cost`, `7`) flagged CloudWatch six days ago
@@ -271,6 +275,19 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("elasticbeanstalk", "DescribeEvents", when ["EnvironmentId=e-p0rtalcls1"], "DescribeEvents-portal-next.xml"),
     fx!("elasticbeanstalk", "DescribeConfigurationSettings", when ["EnvironmentName=portal-legacy"], "DescribeConfigurationSettings-portal-legacy.xml"),
     fx!("elasticbeanstalk", "DescribeConfigurationSettings", when ["EnvironmentName=portal-next"], "DescribeConfigurationSettings-portal-next.xml"),
+
+    // ── AppSync (restJson under /v1/apis) ────────────────────────────────────
+    // Resolvers are listed per type: Query and Mutation have some, every
+    // other object type answers empty. The schema is a raw SDL payload.
+    fx!("appsync", "GET /v1/apis", "ListGraphqlApis.json"),
+    fx!("appsync", "GET /v1/apis/k3st0refr0ntgq1x7m2q9a4b5c/datasources", "ListDataSources.json"),
+    fx!("appsync", "GET /v1/apis/k3st0refr0ntgq1x7m2q9a4b5c/functions", "ListFunctions.json"),
+    fx!("appsync", "GET /v1/apis/k3st0refr0ntgq1x7m2q9a4b5c/apikeys", "ListApiKeys.json"),
+    fx!("appsync", "GET /v1/apis/k3st0refr0ntgq1x7m2q9a4b5c/types", "ListTypes.json"),
+    fx!("appsync", "GET /v1/apis/k3st0refr0ntgq1x7m2q9a4b5c/types/Query/resolvers", "ListResolvers-Query.json"),
+    fx!("appsync", "GET /v1/apis/k3st0refr0ntgq1x7m2q9a4b5c/types/Mutation/resolvers", "ListResolvers-Mutation.json"),
+    fx!("appsync", "GET /v1/apis/*/types/*/resolvers", "ListResolvers-empty.json"),
+    fx!("appsync", "GET /v1/apis/k3st0refr0ntgq1x7m2q9a4b5c/schema", "GetIntrospectionSchema.graphql"),
 
     // ── CloudWatch alarms (the `monitoring` endpoint, RPC v2 CBOR) ──────────
     // JSON here, encoded to CBOR on the way out (`cbor.rs`): timestamps are

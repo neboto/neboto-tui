@@ -160,6 +160,7 @@ aws-sdk-batch = { version = "1", default-features = false, features = ["default-
 aws-sdk-xray = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-databasemigration = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-elasticbeanstalk = { version = "1.114", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-appsync = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-scheduler = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-pipes = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-fms = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }

@@ -333,6 +333,11 @@ fn every_fixture_renders_to_well_formed_output() {
         let (_, body) = split_status(rendered);
         let what = format!("{} {} (when {:?})", f.service, f.operation, f.when);
         assert!(!body.contains("{{"), "{what}: unexpanded placeholder");
+        // A blob-payload operation answers with raw bytes, not a document.
+        if RAW_PAYLOAD_OPS.contains(&(f.service, f.operation)) {
+            assert!(!body.trim().is_empty(), "{what}: empty raw payload");
+            continue;
+        }
         if body.trim_start().starts_with('<') {
             if let Err(e) = xml_balanced(&body) {
                 panic!("{what}: {e}");
@@ -342,6 +347,11 @@ fn every_fixture_renders_to_well_formed_output() {
         }
     }
 }
+
+/// Fixtures whose operation returns its output as a raw payload (an
+/// `@httpPayload` blob) — the body is the bytes themselves, so neither the
+/// JSON nor the XML check applies.
+const RAW_PAYLOAD_OPS: &[(&str, &str)] = &[("appsync", "GET /v1/apis/k3st0refr0ntgq1x7m2q9a4b5c/schema")];
 
 /// Open/close tags pair up, in order. Not a parser — enough to catch a
 /// dropped or mistyped closing tag.
@@ -368,4 +378,24 @@ fn xml_balanced(xml: &str) -> Result<(), String> {
         [] => Ok(()),
         open => Err(format!("unclosed {open:?}")),
     }
+}
+
+#[tokio::test]
+async fn appsync_fixtures_deserialize_and_keys_are_masked() {
+    let c = aws_sdk_appsync::Client::new(&demo_config().await);
+    let apis = c.list_graphql_apis().send().await.expect("ListGraphqlApis");
+    assert_eq!(apis.graphql_apis().len(), 1);
+    let id = apis.graphql_apis()[0].api_id().unwrap().to_string();
+    let ds = crate::aws::services::appsync::fetch_data_sources(c.clone(), id.clone()).await.expect("ListDataSources");
+    assert!(ds.iter().any(|d| d.dynamodb_table.as_deref() == Some("catalog")));
+    let r = crate::aws::services::appsync::fetch_resolvers(c.clone(), id.clone()).await.expect("resolvers");
+    assert_eq!(r.resolvers.len(), 3, "Query.order, Query.product, Mutation.placeOrder");
+    assert_eq!(r.types_total, 4, "enum + input skipped");
+    assert!(r.failed_types.is_empty());
+    assert_eq!(r.resolvers[0].type_name, "Query");
+    let keys = crate::aws::services::appsync::fetch_api_keys(c.clone(), id.clone()).await.expect("ListApiKeys");
+    assert_eq!(keys.len(), 3);
+    assert!(keys.iter().all(|k| k.masked_id.starts_with("da2-…") && k.masked_id.chars().count() == 9));
+    let schema = crate::aws::services::appsync::fetch_schema(c, id).await.expect("GetIntrospectionSchema");
+    assert!(schema.contains("type Mutation"));
 }

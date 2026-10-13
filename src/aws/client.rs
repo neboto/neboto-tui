@@ -704,6 +704,10 @@ impl AwsClients {
         aws_sdk_redshiftserverless::Client::new(&self.config)
     }
 
+    pub fn appsync_client(&self) -> aws_sdk_appsync::Client {
+        aws_sdk_appsync::Client::new(&self.config)
+    }
+
     pub fn transfer_client(&self) -> aws_sdk_transfer::Client {
         aws_sdk_transfer::Client::new(&self.config)
     }

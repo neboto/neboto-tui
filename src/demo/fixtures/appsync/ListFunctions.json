@@ -1,0 +1,26 @@
+{
+  "functions": [
+    {
+      "functionId": "fn0validatecart",
+      "name": "validateCart",
+      "dataSourceName": "None",
+      "functionArn": "arn:aws:appsync:{{region}}:{{account}}:apis/k3st0refr0ntgq1x7m2q9a4b5c/functions/fn0validatecart",
+      "runtime": {
+        "name": "APPSYNC_JS",
+        "runtimeVersion": "1.0.0"
+      },
+      "code": "export function request(ctx) {\n  if (!ctx.args.cart?.items?.length) util.error('empty cart', 'ValidationError');\n  return {};\n}\nexport function response(ctx) { return ctx.prev.result; }"
+    },
+    {
+      "functionId": "fn0createorder",
+      "name": "createOrder",
+      "dataSourceName": "OrdersLambda",
+      "functionArn": "arn:aws:appsync:{{region}}:{{account}}:apis/k3st0refr0ntgq1x7m2q9a4b5c/functions/fn0createorder",
+      "runtime": {
+        "name": "APPSYNC_JS",
+        "runtimeVersion": "1.0.0"
+      },
+      "code": "export function request(ctx) {\n  return { operation: 'Invoke', payload: { action: 'create', cart: ctx.args.cart } };\n}\nexport function response(ctx) { return ctx.result; }"
+    }
+  ]
+}

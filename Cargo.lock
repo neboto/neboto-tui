@@ -357,6 +357,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-appsync"
+version = "1.126.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39ad00fb27b15ff2c94b0c61ccd293e030770b2b3ace62b76bfaa3e53438dafc"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-athena"
 version = "1.117.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4617,6 +4642,7 @@ dependencies = [
  "aws-sdk-acm",
  "aws-sdk-apigateway",
  "aws-sdk-apigatewayv2",
+ "aws-sdk-appsync",
  "aws-sdk-athena",
  "aws-sdk-autoscaling",
  "aws-sdk-backup",

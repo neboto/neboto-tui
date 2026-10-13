@@ -76,6 +76,7 @@ pub enum ServiceType {
     XRay,
     Dms,
     Beanstalk,
+    AppSync,
     Budgets,
     Invoices,
     ControlTower,
@@ -151,6 +152,7 @@ impl ServiceType {
             ServiceType::Athena,
             ServiceType::Glue,
             ServiceType::Ses,
+            ServiceType::AppSync,
             ServiceType::Msk,
             ServiceType::Fms,
             ServiceType::Redshift,
@@ -268,7 +270,8 @@ impl ServiceType {
             ServiceType::Messaging
             | ServiceType::EventBridge
             | ServiceType::StepFunctions
-            | ServiceType::Ses => "App Integration",
+            | ServiceType::Ses
+            | ServiceType::AppSync => "App Integration",
             ServiceType::CloudFormation
             | ServiceType::CloudWatch
             | ServiceType::XRay
@@ -355,6 +358,7 @@ impl ServiceType {
             ServiceType::Msk => "MSK",
             ServiceType::Dms => "DMS",
             ServiceType::Beanstalk => "Elastic Beanstalk",
+            ServiceType::AppSync => "AppSync",
             ServiceType::Fms => "Firewall Manager",
             ServiceType::Redshift => "Redshift",
             ServiceType::Batch => "Batch",
@@ -435,6 +439,7 @@ impl ServiceType {
             ServiceType::Msk => "MSK",
             ServiceType::Dms => "DMS",
             ServiceType::Beanstalk => "EB",
+            ServiceType::AppSync => "GQL",
             ServiceType::Fms => "FMS",
             ServiceType::Redshift => "RSH",
             ServiceType::Batch => "BAT",
@@ -519,6 +524,7 @@ impl ServiceType {
             ServiceType::Batch => "Job Queues, Compute Environments, Jobs, Job Definitions",
             ServiceType::Dms => "Replication Tasks, Instances, Endpoints, Serverless Replications",
             ServiceType::Beanstalk => "Environments (Standard + Cluster Mode), Applications, Versions",
+            ServiceType::AppSync => "GraphQL APIs, Data Sources, Resolvers, Functions",
             ServiceType::Budgets => "Cost & Usage Budgets, Alerts, Subscribers",
             ServiceType::Invoices => "Invoice Summaries & PDF Download",
             ServiceType::ControlTower => "Landing Zone, Enabled Controls, Baselines & Operations",
@@ -584,6 +590,7 @@ impl ServiceType {
             "efs" | "filesystem" | "filesystems" | "nfs" => Some(ServiceType::Efs),
             "events" | "eventbridge" => Some(ServiceType::EventBridge),
             "eb" | "beanstalk" | "elasticbeanstalk" => Some(ServiceType::Beanstalk),
+            "appsync" | "graphql" | "gql" => Some(ServiceType::AppSync),
             "gd" | "guardduty" | "threats" => Some(ServiceType::GuardDuty),
             "sh" | "securityhub" | "shub" => Some(ServiceType::SecurityHub),
             "cognito" | "userpool" | "userpools" | "idp" => Some(ServiceType::Cognito),
@@ -712,6 +719,7 @@ impl ServiceType {
             ServiceType::Msk => "@msk",
             ServiceType::Dms => "@dms",
             ServiceType::Beanstalk => "@eb",
+            ServiceType::AppSync => "@appsync",
             ServiceType::Fms => "@fms",
             ServiceType::Redshift => "@redshift",
             ServiceType::Batch => "@batch",

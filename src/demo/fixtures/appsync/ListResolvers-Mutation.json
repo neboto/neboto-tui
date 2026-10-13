@@ -1,0 +1,21 @@
+{
+  "resolvers": [
+    {
+      "typeName": "Mutation",
+      "fieldName": "placeOrder",
+      "kind": "PIPELINE",
+      "resolverArn": "arn:aws:appsync:{{region}}:{{account}}:apis/k3st0refr0ntgq1x7m2q9a4b5c/types/Mutation/resolvers/placeOrder",
+      "pipelineConfig": {
+        "functions": [
+          "fn0validatecart",
+          "fn0createorder"
+        ]
+      },
+      "runtime": {
+        "name": "APPSYNC_JS",
+        "runtimeVersion": "1.0.0"
+      },
+      "code": "export function request(ctx) { return {}; }\nexport function response(ctx) { return ctx.prev.result; }"
+    }
+  ]
+}

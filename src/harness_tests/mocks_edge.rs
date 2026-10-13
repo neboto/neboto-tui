@@ -286,6 +286,18 @@ pub(super) fn mocks() -> Vec<Mock> {
             )),
         ),
         (
+            ServiceType::AppSync,
+            "AppSyncApi",
+            Box::new(svc::appsync::AppSyncApi::from_sdk(
+                &aws_sdk_appsync::types::GraphqlApi::builder()
+                    .api_id("mockapi123")
+                    .name("mock-api")
+                    .arn("arn:aws:appsync:us-east-1:123456789012:apis/mockapi123")
+                    .authentication_type(aws_sdk_appsync::types::AuthenticationType::ApiKey)
+                    .build(),
+            )),
+        ),
+        (
             ServiceType::Ses,
             "SesIdentity",
             Box::new(svc::ses::SesIdentity::from_sdk(

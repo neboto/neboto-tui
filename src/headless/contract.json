@@ -133,6 +133,7 @@
     "@agentcore",
     "@anfw",
     "@apigw",
+    "@appsync",
     "@asg",
     "@athena",
     "@audit",
@@ -344,6 +345,16 @@
     "AgentCore Workload Identity": [
       "Overview",
       "Return URLs",
+      "Tags"
+    ],
+    "AppSync API": [
+      "Overview",
+      "Auth",
+      "Data Sources",
+      "Resolvers",
+      "Functions",
+      "API Keys",
+      "Schema",
       "Tags"
     ],
     "Athena Database": [

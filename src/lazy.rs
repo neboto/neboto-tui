@@ -444,6 +444,18 @@ pub struct LazyStore {
     /// Environment Resources section (`DescribeEnvironmentResources`).
     pub eb_resources: LazyMap<crate::aws::services::beanstalk::EbResources>,
 
+    // ── AppSync (all keyed by API id) ────────────────────────────────────
+    /// API Data Sources section (`ListDataSources`).
+    pub appsync_data_sources: LazyMap<Vec<crate::aws::services::appsync::AppSyncDataSource>>,
+    /// API Resolvers section (`ListTypes` then `ListResolvers` per type).
+    pub appsync_resolvers: LazyMap<crate::aws::services::appsync::AppSyncResolvers>,
+    /// API Functions section (`ListFunctions`).
+    pub appsync_functions: LazyMap<Vec<crate::aws::services::appsync::AppSyncFunction>>,
+    /// API Keys section (`ListApiKeys`) — ids masked at ingestion.
+    pub appsync_api_keys: LazyMap<Vec<crate::aws::services::appsync::AppSyncApiKey>>,
+    /// Schema section (`GetIntrospectionSchema`, SDL).
+    pub appsync_schema: LazyMap<String>,
+
     // ── Transfer Family ──────────────────────────────────────────────────
     /// A server's users, keyed by server id.
     pub transfer_users: LazyMap<Vec<crate::aws::services::transfer::TransferUser>>,

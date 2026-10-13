@@ -1,0 +1,22 @@
+{
+  "apiKeys": [
+    {
+      "id": "da2-q7w8e9r0t1y2u3i4o5p6a7s8d9",
+      "description": "mobile app v4",
+      "expires": {{epoch:now-1d}},
+      "deletes": {{epoch:now+59d}}
+    },
+    {
+      "id": "da2-z1x2c3v4b5n6m7l8k9j0h1g2f3",
+      "description": "storefront-web",
+      "expires": {{epoch:now+3d}},
+      "deletes": {{epoch:now+63d}}
+    },
+    {
+      "id": "da2-p0o9i8u7y6t5r4e3w2q1a2s3d4",
+      "description": "partner feed",
+      "expires": {{epoch:now+200d}},
+      "deletes": {{epoch:now+260d}}
+    }
+  ]
+}

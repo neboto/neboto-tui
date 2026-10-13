@@ -1,5 +1,6 @@
 pub mod acm;
 pub mod api_gateway;
+pub mod appsync;
 pub mod asg;
 pub mod athena;
 pub mod awsconfig;

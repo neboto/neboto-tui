@@ -40,6 +40,7 @@ use crate::aws::services::fms::{
 };
 use crate::aws::services::ses::{SesAccountInfo, SesConfigSet, SesIdentity};
 use crate::aws::services::transfer::TransferServer;
+use crate::aws::services::appsync::AppSyncApi;
 use crate::aws::services::eventbridge::{EbEventBus, EbPipe, EbRule, EbSchedule};
 use crate::aws::services::network_firewall::{NfwFirewall, NfwPolicy, NfwRuleGroup};
 use crate::aws::services::guardduty::GdFinding;
@@ -188,6 +189,7 @@ use ratatui::{
 mod acm;
 mod agentcore;
 mod api_gateway;
+mod appsync;
 mod asg;
 mod athena;
 mod awsconfig;
@@ -319,6 +321,7 @@ pub use ses::*;
 pub use ssm::*;
 pub use step_functions::*;
 pub use transfer::*;
+pub use appsync::*;
 pub use transit_gateway::*;
 pub use trusted_advisor::*;
 pub use vpc::*;
@@ -856,6 +859,10 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
     }
     if let Some(i) = resource.and_then(|r| r.as_any().downcast_ref::<SesIdentity>()) {
         render_ses_identity_split(app, i, area, frame);
+        return;
+    }
+    if let Some(api) = resource.and_then(|r| r.as_any().downcast_ref::<AppSyncApi>()) {
+        render_appsync_api_split(app, api, area, frame);
         return;
     }
     if let Some(srv) = resource.and_then(|r| r.as_any().downcast_ref::<TransferServer>()) {
@@ -3676,6 +3683,12 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
                 )
             })
         }
+        // AppSync: apis/<apiId> (an API) or apis/<apiId>/… (a type, data
+        // source, resolver) — either way the API row, keyed by its id.
+        "appsync" => resource
+            .strip_prefix("apis/")
+            .and_then(|rest| rest.split('/').next())
+            .and_then(|id| mk(ServiceType::AppSync, JumpView::None, id)),
         "pipes" => {
             // resource = "pipe/NAME"
             resource.strip_prefix("pipe/").and_then(|name| {
@@ -3855,6 +3868,8 @@ pub fn cfn_type_jump_target(
         // arn:…:cluster/name/uuid → name (2nd-from-last, the ELB-ARN shape).
         "AWS::MSK::Cluster" => (Msk, JumpView::None, elb_name()),
         "AWS::Transfer::Server" => (Transfer, JumpView::None, physical_id),
+        // arn:…:apis/<apiId> → the API id (rows are keyed by it).
+        "AWS::AppSync::GraphQLApi" => (AppSync, JumpView::None, after_slash()),
         // Anything else: route by the type's service token — lands in the
         // service with the physical id seeded as a search (the query-style
         // jump), rather than silently not jumping.
@@ -3920,6 +3935,7 @@ fn cfn_service_fallback_jump_target(
         "Redshift" | "RedshiftServerless" => Redshift,
         "MSK" => Msk,
         "Transfer" => Transfer,
+        "AppSync" => AppSync,
         "Cognito" => Cognito,
         "CloudFormation" => CloudFormation,
         "ElasticLoadBalancingV2" | "ElasticLoadBalancing" => Elb,
@@ -4196,6 +4212,7 @@ fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
         .or_else(|| app.org_row_jump_target(key, value))
         .or_else(|| app.sh_row_jump_target(key, value))
         .or_else(|| app.eb_row_jump_target(key, value))
+        .or_else(|| app.appsync_row_jump_target(key, value))
         .or_else(|| resource_jump_target(key, value, current))?;
     Some(target.service != current)
 }

@@ -102,6 +102,7 @@ const DEMO_POPULATED: &[ServiceType] = &[
     ServiceType::Secrets,
     ServiceType::Ssm,
     ServiceType::Ecr,
+    ServiceType::AppSync,
 ];
 
 /// Services whose load correctly reports "not set up" on an account that

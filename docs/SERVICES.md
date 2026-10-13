@@ -985,6 +985,30 @@ the service you're touching.
 - **Transfer Family** (`@transfer`) — N+1 streaming load (`DescribeServer` per
   server); Users lazy. `m` metrics (`AWS/Transfer`, dim `ServerId`):
   bytes/files in+out and on-upload workflow success/failure.
+- **AppSync** (`@appsync`, `appsync.rs`, **aws-sdk-appsync**) — single list of
+  **GraphQL APIs** (standard + merged); Event APIs (`ListApis`, channel
+  namespaces) are not listed yet. `ListGraphqlApis` returns the full config, so
+  there is no per-API describe; everything below the API is lazy.
+  **Resolvers have no API-wide list**: `ListResolvers` takes a `typeName`, so
+  the section runs `ListTypes` (SDL, to tell object types from enums/inputs —
+  only `type`/`extend type` definitions can carry resolvers) then one
+  `ListResolvers` per type, 4 in flight, capped at `MAX_RESOLVER_TYPES=100`
+  with Query/Mutation/Subscription walked first so the cap never drops a root.
+  The cut and any per-type failure render as `⚠` rows in the pane. The
+  Resolvers hook also fires Functions so pipeline steps read by name rather
+  than function id. **API keys are redacted at ingestion**
+  (`mask_api_key_id`, `da2-…wxyz`): the key *id* is the credential a client
+  sends as `x-api-key`, so it never reaches `App` — no reveal, no copy, no
+  export (deliberately unlike the Secrets Manager `x` reveal). RDS data
+  sources show the credentials *secret ARN* only, never resolved. Jumps:
+  `User Pool` / `DynamoDB Table` / `OpenSearch Domain` / `Log Group` rows
+  are label-keyed (`APPSYNC_ROW_*`, `appsync_row_jump_target`); the OpenSearch
+  domain is parsed off the endpoint hostname (`search-<domain>-<hash>.…`,
+  hash = last hyphen segment). Lambda / role / WAF / RDS-cluster / event-bus
+  rows are ARNs and use the generic classifier. `e` on Schema opens the SDL;
+  on Resolvers / Functions it opens every resolver's code (JS, or the VTL
+  request/response templates) in one file. Not yet: `m` (AWS/AppSync,
+  dim `GraphQLAPIId`) and `t` on `/aws/appsync/apis/<id>`.
 - **Step Functions** (`@sfn`, `step_functions.rs`) — sub-tabs **State
   Machines** / **Executions**. `ListStateMachines` streams first, then a
   best-effort execution phase: `ListExecutions` per **STANDARD** machine

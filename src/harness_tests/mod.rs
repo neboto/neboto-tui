@@ -34,6 +34,7 @@ mod cli_picker_test;
 mod batch_test;
 mod dms_test;
 mod org_assume_hint_test;
+mod appsync_test;
 mod beanstalk_test;
 mod s3tables_jump_test;
 mod ec2_lb_test;
