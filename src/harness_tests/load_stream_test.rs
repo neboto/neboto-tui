@@ -161,3 +161,27 @@ async fn untagged_load_events_still_take_the_plain_path() {
     .unwrap();
     assert_eq!(app.resources.len(), 1);
 }
+
+/// A superseded load is aborted, not just muted: the generation guard drops
+/// its events, but the fetch itself would keep paging AWS and spend the rate
+/// limit the new view needs (#115).
+#[tokio::test]
+async fn a_superseded_load_task_is_aborted() {
+    let (mut app, tx, _rx) = test_app().await;
+    armed_load(&mut app);
+    app.load_resources_async(&tx);
+    let old = app.load_task.clone().expect("the load task is tracked");
+    assert!(!old.is_finished(), "a dead-endpoint EC2 load is still retrying");
+
+    // A service switch supersedes it.
+    app.current_service = Some(ServiceType::S3);
+    app.load_service_resources();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !old.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the superseded load task was aborted");
+    assert!(app.load_task.is_none());
+}

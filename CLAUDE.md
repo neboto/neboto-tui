@@ -845,6 +845,13 @@ and the approaches you rejected are the part nobody can recover from your code.
   stops on absent / empty / non-advancing tokens. A bare `if token.is_none()`
   can spin forever (this hung GuardDuty). Not for DynamoDB
   `last_evaluated_key` (a map, not a string).
+- **Throttling** (#115): every config gets `with_throttle_retries`
+  (`client.rs`) — the SDK's **adaptive** retry mode, 5 attempts, unless the
+  user set their own `retry_mode`/`max_attempts`. Adaptive's client-side rate
+  limiter is process-wide per service, so it paces our per-call clients
+  together after the first throttle. Don't add per-client retry overrides;
+  for a known slow API (Route 53 5 TPS, CloudTrail 2 TPS, IAM bursts) lower
+  the fan-out (`buffered(N)` / sequential) at the call site instead.
 - **Colors** (`src/ui/theme.rs`): the palette is **runtime-selected** (config
   `theme`/`[theme_colors]`, installed once via `theme::init_palette` in
   `App::new`) and read through accessors — `theme::accent()`,
@@ -930,8 +937,10 @@ and the approaches you rejected are the part nobody can recover from your code.
   stream is spawned behind a generation-guarded forwarder
   (`load_resources_async` + `App.load_generation`, bumped by
   `load_service_resources` / `start_watch_refresh`, and at the *start* of
-  `switch_profile` / `switch_region`) — a superseded stream's remaining
-  events are dropped before they reach `handle_event`. The forwarder also
+  `switch_profile` / `switch_region`, all through `supersede_loads`) — a
+  superseded stream's remaining events are dropped before they reach
+  `handle_event`, and its fetch task is **aborted** (`App.load_task`) so it
+  stops spending the account's rate limit in the background. The forwarder also
   **tags** every event it passes as `Event::LoadStream { generation, .. }`
   and `handle_event` re-checks the generation **when the event is handled**:
   while `handle_event` is blocked in a profile/region/role switch (the awaited

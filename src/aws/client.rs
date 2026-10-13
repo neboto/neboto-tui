@@ -100,6 +100,7 @@ impl AwsClients {
                 .credentials_provider(mock_credentials());
         }
         let mut config = loader.load().await;
+        config = with_throttle_retries(config);
 
         // An explicitly chosen profile must supply the credentials. The SDK's
         // default chain (what `loader.profile_name` feeds) tries the
@@ -620,19 +621,11 @@ impl AwsClients {
     }
 
     pub fn apigateway_client(&self) -> aws_sdk_apigateway::Client {
-        let retry = aws_config::retry::RetryConfig::standard().with_max_attempts(5);
-        let config = aws_sdk_apigateway::config::Builder::from(&self.config)
-            .retry_config(retry)
-            .build();
-        aws_sdk_apigateway::Client::from_conf(config)
+        aws_sdk_apigateway::Client::new(&self.config)
     }
 
     pub fn apigatewayv2_client(&self) -> aws_sdk_apigatewayv2::Client {
-        let retry = aws_config::retry::RetryConfig::standard().with_max_attempts(5);
-        let config = aws_sdk_apigatewayv2::config::Builder::from(&self.config)
-            .retry_config(retry)
-            .build();
-        aws_sdk_apigatewayv2::Client::from_conf(config)
+        aws_sdk_apigatewayv2::Client::new(&self.config)
     }
 
     pub fn service_quotas_client(&self) -> aws_sdk_servicequotas::Client {
@@ -902,6 +895,37 @@ impl AwsClients {
 /// which calls neboto made — anyone can audit the read-only claim from their
 /// own trail. Configs derived with `into_builder` (profile pinning, assumed
 /// roles) keep it.
+/// Attempts per call under [`with_throttle_retries`].
+const THROTTLE_MAX_ATTEMPTS: u32 = 5;
+
+/// Retry posture for large accounts (#115). The SDK default is `standard`
+/// with 3 attempts: backoff with jitter on throttling errors, but an 8-way
+/// fan-out against a 5 TPS API (Organizations, IAM, Route 53) can spend all
+/// three and surface as a partial load when slower pacing would have
+/// succeeded. `adaptive` adds the SDK's client-side rate limiter: after the
+/// first throttle it paces every client of that service (the limiter is a
+/// process-wide map keyed by service, so our per-call clients share it),
+/// and with no throttling it costs nothing. Five attempts was API
+/// Gateway's own override; it now applies everywhere.
+///
+/// Only replaces the SDK default — a user who set `AWS_RETRY_MODE`,
+/// `AWS_MAX_ATTEMPTS` or the profile's `retry_mode` / `max_attempts`
+/// keeps theirs. (An explicit `standard` with 3 attempts is
+/// indistinguishable from the default and gets ours.)
+fn with_throttle_retries(config: SdkConfig) -> SdkConfig {
+    use aws_config::retry::{RetryConfig, RetryMode};
+    let is_default = config
+        .retry_config()
+        .is_none_or(|r| r.mode() == RetryMode::Standard && r.max_attempts() == 3);
+    if !is_default {
+        return config;
+    }
+    config
+        .into_builder()
+        .retry_config(RetryConfig::adaptive().with_max_attempts(THROTTLE_MAX_ATTEMPTS))
+        .build()
+}
+
 fn sdk_defaults() -> aws_config::ConfigLoader {
     aws_config::defaults(aws_config::BehaviorVersion::latest())
         .app_name(aws_config::AppName::new("neboto").expect("valid app name"))
@@ -1237,6 +1261,37 @@ mod tests {
     use super::*;
     use aws_credential_types::provider::ProvideCredentials;
     use std::io::Write;
+
+    /// The SDK's default retry posture becomes adaptive with more attempts;
+    /// one the user configured is left alone.
+    #[test]
+    fn throttle_retries_replace_only_the_sdk_default() {
+        use aws_config::retry::{RetryConfig, RetryMode};
+        let with = |r: RetryConfig| {
+            with_throttle_retries(SdkConfig::builder().retry_config(r).build())
+                .retry_config()
+                .cloned()
+                .unwrap()
+        };
+        let defaulted = with(RetryConfig::standard());
+        assert_eq!(defaulted.mode(), RetryMode::Adaptive);
+        assert_eq!(defaulted.max_attempts(), THROTTLE_MAX_ATTEMPTS);
+        let unset = with_throttle_retries(SdkConfig::builder().build());
+        assert_eq!(unset.retry_config().unwrap().mode(), RetryMode::Adaptive);
+
+        let users = with(RetryConfig::standard().with_max_attempts(10));
+        assert_eq!((users.mode(), users.max_attempts()), (RetryMode::Standard, 10));
+        let disabled = with(RetryConfig::disabled());
+        assert_eq!(disabled.max_attempts(), 1);
+    }
+
+    /// Every built config gets the throttle posture, test clients included.
+    #[tokio::test]
+    async fn built_clients_retry_adaptively() {
+        let clients = AwsClients::new_for_test().await;
+        let retry = clients.sdk_config().retry_config().unwrap();
+        assert_eq!(retry.mode(), aws_config::retry::RetryMode::Adaptive);
+    }
 
     /// Every config carries the app name (CloudTrail's `userAgent` shows
     /// `app/neboto`), including one re-pointed at another account.

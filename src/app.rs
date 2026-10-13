@@ -1915,6 +1915,11 @@ pub struct App {
     /// clear the new load's flags, poison the cache, or append duplicate
     /// rows (rapid A→B or A→B→A switches raced exactly that way).
     pub load_generation: Arc<AtomicU64>,
+    /// The task running the current list load, so a superseding load can
+    /// abort it. The generation guard only stops a stale stream's events
+    /// from landing — without the abort its fetch keeps paging AWS in the
+    /// background, spending rate limit the new view is about to need (#115).
+    load_task: Option<tokio::task::AbortHandle>,
     /// Watch mode (`w`): periodic auto-refresh of the current view.
     pub watch: WatchState,
     /// While a watch-mode refresh streams in, batches divert here instead of
@@ -2983,6 +2988,7 @@ impl App {
             loading_complete: false,
             loading_started: false,
             load_generation: Arc::new(AtomicU64::new(0)),
+            load_task: None,
             watch: WatchState::new(config.watch.unwrap_or(false), config.watch_interval),
             watch_staging: None,
             switching_region: None,
@@ -9949,7 +9955,7 @@ impl App {
         // the awaited client build, or its forwarder keeps queueing batches
         // for the whole wait (handle_event drops them anyway — see
         // Event::LoadStream — but there's no point buffering them).
-        self.load_generation.fetch_add(1, Ordering::SeqCst);
+        self.supersede_loads();
         self.resources.clear();
         self.filtered_resources.clear();
         self.selected_index = None;
@@ -10075,7 +10081,7 @@ impl App {
         self.load_started_at = Some(Instant::now());
         // Same as switch_region: the old credentials' in-flight stream is
         // superseded the moment the view is reset, not after the client build.
-        self.load_generation.fetch_add(1, Ordering::SeqCst);
+        self.supersede_loads();
         self.reset_account_scoped_state();
 
         // Yield so the UI can paint the loading state before we block on client init.
@@ -10960,7 +10966,7 @@ impl App {
             return;
         }
         // A watch pass is a new load — supersede any stray earlier stream.
-        self.load_generation.fetch_add(1, Ordering::SeqCst);
+        self.supersede_loads();
         self.loading = true;
         self.loading_progress = None;
         self.loading_complete = false;
@@ -11045,7 +11051,7 @@ impl App {
         // emit. Done before the cache check — a cache hit must silence stale
         // streams too, or a late FullyLoaded would stamp this view's rows
         // into the old service's cache.
-        self.load_generation.fetch_add(1, Ordering::SeqCst);
+        self.supersede_loads();
 
         // A manual/full load supersedes any in-flight watch refresh — drop the
         // staging buffer *before* the cache check, or a late FullyLoaded from
@@ -11130,7 +11136,7 @@ impl App {
                         }
                     }
                 });
-                tokio::spawn(async move {
+                let task = tokio::spawn(async move {
                     if let Err(e) = service
                         .list_resources_streaming(stream_tx.clone(), service_type)
                         .await
@@ -11140,7 +11146,19 @@ impl App {
                             error: e.to_string()});
                     }
                 });
+                self.load_task = Some(task.abort_handle());
             }
+        }
+    }
+
+    /// Supersede every in-flight list load: bump the generation so its
+    /// forwarder drops whatever it still emits, and abort the fetch itself
+    /// so it stops calling AWS. Aborting drops the stream's sender, which
+    /// ends the forwarder too.
+    fn supersede_loads(&mut self) {
+        self.load_generation.fetch_add(1, Ordering::SeqCst);
+        if let Some(task) = self.load_task.take() {
+            task.abort();
         }
     }
 
