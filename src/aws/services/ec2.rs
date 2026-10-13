@@ -1355,10 +1355,43 @@ pub fn parse_sg_rules(perms: &[aws_sdk_ec2::types::IpPermission]) -> Vec<SgRule>
     rules
 }
 
+/// Entries shown under a prefix-list rule before collapsing to a count —
+/// AWS-managed lists (CloudFront origin-facing, S3) run to hundreds.
+pub const PL_PREVIEW_ENTRIES: usize = 8;
+/// Distinct prefix lists expanded per security group (one fetch each).
+pub const MAX_SG_PREFIX_LISTS: usize = 10;
+
+/// The distinct `pl-` ids a group's rules reference, in rule order, capped.
+pub fn sg_prefix_list_ids(rules: &[&[SgRule]]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for r in rules.iter().flat_map(|r| r.iter()) {
+        if r.source.starts_with("pl-") && !out.contains(&r.source) {
+            out.push(r.source.clone());
+        }
+    }
+    out.truncate(MAX_SG_PREFIX_LISTS);
+    out
+}
+
+/// Prefix-list entries for the rule rows, by `pl-` id (`LazyStore::pl_entries`,
+/// shared with the VPC prefix-list pane).
+pub type PlEntries = crate::lazy::LazyMap<Vec<(String, String)>>;
+
 /// Render a set of SG rules as detail rows under a group header, e.g.
 /// `Inbound (2 rules)` then `  TCP 443    0.0.0.0/0`, with each rule's
 /// description (if any) appended after a tab as a muted inline note.
 pub fn sg_rule_rows(label: &str, rules: &[SgRule]) -> Vec<(String, String)> {
+    sg_rule_rows_expanded(label, rules, None)
+}
+
+/// [`sg_rule_rows`], with each prefix-list rule followed by the CIDRs it
+/// stands for — a `pl-` id alone doesn't say what the rule allows. The
+/// first [`PL_PREVIEW_ENTRIES`] are listed; past that, a count.
+pub fn sg_rule_rows_expanded(
+    label: &str,
+    rules: &[SgRule],
+    pl_entries: Option<&PlEntries>,
+) -> Vec<(String, String)> {
     let mut rows = vec![
         (
             format!(
@@ -1394,8 +1427,44 @@ pub fn sg_rule_rows(label: &str, rules: &[SgRule]) -> Vec<(String, String)> {
             None => rule,
         };
         rows.push((line, String::new()));
+        if let (Some(map), true) = (pl_entries, r.source.starts_with("pl-")) {
+            rows.extend(pl_entry_rows(map.get(&r.source)));
+        }
     }
     rows
+}
+
+/// The indented CIDR lines under one prefix-list rule.
+fn pl_entry_rows(state: Option<&crate::lazy::Lazy<Vec<(String, String)>>>) -> Vec<(String, String)> {
+    use crate::lazy::Lazy;
+    const INDENT: &str = "                       ";
+    let line = |s: String| (format!("{INDENT}{s}"), String::new());
+    match state {
+        None | Some(Lazy::Loading) => vec![line("Loading entries…".to_string())],
+        Some(Lazy::Error(e)) => vec![line(format!("⚠ entries unavailable: {e}"))],
+        Some(Lazy::Loaded(entries)) if entries.is_empty() => vec![line("· empty prefix list".to_string())],
+        Some(Lazy::Loaded(entries)) => {
+            let mut out: Vec<(String, String)> = entries
+                .iter()
+                .take(PL_PREVIEW_ENTRIES)
+                .map(|(cidr, desc)| {
+                    if desc.is_empty() {
+                        line(cidr.clone())
+                    } else {
+                        line(format!("{cidr}\t{desc}"))
+                    }
+                })
+                .collect();
+            if entries.len() > PL_PREVIEW_ENTRIES {
+                out.push(line(format!(
+                    "· … {} more ({} total) — press ⏎ on the rule to open the list",
+                    entries.len() - PL_PREVIEW_ENTRIES,
+                    entries.len()
+                )));
+            }
+            out
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1443,8 +1512,8 @@ impl SecurityGroup {
 crate::sections! {
     pub enum SecurityGroupDetailSection,
     pub static SECURITY_GROUP_SECTIONS = [
-        Inbound "Inbound",
-        Outbound "Outbound",
+        Inbound "Inbound" => crate::app::App::trigger_sg_prefix_lists_load,
+        Outbound "Outbound" => crate::app::App::trigger_sg_prefix_lists_load,
         UsedBy "Used By" => crate::app::App::trigger_sg_enis_load,
         Tags "Tags",
     ]
@@ -3435,5 +3504,46 @@ mod sg_exposure_tests {
             vec![],
         ));
         assert_eq!(vpc_open.state_label(), SG_OPEN_TO_WORLD);
+    }
+}
+
+#[cfg(test)]
+mod prefix_list_rule_tests {
+    use super::*;
+
+    fn rule(source: &str) -> SgRule {
+        SgRule {
+            protocol: "TCP".into(),
+            ports: "443".into(),
+            source: source.into(),
+            source_label: None,
+            description: None,
+        }
+    }
+
+    #[test]
+    fn distinct_prefix_lists_in_rule_order() {
+        let inbound = vec![rule("pl-b"), rule("10.0.0.0/8"), rule("pl-a")];
+        let outbound = vec![rule("pl-b"), rule("sg-1")];
+        assert_eq!(sg_prefix_list_ids(&[&inbound, &outbound]), vec!["pl-b", "pl-a"]);
+    }
+
+    /// A small list shows every CIDR under its rule; a big AWS-managed one
+    /// collapses to a count after the preview.
+    #[test]
+    fn prefix_list_rules_show_their_cidrs() {
+        let mut map = PlEntries::default();
+        map.apply("pl-small".into(), Ok(vec![("10.1.0.0/16".into(), "corp".into())]));
+        let big: Vec<(String, String)> = (0..120).map(|i| (format!("10.{i}.0.0/16"), String::new())).collect();
+        map.apply("pl-big".into(), Ok(big));
+        let rows = sg_rule_rows_expanded("Inbound", &[rule("pl-small"), rule("pl-big"), rule("pl-cold")], Some(&map));
+        let text: Vec<&str> = rows.iter().map(|(k, _)| k.trim()).collect();
+        assert!(text.contains(&"10.1.0.0/16\tcorp"), "{text:?}");
+        assert!(text.contains(&"10.7.0.0/16"));
+        assert!(!text.contains(&"10.8.0.0/16"), "preview stops at {PL_PREVIEW_ENTRIES}");
+        assert!(text.iter().any(|t| t.starts_with("· … 112 more (120 total)")), "{text:?}");
+        assert!(text.contains(&"Loading entries…"), "an unfetched list says so");
+        // The unexpanded form (flat details) is unchanged.
+        assert_eq!(sg_rule_rows("Inbound", &[rule("pl-small")]).len(), 3);
     }
 }

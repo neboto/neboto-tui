@@ -618,6 +618,22 @@ async fn get_secret_shows_replica_regions() {
     assert!(rep["eu-west-1"]["Message"].as_str().unwrap().contains("KMS"), "{rep}");
 }
 
+/// #106: a prefix-list rule shows the CIDRs the `pl-` id stands for.
+#[tokio::test]
+async fn get_security_group_expands_prefix_list_rules() {
+    let v = demo_get_json(GetArgs {
+        sections: vec!["inbound".into()],
+        resource_type: Some("Security Group".into()),
+        ..get_args("ec2", &["reporting-db-sg"])
+    })
+    .await;
+    let inbound = v["sections"]["Inbound"].to_string();
+    assert!(inbound.contains("pl-0corpvpn00000001"), "{inbound}");
+    assert!(inbound.contains("10.200.0.0/16"), "{inbound}");
+    assert!(inbound.contains("172.31.240.0/20"), "{inbound}");
+    assert!(!inbound.contains("Loading"), "{inbound}");
+}
+
 /// #193 part 2: Secrets Manager version stages ride `ListSecrets` — ids and
 /// labels only, never a value.
 #[tokio::test]

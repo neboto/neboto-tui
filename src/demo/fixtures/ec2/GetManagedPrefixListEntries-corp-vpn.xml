@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<GetManagedPrefixListEntriesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+  <requestId>neboto-demo</requestId>
+  <entrySet>
+    <item><cidr>10.200.0.0/16</cidr><description>Sydney office VPN pool</description></item>
+    <item><cidr>10.201.0.0/16</cidr><description>Melbourne office VPN pool</description></item>
+    <item><cidr>172.31.240.0/20</cidr><description>remote-access VPN</description></item>
+  </entrySet>
+</GetManagedPrefixListEntriesResponse>

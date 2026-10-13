@@ -1857,6 +1857,13 @@ the service you're touching.
     `is_noise()`. Overview / **Entries** (the one lazy VPC section:
     `GetManagedPrefixListEntries` paginated, `lazy.pl_entries` keyed by pl id) /
     Tags. `pl-` ids (route destinations, SG rules) jump to the Routing tab.
+    **Security group rules expand them** (#106): the SG panes' Inbound /
+    Outbound hooks (`trigger_sg_prefix_lists_load`) fetch every distinct
+    `pl-` id the rules reference (cap `MAX_SG_PREFIX_LISTS`) into the same
+    `pl_entries` map, and `sg_rule_rows_expanded` lists the CIDRs under each
+    prefix-list rule — `PL_PREVIEW_ENTRIES`, then a count, because the
+    AWS-managed lists (CloudFront origin-facing, S3) run to hundreds. The
+    flat `details()` view keeps the bare id.
 - **Compute Optimizer lens** (B7) — a lazy **Optimizer** section on five panes:
   EC2 instance (key 9), EBS volume (5), Lambda (6), ASG (5), ECS service (7).
   Not a `ServiceType`: `aws/services/computeoptimizer.rs` flattens the per-ARN

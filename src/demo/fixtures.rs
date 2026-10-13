@@ -88,6 +88,8 @@ pub static FIXTURES: &[Fixture] = &[
     // ── EC2 ──────────────────────────────────────────────────────────────────
     fx!("ec2", "DescribeInstances", "DescribeInstances.xml"),
     fx!("ec2", "DescribeSecurityGroups", "DescribeSecurityGroups.xml"),
+    // reporting-db-sg allows Postgres from a prefix list; its rule expands to these.
+    fx!("ec2", "GetManagedPrefixListEntries", when ["pl-0corpvpn00000001"], "GetManagedPrefixListEntries-corp-vpn.xml"),
     fx!("ec2", "DescribeVolumes", "DescribeVolumes.xml"),
     // ── ECS ──────────────────────────────────────────────────────────────────
     fx!("ecs", "ListClusters", "ListClusters.json"),

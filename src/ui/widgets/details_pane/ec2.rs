@@ -826,13 +826,15 @@ pub fn security_group_section_lines(
     outbound: &[crate::aws::services::ec2::SgRule],
     tags: &std::collections::HashMap<String, String>,
     used_by: Option<&crate::lazy::Lazy<Vec<crate::aws::services::ec2::SgEni>>>,
+    pl_entries: &crate::aws::services::ec2::PlEntries,
 ) -> Vec<(String, String)> {
-    use crate::aws::services::ec2::sg_rule_rows;
+    use crate::aws::services::ec2::sg_rule_rows_expanded;
     match section {
         // Rule rows already carry the sg-/pl-/CIDR token, so referenced security
         // groups are Enter-jumpable via the generic resource_jump_target.
-        SecurityGroupDetailSection::Inbound => sg_rule_rows("Inbound", inbound),
-        SecurityGroupDetailSection::Outbound => sg_rule_rows("Outbound", outbound),
+        // Prefix-list rules gain their CIDRs underneath.
+        SecurityGroupDetailSection::Inbound => sg_rule_rows_expanded("Inbound", inbound, Some(pl_entries)),
+        SecurityGroupDetailSection::Outbound => sg_rule_rows_expanded("Outbound", outbound, Some(pl_entries)),
         SecurityGroupDetailSection::UsedBy => {
             let mut rows = vec![("".to_string(), "".to_string())];
             match used_by {

@@ -51,6 +51,11 @@
           <groups><item><userId>{{account}}</userId><groupId>sg-0web0000000000001</groupId></item></groups>
           <ipRanges/><ipv6Ranges/><prefixListIds/>
         </item>
+        <item>
+          <ipProtocol>tcp</ipProtocol><fromPort>5432</fromPort><toPort>5432</toPort>
+          <groups/><ipRanges/><ipv6Ranges/>
+          <prefixListIds><item><prefixListId>pl-0corpvpn00000001</prefixListId><description>analysts over the corp VPN</description></item></prefixListIds>
+        </item>
       </ipPermissions>
       <ipPermissionsEgress>
         <item>

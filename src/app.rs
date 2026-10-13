@@ -16112,6 +16112,33 @@ impl App {
 
     /// Lazy-load the network interfaces a security group is attached to, on
     /// first view of the Used By section, keyed by group id.
+    /// Fetch the entries of every prefix list the selected security group's
+    /// rules reference (Inbound / Outbound hook), so the rules can show the
+    /// CIDRs a `pl-` id stands for. One fetch per distinct list, shared with
+    /// the VPC prefix-list pane through `pl_entries`.
+    pub(crate) fn trigger_sg_prefix_lists_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::ec2::sg_prefix_list_ids;
+        let Some(r) = self.get_selected_resource() else {
+            return;
+        };
+        let ids = if let Some(sg) = r.as_any().downcast_ref::<crate::aws::services::ec2::SecurityGroup>() {
+            sg_prefix_list_ids(&[&sg.inbound_rules, &sg.outbound_rules])
+        } else if let Some(sg) = r.as_any().downcast_ref::<crate::aws::services::vpc::VpcSecurityGroup>() {
+            sg_prefix_list_ids(&[&sg.inbound_rules, &sg.outbound_rules])
+        } else {
+            return;
+        };
+        for pl_id in ids {
+            let client = self.aws_clients.ec2_vpc_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.pl_entries,
+                pl_id.clone(),
+                event_tx,
+                async move { crate::aws::services::vpc::fetch_pl_entries(&client, &pl_id).await },
+            );
+        }
+    }
+
     pub(crate) fn trigger_sg_enis_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if crate::aws::services::ec2::SecurityGroupDetailSection::from_index(self.detail_section_idx) != SecurityGroupDetailSection::UsedBy {
             return;
@@ -26755,6 +26782,7 @@ impl App {
                     &sg.outbound_rules,
                     &sg.tags,
                     self.lazy.sg_network_interfaces.get(&sg.group_id),
+                    &self.lazy.pl_entries,
                 );
             }
             if let Some(sg) = resource
@@ -26767,6 +26795,7 @@ impl App {
                     &sg.outbound_rules,
                     &sg.tags,
                     self.lazy.sg_network_interfaces.get(&sg.group_id),
+                    &self.lazy.pl_entries,
                 );
             }
             if let Some(vol) = resource
