@@ -1793,6 +1793,17 @@ the service you're touching.
   flat view, `X` and `neboto get` can reach — the per-row expand is cursor
   state (`iam_expanded_docs`) they can't. Headers carry no count (`Managed
   Policies`, not `… (3)`) so export keys stay stable.
+- **IAM Instance Profiles** (Profiles sub-tab, key 8, #106) — one
+  paginated `ListInstanceProfiles` in the IAM load (phase 4b, not a core
+  phase: a failure warns, never counts toward the all-failed error). Each
+  profile **embeds its roles**, so there's no per-profile call, and the role
+  pane's Overview "Instance Profiles" rows are derived from the loaded rows
+  (`App::instance_profiles_for_role`, on-screen list then warm IAM cache) —
+  zero API. A profile with no role is `ResourceState::Idle`, label "no
+  role" (its role was deleted; an instance using it gets no credentials).
+  `id()` is the ARN; `:instance-profile/` ARNs jump here by name, so the
+  EC2 instance's profile ARN and the role pane's rows both land on it. Flat
+  pane — `details()` already says everything `ListInstanceProfiles` returns.
 - **IAM Identity Providers** (Providers sub-tab, key 6) — SAML + OIDC in one
   list; both list calls are unpaginated, and the OIDC one returns **only
   ARNs**, so everything else rides the lazy `Get*Provider` bundle. A

@@ -126,6 +126,12 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("iam", "GetRole", when ["RoleName=github-actions-deploy"], "GetRole-github-actions-deploy.xml"),
     fx!("iam", "GetRole", when ["RoleName=OrganizationAccountAccessRole"], "GetRole-OrganizationAccountAccessRole.xml"),
     fx!("iam", "GetRole", when ["RoleName=legacy-reporting-role"], "GetRole-legacy-reporting-role.xml"),
+    // acme-web-ec2 is what the web instances' `acme-web` profile wraps;
+    // `batch-runner-old` is a profile whose role was deleted (no role).
+    fx!("iam", "GetRole", when ["RoleName=acme-web-ec2"], "GetRole-acme-web-ec2.xml"),
+    fx!("iam", "ListAttachedRolePolicies", when ["RoleName=acme-web-ec2"], "ListAttachedRolePolicies-acme-web-ec2.xml"),
+    fx!("iam", "GetInstanceProfile", when ["InstanceProfileName=acme-web"], "GetInstanceProfile-acme-web.xml"),
+    fx!("iam", "ListInstanceProfiles", "ListInstanceProfiles.xml"),
     fx!("iam", "ListAttachedRolePolicies", when ["RoleName=storefront-web-task"], "ListAttachedRolePolicies-storefront-web-task.xml"),
     fx!("iam", "ListAttachedRolePolicies", when ["RoleName=orders-worker-task"], "ListAttachedRolePolicies-orders-worker-task.xml"),
     fx!("iam", "ListAttachedRolePolicies", when ["RoleName=ecs-task-execution"], "ListAttachedRolePolicies-ecs-task-execution.xml"),

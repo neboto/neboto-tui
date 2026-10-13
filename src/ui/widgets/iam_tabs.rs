@@ -12,6 +12,7 @@ pub fn render_iam_tabs(app: &App, area: Rect, frame: &mut Frame) {
         ('5', "Analyzer", v == IamView::AccessAnalyzer),
         ('6', "Providers", v == IamView::IdentityProviders),
         ('7', "Account", v == IamView::Account),
+        ('8', "Profiles", v == IamView::InstanceProfiles),
     ];
     render_subtab_bar(app, area, frame, &tabs);
 }

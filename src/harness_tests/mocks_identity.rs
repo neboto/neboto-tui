@@ -103,6 +103,21 @@ pub(super) fn mocks() -> Vec<Mock> {
             }),
         ),
         (
+            ServiceType::IAM,
+            "IamInstanceProfile",
+            Box::new(svc::iam::IamInstanceProfile::from_sdk(
+                &aws_sdk_iam::types::InstanceProfile::builder()
+                    .path("/")
+                    .instance_profile_name("mock-profile")
+                    .instance_profile_id("AIPAMOCK")
+                    .arn("arn:aws:iam::123456789012:instance-profile/mock-profile")
+                    .create_date(aws_smithy_types::DateTime::from_secs(0))
+                    .set_roles(Some(vec![]))
+                    .build()
+                    .unwrap(),
+            )),
+        ),
+        (
             ServiceType::Organizations,
             "OrgAccount",
             Box::new(svc::organizations::OrgAccount::from_sdk(

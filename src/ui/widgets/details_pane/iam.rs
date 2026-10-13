@@ -233,9 +233,14 @@ pub fn iam_role_section_lines(
     section: IamRoleDetailSection,
     details_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamRoleDetails>>,
     docs_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamPolicyDocs>>,
+    instance_profiles: &[(String, String)],
 ) -> Vec<(String, String)> {
     match section {
-        IamRoleDetailSection::Overview => iam_role_overview_lines(role, details_state),
+        IamRoleDetailSection::Overview => {
+            let mut rows = iam_role_overview_lines(role, details_state);
+            rows.extend(iam_role_instance_profile_rows(instance_profiles));
+            rows
+        }
         IamRoleDetailSection::TrustPolicy => iam_role_trust_policy_lines(role),
         IamRoleDetailSection::Permissions => iam_role_permissions_lines(details_state),
         IamRoleDetailSection::Policies => iam_policy_docs_lines(docs_state),
@@ -323,6 +328,21 @@ pub(super) fn iam_role_overview_lines(
         }
     }
     rows.push(("".to_string(), "".to_string()));
+    rows
+}
+
+/// The instance profiles wrapping this role — what an EC2 instance shows
+/// instead of the role. Rows are `("  {name}", profile ARN)`, which the IAM
+/// ARN classifier makes jumpable to the Profiles sub-tab.
+fn iam_role_instance_profile_rows(profiles: &[(String, String)]) -> Vec<(String, String)> {
+    let mut rows = vec![("Instance Profiles".to_string(), String::new()), (String::new(), String::new())];
+    if profiles.is_empty() {
+        rows.push(("  (none)".to_string(), String::new()));
+    }
+    for (name, arn) in profiles {
+        rows.push((format!("  {name}"), arn.clone()));
+    }
+    rows.push((String::new(), String::new()));
     rows
 }
 

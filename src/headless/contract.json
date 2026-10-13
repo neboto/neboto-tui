@@ -833,6 +833,9 @@
       "Permissions",
       "Policies"
     ],
+    "IAM Instance Profile": [
+      "Details"
+    ],
     "IAM Policy": [
       "Overview",
       "Document",

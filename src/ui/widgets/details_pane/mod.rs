@@ -2927,6 +2927,9 @@ pub fn resource_jump_target(
         for (marker, view, strip_path) in [
             (":role/", JumpView::Iam(IamView::Roles), true),
             (":policy/", JumpView::Iam(IamView::Policies), true),
+            // Instance profiles resolve by name too (their `id()` is the ARN;
+            // the pending jump tries exact id, then exact name).
+            (":instance-profile/", JumpView::Iam(IamView::InstanceProfiles), true),
             // Provider names keep their slashes: an OIDC provider's name IS
             // the issuer host + path (e.g. an EKS "…/id/HEX" issuer).
             (":saml-provider/", JumpView::Iam(IamView::IdentityProviders), false),
@@ -3782,6 +3785,7 @@ pub fn cfn_type_jump_target(
         "AWS::IAM::User" => (IAM, JumpView::Iam(IamView::Users), after_slash()),
         "AWS::IAM::Group" => (IAM, JumpView::Iam(IamView::Groups), after_slash()),
         "AWS::IAM::ManagedPolicy" => (IAM, JumpView::Iam(IamView::Policies), after_slash()),
+        "AWS::IAM::InstanceProfile" => (IAM, JumpView::Iam(IamView::InstanceProfiles), physical_id),
         "AWS::S3::Bucket" => (S3, JumpView::None, physical_id),
         "AWS::Lambda::Function" => (Lambda, JumpView::None, physical_id),
         "AWS::AutoScaling::AutoScalingGroup" => (Asg, JumpView::None, physical_id),

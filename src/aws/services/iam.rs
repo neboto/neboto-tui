@@ -205,6 +205,43 @@ impl AwsService for IamService {
             }
         }
 
+        // Phase 4b: Instance profiles — each embeds its roles, so one paginated
+        // call covers the sub-tab and the role pane's "Instance Profiles"
+        // rows. Not a core phase: a failure warns, never counts toward the
+        // all-failed hard error.
+        let mut paginator = self.client.list_instance_profiles().into_paginator().send();
+        while let Some(result) = paginator.next().await {
+            match result {
+                Ok(page) => {
+                    let batch: Vec<Box<dyn Resource>> = page
+                        .instance_profiles()
+                        .iter()
+                        .map(|p| Box::new(IamInstanceProfile::from_sdk(p)) as Box<dyn Resource>)
+                        .collect();
+                    if batch.is_empty() {
+                        continue;
+                    }
+                    total += batch.len();
+                    let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                        service: service_type,
+                        resources: batch,
+                        progress: LoadProgress {
+                            loaded_count: total,
+                            total_count: None,
+                            status_message: Some("Loading instance profiles...".to_string()),
+                        },
+                    });
+                }
+                Err(e) => {
+                    let _ = event_tx.send(Event::ResourceLoadWarning {
+                        service: service_type,
+                        warning: format!("instance profiles: {}", crate::error::sdk_error_message(&e)),
+                    });
+                    break;
+                }
+            }
+        }
+
         // All four core phases failed: the load as a whole failed. A hard
         // error reads better than an empty list with a partial-load warning.
         if phase_failures.len() == 4 {
@@ -734,6 +771,119 @@ pub struct IamGroup {
     pub path: String,
     pub create_date: Option<String>,
     pub tags: HashMap<String, String>,
+}
+
+/// An EC2 instance profile — the container that hands a role to EC2
+/// instances. Instances show the *profile*, not the role, and the two names
+/// often differ; this row (and the role pane's "Instance Profiles" rows,
+/// derived from these) connects them. `ListInstanceProfiles` embeds the
+/// roles, so there is no per-profile fetch.
+#[derive(Debug, Clone)]
+pub struct IamInstanceProfile {
+    pub name: String,
+    pub arn: String,
+    pub profile_id: String,
+    pub path: String,
+    pub create_date: String,
+    /// (role name, role ARN) — at most one in practice (AWS's limit).
+    pub roles: Vec<(String, String)>,
+    pub tags: HashMap<String, String>,
+}
+
+impl IamInstanceProfile {
+    pub fn from_sdk(p: &aws_sdk_iam::types::InstanceProfile) -> Self {
+        Self {
+            name: p.instance_profile_name().to_string(),
+            arn: p.arn().to_string(),
+            profile_id: p.instance_profile_id().to_string(),
+            path: p.path().to_string(),
+            create_date: fmt_datetime(Some(p.create_date())).unwrap_or_default(),
+            roles: p
+                .roles()
+                .iter()
+                .map(|r| (r.role_name().to_string(), r.arn().to_string()))
+                .collect(),
+            tags: HashMap::new(),
+        }
+    }
+}
+
+impl Resource for IamInstanceProfile {
+    fn cli_command(&self) -> Option<String> {
+        Some(format!(
+            "aws iam get-instance-profile --instance-profile-name {}",
+            crate::aws::resource::shell_quote(&self.name)
+        ))
+    }
+    fn references(&self) -> Vec<(String, String)> {
+        self.roles.iter().map(|(_, arn)| ("Role".to_string(), arn.clone())).collect()
+    }
+    fn id(&self) -> &str {
+        &self.arn
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn resource_type(&self) -> &str {
+        "IAM Instance Profile"
+    }
+    /// A profile with no role grants an instance nothing — usually left
+    /// behind when its role was deleted.
+    fn state(&self) -> ResourceState {
+        if self.roles.is_empty() {
+            ResourceState::Idle
+        } else {
+            ResourceState::stateless()
+        }
+    }
+    fn state_label(&self) -> String {
+        if self.roles.is_empty() {
+            "no role".to_string()
+        } else {
+            String::new()
+        }
+    }
+    fn tags(&self) -> &HashMap<String, String> {
+        &self.tags
+    }
+    fn search_text(&self) -> String {
+        let mut parts = vec![self.name.clone(), self.arn.clone(), self.profile_id.clone()];
+        parts.extend(self.roles.iter().map(|(name, _)| name.clone()));
+        parts.join(" ")
+    }
+    fn details(&self) -> Vec<(String, String)> {
+        let mut d = vec![
+            ("Instance Profile".to_string(), self.name.clone()),
+            ("ARN".to_string(), self.arn.clone()),
+            ("Profile ID".to_string(), self.profile_id.clone()),
+            ("Path".to_string(), self.path.clone()),
+            ("Created".to_string(), self.create_date.clone()),
+            (String::new(), String::new()),
+        ];
+        if self.roles.is_empty() {
+            d.push(("Role".to_string(), "⚠ none — instances using this profile get no credentials".to_string()));
+        }
+        for (name, arn) in &self.roles {
+            d.push(("Role".to_string(), name.clone()));
+            d.push(("Role ARN".to_string(), arn.clone()));
+        }
+        d
+    }
+    fn console_url(&self, _region: &str) -> Option<String> {
+        Some(format!(
+            "https://us-east-1.console.aws.amazon.com/iam/home#/roles/details/{}",
+            self.roles.first().map(|(n, _)| n.as_str()).unwrap_or(&self.name)
+        ))
+    }
+    fn trail_lookup_keys(&self) -> Vec<String> {
+        vec![self.name.clone(), self.arn.clone()]
+    }
+    fn clone_box(&self) -> Box<dyn Resource> {
+        Box::new(self.clone())
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl IamGroup {

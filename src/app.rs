@@ -1810,7 +1810,8 @@ pub enum IamView {
     Groups,
     AccessAnalyzer,
     IdentityProviders,
-    Account}
+    Account,
+    InstanceProfiles}
 
 impl IamView {
     pub fn resource_type_filter(&self) -> &'static str {
@@ -1821,7 +1822,8 @@ impl IamView {
             IamView::Groups => "IAM Group",
             IamView::AccessAnalyzer => "Access Analyzer Finding",
             IamView::IdentityProviders => "Identity Provider",
-            IamView::Account => "IAM Account Settings"}
+            IamView::Account => "IAM Account Settings",
+            IamView::InstanceProfiles => "IAM Instance Profile"}
     }
 }
 
@@ -8240,6 +8242,11 @@ impl App {
                     self.update_search();
                     return Ok(());
                 }
+                KeyCode::Char('8') => {
+                    self.iam_view = IamView::InstanceProfiles;
+                    self.update_search();
+                    return Ok(());
+                }
                 KeyCode::Tab => {
                     self.iam_view = match self.iam_view {
                         IamView::Roles => IamView::Policies,
@@ -8248,13 +8255,15 @@ impl App {
                         IamView::Groups => IamView::AccessAnalyzer,
                         IamView::AccessAnalyzer => IamView::IdentityProviders,
                         IamView::IdentityProviders => IamView::Account,
-                        IamView::Account => IamView::Roles};
+                        IamView::Account => IamView::InstanceProfiles,
+                        IamView::InstanceProfiles => IamView::Roles};
                     self.update_search();
                     return Ok(());
                 }
                 KeyCode::BackTab => {
                     self.iam_view = match self.iam_view {
-                        IamView::Roles => IamView::Account,
+                        IamView::Roles => IamView::InstanceProfiles,
+                        IamView::InstanceProfiles => IamView::Account,
                         IamView::Policies => IamView::Roles,
                         IamView::Users => IamView::Policies,
                         IamView::Groups => IamView::Users,
@@ -9244,7 +9253,8 @@ impl App {
             Some(ServiceType::IAM) => {
                 align!(
                     self, rtype, iam_view, IamView,
-                    [Roles, Policies, Users, Groups, AccessAnalyzer, IdentityProviders, Account]
+                    [Roles, Policies, Users, Groups, AccessAnalyzer, IdentityProviders, Account,
+                     InstanceProfiles]
                 )
             }
             Some(ServiceType::Organizations) => align!(
@@ -24096,6 +24106,28 @@ impl App {
         }
     }
 
+    /// The loaded instance profiles that wrap a role, as (name, ARN) — zero
+    /// API: `ListInstanceProfiles` embeds the roles, and it's part of the IAM
+    /// list load. Reads the on-screen rows, else the warm IAM cache.
+    fn instance_profiles_for_role(&self, role_arn: &str) -> Vec<(String, String)> {
+        use crate::aws::services::iam::IamInstanceProfile;
+        let from = |list: &[Box<dyn Resource>]| -> Vec<(String, String)> {
+            list.iter()
+                .filter_map(|r| r.as_any().downcast_ref::<IamInstanceProfile>())
+                .filter(|p| p.roles.iter().any(|(_, arn)| arn == role_arn))
+                .map(|p| (p.name.clone(), p.arn.clone()))
+                .collect()
+        };
+        let on_screen = from(&self.resources);
+        if !on_screen.is_empty() {
+            return on_screen;
+        }
+        self.cache
+            .get_ref(&ServiceType::IAM, &crate::aws::region::Region::UsEast1, None)
+            .map(from)
+            .unwrap_or_default()
+    }
+
     /// The selected resource's section descriptor, when the pane is on the
     /// descriptor table (src/sections.rs).
     fn selected_descriptor(&self) -> Option<&'static crate::sections::SectionDescriptor> {
@@ -27882,6 +27914,7 @@ impl App {
                     crate::aws::services::iam::IamRoleDetailSection::from_index(self.detail_section_idx),
                     details_state,
                     docs_state,
+                    &self.instance_profiles_for_role(&role.arn),
                 );
                 if crate::aws::services::iam::IamRoleDetailSection::from_index(self.detail_section_idx) == IamRoleDetailSection::Permissions {
                     lines = self.inject_expanded_policy_docs(lines);

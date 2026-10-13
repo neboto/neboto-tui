@@ -466,6 +466,33 @@ async fn get_iam_policies_carries_the_documents() {
     assert!(text.contains("123456789012"), "placeholders filled: {text}");
 }
 
+/// #106: instance profiles list with their roles (an empty one reads "no
+/// role"), a role names the profiles wrapping it, and an instance's profile
+/// resolves to that role.
+#[tokio::test]
+async fn instance_profiles_connect_roles_and_instances() {
+    use crate::aws::services::iam::IamInstanceProfile;
+    let (rows, _) = demo_list(ServiceType::IAM).await.unwrap();
+    let profiles: Vec<&IamInstanceProfile> =
+        rows.iter().filter_map(|r| r.as_any().downcast_ref::<IamInstanceProfile>()).collect();
+    let web = profiles.iter().find(|p| p.name == "acme-web").expect("acme-web listed");
+    assert_eq!(web.roles[0].0, "acme-web-ec2");
+    let old = profiles.iter().find(|p| p.name == "batch-runner-old").expect("orphan listed");
+    assert_eq!(old.state_label(), "no role");
+
+    let v = demo_get_json(GetArgs {
+        sections: vec!["overview".into()],
+        resource_type: Some("IAM Role".into()),
+        ..get_args("iam", &["acme-web-ec2"])
+    })
+    .await;
+    let profiles = &v["sections"]["Overview"]["Instance Profiles"];
+    assert!(profiles.to_string().contains("instance-profile/acme-web"), "{profiles}");
+
+    let v = demo_get_json(GetArgs { sections: vec!["security".into()], ..get_args("ec2", &["web-1"]) }).await;
+    assert!(v["sections"]["Security"].to_string().contains("acme-web-ec2"), "{}", v["sections"]["Security"]);
+}
+
 /// #71: the exporter's shape rules, against real panes — a repeated key is
 /// an array (not `"X (2)"`), a group's count stays out of its key, and a row
 /// heading indented rows nests them.
