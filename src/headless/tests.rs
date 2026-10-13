@@ -550,6 +550,26 @@ async fn get_surfaces_fields_the_responses_already_carry() {
     assert_eq!(key["Slow Start"], "off");
 }
 
+/// #106: an ALB's Details name the WAF web ACL protecting it, and warn when
+/// an internet-facing one has none.
+#[tokio::test]
+async fn get_alb_names_its_web_acl() {
+    let get = |name: &'static str| async move {
+        let v = demo_get_json(GetArgs {
+            sections: vec!["details".into()],
+            resource_type: Some("Load Balancer".into()),
+            ..get_args("elb", &[name])
+        })
+        .await;
+        v["sections"]["Details"].clone()
+    };
+    let d = get("storefront-alb").await;
+    assert_eq!(d["WAF Web ACL"]["summary"], "storefront-waf", "{d}");
+    assert!(d["WAF Web ACL"]["ARN"].as_str().unwrap().contains(":regional/webacl/storefront-waf/"), "{d}");
+    let d = get("legacy-admin-alb").await;
+    assert!(d["WAF Web ACL"].as_str().unwrap().starts_with("⚠ none"), "{d}");
+}
+
 #[tokio::test]
 async fn list_time_tags_reach_rows_without_a_pane() {
     // #29: CloudWatch has no tag call of its own; the Tagging API fills

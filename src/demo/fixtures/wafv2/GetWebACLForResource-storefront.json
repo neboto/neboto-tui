@@ -1,0 +1,11 @@
+{
+  "WebACL": {
+    "Name": "storefront-waf",
+    "Id": "a1b2c3d4-5e6f-4a0b-9c8d-7e6f5a4b3c2d",
+    "ARN": "arn:aws:wafv2:{{region}}:{{account}}:regional/webacl/storefront-waf/a1b2c3d4-5e6f-4a0b-9c8d-7e6f5a4b3c2d",
+    "DefaultAction": {"Allow": {}},
+    "Rules": [],
+    "VisibilityConfig": {"SampledRequestsEnabled": true, "CloudWatchMetricsEnabled": true, "MetricName": "storefront-waf"},
+    "Capacity": 700
+  }
+}

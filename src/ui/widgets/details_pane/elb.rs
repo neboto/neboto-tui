@@ -72,16 +72,43 @@ pub fn load_balancer_section_lines(
     lb: &LoadBalancer,
     section: LoadBalancerDetailSection,
     details_state: Option<&crate::lazy::Lazy<crate::aws::services::elb::LbDetails>>,
+    web_acl: Option<&crate::lazy::Lazy<crate::aws::services::elb::LbWebAcl>>,
 ) -> Vec<(String, String)> {
     match section {
-        LoadBalancerDetailSection::Details => lb_details_lines(lb),
+        LoadBalancerDetailSection::Details => lb_details_lines(lb, web_acl),
         LoadBalancerDetailSection::Listeners => lb_listeners_lines(details_state),
         LoadBalancerDetailSection::Attributes => lb_attributes_lines(details_state),
         LoadBalancerDetailSection::Tags => lb_tags_lines(lb),
     }
 }
 
-pub(super) fn lb_details_lines(lb: &LoadBalancer) -> Vec<(String, String)> {
+/// The ALB's WAF row: the web ACL's name with its ARN beneath (jumpable to
+/// the WAF tab), or — for an internet-facing ALB with none — a warning,
+/// since that's an unfiltered public entry point.
+fn lb_web_acl_rows(
+    lb: &LoadBalancer,
+    web_acl: Option<&crate::lazy::Lazy<crate::aws::services::elb::LbWebAcl>>,
+) -> Vec<(String, String)> {
+    use crate::lazy::Lazy;
+    let key = "WAF Web ACL".to_string();
+    match web_acl {
+        None | Some(Lazy::Loading) => vec![(key, "Loading…".to_string())],
+        Some(Lazy::Error(e)) => vec![(key, format!("⚠ unknown — {e}"))],
+        Some(Lazy::Loaded(Some((name, arn)))) => vec![
+            (key, format!("✓ {name}")),
+            ("  ARN".to_string(), arn.clone()),
+        ],
+        Some(Lazy::Loaded(None)) if lb.scheme == "internet-facing" => {
+            vec![(key, "⚠ none — internet-facing with no AWS WAF".to_string())]
+        }
+        Some(Lazy::Loaded(None)) => vec![(key, "none".to_string())],
+    }
+}
+
+pub(super) fn lb_details_lines(
+    lb: &LoadBalancer,
+    web_acl: Option<&crate::lazy::Lazy<crate::aws::services::elb::LbWebAcl>>,
+) -> Vec<(String, String)> {
     let mut rows = vec![];
 
     rows.push(("Name".to_string(), lb.name.clone()));
@@ -112,6 +139,11 @@ pub(super) fn lb_details_lines(lb: &LoadBalancer) -> Vec<(String, String)> {
         for az in &lb.availability_zones {
             rows.push((format!("  {}", az), "".to_string()));
         }
+    }
+
+    if lb.supports_waf() {
+        rows.push(("".to_string(), "".to_string()));
+        rows.extend(lb_web_acl_rows(lb, web_acl));
     }
 
     if !lb.security_groups.is_empty() {

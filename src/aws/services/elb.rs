@@ -256,7 +256,7 @@ impl LoadBalancer {
 crate::sections! {
     pub enum LoadBalancerDetailSection,
     pub static LOAD_BALANCER_SECTIONS = [
-        Details "Details",
+        Details "Details" => crate::app::App::trigger_lb_web_acl_load,
         Listeners "Listeners" => crate::app::App::trigger_load_balancer_details_load,
         Attributes "Attributes" => crate::app::App::trigger_load_balancer_details_load,
         Tags "Tags",
@@ -796,6 +796,31 @@ pub struct LbListener {
     pub default_action: String,
     /// Non-default routing rules, ordered by priority.
     pub rules: Vec<LbRule>,
+}
+
+/// The AWS WAF web ACL protecting a load balancer: (name, ARN).
+pub type LbWebAcl = Option<(String, String)>;
+
+impl LoadBalancer {
+    /// Only application load balancers can carry a WAF web ACL.
+    pub fn supports_waf(&self) -> bool {
+        self.lb_type.eq_ignore_ascii_case("application")
+    }
+}
+
+/// `wafv2:GetWebACLForResource` — which web ACL (if any) is associated with
+/// this ALB. No association is an empty success, not an error.
+pub async fn fetch_lb_web_acl(
+    waf: aws_sdk_wafv2::Client,
+    lb_arn: String,
+) -> std::result::Result<LbWebAcl, String> {
+    let resp = waf
+        .get_web_acl_for_resource()
+        .resource_arn(&lb_arn)
+        .send()
+        .await
+        .map_err(|e| crate::error::sdk_error_message(&e))?;
+    Ok(resp.web_acl().map(|acl| (acl.name().to_string(), acl.arn().to_string())))
 }
 
 #[derive(Debug, Clone)]

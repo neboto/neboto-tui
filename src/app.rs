@@ -27641,6 +27641,7 @@ impl App {
                     lb,
                     crate::aws::services::elb::LoadBalancerDetailSection::from_index(self.detail_section_idx),
                     details_state,
+                    self.lazy.lb_web_acl.get(&lb.arn),
                 );
             }
             if let Some(tg) = resource
@@ -29582,6 +29583,28 @@ impl App {
 
     /// Lazy-load a load balancer's listeners + attributes on first
     /// Listeners/Attributes-section visit.
+    /// Which WAF web ACL protects the selected ALB (Details hook). NLBs and
+    /// GWLBs can't have one, so they never call. Uses the regional wafv2
+    /// client — an ALB's ACL is always REGIONAL scope, whatever the WAF
+    /// tab's scope toggle says.
+    pub(crate) fn trigger_lb_web_acl_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let target = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::elb::LoadBalancer>()
+                .filter(|lb| lb.supports_waf())
+                .map(|lb| lb.arn.clone())
+        });
+        if let Some(arn) = target {
+            let waf = self.aws_clients.wafv2_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.lb_web_acl,
+                arn.clone(),
+                event_tx,
+                crate::aws::services::elb::fetch_lb_web_acl(waf, arn),
+            );
+        }
+    }
+
     pub(crate) fn trigger_load_balancer_details_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if let Some(lb) = self.get_selected_resource().and_then(|r| {
             r.as_any()

@@ -1906,6 +1906,16 @@ the service you're touching.
   An `http_endpoint = disabled` instance shows only that row (the token
   setting is moot). CPU options / lifecycle / tenancy / placement group /
   capacity reservation ride the same response into Launch Config (#193).
+- **ALB → WAF** (#106) — the LB Details section's on-enter hook
+  (`trigger_lb_web_acl_load`) runs `wafv2:GetWebACLForResource` for
+  **application** LBs only (NLB/GWLB can't carry an ACL), always on the
+  regional wafv2 client: an ALB's ACL is REGIONAL whatever `App.waf_scope`
+  says. No association is an empty success, rendered `⚠ none` on an
+  internet-facing ALB (an unfiltered public entry point) and plain `none`
+  on an internal one. The ACL's ARN row jumps to the WAF tab. Rejected: the
+  zero-call reverse map from a warm `@waf` cache's `ListResourcesForWebACL`
+  — it only works after visiting `@waf`, and a cold cache would read as
+  "no WAF". WAF Classic (`waf-regional`) associations aren't checked.
 - **ELB Attributes "Key Settings"** — the LB and target-group Attributes
   sections lead with named rows looked up by AWS's dotted key
   (`deletion_protection.enabled`, `stickiness.*`,

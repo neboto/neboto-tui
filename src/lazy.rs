@@ -803,6 +803,8 @@ pub struct LazyStore {
     pub target_group_attributes: LazyMap<Vec<(String, String)>>,
     /// A load balancer's listeners + attributes, keyed by LB ARN.
     pub load_balancer_details: LazyMap<crate::aws::services::elb::LbDetails>,
+    /// An ALB's WAF web ACL (`GetWebACLForResource`), keyed by LB ARN.
+    pub lb_web_acl: LazyMap<crate::aws::services::elb::LbWebAcl>,
     /// An Auto Scaling group's scaling activities, keyed by group name.
     pub asg_activities: LazyMap<Vec<crate::aws::services::asg::ScalingActivity>>,
 }

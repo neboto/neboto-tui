@@ -290,6 +290,9 @@ pub static FIXTURES: &[Fixture] = &[
     // ── Secrets Manager / SSM Parameter Store ───────────────────────────────
     // Metadata only: there is deliberately no GetSecretValue / GetParameter
     // fixture — `neboto get`'s guard test asserts neither is ever called.
+    // storefront-alb sits behind a web ACL; legacy-admin-alb (the
+    // forgotten one) has none, so its Details row warns.
+    fx!("wafv2", "GetWebACLForResource", when ["storefront-alb"], "GetWebACLForResource-storefront.json"),
     fx!("secretsmanager", "ListSecrets", "ListSecrets.json"),
     // Replication section: one healthy replica, one stuck on a KMS grant.
     fx!("secretsmanager", "DescribeSecret", when ["prod/orders/db"], "DescribeSecret-orders-db.json"),
