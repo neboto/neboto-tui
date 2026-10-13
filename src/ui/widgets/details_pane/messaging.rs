@@ -363,6 +363,17 @@ pub(super) fn sns_subscriptions_lines(state: Option<&crate::lazy::Lazy<Vec<crate
                         // simply render without a jump arrow.
                         rows.push(("  Endpoint".to_string(), sub.endpoint.clone()));
                     }
+                    rows.extend(sns_subscription_attr_rows(sub));
+                }
+                let confirmed = subs.iter().filter(|s| s.confirmed).count();
+                if confirmed > crate::aws::services::messaging::MAX_SNS_SUBSCRIPTION_ATTRS {
+                    rows.push((
+                        String::new(),
+                        format!(
+                            "· filter policy / DLQ shown for the first {} confirmed subscriptions",
+                            crate::aws::services::messaging::MAX_SNS_SUBSCRIPTION_ATTRS
+                        ),
+                    ));
                 }
             }
         }
@@ -372,6 +383,42 @@ pub(super) fn sns_subscriptions_lines(state: Option<&crate::lazy::Lazy<Vec<crate
     }
 
     rows.push(("".to_string(), "".to_string()));
+    rows
+}
+
+/// One subscription's delivery settings: the filter policy (what it lets
+/// through), raw delivery, its DLQ (jumpable), and the HTTP/S retry policy.
+fn sns_subscription_attr_rows(sub: &crate::aws::services::messaging::SnsSubscription) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    let a = match &sub.attrs {
+        None => return rows,
+        Some(Err(e)) => {
+            rows.push(("  ⚠ attributes unavailable".to_string(), String::new()));
+            rows.push(("    ".to_string() + e, String::new()));
+            return rows;
+        }
+        Some(Ok(a)) => a,
+    };
+    if let Some(raw) = a.raw_delivery {
+        rows.push(("  Raw Delivery".to_string(), if raw { "Yes" } else { "No" }.to_string()));
+    }
+    rows.push((
+        "  DLQ".to_string(),
+        a.dlq_arn.clone().unwrap_or_else(|| "none".to_string()),
+    ));
+    if let Some(dp) = &a.delivery_policy {
+        rows.push(("  Delivery Policy".to_string(), dp.clone()));
+    }
+    match &a.filter_policy {
+        None => rows.push(("  Filter Policy".to_string(), "none — receives every message".to_string())),
+        Some(fp) => {
+            let scope = a.filter_policy_scope.as_deref().unwrap_or("MessageAttributes");
+            rows.push(("  Filter Policy".to_string(), format!("on {scope}")));
+            for line in fp.lines() {
+                rows.push((format!("    {line}"), String::new()));
+            }
+        }
+    }
     rows
 }
 
@@ -469,4 +516,45 @@ pub(super) fn sns_tags_lines(topic: &SnsTopic) -> Vec<(String, String)> {
 
     rows.push(("".to_string(), "".to_string()));
     rows
+}
+
+#[cfg(test)]
+mod sns_subscription_row_tests {
+    use super::*;
+    use crate::aws::services::messaging::{SnsSubscription, SnsSubscriptionAttrs};
+
+    fn sub(attrs: Option<Result<SnsSubscriptionAttrs, String>>) -> SnsSubscription {
+        SnsSubscription {
+            protocol: "sqs".into(),
+            endpoint: "arn:aws:sqs:us-east-1:111122223333:orders".into(),
+            confirmed: true,
+            arn: "arn:aws:sns:us-east-1:111122223333:orders:abc".into(),
+            attrs,
+        }
+    }
+
+    #[test]
+    fn a_subscription_shows_its_filter_and_dlq() {
+        let a = SnsSubscriptionAttrs {
+            filter_policy: Some("{\n  \"eventType\": [\"order.created\"]\n}".into()),
+            dlq_arn: Some("arn:aws:sqs:us-east-1:111122223333:orders-dlq".into()),
+            raw_delivery: Some(true),
+            ..Default::default()
+        };
+        let rows = sns_subscription_attr_rows(&sub(Some(Ok(a))));
+        assert!(rows.contains(&("  DLQ".into(), "arn:aws:sqs:us-east-1:111122223333:orders-dlq".into())), "{rows:?}");
+        assert!(rows.contains(&("  Filter Policy".into(), "on MessageAttributes".into())), "{rows:?}");
+        assert!(rows.contains(&("      \"eventType\": [\"order.created\"]".into(), String::new())), "{rows:?}");
+        assert!(rows.contains(&("  Raw Delivery".into(), "Yes".into())));
+    }
+
+    #[test]
+    fn no_filter_means_every_message_and_errors_stay_per_subscription() {
+        let rows = sns_subscription_attr_rows(&sub(Some(Ok(SnsSubscriptionAttrs::default()))));
+        assert!(rows.contains(&("  Filter Policy".into(), "none — receives every message".into())));
+        assert!(rows.contains(&("  DLQ".into(), "none".into())));
+        let rows = sns_subscription_attr_rows(&sub(Some(Err("AccessDenied".into()))));
+        assert!(rows[0].0.contains("⚠ attributes unavailable"));
+        assert!(sns_subscription_attr_rows(&sub(None)).is_empty(), "pending: nothing fetched");
+    }
 }

@@ -603,12 +603,54 @@ pub struct SnsSubscription {
     pub protocol: String,
     pub endpoint: String,
     pub confirmed: bool,
+    /// The subscription ARN (`PendingConfirmation` until confirmed).
+    pub arn: String,
+    /// `GetSubscriptionAttributes`, for confirmed subscriptions within the
+    /// cap. `None` = not fetched (pending, or past the cap).
+    pub attrs: Option<std::result::Result<SnsSubscriptionAttrs, String>>,
+}
+
+/// What decides whether a published message reaches this subscriber and
+/// what happens when it can't — the usual "why didn't it arrive?" answer.
+#[derive(Debug, Clone, Default)]
+pub struct SnsSubscriptionAttrs {
+    /// Pretty-printed `FilterPolicy` JSON.
+    pub filter_policy: Option<String>,
+    /// `MessageAttributes` (default) or `MessageBody`.
+    pub filter_policy_scope: Option<String>,
+    /// `RawMessageDelivery` — only reported for protocols that support it.
+    pub raw_delivery: Option<bool>,
+    /// `RedrivePolicy.deadLetterTargetArn` — the subscription's DLQ.
+    pub dlq_arn: Option<String>,
+    /// `DeliveryPolicy`, compact JSON (HTTP/S retry policy).
+    pub delivery_policy: Option<String>,
+}
+
+/// Confirmed subscriptions whose attributes are fetched (one call each).
+pub const MAX_SNS_SUBSCRIPTION_ATTRS: usize = 50;
+
+impl SnsSubscriptionAttrs {
+    pub fn from_map(attrs: &HashMap<String, String>) -> Self {
+        let json = |k: &str| -> Option<serde_json::Value> {
+            attrs.get(k).filter(|v| !v.trim().is_empty()).and_then(|v| serde_json::from_str(v).ok())
+        };
+        SnsSubscriptionAttrs {
+            filter_policy: json("FilterPolicy").and_then(|v| serde_json::to_string_pretty(&v).ok()),
+            filter_policy_scope: attrs.get("FilterPolicyScope").cloned(),
+            raw_delivery: attrs.get("RawMessageDelivery").map(|v| v == "true"),
+            dlq_arn: json("RedrivePolicy").and_then(|v| {
+                v.get("deadLetterTargetArn").and_then(|a| a.as_str()).map(str::to_string)
+            }),
+            delivery_policy: json("DeliveryPolicy").map(|v| v.to_string()),
+        }
+    }
 }
 
 pub async fn fetch_topic_subscriptions(
     sns: SnsClient,
     topic_arn: String,
 ) -> Result<Vec<SnsSubscription>> {
+    use futures::stream::{self, StreamExt};
     let mut subs = Vec::new();
     let mut paginator = sns
         .list_subscriptions_by_topic()
@@ -623,8 +665,40 @@ pub async fn fetch_topic_subscriptions(
                 protocol: s.protocol().unwrap_or("").to_string(),
                 endpoint: s.endpoint().unwrap_or("").to_string(),
                 confirmed: sub_arn != "PendingConfirmation" && !sub_arn.is_empty(),
+                arn: sub_arn.to_string(),
+                attrs: None,
             });
         }
+    }
+    // One GetSubscriptionAttributes per confirmed subscription, a few at a
+    // time and in topic order; a pending one has no real ARN to ask about.
+    let wanted: Vec<usize> = subs
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.confirmed)
+        .map(|(i, _)| i)
+        .take(MAX_SNS_SUBSCRIPTION_ATTRS)
+        .collect();
+    let fetched: Vec<(usize, std::result::Result<SnsSubscriptionAttrs, String>)> =
+        stream::iter(wanted.into_iter().map(|i| {
+            let sns = sns.clone();
+            let arn = subs[i].arn.clone();
+            async move {
+                let result = sns
+                    .get_subscription_attributes()
+                    .subscription_arn(&arn)
+                    .send()
+                    .await
+                    .map(|r| SnsSubscriptionAttrs::from_map(r.attributes().unwrap_or(&HashMap::new())))
+                    .map_err(|e| crate::error::sdk_error_message(&e));
+                (i, result)
+            }
+        }))
+        .buffered(5)
+        .collect()
+        .await;
+    for (i, result) in fetched {
+        subs[i].attrs = Some(result);
     }
     Ok(subs)
 }
@@ -847,5 +921,35 @@ mod tests {
         assert!(error.contains("AccessDenied"), "{error}");
         assert!(error.contains("not authorized to perform: sqs:ListQueues"), "{error}");
         assert!(!error.contains("service error"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod sns_subscription_attr_tests {
+    use super::*;
+
+    #[test]
+    fn attributes_parse_filter_dlq_and_raw_delivery() {
+        let map: HashMap<String, String> = [
+            ("FilterPolicy", r#"{"eventType":["order.created"]}"#),
+            ("FilterPolicyScope", "MessageBody"),
+            ("RawMessageDelivery", "true"),
+            ("RedrivePolicy", r#"{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:111122223333:orders-dlq"}"#),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let a = SnsSubscriptionAttrs::from_map(&map);
+        assert!(a.filter_policy.as_deref().unwrap().contains("\"order.created\""));
+        assert!(a.filter_policy.as_deref().unwrap().contains('\n'), "pretty-printed");
+        assert_eq!(a.filter_policy_scope.as_deref(), Some("MessageBody"));
+        assert_eq!(a.raw_delivery, Some(true));
+        assert_eq!(a.dlq_arn.as_deref(), Some("arn:aws:sqs:us-east-1:111122223333:orders-dlq"));
+        assert_eq!(a.delivery_policy, None);
+
+        // A Lambda subscription reports no RawMessageDelivery and no policy.
+        let bare = SnsSubscriptionAttrs::from_map(&HashMap::new());
+        assert_eq!(bare.raw_delivery, None);
+        assert_eq!(bare.filter_policy, None);
     }
 }
