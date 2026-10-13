@@ -494,7 +494,7 @@ in `any_pane_overlay_active` (which gates the mouse).
   pattern.
 - **Change timeline** (`W`, on **any** resource — list or detail pane):
   `App.trail_in_pane: Option<TrailLensState>` (`trail_lens.rs`; row model in
-  `src/timeline.rs`) — "what changed around this resource?", four sources
+  `src/timeline.rs`) — "what changed around this resource?", six sources
   merged newest-first, each row wearing a colored badge. **CT**: one-shot
   `cloudtrail::fetch_trail_events` (`LookupEvents` filtered by
   `ResourceName`, throttled 2 TPS so no polling, cap ~50; identifiers from
@@ -507,7 +507,11 @@ in `any_pane_overlay_active` (which gates the mouse).
   ownership resolver names a stack, `fetch_stack_events` filtered to this
   resource's logical id + stack-level rows (logical id == stack name).
   **DEP**: ECS deployments + service events straight off `EcsServiceInfo` —
-  zero fetch. The fan-out is `App::seed_trail_lens` (inputs computed by
+  zero fetch. **ASG** / **RDS** (`trigger_timeline_ops_sources`): what AWS
+  itself did, which CloudTrail never records — Auto Scaling activities
+  (group, or an instance via its `aws:autoscaling:groupName` tag, filtered
+  to activities naming it) and RDS events (instance/cluster; 14-day
+  retention, noted on longer ranges). The fan-out is `App::seed_trail_lens` (inputs computed by
   `timeline_inputs`); sources land independently (`TrailLensLoaded` /
   `TrailLensAux`, one shared generation guard) and the lens stays **off**
   the LazyStore deliberately — like the metrics maps it refetches per open.

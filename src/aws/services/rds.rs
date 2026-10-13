@@ -2024,9 +2024,14 @@ const MAX_RDS_EVENTS: usize = 100;
 #[derive(Debug, Clone)]
 pub struct RdsEvent {
     pub date: String,
+    /// Epoch seconds of `date` (0 when absent) — the timeline sorts on it.
+    pub ts_secs: i64,
     pub message: String,
     pub categories: Vec<String>,
 }
+
+/// How far back RDS keeps events — the timeline says so past this.
+pub const RDS_EVENTS_RETENTION_DAYS: i64 = 14;
 
 /// Fetch the last 14 days of events for one instance or cluster, newest first.
 pub async fn fetch_rds_events(
@@ -2056,6 +2061,7 @@ pub async fn fetch_rds_events(
         for e in page.events() {
             events.push(RdsEvent {
                 date: e.date().map(fmt_dt).unwrap_or_default(),
+                ts_secs: e.date().map(|d| d.secs()).unwrap_or(0),
                 message: e.message().unwrap_or("").to_string(),
                 categories: e.event_categories().iter().map(|c| c.to_string()).collect(),
             });

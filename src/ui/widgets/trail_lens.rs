@@ -1,7 +1,7 @@
 //! Change timeline ("what changed around this resource?"), rendered **in
 //! the detail pane** (the canonical rich detail-pane view + `Z` full-width
 //! pattern, like the log tail and metric overlays). `W` on any resource
-//! merges four sources into one time-sorted list, each row wearing a
+//! merges six sources into one time-sorted list, each row wearing a
 //! colored source badge:
 //!
 //! - `CT`  — CloudTrail `LookupEvents` for the resource's
@@ -14,6 +14,11 @@
 //!   resource's logical id plus stack-level rows.
 //! - `DEP` — ECS deployments + service events, already on the struct
 //!   (zero fetch).
+//! - `ASG` — Auto Scaling activities (`DescribeScalingActivities`, newest
+//!   50) for a group, or for an instance carrying its group's tag (filtered
+//!   to activities naming the instance).
+//! - `RDS` — `DescribeEvents` for an RDS instance or cluster; RDS keeps 14
+//!   days, so the 30d/90d ranges add a note saying so.
 //!
 //! `f` cycles a source filter; `Enter`/`v` opens the selected row (raw JSON
 //! for CloudTrail, a text summary otherwise) in `$EDITOR`. Sources land
@@ -39,6 +44,8 @@ pub struct TrailLensState {
     pub alarm_rows: Vec<TimelineRow>,
     pub cfn_rows: Vec<TimelineRow>,
     pub deploy_rows: Vec<TimelineRow>,
+    pub scaling_rows: Vec<TimelineRow>,
+    pub rds_rows: Vec<TimelineRow>,
     /// The merged, filtered, time-sorted view the body renders — rebuilt by
     /// [`rebuild`](Self::rebuild) on every batch arrival / filter change.
     pub rows: Vec<TimelineRow>,
@@ -93,6 +100,8 @@ impl TrailLensState {
             TimelineSource::Alarm => self.alarm_rows = rows,
             TimelineSource::Cfn => self.cfn_rows = rows,
             TimelineSource::Deploy => self.deploy_rows = rows,
+            TimelineSource::Scaling => self.scaling_rows = rows,
+            TimelineSource::Rds => self.rds_rows = rows,
         }
         self.pending.retain(|s| *s != source);
         self.rebuild();
@@ -116,13 +125,17 @@ impl TrailLensState {
             self.trail_rows.len()
                 + self.alarm_rows.len()
                 + self.cfn_rows.len()
-                + self.deploy_rows.len(),
+                + self.deploy_rows.len()
+                + self.scaling_rows.len()
+                + self.rds_rows.len(),
         );
         for list in [
             &self.trail_rows,
             &self.alarm_rows,
             &self.cfn_rows,
             &self.deploy_rows,
+            &self.scaling_rows,
+            &self.rds_rows,
         ] {
             for row in list.iter() {
                 if self.source_filter.is_none_or(|f| f == row.source) {
@@ -137,7 +150,7 @@ impl TrailLensState {
         }
     }
 
-    /// `f`: all → CT → ALM → CFN → DEP → all.
+    /// `f`: all → CT → ALM → CFN → DEP → ASG → RDS → all.
     pub fn cycle_source_filter(&mut self) {
         self.source_filter = match self.source_filter {
             None => Some(TimelineSource::ALL[0]),
@@ -181,6 +194,8 @@ fn source_color(source: TimelineSource) -> Color {
         TimelineSource::Alarm => theme::warning(),
         TimelineSource::Cfn => theme::heading(),
         TimelineSource::Deploy => theme::success(),
+        TimelineSource::Scaling => theme::text_primary(),
+        TimelineSource::Rds => theme::aws_orange(),
     }
 }
 
@@ -273,6 +288,8 @@ pub fn render_trail_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) {
         (TimelineSource::Alarm, &st.alarm_rows),
         (TimelineSource::Cfn, &st.cfn_rows),
         (TimelineSource::Deploy, &st.deploy_rows),
+        (TimelineSource::Scaling, &st.scaling_rows),
+        (TimelineSource::Rds, &st.rds_rows),
     ] {
         let in_flight = st.pending.contains(&source);
         if list.is_empty() && !in_flight {

@@ -369,6 +369,8 @@ impl Resource for AsgGroup {
 #[derive(Debug, Clone)]
 pub struct ScalingActivity {
     pub start_time: String,
+    /// Epoch seconds of `start_time` (0 when absent) — the timeline sorts on it.
+    pub start_secs: i64,
     pub status_code: String,
     pub description: String,
     pub cause: String,
@@ -399,6 +401,7 @@ pub async fn fetch_scaling_activities(
                     s.split('.').next().unwrap_or(&s).replace('T', " ")
                 })
                 .unwrap_or_default(),
+            start_secs: a.start_time().map(|t| t.secs()).unwrap_or(0),
             status_code: a
                 .status_code()
                 .map(|s| s.as_str().to_string())

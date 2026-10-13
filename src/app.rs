@@ -1346,6 +1346,11 @@ struct TimelineInputs {
     cw_cache_warm: bool,
     /// ECS deployment + service-event rows, straight off the struct.
     deploy_rows: Vec<crate::timeline::TimelineRow>,
+    /// Auto Scaling source: the group, plus the instance id to filter its
+    /// activities to when the lens is on an instance rather than the group.
+    asg: Option<(String, Option<String>)>,
+    /// RDS events source: (instance or cluster identifier, is_cluster).
+    rds: Option<(String, bool)>,
 }
 
 /// Where `Ctrl-O` should move the jump-list cursor, given the timeline length
@@ -18328,6 +18333,21 @@ impl App {
             }
         }
 
+        // Auto Scaling activities: the group itself, or an instance that
+        // carries its group's tag (filtered to activities naming it).
+        if let Some(g) = r.as_any().downcast_ref::<crate::aws::services::asg::AsgGroup>() {
+            out.asg = Some((g.name.clone(), None));
+        } else if let Some(i) = r.as_any().downcast_ref::<crate::aws::services::ec2::Ec2Instance>() {
+            if let Some(group) = i.tags.get("aws:autoscaling:groupName") {
+                out.asg = Some((group.clone(), Some(i.instance_id.clone())));
+            }
+        }
+        if let Some(i) = r.as_any().downcast_ref::<crate::aws::services::rds::RdsInstance>() {
+            out.rds = Some((i.db_identifier.clone(), false));
+        } else if let Some(c) = r.as_any().downcast_ref::<crate::aws::services::rds::RdsCluster>() {
+            out.rds = Some((c.cluster_identifier.clone(), true));
+        }
+
         // ECS deployments + service events: already on the struct.
         if let Some(svc) = r
             .as_any()
@@ -18365,6 +18385,8 @@ impl App {
         let alarm_names = inputs.alarm_names;
         let stack = inputs.stack;
         let logical_id = inputs.logical_id;
+        let asg = inputs.asg;
+        let rds = inputs.rds;
         if let Some(st) = self.trail_in_pane.as_mut() {
             st.ownership = inputs.ownership_line;
             let mut pending = vec![TimelineSource::Trail];
@@ -18374,11 +18396,22 @@ impl App {
             if stack.is_some() {
                 pending.push(TimelineSource::Cfn);
             }
+            if asg.is_some() {
+                pending.push(TimelineSource::Scaling);
+            }
+            if rds.is_some() {
+                pending.push(TimelineSource::Rds);
+            }
             st.begin(pending);
             if !inputs.cw_cache_warm {
                 st.aux_notes.push(
                     "@cloudwatch not loaded — alarm history unavailable".to_string(),
                 );
+            }
+            let retention = crate::aws::services::rds::RDS_EVENTS_RETENTION_DAYS;
+            if rds.is_some() && range.lookback_secs() > retention * 86_400 {
+                st.aux_notes
+                    .push(format!("RDS keeps {retention} days of events — older ones are gone"));
             }
             st.set_rows(TimelineSource::Deploy, inputs.deploy_rows);
         }
@@ -18391,6 +18424,65 @@ impl App {
             stack,
             logical_id,
         );
+        self.trigger_timeline_ops_sources(event_tx, range, asg, rds);
+    }
+
+    /// The operational timeline sources — events AWS itself causes, which
+    /// CloudTrail never records: Auto Scaling activities (newest 50 for the
+    /// group) and RDS events (RDS keeps 14 days). Both filter client-side to
+    /// the lens range; same generation guard as the other sources.
+    fn trigger_timeline_ops_sources(
+        &mut self,
+        event_tx: &mpsc::UnboundedSender<Event>,
+        range: crate::aws::services::cloudtrail::TrailRange,
+        asg: Option<(String, Option<String>)>,
+        rds: Option<(String, bool)>,
+    ) {
+        use crate::timeline::{TimelineRow, TimelineSource};
+        let generation = self.trail_generation;
+        let cutoff = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+            - range.lookback_secs();
+        if let Some((group, instance)) = asg {
+            let client = self.aws_clients.asg_client();
+            let tx = event_tx.clone();
+            tokio::spawn(async move {
+                let rows = crate::aws::services::asg::fetch_scaling_activities(client, group)
+                    .await
+                    .map(|acts| {
+                        crate::timeline::scaling_rows(&acts, cutoff, instance.as_deref())
+                    })
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(Event::TrailLensAux {
+                    generation,
+                    source: TimelineSource::Scaling,
+                    rows,
+                });
+            });
+        }
+        if let Some((id, is_cluster)) = rds {
+            let client = self.aws_clients.rds_client();
+            let tx = event_tx.clone();
+            tokio::spawn(async move {
+                let rows = crate::aws::services::rds::fetch_rds_events(client, id, is_cluster)
+                    .await
+                    .map(|events| {
+                        events
+                            .iter()
+                            .filter(|e| e.ts_secs >= cutoff)
+                            .map(TimelineRow::from_rds)
+                            .collect()
+                    })
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(Event::TrailLensAux {
+                    generation,
+                    source: TimelineSource::Rds,
+                    rows,
+                });
+            });
+        }
     }
 
     /// Fire the async timeline fetches, all generation-guarded: the
