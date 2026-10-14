@@ -69,6 +69,10 @@ async fn current() -> Value {
 
     let svcs = serde_json::from_str::<Value>(&services(OutputFormat::Json).unwrap()).unwrap();
 
+    let audit_rows = super::tests::demo_audit().await;
+    let audit = serde_json::from_str::<Value>(&render_audit("us-east-1", &audit_rows, OutputFormat::Json)).unwrap();
+    let audit_csv = render_audit("us-east-1", &audit_rows, OutputFormat::Csv);
+
     let mut prefixes: Vec<String> = ServiceType::all().iter().map(|s| s.prefix().to_string()).collect();
     prefixes.sort();
 
@@ -87,6 +91,11 @@ async fn current() -> Value {
             "item": keys(&several["resources"][0]),
             "resource": keys(&one["resource"]),
             "csv": csv_header(&get_csv, 4),
+        },
+        "audit": {
+            "envelope": keys(&audit),
+            "finding": keys(&audit["findings"][0]),
+            "csv": csv_header(&audit_csv, 5),
         },
         "prefixes": prefixes,
         "sections": sections_by_type(),

@@ -32,6 +32,10 @@ fn id_cell(resource: &dyn crate::aws::resource::Resource) -> String {
     {
         return a.summary().to_string();
     }
+    // An @audit row's id is a compound key; what was found is the point.
+    if let Some(f) = resource.as_any().downcast_ref::<crate::audit::AuditFinding>() {
+        return f.list_note.clone();
+    }
     if resource.id() != resource.name() {
         resource.id().to_string()
     } else {

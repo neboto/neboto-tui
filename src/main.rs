@@ -1,4 +1,5 @@
 mod app;
+mod audit;
 mod aws;
 mod bookmarks;
 mod cli;

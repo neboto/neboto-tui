@@ -163,6 +163,8 @@ neboto ls @lambda --demo -o json | jq '.resources[].name'
 neboto get @lambda orders-api                     # every detail-pane section
 neboto get @iam deploy-role --section permissions -o json
 neboto get @ec2 web-1 web-2 sg-0123abcd -o md     # several, one document
+neboto audit                                      # security findings; exit 3 if any
+neboto audit --fail-on high -o json               # gate CI on high severity only
 ```
 
 `ls` flags:
@@ -185,6 +187,11 @@ matched by exact id (or ARN, where that's its id), then exact name.
 | `-t`, `--type <TYPE>` | Pick between resources that share a name (an ECS service and its task definition), as in `ls` |
 | `--section <NAME>` | Only this section, any case; repeatable. The other sections' data isn't fetched |
 | `--wait <SECS>` | How long to wait for slow sections (default 60); anything still loading prints as not loaded, with a note on stderr |
+
+`audit` loads EC2, RDS, S3, EKS and IAM, runs the same checks as the TUI's
+`@audit`, and prints the findings plus any checks that couldn't run (`-o json`
+puts those under `not_checked`, so a denied load never reads as a clean
+account).
 
 **To compare two resources**, diff two `get`s. Both come out with the same
 sections in the same order, so the diff lines up:
@@ -233,7 +240,9 @@ section that never loaded is `null`. `get -o csv` is one `ID,Section,Key,Value`
 row per detail row. Secret values are never fetched: the `x`/`Y` reveal has no
 CLI equivalent. Warnings go to stderr. Exit codes: `0` success (including an
 empty list), `1` an AWS error, `2` a bad service, region or section, or a
-resource that isn't there or is ambiguous. Unlike the TUI, an unknown region
+resource that isn't there or is ambiguous, and `3` from `audit` when it
+found something at or above `--fail-on` (`high`, `medium`, `low` (the
+default) or `never`). Unlike the TUI, an unknown region
 or profile is an error rather than a fallback, so a script never gets another
 account's answer.
 
@@ -394,6 +403,7 @@ iTerm2).
 @ec2 web             switch to EC2 and fuzzy-search "web"
 ec2:web              colon syntax, same thing
 @all payments        search every warm cache entry, across services
+@audit               security findings from what's loaded (no API calls)
 tag:env=prod         exact tag filter (composes: tag:env=prod api)
 arn:aws:iam::…       paste an ARN — it fuzzy-matches rather than erroring
 ```
@@ -414,6 +424,17 @@ all again; `z` sorts the results (name, state, or grouped by
 service). On a result, `Enter` opens it in its own service; `l` peeks at it
 in place, and `h` comes back to the same results.
 
+`@audit` runs security checks over the same warm caches, with no API calls.
+It flags security groups open to the world (graded by port), public or
+unencrypted RDS, unencrypted EBS, IMDSv1, public AMIs, S3 buckets without a
+full public access block, EKS endpoints open to `0.0.0.0/0`, root MFA and
+access keys, the password policy, and Access Analyzer's public findings.
+Severity is the row's state, so `F` filters by it and `z` sorts by it.
+`Enter` opens the resource. A check whose service you haven't loaded says
+`not checked — load @rds` rather than passing. `neboto audit` loads what the
+checks need and runs them once (#124 has the roadmap: load-everything,
+CIS mappings, rule packs).
+
 ---
 
 ## Services
@@ -428,7 +449,7 @@ same grouping.
 | **Storage** | S3 `@s3` · EFS `@efs` · FSx `@fsx` · Backup `@backup` · Transfer Family `@transfer` |
 | **Database** | RDS `@rds` · DynamoDB `@ddb` · ElastiCache `@elasticache` · DMS `@dms` |
 | **Networking** | VPC `@vpc` · ELB `@elb` · Route 53 `@r53` · Route 53 Resolver `@resolver` · Route 53 Profiles `@profiles` · CloudFront `@cloudfront` · Transit Gateway `@tgw` · Direct Connect `@dx` · Global Accelerator `@ga` · API Gateway `@apigw` |
-| **Security & Identity** | IAM `@iam` · Identity Center `@idc` · Cognito `@cognito` · KMS `@kms` · Secrets Manager `@secrets` · ACM `@acm` · WAF `@waf` · Network Firewall `@anfw` · GuardDuty `@gd` · Security Hub `@sh` · Inspector `@inspector` · Firewall Manager `@fms` |
+| **Security & Identity** | IAM `@iam` · Identity Center `@idc` · Cognito `@cognito` · KMS `@kms` · Secrets Manager `@secrets` · ACM `@acm` · WAF `@waf` · Network Firewall `@anfw` · GuardDuty `@gd` · Security Hub `@sh` · Inspector `@inspector` · Firewall Manager `@fms` · Audit `@audit` (findings from loaded data) |
 | **Analytics** | Athena `@athena` · Glue `@glue` · Kinesis `@kinesis` · MSK `@msk` · Redshift `@redshift` · OpenSearch `@opensearch` |
 | **ML & AI** | Bedrock `@bedrock` |
 | **App Integration** | SQS/SNS `@sqs` · EventBridge `@events` · Step Functions `@sfn` · SES `@ses` |

@@ -4171,6 +4171,10 @@ fn record_jump_arrows(app: &App, area: Rect, row_map: &[usize], lines: &[Line]) 
 
 fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
     let current = app.current_service?;
+    if current == crate::aws::service::ServiceType::Audit {
+        // A finding's `Resource ID` row opens the resource (`trigger_jump`).
+        return (key == "Resource ID" && !value.is_empty()).then_some(true);
+    }
     let target = app
         .ic_jump_target(key, value)
         .or_else(|| app.ecs_service_task_row_jump_target(key, value))

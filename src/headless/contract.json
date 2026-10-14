@@ -29,6 +29,9 @@
       "--section",
       "--type",
       "--wait"
+    ],
+    "audit": [
+      "--fail-on"
     ]
   },
   "services": {
@@ -99,6 +102,32 @@
       "Value"
     ]
   },
+  "audit": {
+    "envelope": [
+      "schema",
+      "region",
+      "count",
+      "findings",
+      "not_checked"
+    ],
+    "finding": [
+      "severity",
+      "check",
+      "title",
+      "service",
+      "resource_id",
+      "resource_name",
+      "resource_type",
+      "reason"
+    ],
+    "csv": [
+      "Severity",
+      "Check",
+      "Service",
+      "Resource",
+      "Finding"
+    ]
+  },
   "prefixes": [
     "@acm",
     "@agentcore",
@@ -106,6 +135,7 @@
     "@apigw",
     "@asg",
     "@athena",
+    "@audit",
     "@backup",
     "@batch",
     "@bedrock",

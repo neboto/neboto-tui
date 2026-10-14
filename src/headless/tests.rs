@@ -125,7 +125,7 @@ async fn every_service_load_path_succeeds_against_the_demo() {
     // needs an empty-list fixture), not missing data. Failures are collected
     // so one run names all of them.
     let mut failures = Vec::new();
-    for svc in ServiceType::all() {
+    for svc in ServiceType::all().into_iter().filter(|s| !s.is_virtual()) {
         let res = tokio::time::timeout(std::time::Duration::from_secs(30), demo_list(svc)).await;
         if let Some((_, expected)) = DEMO_NOT_SET_UP.iter().find(|(s, _)| *s == svc) {
             let said = match &res {
@@ -202,6 +202,46 @@ pub(super) async fn demo_get(args: GetArgs, format: OutputFormat) -> Result<Stri
 pub(super) async fn demo_get_json(args: GetArgs) -> serde_json::Value {
     let out = demo_get(args, OutputFormat::Json).await.unwrap();
     serde_json::from_str(&out).unwrap()
+}
+
+/// The demo account's planted exposures, from one `neboto audit` run.
+pub(super) async fn demo_audit() -> Vec<crate::audit::AuditFinding> {
+    let clients = AwsClients::new_demo_for_test().await;
+    let roles = vec!["OrganizationAccountAccessRole".to_string()];
+    let services = App::build_services(&clients, None, &roles);
+    audit_findings(&services, "us-east-1").await
+}
+
+#[tokio::test]
+async fn audit_loads_its_sources_and_reports_worst_first() {
+    let rows = demo_audit().await;
+    let found: Vec<(&str, &str, &str)> = rows
+        .iter()
+        .filter(|f| f.is_finding())
+        .map(|f| (f.severity.label(), f.check_id, f.resource_name.as_str()))
+        .collect();
+    assert_eq!(found[0], ("high", "sg-open-world", "web-sg"), "{found:?}");
+    assert!(found.contains(&("low", "sg-open-world", "storefront-alb-sg")), "{found:?}");
+    assert!(found.contains(&("medium", "ec2-imdsv1", "web-2")), "{found:?}");
+    // Every source loaded, so nothing is "not checked" for want of a load.
+    assert!(
+        rows.iter().all(|f| !f.list_note.contains("load @")),
+        "{:?}",
+        rows.iter().map(|f| &f.list_note).collect::<Vec<_>>()
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_str(&render_audit("us-east-1", &rows, OutputFormat::Json)).unwrap();
+    assert_eq!(json["schema"], SCHEMA);
+    assert_eq!(json["count"], found.len());
+    assert_eq!(json["findings"][0]["check"], "sg-open-world");
+}
+
+#[test]
+fn audit_is_a_command_not_a_listable_service() {
+    let err = resolve_service("@audit").unwrap_err();
+    assert_eq!(err.code(), 2);
+    assert!(err.message().contains("neboto audit"));
 }
 
 #[tokio::test]

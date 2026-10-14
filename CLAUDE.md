@@ -97,6 +97,13 @@ AWS.
   / Cost / CloudFront / Trusted Advisor / Global Accelerator / Health /
   Resource Explorer.
 
+**Virtual services**: `ServiceType::is_virtual()` (today only `Audit`,
+`@audit`, `src/audit.rs`) has **no client and no cache**: it's left out of
+`build_services`, and `load_service_resources` short-circuits it to compute
+rows in-app from the other services' warm caches (ADR 0006). Anything that
+loops over `ServiceType::all()` expecting a client must skip virtual
+services (the registration test, the demo smoke test and watch mode do).
+
 **Naming gotchas** (services people conflate — don't):
 - `ServiceType::Secrets` (`@secrets`, file `config.rs`) is **Secrets Manager
   only**.
