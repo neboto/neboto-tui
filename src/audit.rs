@@ -164,9 +164,21 @@ static ACCESS_ANALYZER: Check = Check {
     run: check_access_analyzer_public,
 };
 
+/// What `r` in `@audit` and `neboto audit` load: every service a check
+/// reads. `@vpc` is left out — its security groups are the ones `@ec2` lists.
+pub const SOURCES: &[ServiceType] = &[
+    ServiceType::EC2,
+    ServiceType::RDS,
+    ServiceType::S3,
+    ServiceType::Eks,
+    ServiceType::IAM,
+];
+
 /// Cached lists, one per service that had a warm cache.
 pub struct AuditInput<'a> {
     lists: HashMap<ServiceType, &'a [Box<dyn Resource>]>,
+    /// Sources whose load `r` has in flight — their checks say "loading…".
+    loading: Vec<ServiceType>,
     /// For telling current-region S3 buckets from other-region stubs.
     region: String,
 }
@@ -175,8 +187,13 @@ impl<'a> AuditInput<'a> {
     pub fn new(region: &str) -> Self {
         Self {
             lists: HashMap::new(),
+            loading: Vec::new(),
             region: region.to_string(),
         }
+    }
+
+    pub fn set_loading(&mut self, loading: &[ServiceType]) {
+        self.loading = loading.to_vec();
     }
 
     pub fn add(&mut self, svc: ServiceType, list: &'a [Box<dyn Resource>]) {
@@ -208,7 +225,8 @@ pub fn run(input: &AuditInput) -> Vec<AuditFinding> {
             ran += 1;
             (check.run)(input, &mut findings);
         } else {
-            notes.push(AuditFinding::not_checked(check));
+            let loading = check.sources.iter().any(|s| input.loading.contains(s));
+            notes.push(AuditFinding::not_checked(check, loading));
         }
     }
     notes.extend(s3_coverage_notes(input));
@@ -285,18 +303,26 @@ impl AuditFinding {
         }
     }
 
-    fn not_checked(check: &Check) -> Self {
+    fn not_checked(check: &Check, loading: bool) -> Self {
         let load = check
             .sources
             .iter()
             .map(|s| s.prefix())
             .collect::<Vec<_>>()
             .join(" or ");
+        if loading {
+            return Self::note(
+                check,
+                check.title.to_string(),
+                "loading…".to_string(),
+                format!("{load} is loading; this check runs when it lands."),
+            );
+        }
         Self::note(
             check,
             check.title.to_string(),
-            format!("not checked — load {load}"),
-            format!("{load} isn't cached, so this check didn't run. Visit {load}, then come back (or press r here)."),
+            format!("not checked — {load} not loaded"),
+            format!("{load} isn't cached, so this check didn't run. Press r here to load it (or visit {load})."),
         )
     }
 
@@ -877,7 +903,7 @@ mod tests {
         assert!(rows.iter().all(|r| r.kind == RowKind::NotChecked));
         assert_eq!(rows.len(), CHECKS.len() + 1);
         assert_eq!(rows[0].resource_name, "Security group open to the world");
-        assert!(rows[0].list_note.contains("@ec2 or @vpc"));
+        assert!(rows[0].list_note.contains("@ec2 or @vpc not loaded"));
         // Not-checked rows carry no severity — `F` must not offer them.
         assert!(rows.iter().all(|r| r.state_label().is_empty()));
     }

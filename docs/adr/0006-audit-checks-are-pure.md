@@ -6,8 +6,10 @@ account facts) that neboto has **already fetched**, and returns findings. A
 check never calls AWS.
 
 The TUI audits the **warm caches**, as `@all` searches them (ADR 0004). A
-check whose inputs aren't cached produces a "not checked — load @x" row, never
-silence. `neboto audit` has no cache, so it loads the services the checks read
+check whose inputs aren't cached produces a "not checked — @x not loaded" row,
+never silence. `r` in `@audit` loads the missing source services into the
+cache: the same list loads you'd get by visiting them, fired by an explicit
+key press rather than on open. `neboto audit` has no cache, so it loads the services the checks read
 first. That's the same list load `neboto ls` does, nothing more.
 
 ## Considered options
@@ -27,8 +29,9 @@ first. That's the same list load `neboto ls` does, nothing more.
   panes.
 - **A full background sweep on open.** ADR 0004 rejected this for `@all`
   (throttling, noisy permission errors, a slow first paint), and the same
-  objections apply here. #206 adds it as an explicit `L` keypress with
-  progress, not as the default.
+  objections apply here. Loading is an explicit `r`, limited to the handful
+  of sources the checks read. A denied load is reported once and its checks
+  stay "not checked".
 
 ## Consequences
 

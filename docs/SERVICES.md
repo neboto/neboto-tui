@@ -22,8 +22,16 @@ the service you're touching.
 - **Audit** (`@audit`, `src/audit.rs` — **not** a service file; #124, ADR
   0006) — virtual: no client, no cache, nothing in `build_services`
   (`ServiceType::is_virtual`). `load_service_resources` short-circuits it and
-  runs every check over the warm caches (`App::run_audit`, the `@all` walk), so
-  `r` re-audits whatever is cached now. Checks are pure fns over list-time
+  runs every check over the warm caches (`App::run_audit`, the `@all` walk).
+  **`r` loads the missing sources**: `load_audit_sources` spawns
+  `headless::list_all` for each uncached `audit::SOURCES` service, and the
+  results come back as `Event::AuditSourceLoaded`, written **to the cache only**
+  (never `resources`, and `loading` stays false). The audit re-runs as each one
+  lands; checks in flight say `loading…`. Already-cached sources are left
+  alone, since `r` in that service reloads it. `audit_generation` (bumped
+  beside the LazyStore replacement on profile, region and role switches)
+  drops late results, so the old account's rows can't be cached under the new
+  one. Checks are pure fns over list-time
   data only. **Before adding a check**, confirm its field is filled at *list*
   time: KMS `rotation_enabled`, IAM user keys/MFA, snapshot sharing and S3
   `policy_status_public` are all lazy (the field exists but is `None` in the

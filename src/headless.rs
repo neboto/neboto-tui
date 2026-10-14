@@ -43,7 +43,7 @@ impl Failure {
             Failure::Error(_) => 1,
         }
     }
-    fn message(&self) -> &str {
+    pub(crate) fn message(&self) -> &str {
         match self {
             Failure::Usage(m) | Failure::Error(m) => m,
         }
@@ -357,16 +357,6 @@ fn render_list(svc: ServiceType, region: &str, rows: &[Box<dyn Resource>], forma
 
 // ── audit ───────────────────────────────────────────────────────────────────
 
-/// What `neboto audit` loads. The TUI audits whatever is already cached; a
-/// one-shot run has no cache, so it loads every service a check reads.
-/// `@vpc` is left out: its security groups are the ones `@ec2` lists.
-pub(crate) const AUDIT_SOURCES: &[ServiceType] = &[
-    ServiceType::EC2,
-    ServiceType::RDS,
-    ServiceType::S3,
-    ServiceType::Eks,
-    ServiceType::IAM,
-];
 
 async fn audit(
     config: &Config,
@@ -398,7 +388,7 @@ pub(crate) async fn audit_findings(
     services: &std::collections::HashMap<ServiceType, Arc<dyn AwsService>>,
     region: &str,
 ) -> Vec<crate::audit::AuditFinding> {
-    let loads = AUDIT_SOURCES.iter().filter_map(|svc| {
+    let loads = crate::audit::SOURCES.iter().filter_map(|svc| {
         let service = services.get(svc)?.clone();
         Some(async move { (*svc, list_all(service, *svc).await) })
     });

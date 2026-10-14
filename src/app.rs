@@ -1922,6 +1922,13 @@ pub struct App {
     /// clear the new load's flags, poison the cache, or append duplicate
     /// rows (rapid A→B or A→B→A switches raced exactly that way).
     pub load_generation: Arc<AtomicU64>,
+    /// Bumped on every profile/region/role switch: an `@audit` source load
+    /// (`r` in `@audit`) from before the switch is dropped on arrival.
+    pub audit_generation: u64,
+    /// `@audit` sources `r` is loading right now.
+    pub audit_loading: Vec<ServiceType>,
+    /// Sources that failed during the current `r`, reported once all land.
+    audit_load_failures: Vec<String>,
     /// The task running the current list load, so a superseding load can
     /// abort it. The generation guard only stops a stale stream's events
     /// from landing — without the abort its fetch keeps paging AWS in the
@@ -2995,6 +3002,9 @@ impl App {
             loading_complete: false,
             loading_started: false,
             load_generation: Arc::new(AtomicU64::new(0)),
+            audit_generation: 0,
+            audit_loading: Vec::new(),
+            audit_load_failures: Vec::new(),
             load_task: None,
             watch: WatchState::new(config.watch.unwrap_or(false), config.watch_interval),
             watch_staging: None,
@@ -3376,6 +3386,9 @@ impl App {
             | Event::ResourceLoadWarning { .. }
             | Event::ListTagsLoaded { .. }) => {
                 self.handle_load_stream_event(ev, event_tx);
+            }
+            Event::AuditSourceLoaded { generation, service, result } => {
+                self.handle_audit_source_loaded(generation, service, result);
             }
             Event::ResourceRefreshed { id, resource, quiet } => {
                 // Swap the resource in place by id — same position, so the list
@@ -9547,6 +9560,7 @@ impl App {
     pub(crate) fn run_audit(&self) -> Vec<Box<dyn Resource>> {
         let region = self.current_region.as_str().to_string();
         let mut input = crate::audit::AuditInput::new(&region);
+        input.set_loading(&self.audit_loading);
         for svc in ServiceType::all() {
             if svc.is_virtual() {
                 continue;
@@ -9560,6 +9574,119 @@ impl App {
             .into_iter()
             .map(|f| Box::new(f) as Box<dyn Resource>)
             .collect()
+    }
+
+    /// Recompute the `@audit` rows in place, keeping the selected row.
+    fn rerun_audit(&mut self) {
+        let keep = self.get_selected_resource_id();
+        self.resources = self.run_audit();
+        self.update_search();
+        // A "loading…" row the cursor sat on is replaced by findings — start
+        // from the top (the worst) rather than wherever the index lands.
+        if !keep.is_some_and(|id| self.restore_selection_by_id(&id)) {
+            self.select_first_resource();
+        }
+    }
+
+    /// `r` in `@audit`: load every source service that isn't cached — in the
+    /// background, straight into the cache — re-auditing as each lands. A
+    /// cached source is left alone (`r` in that service reloads it), so a
+    /// second `r` costs nothing once everything is warm.
+    fn load_audit_sources(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if !self.audit_loading.is_empty() {
+            self.audit_progress_message();
+            return;
+        }
+        let missing: Vec<ServiceType> = crate::audit::SOURCES
+            .iter()
+            .copied()
+            .filter(|s| self.services.contains_key(s))
+            .filter(|s| {
+                let variant = self.cache_variant(*s);
+                self.cache.get_ref(s, &self.current_region, variant.as_deref()).is_none()
+            })
+            .collect();
+        self.error_message = None;
+        if missing.is_empty() {
+            self.rerun_audit();
+            self.success_message = Some(
+                "Re-audited — every source is cached (r in a service reloads it)".to_string(),
+            );
+            self.success_message_time = Some(Instant::now());
+            return;
+        }
+        self.audit_loading = missing.clone();
+        self.audit_load_failures.clear();
+        let generation = self.audit_generation;
+        for svc in missing {
+            let service = Arc::clone(&self.services[&svc]);
+            let tx = event_tx.clone();
+            tokio::spawn(async move {
+                let result = crate::headless::list_all(service, svc)
+                    .await
+                    .map_err(|f| f.message().to_string());
+                let _ = tx.send(Event::AuditSourceLoaded { generation, service: svc, result });
+            });
+        }
+        self.rerun_audit(); // the pending checks now read "loading…"
+        self.audit_progress_message();
+    }
+
+    fn audit_progress_message(&mut self) {
+        let names: Vec<&str> = self.audit_loading.iter().map(|s| s.prefix()).collect();
+        self.success_message = Some(format!("Audit: loading {}…", names.join(" ")));
+        self.success_message_time = Some(Instant::now());
+    }
+
+    /// A profile/region/role switch: in-flight `@audit` loads belong to the
+    /// old account or region.
+    fn drop_audit_loads(&mut self) {
+        self.audit_generation += 1;
+        self.audit_loading.clear();
+        self.audit_load_failures.clear();
+    }
+
+    fn handle_audit_source_loaded(
+        &mut self,
+        generation: u64,
+        service: ServiceType,
+        result: std::result::Result<(Vec<Box<dyn Resource>>, Vec<String>), String>,
+    ) {
+        if generation != self.audit_generation || !self.audit_loading.contains(&service) {
+            return;
+        }
+        self.audit_loading.retain(|s| *s != service);
+        match result {
+            Ok((rows, warnings)) => {
+                let variant = self.cache_variant(service);
+                self.cache.insert(service, self.current_region, variant, rows);
+                for w in warnings {
+                    self.audit_load_failures.push(format!("{} partial: {w}", service.prefix()));
+                }
+            }
+            Err(e) => self.audit_load_failures.push(format!("{}: {e}", service.prefix())),
+        }
+        if self.current_service == Some(ServiceType::Audit) && !self.all_search_mode {
+            self.rerun_audit();
+        }
+        if !self.audit_loading.is_empty() {
+            self.audit_progress_message();
+        } else if self.audit_load_failures.is_empty() {
+            let n = self
+                .resources
+                .iter()
+                .filter_map(|r| r.as_any().downcast_ref::<crate::audit::AuditFinding>())
+                .filter(|f| f.is_finding())
+                .count();
+            self.success_message = Some(format!("Audit: sources loaded — {n} finding{}", if n == 1 { "" } else { "s" }));
+            self.success_message_time = Some(Instant::now());
+        } else {
+            self.success_message = None;
+            self.error_message = Some(format!(
+                "Audit: some checks couldn't run — {}",
+                self.audit_load_failures.join("; ")
+            ));
+        }
     }
 
     /// `⏎` on an `@audit` finding (list row, or its detail pane's
@@ -10054,6 +10181,7 @@ impl App {
                 // data just refetches on next view, and one epoch keeps the
                 // clear and the in-flight stale-drop atomic (see src/lazy.rs).
                 self.lazy = crate::lazy::LazyStore::new(self.lazy.epoch() + 1);
+                self.drop_audit_loads();
                 self.cancel_pending_deep_export();
 
                 // Reload resources for current service
@@ -10105,6 +10233,7 @@ impl App {
         // store clears every LazyMap, and the epoch bump drops any in-flight
         // fetch — no per-map hand-listing.
         self.lazy = crate::lazy::LazyStore::new(self.lazy.epoch() + 1);
+        self.drop_audit_loads();
         // An armed deep export was collecting the *old* account's sections.
         self.cancel_pending_deep_export();
         // Lazy detail state is credential-scoped — let the flat-view trigger
@@ -10919,6 +11048,10 @@ impl App {
     }
 
     fn refresh_current_service(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if self.current_service == Some(ServiceType::Audit) && !self.all_search_mode {
+            self.load_audit_sources(event_tx);
+            return;
+        }
         // @all lists other services' cached rows. Reloading the service
         // underneath would be discarded uncached (the stream handlers can't
         // write under @all) — a wasted load, and an emptied lazy store with

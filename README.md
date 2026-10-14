@@ -431,8 +431,9 @@ full public access block, EKS endpoints open to `0.0.0.0/0`, root MFA and
 access keys, the password policy, and Access Analyzer's public findings.
 Severity is the row's state, so `F` filters by it and `z` sorts by it.
 `Enter` opens the resource. A check whose service you haven't loaded says
-`not checked — load @rds` rather than passing. `neboto audit` loads what the
-checks need and runs them once (#124 has the roadmap: load-everything,
+`not checked — @rds not loaded` rather than passing; `r` loads every missing
+one in the background (EC2, RDS, S3, EKS, IAM) and re-audits as each lands.
+`neboto audit` loads the same services and runs the checks once (#124 has the roadmap: load-everything,
 CIS mappings, rule packs).
 
 ---

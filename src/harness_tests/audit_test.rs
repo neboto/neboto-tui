@@ -117,3 +117,95 @@ async fn coverage_row_enter_reads_it_instead_of_jumping() {
     assert_eq!(app.current_service, Some(ServiceType::Audit));
     assert!(app.details_focused);
 }
+
+fn public_db() -> Box<dyn Resource> {
+    Box::new(crate::aws::services::rds::RdsInstance::from_sdk(
+        &aws_sdk_rds::types::DbInstance::builder()
+            .db_instance_identifier("orders-db")
+            .publicly_accessible(true)
+            .storage_encrypted(true)
+            .build(),
+    ))
+}
+
+fn notes(app: &App) -> Vec<String> {
+    app.resources
+        .iter()
+        .filter_map(|r| r.as_any().downcast_ref::<crate::audit::AuditFinding>())
+        .filter(|f| f.kind == crate::audit::RowKind::NotChecked)
+        .map(|f| format!("{}: {}", f.check_id, f.list_note))
+        .collect()
+}
+
+#[tokio::test]
+async fn r_loads_the_missing_sources_into_the_cache_and_re_audits() {
+    let (mut app, tx, _rx) = audit_over_warm_ec2().await;
+    app.handle_key(key(KeyCode::Char('r')), &tx).await.unwrap();
+
+    // EC2 was warm, so only the other four load — and nothing is cleared.
+    assert_eq!(
+        app.audit_loading,
+        vec![ServiceType::RDS, ServiceType::S3, ServiceType::Eks, ServiceType::IAM]
+    );
+    assert!(app.cache.get(&ServiceType::EC2, &app.current_region, None).is_some());
+    assert!(!app.loading, "the audit view itself never loads");
+    assert!(
+        notes(&app).iter().any(|n| n == "rds-public: loading…"),
+        "{:?}",
+        notes(&app)
+    );
+
+    // RDS lands: cached, and its finding appears.
+    let generation = app.audit_generation;
+    app.handle_event(
+        Event::AuditSourceLoaded { generation, service: ServiceType::RDS, result: Ok((vec![public_db()], vec![])) },
+        &tx,
+    )
+    .await
+    .unwrap();
+    assert!(app.cache.get(&ServiceType::RDS, &app.current_region, None).is_some());
+    assert!(finding_ids(&app).contains(&"rds-public:orders-db".to_string()), "{:?}", finding_ids(&app));
+    assert!(!app.audit_loading.contains(&ServiceType::RDS));
+
+    // A failed source reports once everything has landed, and its checks
+    // stay "not checked" — never a pass.
+    for svc in [ServiceType::S3, ServiceType::Eks, ServiceType::IAM] {
+        let result = if svc == ServiceType::S3 { Err("AccessDenied".to_string()) } else { Ok((vec![], vec![])) };
+        app.handle_event(Event::AuditSourceLoaded { generation, service: svc, result }, &tx)
+            .await
+            .unwrap();
+    }
+    assert!(app.audit_loading.is_empty());
+    assert!(app.error_message.as_deref().unwrap_or("").contains("@s3: AccessDenied"));
+    assert!(notes(&app).iter().any(|n| n.starts_with("s3-public-access-block: not checked")));
+}
+
+#[tokio::test]
+async fn a_switch_drops_audit_loads_still_in_flight() {
+    let (mut app, tx, _rx) = audit_over_warm_ec2().await;
+    app.handle_key(key(KeyCode::Char('r')), &tx).await.unwrap();
+    let stale = app.audit_generation;
+    app.reset_account_scoped_state(); // what a profile / role switch runs
+    app.handle_event(
+        Event::AuditSourceLoaded { generation: stale, service: ServiceType::RDS, result: Ok((vec![public_db()], vec![])) },
+        &tx,
+    )
+    .await
+    .unwrap();
+    assert!(
+        app.cache.get(&ServiceType::RDS, &app.current_region, None).is_none(),
+        "the old account's rows must not be cached"
+    );
+}
+
+#[tokio::test]
+async fn r_with_every_source_cached_says_so() {
+    let (mut app, tx, _rx) = audit_over_warm_ec2().await;
+    let region = app.current_region;
+    for svc in [ServiceType::RDS, ServiceType::S3, ServiceType::Eks, ServiceType::IAM] {
+        app.cache.insert(svc, region, None, vec![]);
+    }
+    app.handle_key(key(KeyCode::Char('r')), &tx).await.unwrap();
+    assert!(app.audit_loading.is_empty());
+    assert!(app.success_message.as_deref().unwrap_or("").contains("every source is cached"));
+}
