@@ -22535,6 +22535,44 @@ impl App {
         }
     }
 
+    /// The region of the resource an AppSync row jumps to, when the API
+    /// names one: a user pool's `awsRegion`, a data source's table / domain
+    /// region. `None` (stay put) for anything else.
+    fn appsync_row_jump_region(&self, key: &str, value: &str) -> Option<crate::aws::region::Region> {
+        use crate::aws::services::appsync::{opensearch_domain_from_endpoint, AppSyncApi};
+        use crate::ui::widgets::details_pane as dp;
+        self.appsync_row_jump_target(key, value)?;
+        let api = self.get_selected_resource()?.as_any().downcast_ref::<AppSyncApi>()?;
+        let v = value.trim();
+        let region = match key.trim() {
+            k if k == dp::APPSYNC_ROW_USER_POOL => api
+                .auth_modes()
+                .find(|m| m.user_pool_id.as_deref() == Some(v))
+                .and_then(|m| m.user_pool_region.clone()),
+            k if k == dp::APPSYNC_ROW_DDB_TABLE || k == dp::APPSYNC_ROW_OPENSEARCH => {
+                let Some(crate::lazy::Lazy::Loaded(sources)) = self.lazy.appsync_data_sources.get(&api.api_id) else {
+                    return None;
+                };
+                sources
+                    .iter()
+                    .find(|ds| {
+                        if k == dp::APPSYNC_ROW_DDB_TABLE {
+                            ds.dynamodb_table.as_deref() == Some(v)
+                        } else {
+                            ds.opensearch_endpoint
+                                .as_deref()
+                                .and_then(opensearch_domain_from_endpoint)
+                                .as_deref()
+                                == Some(v)
+                        }
+                    })
+                    .and_then(|ds| ds.region.clone())
+            }
+            _ => None,
+        }?;
+        crate::aws::region::Region::from_str(&region)
+    }
+
     /// Elastic Beanstalk rows → the resource they name. Keyed on the row
     /// labels `details_pane` exports as `EB_ROW_*` (names carry no
     /// recognizable id prefix): the application / environment / version
@@ -22884,6 +22922,13 @@ impl App {
         let target = match target {
             Some(t) => t,
             None => return false};
+        // A row can name a resource in another region (an AppSync API's
+        // Cognito pool / DynamoDB table / OpenSearch domain): switch there
+        // too, or the jump searches the current region and finds nothing.
+        let jump_region = jump_region.or_else(|| {
+            row.as_ref()
+                .and_then(|(k, v)| self.appsync_row_jump_region(k, v))
+        });
         let cross = target.service != current;
         if cross && !allow_cross_service {
             return false;

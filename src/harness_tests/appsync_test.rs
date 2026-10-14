@@ -179,3 +179,90 @@ fn api_arns_jump_to_the_api_row() {
         assert_eq!(t.id, API_ID);
     }
 }
+
+/// A row naming a resource in another region switches region with the
+/// jump; a same-region row doesn't ask for a switch.
+#[tokio::test]
+async fn cross_region_rows_switch_region_with_the_jump() {
+    use crate::aws::region::Region;
+    use aws_sdk_appsync::types::{AuthenticationType, DefaultAction, GraphqlApi, UserPoolConfig};
+    let (mut app, tx, mut rx) = test_app().await;
+    app.current_region = Region::UsEast1;
+    let api = AppSyncApi::from_sdk(
+        &GraphqlApi::builder()
+            .api_id(API_ID)
+            .name("storefront-graphql")
+            .authentication_type(AuthenticationType::AmazonCognitoUserPools)
+            .user_pool_config(
+                UserPoolConfig::builder()
+                    .user_pool_id("eu-west-1_AbCdEf123")
+                    .aws_region("eu-west-1")
+                    .default_action(DefaultAction::Allow)
+                    .build()
+                    .unwrap(),
+            )
+            .build(),
+    );
+
+    let press_on = |app: &mut App, label: &str| {
+        let i = app
+            .get_detail_lines_filtered()
+            .iter()
+            .position(|(k, _)| k == label)
+            .unwrap_or_else(|| panic!("no {label:?} row"));
+        app.details_selected_index = Some(i);
+    };
+    let switched_to = |rx: &mut mpsc::UnboundedReceiver<Event>| {
+        let mut switched = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let Event::RegionSwitchRequested { region } = ev {
+                switched = Some(region);
+            }
+        }
+        switched
+    };
+
+    // Cognito pool in eu-west-1.
+    select_mock(&mut app, ServiceType::AppSync, Box::new(api.clone()));
+    app.details_focused = true;
+    app.reset_detail_section_to_default(&tx);
+    app.set_detail_section(section_idx("Auth"), &tx);
+    press_on(&mut app, "  User Pool");
+    app.handle_key(key(KeyCode::Enter), &tx).await.unwrap();
+    assert_eq!(app.current_service, Some(ServiceType::Cognito));
+    assert_eq!(app.pending_jump_region, Some(Region::EuWest1));
+    assert_eq!(switched_to(&mut rx), Some(Region::EuWest1));
+
+    // DynamoDB table in ap-southeast-2, OpenSearch domain in the current region.
+    for (label, want) in [("  DynamoDB Table", Some(Region::ApSoutheast2)), ("  OpenSearch Domain", None)] {
+        select_mock(&mut app, ServiceType::AppSync, Box::new(api.clone()));
+        app.pending_jump = None;
+        app.pending_jump_region = None;
+        app.details_focused = true;
+        app.reset_detail_section_to_default(&tx);
+        app.lazy.appsync_data_sources.apply(
+            API_ID.to_string(),
+            Ok(vec![
+                AppSyncDataSource {
+                    name: "CatalogTable".into(),
+                    ds_type: "AMAZON_DYNAMODB".into(),
+                    dynamodb_table: Some("catalog".into()),
+                    region: Some("ap-southeast-2".into()),
+                    ..Default::default()
+                },
+                AppSyncDataSource {
+                    name: "Search".into(),
+                    ds_type: "AMAZON_OPENSEARCH_SERVICE".into(),
+                    opensearch_endpoint: Some("https://search-products-abc123.us-east-1.es.amazonaws.com".into()),
+                    region: Some("us-east-1".into()),
+                    ..Default::default()
+                },
+            ]),
+        );
+        app.set_detail_section(section_idx("Data Sources"), &tx);
+        press_on(&mut app, label);
+        app.handle_key(key(KeyCode::Enter), &tx).await.unwrap();
+        assert_eq!(app.pending_jump_region, want, "{label}");
+        assert_eq!(switched_to(&mut rx), want, "{label}");
+    }
+}

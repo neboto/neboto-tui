@@ -1004,7 +1004,9 @@ the service you're touching.
   `User Pool` / `DynamoDB Table` / `OpenSearch Domain` / `Log Group` rows
   are label-keyed (`APPSYNC_ROW_*`, `appsync_row_jump_target`); the OpenSearch
   domain is parsed off the endpoint hostname (`search-<domain>-<hash>.…`,
-  hash = last hyphen segment). Lambda / role / WAF / RDS-cluster / event-bus
+  hash = last hyphen segment). Those three rows switch region with the jump
+  when the API names another one (pool `awsRegion`, data source region —
+  `appsync_row_jump_region`). Lambda / role / WAF / RDS-cluster / event-bus
   rows are ARNs and use the generic classifier. `e` on Schema opens the SDL;
   on Resolvers / Functions it opens every resolver's code (JS, or the VTL
   request/response templates) in one file. Not yet: `m` (AWS/AppSync,
