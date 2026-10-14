@@ -28880,7 +28880,7 @@ impl App {
                 S::Resolvers => {
                     if let Some(Lazy::Loaded(r)) = self.lazy.appsync_resolvers.get(id) {
                         if !r.resolvers.is_empty() {
-                            let doc = crate::ui::widgets::details_pane::appsync_code_document(
+                            let (doc, ext) = crate::ui::widgets::details_pane::appsync_code_document(
                                 r.resolvers.iter().map(|x| {
                                     (
                                         format!("{}.{}", x.type_name, x.field_name),
@@ -28890,14 +28890,14 @@ impl App {
                                     )
                                 }),
                             );
-                            return Some((doc, ".js"));
+                            return Some((doc, ext));
                         }
                     }
                 }
                 S::Functions => {
                     if let Some(Lazy::Loaded(fs)) = self.lazy.appsync_functions.get(id) {
                         if !fs.is_empty() {
-                            let doc = crate::ui::widgets::details_pane::appsync_code_document(
+                            let (doc, ext) = crate::ui::widgets::details_pane::appsync_code_document(
                                 fs.iter().map(|f| {
                                     (
                                         f.name.clone(),
@@ -28907,7 +28907,7 @@ impl App {
                                     )
                                 }),
                             );
-                            return Some((doc, ".js"));
+                            return Some((doc, ext));
                         }
                     }
                 }

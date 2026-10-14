@@ -379,14 +379,19 @@ pub fn appsync_api_section_lines(app: &App, api: &AppSyncApi, section: AppSyncAp
 }
 
 /// What `e` opens on the Resolvers / Functions sections: every resolver's
-/// (or function's) code in one document, headed by its name. JS resolvers
-/// carry `code`; VTL ones carry request/response mapping templates.
+/// (or function's) code in one document, headed by its name, plus the file
+/// extension to open it with. JS resolvers carry `code`; VTL ones carry
+/// request/response mapping templates. Any JS makes it a `.js` file (`//`
+/// headers); all-VTL is `.vtl`, headed with VTL's `##` comments.
 pub fn appsync_code_document(
     entries: impl Iterator<Item = (String, Option<String>, Option<String>, Option<String>)>,
-) -> String {
+) -> (String, &'static str) {
+    let entries: Vec<_> = entries.collect();
+    let js = entries.iter().any(|(_, code, _, _)| code.is_some());
+    let (comment, ext) = if js { ("//", ".js") } else { ("##", ".vtl") };
     let mut out = String::new();
     for (title, code, req, resp) in entries {
-        out.push_str(&format!("// ── {title} ──\n"));
+        out.push_str(&format!("{comment} ── {title} ──\n"));
         match (code, req, resp) {
             (Some(c), _, _) => out.push_str(&c),
             (None, req, resp) => {
@@ -403,7 +408,7 @@ pub fn appsync_code_document(
         }
         out.push_str("\n\n");
     }
-    out
+    (out, ext)
 }
 
 #[cfg(test)]
@@ -464,7 +469,7 @@ mod appsync_tests {
 
     #[test]
     fn code_document_prefers_js_code_then_templates() {
-        let doc = appsync_code_document(
+        let (doc, ext) = appsync_code_document(
             vec![
                 ("Query.a".to_string(), Some("export function request() {}".to_string()), None, None),
                 ("Query.b".to_string(), None, Some("{\"version\": \"2018-05-29\"}".to_string()), Some("$util.toJson($ctx.result)".to_string())),
@@ -474,5 +479,21 @@ mod appsync_tests {
         assert!(doc.contains("// ── Query.a ──\nexport function request() {}"));
         assert!(doc.contains("## request mapping template\n{\"version\""));
         assert!(doc.contains("## response mapping template\n$util.toJson"));
+        assert_eq!(ext, ".js");
+    }
+
+    #[test]
+    fn all_vtl_code_opens_as_vtl() {
+        let (doc, ext) = appsync_code_document(
+            vec![(
+                "Query.b".to_string(),
+                None,
+                Some("{\"version\": \"2018-05-29\"}".to_string()),
+                Some("$util.toJson($ctx.result)".to_string()),
+            )]
+            .into_iter(),
+        );
+        assert_eq!(ext, ".vtl");
+        assert!(doc.starts_with("## ── Query.b ──\n"), "{doc}");
     }
 }
