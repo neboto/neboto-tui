@@ -9693,10 +9693,12 @@ impl App {
     /// `Resource ID` row): open the resource in its own service. `Ctrl-O` comes back.
     /// Returns false for rows with no resource (coverage notes).
     pub(crate) fn jump_to_audit_finding(&mut self, event_tx: &mpsc::UnboundedSender<Event>) -> bool {
-        let Some((svc, id, rtype)) = self
+        let Some((svc, id, rtype, section)) = self
             .get_selected_resource()
             .and_then(|r| r.as_any().downcast_ref::<crate::audit::AuditFinding>())
-            .and_then(|f| Some((f.service?, f.resource_id.clone(), f.resource_type.clone())))
+            .and_then(|f| {
+                Some((f.service?, f.resource_id.clone(), f.resource_type.clone(), f.section))
+            })
         else {
             return false;
         };
@@ -9704,7 +9706,9 @@ impl App {
         self.details_focused = false;
         self.details_selected_index = None;
         self.search_active = false;
-        self.jump_to_cached_resource(svc, id, &rtype, false, event_tx);
+        // Land on the section that shows the problem (an SG's Inbound rules,
+        // the account's Password Policy), not the type's default.
+        self.jump_to_cached_resource_at(svc, id, &rtype, false, section.map(String::from), event_tx);
         true
     }
 
@@ -9722,6 +9726,20 @@ impl App {
         reload_same_service: bool,
         event_tx: &mpsc::UnboundedSender<Event>,
     ) {
+        self.jump_to_cached_resource_at(svc, id, rtype, reload_same_service, None, event_tx);
+    }
+
+    /// `jump_to_cached_resource`, landing on the detail section named
+    /// `section` (unknown names fall back to the default, as bookmarks do).
+    fn jump_to_cached_resource_at(
+        &mut self,
+        svc: ServiceType,
+        id: String,
+        rtype: &str,
+        reload_same_service: bool,
+        section: Option<String>,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
         if self.current_service != Some(svc) {
             // switch_service resets views + reloads; set the search after it.
             self.switch_service(svc);
@@ -9736,7 +9754,7 @@ impl App {
         self.search_query = id.clone();
         self.pending_jump = Some(id);
         self.pending_jump_focus_details = true;
-        self.pending_jump_section = None;
+        self.pending_jump_section = section;
         if !self.loading {
             self.update_search();
             self.resolve_pending_jump(event_tx);

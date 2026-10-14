@@ -71,6 +71,8 @@ async fn enter_opens_the_resource_and_ctrl_o_comes_back() {
     assert_eq!(app.current_service, Some(ServiceType::EC2));
     assert_eq!(app.get_selected_resource_id().as_deref(), Some("sg-ssh"));
     assert!(app.details_focused, "lands in the group's detail pane");
+    let labels = app.get_selected_resource().unwrap().detail_sections().unwrap().sections;
+    assert_eq!(labels[app.detail_section_idx].label, "Inbound");
 
     app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL), &tx)
         .await
@@ -208,4 +210,49 @@ async fn r_with_every_source_cached_says_so() {
     app.handle_key(key(KeyCode::Char('r')), &tx).await.unwrap();
     assert!(app.audit_loading.is_empty());
     assert!(app.success_message.as_deref().unwrap_or("").contains("every source is cached"));
+}
+
+#[tokio::test]
+async fn enter_on_an_account_finding_lands_on_iams_account_row() {
+    // The account row's search text doesn't contain its id, so the jump's
+    // id-as-query once filtered it out: "no matches for iam-account-settings".
+    let (mut app, tx, _rx) = test_app().await;
+    let region = app.current_region;
+    let account = crate::aws::services::iam::IamAccountSettings {
+        display_name: "acme-prod".into(),
+        aliases: vec![],
+        summary: vec![("AccountMFAEnabled".into(), 1), ("AccountAccessKeysPresent".into(), 0)],
+        summary_error: None,
+        password_policy: None,
+        pw_policy_error: None,
+        tags: Default::default(),
+    };
+    app.cache.insert(ServiceType::IAM, region, None, vec![Box::new(account)]);
+    app.switch_service(ServiceType::Audit);
+    app.update_search();
+    assert_eq!(finding_ids(&app), vec!["iam-password-policy:iam-account-settings"]);
+
+    app.selected_index = Some(0);
+    app.handle_key(key(KeyCode::Enter), &tx).await.unwrap();
+    assert_eq!(app.current_service, Some(ServiceType::IAM));
+    assert_eq!(app.get_selected_resource_id().as_deref(), Some("iam-account-settings"));
+    assert!(app.details_focused);
+    let labels = app.get_selected_resource().unwrap().detail_sections().unwrap().sections;
+    assert_eq!(labels[app.detail_section_idx].label, "Password Policy", "lands on the problem");
+}
+
+#[test]
+fn every_landing_section_is_a_real_section_label() {
+    // A misspelt `Check::section` silently lands on the default section —
+    // pin each name to a label some split pane actually declares.
+    let labels: std::collections::HashSet<&str> = all_mocks()
+        .iter()
+        .filter_map(|(_, _, r)| r.detail_sections())
+        .flat_map(|d| d.sections.iter().map(|s| s.label))
+        .collect();
+    for check in crate::audit::all_checks() {
+        if let Some(section) = check.section {
+            assert!(labels.contains(section), "{}: no pane has a {section:?} section", check.id);
+        }
+    }
 }

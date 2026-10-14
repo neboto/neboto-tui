@@ -54,6 +54,8 @@ pub struct Check {
     pub title: &'static str,
     pub why: &'static str,
     pub sources: &'static [ServiceType],
+    /// The detail section `⏎` lands on: the one that shows the problem.
+    pub section: Option<&'static str>,
     run: fn(&AuditInput, &mut Vec<AuditFinding>),
 }
 
@@ -64,6 +66,7 @@ static CHECKS: [Check; 13] = [
         title: "Security group open to the world",
         why: "Inbound 0.0.0.0/0 or ::/0 lets anyone on the internet reach whatever the group is attached to. Admin and database ports (SSH, RDP, MySQL, Postgres…) are the ones scanned within minutes of exposure; 80/443 is normal for a public load balancer.",
         sources: &[ServiceType::EC2, ServiceType::VPC],
+        section: Some("Inbound"),
         run: check_sg_open_world,
     },
     Check {
@@ -71,6 +74,7 @@ static CHECKS: [Check; 13] = [
         title: "RDS instance publicly accessible",
         why: "A publicly accessible instance gets a public DNS name resolving to a public IP. Its security groups are then the only thing between the database and the internet.",
         sources: &[ServiceType::RDS],
+        section: Some("Config"),
         run: check_rds_public,
     },
     Check {
@@ -78,6 +82,7 @@ static CHECKS: [Check; 13] = [
         title: "RDS storage not encrypted",
         why: "Storage encryption can't be turned on for an existing instance or cluster — it takes a snapshot, an encrypted copy and a restore. Snapshots and read replicas inherit the setting.",
         sources: &[ServiceType::RDS],
+        section: Some("Storage"),
         run: check_rds_unencrypted,
     },
     Check {
@@ -85,6 +90,7 @@ static CHECKS: [Check; 13] = [
         title: "RDS snapshot not encrypted",
         why: "An unencrypted snapshot restores to an unencrypted database, and can be shared or copied without a KMS key gating it.",
         sources: &[ServiceType::RDS],
+        section: None,
         run: check_rds_snapshot_unencrypted,
     },
     Check {
@@ -92,6 +98,7 @@ static CHECKS: [Check; 13] = [
         title: "EBS volume not encrypted",
         why: "Unencrypted volumes produce unencrypted snapshots. Turning on EBS encryption-by-default covers new volumes only.",
         sources: &[ServiceType::EC2],
+        section: Some("Details"),
         run: check_ebs_unencrypted,
     },
     Check {
@@ -99,6 +106,7 @@ static CHECKS: [Check; 13] = [
         title: "EBS snapshot not encrypted",
         why: "An unencrypted snapshot can be shared with another account (or made public) with no KMS key policy in the way.",
         sources: &[ServiceType::EC2],
+        section: None,
         run: check_ebs_snapshot_unencrypted,
     },
     Check {
@@ -106,6 +114,7 @@ static CHECKS: [Check; 13] = [
         title: "EC2 instance allows IMDSv1",
         why: "IMDSv1 answers unauthenticated GETs, so an SSRF bug in anything on the instance can read its role credentials. IMDSv2 (HttpTokens=required) needs a session token first.",
         sources: &[ServiceType::EC2],
+        section: Some("Security"),
         run: check_ec2_imdsv1,
     },
     Check {
@@ -113,6 +122,7 @@ static CHECKS: [Check; 13] = [
         title: "AMI is public",
         why: "A public AMI can be launched by any AWS account — including whatever is baked into it: keys, config, application code.",
         sources: &[ServiceType::EC2],
+        section: Some("Permissions"),
         run: check_ami_public,
     },
     Check {
@@ -120,6 +130,7 @@ static CHECKS: [Check; 13] = [
         title: "S3 bucket public access block not fully on",
         why: "With any of the four Block Public Access settings off, a bucket policy or ACL can make objects public. The account-level block may still cover this bucket — that setting isn't checked yet (#206).",
         sources: &[ServiceType::S3],
+        section: Some("Security"),
         run: check_s3_public_access_block,
     },
     Check {
@@ -127,6 +138,7 @@ static CHECKS: [Check; 13] = [
         title: "EKS API endpoint open to the world",
         why: "The cluster's Kubernetes API is reachable from any IP. Authentication still applies, but the endpoint is exposed to credential stuffing and to any future API-server vulnerability.",
         sources: &[ServiceType::Eks],
+        section: Some("Networking"),
         run: check_eks_public_endpoint,
     },
     // Account-level checks read the IAM Account sub-tab's row, which the IAM
@@ -136,6 +148,7 @@ static CHECKS: [Check; 13] = [
         title: "Root user has no MFA",
         why: "The root user can do anything, including closing the account, and no policy can restrict it. Without MFA, its password is the only thing protecting it.",
         sources: &[ServiceType::IAM],
+        section: Some("Overview"),
         run: check_root_mfa,
     },
     Check {
@@ -143,6 +156,7 @@ static CHECKS: [Check; 13] = [
         title: "Root user has access keys",
         why: "A root access key is unrestricted, long-lived and can't be scoped by any policy. AWS's guidance is to have none; use roles instead.",
         sources: &[ServiceType::IAM],
+        section: Some("Overview"),
         run: check_root_access_keys,
     },
     Check {
@@ -150,6 +164,7 @@ static CHECKS: [Check; 13] = [
         title: "IAM password policy weak or missing",
         why: "The password policy applies to IAM users' console passwords. CIS asks for at least 14 characters and preventing reuse of the last 24. Accounts where nobody signs in as an IAM user (SSO only) can treat this as low priority.",
         sources: &[ServiceType::IAM],
+        section: Some("Password Policy"),
         run: check_password_policy,
     },
 ];
@@ -161,6 +176,7 @@ static ACCESS_ANALYZER: Check = Check {
     title: "Public access (IAM Access Analyzer)",
     why: "IAM Access Analyzer proved from the resource's policy that anyone can access it. This is AWS's finding, relayed — open it for the principal, actions and conditions.",
     sources: &[ServiceType::IAM],
+    section: None,
     run: check_access_analyzer_public,
 };
 
@@ -173,6 +189,11 @@ pub const SOURCES: &[ServiceType] = &[
     ServiceType::Eks,
     ServiceType::IAM,
 ];
+
+/// Every check, the Access Analyzer relay included.
+pub fn all_checks() -> impl Iterator<Item = &'static Check> {
+    CHECKS.iter().chain(std::iter::once(&ACCESS_ANALYZER))
+}
 
 /// Cached lists, one per service that had a warm cache.
 pub struct AuditInput<'a> {
@@ -220,7 +241,7 @@ pub fn run(input: &AuditInput) -> Vec<AuditFinding> {
     let mut findings = Vec::new();
     let mut notes = Vec::new();
     let mut ran = 0;
-    for check in CHECKS.iter().chain(std::iter::once(&ACCESS_ANALYZER)) {
+    for check in all_checks() {
         if check.sources.iter().any(|s| input.has(*s)) {
             ran += 1;
             (check.run)(input, &mut findings);
@@ -267,6 +288,8 @@ pub struct AuditFinding {
     pub resource_name: String,
     pub resource_type: String,
     pub reason: String,
+    /// See `Check::section`.
+    pub section: Option<&'static str>,
     /// The list's second column: the reason for a finding, why not for a
     /// not-checked row.
     pub list_note: String,
@@ -291,6 +314,7 @@ impl AuditFinding {
             check_id: check.id,
             check_title: check.title,
             why: check.why,
+            section: check.section,
             service: Some(service),
             resource_id: r.id().to_string(),
             resource_name: r.name().to_string(),
@@ -334,6 +358,7 @@ impl AuditFinding {
             check_id: check.id,
             check_title: check.title,
             why: check.why,
+            section: None,
             service: None,
             resource_id: String::new(),
             resource_name: name,
@@ -352,6 +377,7 @@ impl AuditFinding {
             check_id: "all-clear",
             check_title: "No findings",
             why: "",
+            section: None,
             service: None,
             resource_id: String::new(),
             resource_name: format!("✓ no findings — {ran} check{} ran clean", if ran == 1 { "" } else { "s" }),
