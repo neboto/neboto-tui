@@ -1274,6 +1274,36 @@ pub struct SgRule {
     pub description: Option<String>,
 }
 
+impl SgRule {
+    /// Source is the whole internet (`0.0.0.0/0` or `::/0`).
+    pub fn is_world(&self) -> bool {
+        self.source == "0.0.0.0/0" || self.source == "::/0"
+    }
+}
+
+/// A group with any inbound rule open to the world is the one thing a
+/// security-group list should make obvious, so it gets a state: red `●`,
+/// labelled `open to world` — `F` filters to exactly those, and `z`'s state
+/// sort floats them to the top. Everything else stays `stateless()`.
+/// Outbound-to-anywhere is the AWS default and deliberately not flagged.
+pub const SG_OPEN_TO_WORLD: &str = "open to world";
+
+pub fn sg_exposure_state(inbound: &[SgRule]) -> ResourceState {
+    if inbound.iter().any(SgRule::is_world) {
+        ResourceState::Unavailable
+    } else {
+        ResourceState::stateless()
+    }
+}
+
+pub fn sg_exposure_label(inbound: &[SgRule]) -> String {
+    if inbound.iter().any(SgRule::is_world) {
+        SG_OPEN_TO_WORLD.to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// Flatten a list of `IpPermission`s into individual rules, preserving CIDRs,
 /// IPv6 ranges, referenced security groups (with name), prefix lists, and
 /// per-source descriptions.
@@ -1451,7 +1481,11 @@ impl Resource for SecurityGroup {
     }
 
     fn state(&self) -> ResourceState {
-        ResourceState::stateless()
+        sg_exposure_state(&self.inbound_rules)
+    }
+
+    fn state_label(&self) -> String {
+        sg_exposure_label(&self.inbound_rules)
     }
 
     fn tags(&self) -> &HashMap<String, String> {
@@ -1466,6 +1500,9 @@ impl Resource for SecurityGroup {
         ];
         if let Some(vpc) = &self.vpc_id {
             parts.push(vpc.clone());
+        }
+        if self.inbound_rules.iter().any(SgRule::is_world) {
+            parts.push(SG_OPEN_TO_WORLD.to_string());
         }
         for (k, v) in &self.tags {
             parts.push(format!("{}:{}", k, v));
@@ -3341,5 +3378,62 @@ mod user_data_tests {
         let big = vec![b'a'; (USER_DATA_MAX_BYTES + 1) as usize];
         let encoded = b64(&gzip(&big));
         assert_eq!(decode_user_data(&encoded), encoded);
+    }
+}
+
+#[cfg(test)]
+mod sg_exposure_tests {
+    use super::*;
+    use aws_sdk_ec2::types::{IpPermission, IpRange, Ipv6Range, SecurityGroup as SdkSg};
+
+    fn perm(port: i32, v4: &[&str], v6: &[&str]) -> IpPermission {
+        let mut p = IpPermission::builder()
+            .ip_protocol("tcp")
+            .from_port(port)
+            .to_port(port);
+        for c in v4 {
+            p = p.ip_ranges(IpRange::builder().cidr_ip(*c).build());
+        }
+        for c in v6 {
+            p = p.ipv6_ranges(Ipv6Range::builder().cidr_ipv6(*c).build());
+        }
+        p.build()
+    }
+
+    fn sg(inbound: Vec<IpPermission>, outbound: Vec<IpPermission>) -> SdkSg {
+        SdkSg::builder()
+            .group_id("sg-1")
+            .group_name("web")
+            .set_ip_permissions(Some(inbound))
+            .set_ip_permissions_egress(Some(outbound))
+            .build()
+    }
+
+    #[test]
+    fn world_inbound_flags_the_group_and_nothing_else_does() {
+        let open = SecurityGroup::from_sdk(&sg(vec![perm(22, &["0.0.0.0/0"], &[])], vec![]));
+        assert_eq!(open.state(), ResourceState::Unavailable);
+        assert_eq!(open.state_label(), SG_OPEN_TO_WORLD);
+        assert!(open.search_text().contains(SG_OPEN_TO_WORLD));
+
+        // IPv6 any counts too.
+        let v6 = SecurityGroup::from_sdk(&sg(vec![perm(443, &[], &["::/0"])], vec![]));
+        assert_eq!(v6.state_label(), SG_OPEN_TO_WORLD);
+
+        // A private CIDR, or the default allow-all *egress*, is not exposure.
+        let closed = SecurityGroup::from_sdk(&sg(
+            vec![perm(22, &["10.0.0.0/8"], &[])],
+            vec![perm(443, &["0.0.0.0/0"], &["::/0"])],
+        ));
+        assert_eq!(closed.state(), ResourceState::stateless());
+        assert_eq!(closed.state_label(), "");
+        assert!(!closed.search_text().contains(SG_OPEN_TO_WORLD));
+
+        // The VPC view's copy of the type agrees.
+        let vpc_open = crate::aws::services::vpc::VpcSecurityGroup::from_sdk(&sg(
+            vec![perm(3389, &["0.0.0.0/0"], &[])],
+            vec![],
+        ));
+        assert_eq!(vpc_open.state_label(), SG_OPEN_TO_WORLD);
     }
 }

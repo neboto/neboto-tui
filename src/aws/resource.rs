@@ -21,7 +21,7 @@ pub enum ResourceState {
 
 impl ResourceState {
     /// The state of a resource kind that has **no lifecycle state** in AWS —
-    /// an IAM role, a security group, an SQS queue, a log group. Renders as a
+    /// an IAM role, an SQS queue, a log group. Renders as a
     /// dim `○` with a blank label, so the wide list column stays empty and
     /// the `F` filter offers nothing. Use this instead of a constant
     /// `Available`: a column of green "available" on rows that can't be

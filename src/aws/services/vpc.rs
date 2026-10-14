@@ -1509,7 +1509,11 @@ impl Resource for VpcSecurityGroup {
     }
 
     fn state(&self) -> ResourceState {
-        ResourceState::stateless()
+        crate::aws::services::ec2::sg_exposure_state(&self.inbound_rules)
+    }
+
+    fn state_label(&self) -> String {
+        crate::aws::services::ec2::sg_exposure_label(&self.inbound_rules)
     }
 
     fn tags(&self) -> &HashMap<String, String> {
@@ -1524,6 +1528,13 @@ impl Resource for VpcSecurityGroup {
         ];
         if let Some(vpc) = &self.vpc_id {
             parts.push(vpc.clone());
+        }
+        if self
+            .inbound_rules
+            .iter()
+            .any(crate::aws::services::ec2::SgRule::is_world)
+        {
+            parts.push(crate::aws::services::ec2::SG_OPEN_TO_WORLD.to_string());
         }
         for (k, v) in &self.tags {
             parts.push(format!("{}:{}", k, v));

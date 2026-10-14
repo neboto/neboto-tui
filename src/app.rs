@@ -9417,7 +9417,7 @@ impl App {
             .filter(|l| !l.is_empty())
             .collect();
         if states.is_empty() {
-            // Stateless kinds (IAM roles, security groups, queues…) label as
+            // Stateless kinds (IAM roles, queues, log groups…) label as
             // "" — nothing to cycle, say so instead of silently no-op'ing.
             self.list_state_filter = None;
             self.success_message = Some("No states to filter in this view".to_string());

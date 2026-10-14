@@ -161,7 +161,7 @@ pub fn merge_rules(groups: &[SecurityGroup]) -> Vec<AccessRow> {
                         source_label: r.source_label.clone(),
                         from: vec![(g.group_id.clone(), g.group_name.clone())],
                         descriptions: r.description.iter().cloned().collect(),
-                        world: r.source == "0.0.0.0/0" || r.source == "::/0",
+                        world: r.is_world(),
                         lb_sources: Vec::new(),
                     }),
                 }

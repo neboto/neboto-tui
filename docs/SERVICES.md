@@ -1797,6 +1797,12 @@ the service you're touching.
   would cover both kinds if that ever gets built).
 - **Security groups** — EC2 `SecurityGroup` and VPC `VpcSecurityGroup` share one
   Inbound/Outbound/Used-By/Tags split pane. "Used By" (ENIs) is lazy.
+  A group with any **inbound** `0.0.0.0/0` / `::/0` rule is the one SG with a
+  state (`sg_exposure_state`): red `●`, label `open to world` — so `F` filters
+  the list to exposed groups, `z`'s state sort floats them first, and the
+  label is in `search_text`. Every other group stays `stateless()`; world
+  *egress* is the AWS default and not flagged. Zero API — this is the
+  list-level slice of the shelved `@audit` sweep (#124), not a revival of it.
 - **VPC extras** (beyond the core subnet/SG/NACL/endpoint tabs) — tab 3
   **Routing** and tab 4 **Gateways** are *grouped* tabs (pipe filters:
   route tables + prefix lists; IGWs + NAT GWs + **egress-only IGWs**); tab 5
