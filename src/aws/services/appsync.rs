@@ -603,6 +603,9 @@ pub struct AppSyncResolvers {
     pub types_scanned: usize,
     /// Types whose `ListResolvers` failed — their resolvers are missing.
     pub failed_types: Vec<String>,
+    /// The first of those failures' AWS message (usually they share one,
+    /// e.g. a missing `appsync:ListResolvers`).
+    pub failure: Option<String>,
 }
 
 /// Root operation types first, so a cap never cuts Query / Mutation /
@@ -617,16 +620,40 @@ fn type_rank(name: &str) -> (u8, &str) {
     (r, name)
 }
 
-/// Pick which schema types to walk for resolvers: object types only (an
-/// enum, input or scalar can't carry a resolver — a definition we can read
-/// that isn't `type …` is skipped), roots first, cut at `cap`. Returns the
-/// chosen names and how many object types there were in total.
+/// The first keyword of an SDL definition, past any leading description
+/// (`"""…"""` or `"…"`), `#` comments and whitespace — `type`, `enum`, ….
+fn sdl_keyword(def: &str) -> &str {
+    let mut rest = def;
+    loop {
+        rest = rest.trim_start();
+        if let Some(r) = rest.strip_prefix("\"\"\"") {
+            rest = r.find("\"\"\"").map_or("", |i| &r[i + 3..]);
+        } else if let Some(r) = rest.strip_prefix('"') {
+            rest = r.find('"').map_or("", |i| &r[i + 1..]);
+        } else if rest.starts_with('#') {
+            rest = rest.find('\n').map_or("", |i| &rest[i + 1..]);
+        } else {
+            break;
+        }
+    }
+    let rest = rest.strip_prefix("extend ").map_or(rest, str::trim_start);
+    rest.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("")
+}
+
+/// Pick which schema types to walk for resolvers: roots first, cut at
+/// `cap`. Only kinds that *can't* carry a resolver (enum, input, scalar,
+/// union, interface) are skipped — anything else is walked, so a definition
+/// shape we don't recognise costs one extra call rather than silently
+/// hiding its resolvers. Returns the chosen names and how many candidate
+/// types there were in total.
 pub fn resolver_types_to_scan(types: &[(String, Option<String>)], cap: usize) -> (Vec<String>, usize) {
     let mut names: Vec<&str> = types
         .iter()
-        .filter(|(_, def)| match def.as_deref().map(str::trim_start) {
-            None | Some("") => true,
-            Some(d) => d.starts_with("type ") || d.starts_with("extend type "),
+        .filter(|(_, def)| {
+            !matches!(
+                sdl_keyword(def.as_deref().unwrap_or("")),
+                "enum" | "input" | "scalar" | "union" | "interface"
+            )
         })
         .map(|(n, _)| n.as_str())
         .collect();
@@ -724,10 +751,14 @@ pub async fn fetch_resolvers(client: AppSyncClient, api_id: String) -> Result<Ap
 
     let mut resolvers = Vec::new();
     let mut failed_types = Vec::new();
+    let mut failure = None;
     for (type_name, r) in results {
         match r {
             Ok(v) => resolvers.extend(v),
-            Err(_) => failed_types.push(type_name),
+            Err(e) => {
+                failure.get_or_insert(e);
+                failed_types.push(type_name);
+            }
         }
     }
     resolvers.sort_by(|a, b| {
@@ -741,6 +772,7 @@ pub async fn fetch_resolvers(client: AppSyncClient, api_id: String) -> Result<Ap
         types_total,
         types_scanned,
         failed_types,
+        failure,
     })
 }
 
@@ -855,6 +887,22 @@ mod tests {
         assert_eq!(total, 4);
         let (scan, total) = resolver_types_to_scan(&types, 2);
         assert_eq!(scan, vec!["Query", "Mutation"]);
+        assert_eq!(total, 4);
+    }
+
+    #[test]
+    fn resolver_scan_sees_past_descriptions_and_comments() {
+        let t = |n: &str, d: &str| (n.to_string(), Some(d.to_string()));
+        let types = vec![
+            t("Order", "\"\"\"\nAn order.\n\"\"\"\ntype Order { id: ID! }"),
+            t("Product", "\"A product\" type Product @aws_iam { id: ID! }"),
+            t("Cart", "# carts\ntype Cart { id: ID! }"),
+            t("Status", "\"\"\"States\"\"\" enum Status { OPEN }"),
+            t("Node", "interface Node { id: ID! }"),
+            t("Query", "extend type Query { a: Int }"),
+        ];
+        let (scan, total) = resolver_types_to_scan(&types, 100);
+        assert_eq!(scan, vec!["Query", "Cart", "Order", "Product"]);
         assert_eq!(total, 4);
     }
 

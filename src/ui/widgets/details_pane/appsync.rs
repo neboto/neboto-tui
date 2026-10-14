@@ -194,7 +194,10 @@ fn resolver_rows(r: &AppSyncResolvers, functions: Option<&[AppSyncFunction]>) ->
     if !r.failed_types.is_empty() {
         rows.push(kv(
             "",
-            format!("⚠ Resolvers unavailable for: {}", r.failed_types.join(", ")),
+            match &r.failure {
+                Some(e) => format!("⚠ Resolvers unavailable for: {} — {e}", r.failed_types.join(", ")),
+                None => format!("⚠ Resolvers unavailable for: {}", r.failed_types.join(", ")),
+            },
         ));
         rows.push(spacer());
     }
@@ -438,12 +441,25 @@ mod appsync_tests {
             types_total: MAX_RESOLVER_TYPES + 20,
             types_scanned: MAX_RESOLVER_TYPES,
             failed_types: vec![],
+            failure: None,
         };
         let fns = vec![AppSyncFunction { function_id: "fn1".into(), name: "validate".into(), ..Default::default() }];
         let rows = resolver_rows(&r, Some(&fns));
         assert!(rows.iter().any(|(_, v)| v.starts_with("⚠ Only the first 100 of 120")));
         assert!(rows.iter().any(|(k, _)| k == "Mutation.placeOrder"));
         assert!(rows.iter().any(|(k, v)| k == "  Pipeline" && v == "validate → fn2"));
+    }
+
+    #[test]
+    fn failed_resolver_types_carry_the_aws_reason() {
+        let r = AppSyncResolvers {
+            failed_types: vec!["Mutation".into(), "Query".into()],
+            failure: Some("AccessDeniedException: not authorized to perform appsync:ListResolvers".into()),
+            ..Default::default()
+        };
+        let rows = resolver_rows(&r, None);
+        assert!(rows.iter().any(|(_, v)| v
+            == "⚠ Resolvers unavailable for: Mutation, Query — AccessDeniedException: not authorized to perform appsync:ListResolvers"));
     }
 
     #[test]
