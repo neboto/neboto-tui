@@ -3023,6 +3023,19 @@ the service you're touching.
     resource selection and `Esc` drops it; the flat view, snapshot walk and
     export never see it. Providers are summarised as counts rather than
     repeated per row — the per-row `provider:` noise was the first draft.
+  - **Access Points section** (#106) — a **separate crate**,
+    `aws-sdk-s3control`: access points are an S3 Control resource, not an
+    S3 one. `ListAccessPoints` takes the **account id on every call** (the
+    SDK puts it in the host, `<account>.s3-control.<region>…`), so the
+    section reads a dim hint until `App.account_id` resolves, and never
+    issues a call without it. The client is pinned to the **bucket's**
+    region (`s3control_client_for_region`) — access points are regional and
+    listed where their bucket is. Only this account's access points come
+    back: a cross-account access point lives in the account that created it,
+    and the empty state says so. `DemoRequest::parse` skips an all-digit
+    leading host label so the demo routes the call to `s3-control`; a
+    restXml call with no fixture fails the root-element check, so the empty
+    `ListAccessPoints.xml` fixture is load-bearing.
 - **S3 Files** (`@s3files`, `s3files.rs`) — the 2026 S3 shared-file-system
   feature (EFS-based NFS file systems linked to a bucket or prefix, two-way
   sync). Single-list (file systems, `ListFileSystems`, cap 200, single-phase

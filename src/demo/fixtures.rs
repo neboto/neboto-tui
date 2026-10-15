@@ -347,6 +347,9 @@ pub static FIXTURES: &[Fixture] = &[
     // Not in the dataset yet, but their list calls need a root element the
     // empty-success reply can't supply (it varies per operation).
     fx!("s3", "GET /", "ListBuckets.xml"),
+    // The bucket pane's Access Points section (S3 Control; the account id
+    // label in front of the host is skipped by `DemoRequest::parse`).
+    fx!("s3-control", "GET /v20180820/accesspoint", "ListAccessPoints.xml"),
     fx!("route53", "GET /2013-04-01/hostedzone", "ListHostedZones.xml"),
     fx!("route53", "GET /2013-04-01/healthcheck", "ListHealthChecks.xml"),
 ];

@@ -15763,6 +15763,33 @@ impl App {
 
     /// The S3 bucket pane's File Systems section: one `ListFileSystems`
     /// sweep filtered to this bucket, keyed by bucket name.
+    /// Access Points section: S3 Control `ListAccessPoints` filtered to the
+    /// selected bucket, on the bucket's region. S3 Control needs the account
+    /// id; until it's resolved this does nothing and the section says why.
+    pub(crate) fn trigger_s3_access_points_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(account_id) = self.account_id.clone() else {
+            return;
+        };
+        let Some((name, region)) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::s3::S3Bucket>()
+                .map(|b| (b.name.clone(), b.region.clone()))
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.s3control_client_for_region(&region);
+        self.trigger_lazy(
+            |app| &mut app.lazy.s3_access_points,
+            name.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::s3::fetch_bucket_access_points(client, account_id, name)
+                    .await
+                    .map_err(|e| format!("Access points unavailable: {}", e))
+            },
+        );
+    }
+
     pub(crate) fn trigger_s3_bucket_filesystems_load(
         &mut self,
         event_tx: &mpsc::UnboundedSender<Event>,
@@ -27150,6 +27177,7 @@ impl App {
                     self.account_id.as_deref(),
                     self.lazy.s3_storage_metrics.get(&bucket.name),
                     self.lazy.s3_bucket_filesystems.get(&bucket.name),
+                    self.lazy.s3_access_points.get(&bucket.name),
                 );
             }
             if let Some(rule) = resource

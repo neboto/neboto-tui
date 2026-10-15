@@ -795,6 +795,8 @@ pub struct LazyStore {
     /// sweep — feeds the S3 bucket pane's File Systems section), keyed by
     /// bucket name.
     pub s3_bucket_filesystems: LazyMap<Vec<crate::aws::services::s3files::S3FileSystem>>,
+    /// A bucket's access points (S3 Control `ListAccessPoints`), keyed by bucket name.
+    pub s3_access_points: LazyMap<Vec<crate::aws::services::s3::S3AccessPoint>>,
 
     // ── S3 Tables ────────────────────────────────────────────────────────
     /// A table bucket's encryption config + tags (neither in the list

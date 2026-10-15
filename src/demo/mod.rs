@@ -102,6 +102,11 @@ impl DemoRequest {
         if labels.peek() == Some(&"api") {
             labels.next();
         }
+        // S3 Control puts the account id first
+        // (`<account>.s3-control.<region>.amazonaws.com`).
+        if labels.peek().is_some_and(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_digit())) {
+            labels.next();
+        }
         let service = labels.next().unwrap_or_default().to_string();
         let region = labels
             .next()
