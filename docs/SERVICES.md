@@ -1861,6 +1861,21 @@ the service you're touching.
   `id()` is the ARN; `:instance-profile/` ARNs jump here by name, so the
   EC2 instance's profile ARN and the role pane's rows both land on it. Flat
   pane — `details()` already says everything `ListInstanceProfiles` returns.
+- **IAM Access Advisor** (Last Accessed section on role / user / group /
+  managed-policy panes, #106) — the **only non-Get/List IAM call**:
+  `GenerateServiceLastAccessedDetails` starts a report job, then
+  `GetServiceLastAccessedDetails` is polled once a second until it finishes
+  (60s timeout, then an inline "press r to retry"). It's on `ALLOW_OPS` in
+  `scripts/check-readonly.py` on purpose: AWS rates it a Read action, puts
+  it in `IAMReadOnlyAccess`, and it creates no resource. That reasoning does
+  **not** extend to `GenerateCredentialReport`, which writes a report the
+  whole account then sees — keep that one out. `SERVICE_LEVEL` granularity
+  only: `ACTION_LEVEL` covers a handful of services and would read as
+  "everything else unused". One `LazyMap` keyed by ARN feeds all four panes
+  (`trigger_iam_last_accessed_load` downcasts whichever is selected). A
+  report on a group or policy names the principal that last used each
+  service (`LastAuthenticatedEntity`); on a role or user that's the subject
+  itself, so the renderer hides it.
 - **IAM Identity Providers** (Providers sub-tab, key 6) — SAML + OIDC in one
   list; both list calls are unpaginated, and the OIDC one returns **only
   ARNs**, so everything else rides the lazy `Get*Provider` bundle. A

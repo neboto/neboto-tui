@@ -573,6 +573,8 @@ pub struct LazyStore {
     pub iam_policy_docs: LazyMap<crate::aws::services::iam::IamPolicyDocs>,
     /// An identity provider's config + tags (SAML/OIDC get call), keyed by ARN.
     pub iam_idp_details: LazyMap<crate::aws::services::iam::IamIdpDetails>,
+    /// Access Advisor report, keyed by the role / user / group / policy ARN.
+    pub iam_last_accessed: LazyMap<crate::aws::services::iam::IamLastAccessed>,
     /// An account's parents/OUs + attached SCPs, keyed by account id.
     pub org_account_details: LazyMap<crate::aws::services::organizations::OrgAccountDetails>,
     /// An SCP's document + attached targets, keyed by policy id.

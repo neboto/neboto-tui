@@ -20407,6 +20407,33 @@ impl App {
         }
     }
 
+    /// Access Advisor (Last Accessed section) for the selected role, user,
+    /// group or managed policy — one report job per ARN, polled to completion.
+    pub(crate) fn trigger_iam_last_accessed_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::iam::{IamGroup, IamPolicy, IamRole, IamUser};
+        let Some(arn) = self.get_selected_resource().and_then(|r| {
+            let any = r.as_any();
+            any.downcast_ref::<IamRole>()
+                .map(|x| x.arn.clone())
+                .or_else(|| any.downcast_ref::<IamUser>().map(|x| x.arn.clone()))
+                .or_else(|| any.downcast_ref::<IamGroup>().map(|x| x.arn.clone()))
+                .or_else(|| any.downcast_ref::<IamPolicy>().map(|x| x.policy_arn.clone()))
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.iam_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.iam_last_accessed,
+            arn.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::iam::fetch_iam_last_accessed(client, arn)
+                    .await
+                    .map_err(|e| format!("Access Advisor unavailable: {}", e))
+            },
+        );
+    }
+
     /// Trigger a lazy-load of the policy document + attachments for the selected policy.
     pub(crate) fn trigger_iam_policy_details_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if let Some(policy) = self
@@ -28293,6 +28320,7 @@ impl App {
                     details_state,
                     docs_state,
                     &self.instance_profiles_for_role(&role.arn),
+                    self.lazy.iam_last_accessed.get(&role.arn),
                 );
                 if crate::aws::services::iam::IamRoleDetailSection::from_index(self.detail_section_idx) == IamRoleDetailSection::Permissions {
                     lines = self.inject_expanded_policy_docs(lines);
@@ -28337,6 +28365,7 @@ impl App {
                     policy,
                     crate::aws::services::iam::IamPolicyDetailSection::from_index(self.detail_section_idx),
                     details_state,
+                    self.lazy.iam_last_accessed.get(&policy.policy_arn),
                 );
             }
             if let Some(user) = resource
@@ -28352,6 +28381,7 @@ impl App {
                     crate::aws::services::iam::IamUserDetailSection::from_index(self.detail_section_idx),
                     details_state,
                     docs_state,
+                    self.lazy.iam_last_accessed.get(&user.arn),
                 );
                 if crate::aws::services::iam::IamUserDetailSection::from_index(self.detail_section_idx) == IamUserDetailSection::Permissions {
                     lines = self.inject_expanded_policy_docs(lines);
@@ -28371,6 +28401,7 @@ impl App {
                     crate::aws::services::iam::IamGroupDetailSection::from_index(self.detail_section_idx),
                     details_state,
                     docs_state,
+                    self.lazy.iam_last_accessed.get(&group.arn),
                 );
                 if crate::aws::services::iam::IamGroupDetailSection::from_index(self.detail_section_idx) == IamGroupDetailSection::Permissions {
                     lines = self.inject_expanded_policy_docs(lines);

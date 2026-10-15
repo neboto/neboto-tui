@@ -872,7 +872,8 @@
       "Overview",
       "Members",
       "Permissions",
-      "Policies"
+      "Policies",
+      "Last Accessed"
     ],
     "IAM Instance Profile": [
       "Details"
@@ -881,21 +882,24 @@
       "Overview",
       "Document",
       "Attached To",
-      "Tags"
+      "Tags",
+      "Last Accessed"
     ],
     "IAM Role": [
       "Overview",
       "Trust Policy",
       "Permissions",
       "Policies",
-      "Tags"
+      "Tags",
+      "Last Accessed"
     ],
     "IAM User": [
       "Access",
       "Permissions",
       "Policies",
       "Groups",
-      "Tags"
+      "Tags",
+      "Last Accessed"
     ],
     "IC Application": [
       "Overview",

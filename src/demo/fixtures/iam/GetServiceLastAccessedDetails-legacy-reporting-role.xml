@@ -1,0 +1,16 @@
+<GetServiceLastAccessedDetailsResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetServiceLastAccessedDetailsResult>
+    <JobStatus>COMPLETED</JobStatus>
+    <JobType>SERVICE_LEVEL</JobType>
+    <JobCreationDate>{{iso:now-1m}}</JobCreationDate>
+    <JobCompletionDate>{{iso:now-1m+3s}}</JobCompletionDate>
+    <IsTruncated>false</IsTruncated>
+    <ServicesLastAccessed>
+      <member><ServiceName>Amazon Athena</ServiceName><ServiceNamespace>athena</ServiceNamespace><TotalAuthenticatedEntities>0</TotalAuthenticatedEntities></member>
+      <member><ServiceName>AWS Glue</ServiceName><ServiceNamespace>glue</ServiceNamespace><TotalAuthenticatedEntities>0</TotalAuthenticatedEntities></member>
+      <member><ServiceName>Amazon S3</ServiceName><ServiceNamespace>s3</ServiceNamespace><TotalAuthenticatedEntities>0</TotalAuthenticatedEntities></member>
+      <member><ServiceName>Amazon Redshift</ServiceName><ServiceNamespace>redshift</ServiceNamespace><TotalAuthenticatedEntities>0</TotalAuthenticatedEntities></member>
+    </ServicesLastAccessed>
+  </GetServiceLastAccessedDetailsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetServiceLastAccessedDetailsResponse>

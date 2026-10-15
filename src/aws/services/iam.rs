@@ -466,6 +466,7 @@ crate::sections! {
         Permissions "Permissions" => crate::app::App::trigger_iam_role_details_load,
         Policies "Policies" => crate::app::App::trigger_iam_policy_docs_load,
         Tags "Tags" => crate::app::App::trigger_iam_role_details_load,
+        LastAccessed "Last Accessed" => crate::app::App::trigger_iam_last_accessed_load,
     ]
 }
 
@@ -579,6 +580,7 @@ crate::sections! {
         AttachedTo "Attached To" => crate::app::App::trigger_iam_policy_details_load,
         // ListPolicies omits Tags — they ride the lazy bundle (ListPolicyTags).
         Tags "Tags" => crate::app::App::trigger_iam_policy_details_load,
+        LastAccessed "Last Accessed" => crate::app::App::trigger_iam_last_accessed_load,
     ]
 }
 
@@ -684,6 +686,7 @@ crate::sections! {
         Policies "Policies" => crate::app::App::trigger_iam_policy_docs_load,
         Groups "Groups" => crate::app::App::trigger_iam_user_details_load,
         Tags "Tags" => crate::app::App::trigger_iam_user_details_load,
+        LastAccessed "Last Accessed" => crate::app::App::trigger_iam_last_accessed_load,
     ]
 }
 
@@ -906,6 +909,7 @@ crate::sections! {
         Members "Members" => crate::app::App::trigger_iam_group_details_load,
         Permissions "Permissions" => crate::app::App::trigger_iam_group_details_load,
         Policies "Policies" => crate::app::App::trigger_iam_policy_docs_load,
+        LastAccessed "Last Accessed" => crate::app::App::trigger_iam_last_accessed_load,
     ]
 }
 
@@ -1506,7 +1510,7 @@ pub async fn fetch_principal_policy_documents(
 
 // ── Timestamp helpers ─────────────────────────────────────────────────────────
 
-fn fmt_epoch_secs(secs: i64) -> String {
+pub(crate) fn fmt_epoch_secs(secs: i64) -> String {
     let days = secs / 86400;
     let time_rem = secs % 86400;
     let h = time_rem / 3600;
@@ -1736,6 +1740,109 @@ pub async fn fetch_iam_idp_details(
             thumbprints: r.thumbprint_list().to_vec(),
             tags: tags_from_sdk(r.tags()),
         })
+    }
+}
+
+// ── Access Advisor (last accessed, role / user / group / policy) ─────────────
+
+/// One service the principal or policy grants, and when it was last used.
+#[derive(Debug, Clone)]
+pub struct IamServiceLastAccessed {
+    pub service_name: String,
+    pub namespace: String,
+    /// `None` = not accessed in the tracking period (IAM tracks 400 days).
+    pub last_authenticated_secs: Option<i64>,
+    pub region: Option<String>,
+    /// The principal that last used it — set for group and policy reports,
+    /// where several principals share the grant.
+    pub entity: Option<String>,
+    pub total_entities: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IamLastAccessed {
+    pub services: Vec<IamServiceLastAccessed>,
+    pub completed: Option<String>,
+}
+
+/// How long to poll the Access Advisor job before giving up. Jobs normally
+/// finish in a few seconds; a principal with a very large grant can take longer.
+const LAST_ACCESSED_POLL_SECS: u64 = 60;
+
+/// Access Advisor for a role, user, group or managed policy ARN.
+///
+/// `GenerateServiceLastAccessedDetails` is the one non-`Get`/`List` IAM call
+/// neboto makes (an `ALLOW_OPS` exception in `scripts/check-readonly.py`):
+/// it starts a report job and creates no resource. AWS classes it a Read
+/// action and grants it in the `IAMReadOnlyAccess` managed policy. The job
+/// is then polled with `GetServiceLastAccessedDetails`.
+pub async fn fetch_iam_last_accessed(client: IamClient, arn: String) -> Result<IamLastAccessed> {
+    use aws_sdk_iam::types::{AccessAdvisorUsageGranularityType, JobStatusType};
+    let job_id = client
+        .generate_service_last_accessed_details()
+        .arn(&arn)
+        .granularity(AccessAdvisorUsageGranularityType::ServiceLevel)
+        .send()
+        .await
+        .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?
+        .job_id
+        .ok_or_else(|| crate::error::Error::AwsSdk("no job id returned".to_string()))?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(LAST_ACCESSED_POLL_SECS);
+    let mut services = Vec::new();
+    let mut marker: Option<String> = None;
+    loop {
+        let resp = client
+            .get_service_last_accessed_details()
+            .job_id(&job_id)
+            .set_marker(marker.clone())
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+        match resp.job_status() {
+            JobStatusType::InProgress => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(crate::error::Error::AwsSdk(format!(
+                        "the Access Advisor report was still running after {LAST_ACCESSED_POLL_SECS}s — press r to retry"
+                    )));
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+            JobStatusType::Failed => {
+                return Err(match resp.error() {
+                    Some(e) => crate::error::Error::AwsSdk(format!("{}: {}", e.code(), e.message())),
+                    None => crate::error::Error::AwsSdk("the Access Advisor report failed".to_string()),
+                });
+            }
+            _ => {}
+        }
+        services.extend(resp.services_last_accessed().iter().map(|s| IamServiceLastAccessed {
+            service_name: s.service_name().to_string(),
+            namespace: s.service_namespace().to_string(),
+            last_authenticated_secs: s.last_authenticated().map(|d| d.secs()),
+            region: s.last_authenticated_region().map(str::to_string),
+            entity: s.last_authenticated_entity().map(str::to_string),
+            total_entities: s.total_authenticated_entities(),
+        }));
+        let next = if resp.is_truncated() {
+            crate::aws::pagination::next_page_token(resp.marker(), &marker)
+        } else {
+            None
+        };
+        if next.is_none() {
+            // Most recently used first; never-used services after, by name.
+            services.sort_by(|a, b| {
+                b.last_authenticated_secs
+                    .cmp(&a.last_authenticated_secs)
+                    .then_with(|| a.service_name.cmp(&b.service_name))
+            });
+            return Ok(IamLastAccessed {
+                services,
+                completed: Some(fmt_epoch_secs(resp.job_completion_date().secs())),
+            });
+        }
+        marker = next;
     }
 }
 

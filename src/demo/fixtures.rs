@@ -136,6 +136,12 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("iam", "ListAttachedRolePolicies", when ["RoleName=acme-web-ec2"], "ListAttachedRolePolicies-acme-web-ec2.xml"),
     fx!("iam", "GetInstanceProfile", when ["InstanceProfileName=acme-web"], "GetInstanceProfile-acme-web.xml"),
     fx!("iam", "ListInstanceProfiles", "ListInstanceProfiles.xml"),
+    // Access Advisor (Last Accessed section): the stale legacy role has used
+    // none of what it grants; every other subject shares one mixed report.
+    fx!("iam", "GenerateServiceLastAccessedDetails", when ["legacy-reporting-role"], "GenerateServiceLastAccessedDetails-legacy-reporting-role.xml"),
+    fx!("iam", "GenerateServiceLastAccessedDetails", "GenerateServiceLastAccessedDetails.xml"),
+    fx!("iam", "GetServiceLastAccessedDetails", when ["JobId=demo-access-advisor-legacy"], "GetServiceLastAccessedDetails-legacy-reporting-role.xml"),
+    fx!("iam", "GetServiceLastAccessedDetails", "GetServiceLastAccessedDetails.xml"),
     fx!("iam", "ListAttachedRolePolicies", when ["RoleName=storefront-web-task"], "ListAttachedRolePolicies-storefront-web-task.xml"),
     fx!("iam", "ListAttachedRolePolicies", when ["RoleName=orders-worker-task"], "ListAttachedRolePolicies-orders-worker-task.xml"),
     fx!("iam", "ListAttachedRolePolicies", when ["RoleName=ecs-task-execution"], "ListAttachedRolePolicies-ecs-task-execution.xml"),
