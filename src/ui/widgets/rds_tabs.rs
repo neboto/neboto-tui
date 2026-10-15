@@ -11,6 +11,7 @@ pub fn render_rds_tabs(app: &App, area: Rect, frame: &mut Frame) {
         ('4', "Param Groups", v == RdsView::ParamGroups),
         ('5', "Option Groups", v == RdsView::OptionGroups),
         ('6', "Subnet Groups", v == RdsView::SubnetGroups),
+        ('7', "Proxies", v == RdsView::Proxies),
     ];
     render_subtab_bar(app, area, frame, &tabs);
 }

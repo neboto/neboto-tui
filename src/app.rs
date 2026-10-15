@@ -1061,7 +1061,8 @@ pub enum RdsView {
     Snapshots,
     ParamGroups,
     OptionGroups,
-    SubnetGroups}
+    SubnetGroups,
+    Proxies}
 
 impl RdsView {
     pub fn resource_type_filter(&self) -> &'static str {
@@ -1071,7 +1072,8 @@ impl RdsView {
             RdsView::Snapshots => "RDS Snapshot",
             RdsView::ParamGroups => "RDS Parameter Group",
             RdsView::OptionGroups => "RDS Option Group",
-            RdsView::SubnetGroups => "RDS Subnet Group"}
+            RdsView::SubnetGroups => "RDS Subnet Group",
+            RdsView::Proxies => "RDS Proxy"}
     }
 }
 
@@ -6586,6 +6588,11 @@ impl App {
                     self.update_search();
                     return Ok(());
                 }
+                KeyCode::Char('7') => {
+                    self.rds_view = RdsView::Proxies;
+                    self.update_search();
+                    return Ok(());
+                }
                 KeyCode::Tab => {
                     self.rds_view = match self.rds_view {
                         RdsView::Instances => RdsView::Clusters,
@@ -6593,18 +6600,20 @@ impl App {
                         RdsView::Snapshots => RdsView::ParamGroups,
                         RdsView::ParamGroups => RdsView::OptionGroups,
                         RdsView::OptionGroups => RdsView::SubnetGroups,
-                        RdsView::SubnetGroups => RdsView::Instances};
+                        RdsView::SubnetGroups => RdsView::Proxies,
+                        RdsView::Proxies => RdsView::Instances};
                     self.update_search();
                     return Ok(());
                 }
                 KeyCode::BackTab => {
                     self.rds_view = match self.rds_view {
-                        RdsView::Instances => RdsView::SubnetGroups,
+                        RdsView::Instances => RdsView::Proxies,
                         RdsView::Clusters => RdsView::Instances,
                         RdsView::Snapshots => RdsView::Clusters,
                         RdsView::ParamGroups => RdsView::Snapshots,
                         RdsView::OptionGroups => RdsView::ParamGroups,
-                        RdsView::SubnetGroups => RdsView::OptionGroups};
+                        RdsView::SubnetGroups => RdsView::OptionGroups,
+                        RdsView::Proxies => RdsView::SubnetGroups};
                     self.update_search();
                     return Ok(());
                 }
@@ -9267,7 +9276,7 @@ impl App {
             Some(ServiceType::RDS) => {
                 align!(
                     self, rtype, rds_view, RdsView,
-                    [Instances, Clusters, Snapshots, ParamGroups, OptionGroups, SubnetGroups]
+                    [Instances, Clusters, Snapshots, ParamGroups, OptionGroups, SubnetGroups, Proxies]
                 )
             }
             Some(ServiceType::IAM) => {
@@ -22651,7 +22660,7 @@ impl App {
         }
         let view = match key.trim_start() {
             "Cluster" | "Source Cluster" | "Replication Source" => RdsView::Clusters,
-            "Writer" | "Reader" | "Source DB" | "Replica Source" | "Read Replica" => {
+            "Writer" | "Reader" | "Source DB" | "Replica Source" | "Read Replica" | "Target DB" => {
                 RdsView::Instances
             }
             "Snapshot" => RdsView::Snapshots,
@@ -28009,6 +28018,16 @@ impl App {
                     self.lazy.rds_log_files.get(&db.db_identifier),
                 );
             }
+            if let Some(proxy) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::rds::RdsProxy>()
+            {
+                return crate::ui::widgets::details_pane::rds_proxy_section_lines(
+                    proxy,
+                    crate::aws::services::rds::RdsProxyDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.rds_proxy_targets.get(&proxy.name),
+                );
+            }
             if let Some(pg) = resource
                 .as_any()
                 .downcast_ref::<crate::aws::services::rds::RdsParamGroup>()
@@ -29863,6 +29882,29 @@ impl App {
             event_tx,
             async move {
                 crate::aws::services::rds::fetch_rds_log_files(client, fetch_id)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+        );
+    }
+
+    /// Lazy-load the selected RDS proxy's target groups + targets (Targets
+    /// section — pool settings and per-target health).
+    pub(crate) fn trigger_rds_proxy_targets_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(name) = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::rds::RdsProxy>())
+            .map(|p| p.name.clone())
+        else {
+            return;
+        };
+        let client = self.aws_clients.rds_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.rds_proxy_targets,
+            name.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::rds::fetch_rds_proxy_targets(client, name)
                     .await
                     .map_err(|e| e.to_string())
             },

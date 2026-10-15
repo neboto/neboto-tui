@@ -196,6 +196,17 @@ pub(super) fn mocks() -> Vec<Mock> {
         ),
         (
             ServiceType::RDS,
+            "RdsProxy",
+            Box::new(svc::rds::RdsProxy::from_sdk(
+                &aws_sdk_rds::types::DbProxy::builder()
+                    .db_proxy_name("mock-proxy")
+                    .engine_family("POSTGRESQL")
+                    .status(aws_sdk_rds::types::DbProxyStatus::Available)
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::RDS,
             "RdsOptionGroup",
             Box::new(svc::rds::RdsOptionGroup::from_sdk(
                 &aws_sdk_rds::types::OptionGroup::builder()
