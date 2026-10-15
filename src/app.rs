@@ -16885,6 +16885,27 @@ impl App {
         }
     }
 
+    /// The Application pane's Auth section: authentication methods, access
+    /// scopes and grants. Never errors as a whole — each part records its own.
+    pub(crate) fn trigger_ic_app_auth_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(arn) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::identity_center::IcApplication>()
+                .map(|a| a.arn.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.ssoadmin_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.ic_app_auth,
+            arn.clone(),
+            event_tx,
+            async move {
+                Ok::<_, String>(crate::aws::services::identity_center::fetch_app_auth(client, arn).await)
+            },
+        );
+    }
+
     fn selected_ga_accelerator_arn(&self) -> Option<String> {
         self.get_selected_resource().and_then(|r| {
             r.as_any()
@@ -27254,6 +27275,7 @@ impl App {
                     app,
                     crate::aws::services::identity_center::IcApplicationDetailSection::from_index(self.detail_section_idx),
                     self.lazy.ic_app_assignments.get(&app.arn),
+                    self.lazy.ic_app_auth.get(&app.arn),
                 );
             }
             if let Some(sg) = resource

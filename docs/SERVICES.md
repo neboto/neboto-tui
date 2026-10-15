@@ -2094,7 +2094,19 @@ the service you're touching.
   disabled reads unavailable, title, external IDs = the SCIM/identity-source
   signal, created/updated). Applications load eagerly from `ListApplications`
   (no N+1); Assignments is lazy (+ `GetApplicationAssignmentConfiguration`
-  assignment-required flag). `ic_jump_target` (a specialized classifier) wires
+  assignment-required flag). **Auth** (#106) is lazy too: one `LazyMap`
+  entry (`IcAppAuth`) holding three independent `Result`s —
+  `ListApplicationAuthenticationMethods` / `ListApplicationAccessScopes` /
+  `ListApplicationGrants`, run with `tokio::join!` — so one denied call
+  leaves a ⚠ in its own group and the other two still render; the lazy
+  slot itself never errors. Most applications have no OAuth config, so an
+  empty part reads "None configured", and a `ResourceNotFoundException` on
+  these calls is treated as empty rather than a failure. The IAM method's
+  actor policy is a smithy `Document`, pretty-printed via
+  `aws::document::document_pretty`. Trusted-token-issuer ARNs on a
+  JWT-bearer grant don't jump — issuers live on the Instance pane's Trusted
+  Issuers section, not a list a jump can land on.
+  `ic_jump_target` (a specialized classifier) wires
   `Enter` across the IC graph (members↔users↔groups, assignments→principal/
   account, access→permission set/account, app assignments→principal).
 - **Organizations** (`@org`, `organizations.rs`) — sub-tabs Overview / Accounts

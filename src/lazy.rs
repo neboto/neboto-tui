@@ -211,6 +211,9 @@ pub struct LazyStore {
     /// Application assignments, keyed by application ARN.
     pub ic_app_assignments:
         LazyMap<Box<crate::aws::services::identity_center::IcAppAssignments>>,
+    /// Application authentication methods / access scopes / grants, keyed by
+    /// application ARN. Each part carries its own error.
+    pub ic_app_auth: LazyMap<crate::aws::services::identity_center::IcAppAuth>,
 
     // ── Compute Optimizer ────────────────────────────────────────────────
     /// Per-resource recommendation, keyed by ARN. `Loaded(None)` = the call
