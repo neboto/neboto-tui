@@ -351,6 +351,118 @@ pub async fn fetch_cognito_clients(
         .collect())
 }
 
+// ── Groups (lazy, per user pool) ─────────────────────────────────────────────
+
+/// Groups listed per pool — past this the section says it's truncated.
+pub const MAX_COGNITO_GROUPS: usize = 50;
+/// Members listed per group: one `ListUsersInGroup` page (60 is the API max).
+pub const MAX_COGNITO_GROUP_MEMBERS: i32 = 60;
+
+#[derive(Debug, Clone)]
+pub struct CognitoGroupMember {
+    pub username: String,
+    pub enabled: bool,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CognitoGroup {
+    pub name: String,
+    pub description: Option<String>,
+    pub precedence: Option<i32>,
+    pub role_arn: Option<String>,
+    /// `Err` = this group's `ListUsersInGroup` failed; the others still render.
+    pub members: std::result::Result<Vec<CognitoGroupMember>, String>,
+    /// More members exist than the one page fetched.
+    pub members_truncated: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CognitoGroups {
+    pub groups: Vec<CognitoGroup>,
+    /// More groups exist than `MAX_COGNITO_GROUPS`.
+    pub truncated: bool,
+}
+
+/// A user pool's groups with their members, inverted from the group side:
+/// `ListGroups` + one `ListUsersInGroup` page per group (4 at a time). The
+/// per-user `AdminListGroupsForUser` is never called — it's one call per user,
+/// and an `Admin*` action.
+pub async fn fetch_cognito_groups(idp: IdpClient, pool_id: String) -> Result<CognitoGroups> {
+    use futures::StreamExt;
+    let mut raw = Vec::new();
+    let mut token: Option<String> = None;
+    let mut truncated = false;
+    loop {
+        let page = idp
+            .list_groups()
+            .user_pool_id(&pool_id)
+            .limit(60)
+            .set_next_token(token.clone())
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+        raw.extend(page.groups().iter().cloned());
+        token = next_page_token(page.next_token(), &token);
+        if raw.len() > MAX_COGNITO_GROUPS || (raw.len() == MAX_COGNITO_GROUPS && token.is_some()) {
+            raw.truncate(MAX_COGNITO_GROUPS);
+            truncated = true;
+            break;
+        }
+        if token.is_none() {
+            break;
+        }
+    }
+
+    let mut groups: Vec<CognitoGroup> = futures::stream::iter(raw.into_iter().map(|g| {
+        let idp = idp.clone();
+        let pool_id = pool_id.clone();
+        async move {
+            let name = g.group_name().unwrap_or_default().to_string();
+            let resp = idp
+                .list_users_in_group()
+                .user_pool_id(&pool_id)
+                .group_name(&name)
+                .limit(MAX_COGNITO_GROUP_MEMBERS)
+                .send()
+                .await;
+            let (members, members_truncated) = match resp {
+                Ok(r) => (
+                    Ok(r.users()
+                        .iter()
+                        .map(|u| CognitoGroupMember {
+                            username: u.username().unwrap_or_default().to_string(),
+                            enabled: u.enabled(),
+                            status: u.user_status().map(|s| s.as_str().to_string()),
+                        })
+                        .collect()),
+                    r.next_token().is_some_and(|t| !t.is_empty()),
+                ),
+                Err(e) => (Err(crate::error::sdk_error_message(&e)), false),
+            };
+            CognitoGroup {
+                name,
+                description: g.description().filter(|d| !d.is_empty()).map(str::to_string),
+                precedence: g.precedence(),
+                role_arn: g.role_arn().map(str::to_string),
+                members,
+                members_truncated,
+            }
+        }
+    }))
+    .buffered(4)
+    .collect()
+    .await;
+    // Precedence order (lower wins when a user's groups carry roles), then name.
+    groups.sort_by(|a, b| {
+        a.precedence
+            .unwrap_or(i32::MAX)
+            .cmp(&b.precedence.unwrap_or(i32::MAX))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(CognitoGroups { groups, truncated })
+}
+
 // ── CognitoUserPool ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -430,6 +542,7 @@ crate::sections! {
         AppClients "App Clients" => crate::app::App::trigger_cognito_clients_load,
         Policies "Policies",
         Tags "Tags",
+        Groups "Groups" => crate::app::App::trigger_cognito_groups_load,
     ]
 }
 

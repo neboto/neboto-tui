@@ -985,6 +985,16 @@ the service you're touching.
 - **Transfer Family** (`@transfer`) — N+1 streaming load (`DescribeServer` per
   server); Users lazy. `m` metrics (`AWS/Transfer`, dim `ServerId`):
   bytes/files in+out and on-upload workflow success/failure.
+- **Cognito user-pool Groups** (#106) — a lazy section on the **pool**
+  pane, inverted from the group side: `ListGroups` (capped
+  `MAX_COGNITO_GROUPS=50`) + one `ListUsersInGroup` page per group
+  (`MAX_COGNITO_GROUP_MEMBERS=60`, the API's page max; `buffered(4)`).
+  Both caps say so in the section when hit. It lives on the pool rather than
+  the user because the per-user route, `AdminListGroupsForUser`, is one call
+  per user and an `Admin*` action — **never** call it. A single group's
+  member call failing renders `⚠` on that group's Members row only. Groups
+  sort by precedence (lower wins when a user's groups carry IAM roles); the
+  role ARN row jumps via the IAM classifier.
 - **AppSync** (`@appsync`, `appsync.rs`, **aws-sdk-appsync**) — single list of
   **GraphQL APIs** (standard + merged); Event APIs (`ListApis`, channel
   namespaces) are not listed yet. `ListGraphqlApis` returns the full config, so
