@@ -99,6 +99,9 @@ pub static FIXTURES: &[Fixture] = &[
     // ── ECS ──────────────────────────────────────────────────────────────────
     fx!("ecs", "ListClusters", "ListClusters.json"),
     fx!("ecs", "DescribeClusters", "DescribeClusters.json"),
+    // acme-prod runs on Fargate (+ Spot, 1:3) and keeps a GPU ASG provider
+    // scaled to zero for batch work — the Capacity Providers section.
+    fx!("ecs", "DescribeCapacityProviders", "DescribeCapacityProviders.json"),
     fx!("ecs", "ListServices", "ListServices.json"),
     fx!("ecs", "DescribeServices", "DescribeServices.json"),
     fx!("ecs", "ListTaskDefinitions", "ListTaskDefinitions.json"),

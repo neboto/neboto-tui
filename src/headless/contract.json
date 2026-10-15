@@ -676,7 +676,8 @@
     "ECS Cluster": [
       "Overview",
       "Settings",
-      "Tags"
+      "Tags",
+      "Capacity Providers"
     ],
     "ECS Service": [
       "Overview",

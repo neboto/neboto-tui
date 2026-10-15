@@ -694,6 +694,8 @@ pub struct LazyStore {
     pub ecs_service_tasks: LazyMap<Vec<crate::aws::services::ecs::EcsTask>>,
     /// A task definition's full detail, keyed by task-definition ARN.
     pub ecs_taskdef_details: LazyMap<Box<crate::aws::services::ecs::EcsTaskDefinitionDetails>>,
+    /// A cluster's capacity providers (Fargate excluded), keyed by cluster ARN.
+    pub ecs_capacity_providers: LazyMap<Vec<crate::aws::services::ecs::EcsCapacityProviderInfo>>,
 
     // ── FSx ──────────────────────────────────────────────────────────────
     /// A file system's volumes, keyed by file-system id.

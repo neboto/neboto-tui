@@ -16230,6 +16230,29 @@ impl App {
     /// first view of the Tasks section, keyed by service ARN. No-op unless the
     /// Tasks section is active and a service is selected; idempotent once
     /// loading/loaded.
+    /// Lazy `DescribeCapacityProviders` for the cluster pane's Capacity
+    /// Providers section, keyed by cluster ARN.
+    pub(crate) fn trigger_ecs_capacity_providers_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some((arn, names)) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::ecs::EcsCluster>()
+                .map(|c| (c.cluster_arn.clone(), c.capacity_providers.clone()))
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.ecs_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.ecs_capacity_providers,
+            arn,
+            event_tx,
+            async move {
+                crate::aws::services::ecs::fetch_capacity_providers(client, names)
+                    .await
+                    .map_err(|e| format!("Capacity providers unavailable: {}", e))
+            },
+        );
+    }
+
     pub(crate) fn trigger_ecs_service_tasks_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if crate::aws::services::ecs::EcsServiceDetailSection::from_index(self.detail_section_idx) != EcsServiceDetailSection::Tasks {
             return;
@@ -28114,6 +28137,7 @@ impl App {
                 return crate::ui::widgets::details_pane::ecs_cluster_section_lines(
                     cluster,
                     crate::aws::services::ecs::EcsClusterDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.ecs_capacity_providers.get(&cluster.cluster_arn),
                 );
             }
             if let Some(svc) = resource

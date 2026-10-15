@@ -691,6 +691,17 @@ the service you're touching.
   merely *looking* at an image would move the "Last Pulled" date people use
   to decide what is safe to delete. `GetDownloadUrlForLayer` has the same
   problem. Don't add either without an explicit opt-in.
+- **ECS cluster Capacity Providers** (#106) — a lazy section from
+  `DescribeCapacityProviders`, called with the cluster's provider names
+  **minus `FARGATE` / `FARGATE_SPOT`**: those are AWS-managed with no ASG,
+  so the pane explains them without a call, and a Fargate-only cluster makes
+  none. The default strategy comes from `DescribeClusters` (already loaded).
+  The ASG ARN row jumps through an `autoscaling` arm in `arn_jump_target`
+  that takes the group name after `:autoScalingGroupName/` and **only** for
+  `autoScalingGroup:` resources — a scaling-policy or lifecycle-hook ARN
+  embeds the same segment followed by `:policyName/…` and is not the group.
+  A provider the cluster lists but the call doesn't return (deleted while
+  still attached) gets a ⚠ row rather than vanishing.
 - **EKS** (`@eks`) — the showcase: eight-section split pane. **Tier 1
   (AWS-API depth) only** — live Kubernetes workloads (pods/nodes via the cluster
   API server) are deliberately out of scope. Add-on "update-available" costs one
