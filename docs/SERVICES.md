@@ -1919,6 +1919,20 @@ the service you're touching.
   label is in `search_text`. Every other group stays `stateless()`; world
   *egress* is the AWS default and not flagged. Zero API — this is the
   list-level slice of the shelved `@audit` sweep (#124), not a revival of it.
+  **`unused`** (#106) is the second state: a group no network interface
+  carries is `ResourceState::Idle` (muted `◌`, label `unused`), so `F` picks
+  it like an available EBS volume. Open-to-world wins when both apply — the
+  rule is the risk the moment anything attaches the group. The attached set
+  is one paginated `DescribeNetworkInterfaces` (`fetch_attached_group_ids`):
+  `@ec2` reuses its ENI phase, which is why that phase now runs **before**
+  security groups; `@vpc` makes its own scan ahead of its SG phase. The set
+  is all-or-nothing — a failed page leaves every group unmarked, since a
+  partial set would call attached groups unused. The VPC `default` group is
+  never flagged (it can't be deleted). **Unused ≠ safe to delete**, and the
+  Used By section's empty state says why: a group referenced only by another
+  group's rules, a launch template / launch configuration, or ENIs in a
+  shared-VPC participant account has no ENI this account can see. That's
+  also why there's no "delete candidates" view.
 - **VPC extras** (beyond the core subnet/SG/NACL/endpoint tabs) — tab 3
   **Routing** and tab 4 **Gateways** are *grouped* tabs (pipe filters:
   route tables + prefix lists; IGWs + NAT GWs + **egress-only IGWs**); tab 5

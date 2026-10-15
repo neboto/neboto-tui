@@ -100,5 +100,25 @@
         <item><key>team</key><value>storefront</value></item>
       </tagSet>
     </item>
+    <item>
+      <ownerId>{{account}}</ownerId>
+      <groupId>sg-0batch00000000004</groupId>
+      <groupName>legacy-batch-sg</groupName>
+      <groupDescription>Nightly batch hosts (retired)</groupDescription>
+      <vpcId>vpc-0acme000000prod1</vpcId>
+      <ipPermissions>
+        <item>
+          <ipProtocol>tcp</ipProtocol><fromPort>22</fromPort><toPort>22</toPort>
+          <ipRanges><item><cidrIp>10.20.0.0/16</cidrIp></item></ipRanges>
+        </item>
+      </ipPermissions>
+      <ipPermissionsEgress>
+        <item>
+          <ipProtocol>-1</ipProtocol>
+          <ipRanges><item><cidrIp>0.0.0.0/0</cidrIp></item></ipRanges>
+        </item>
+      </ipPermissionsEgress>
+      <tagSet><item><key>team</key><value>data</value></item></tagSet>
+    </item>
   </securityGroupInfo>
 </DescribeSecurityGroupsResponse>

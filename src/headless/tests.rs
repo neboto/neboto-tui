@@ -31,8 +31,30 @@ async fn ls_collects_every_streamed_batch() {
     let (rows, warnings) = demo_list(ServiceType::EC2).await.unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");
     let types = distinct_types(&rows);
-    assert_eq!(types, ["EC2 Instance", "Security Group", "EBS Volume"]);
+    assert_eq!(types, ["EC2 Instance", "Network Interface", "Security Group", "EBS Volume"]);
     assert!(names(&rows).contains(&"legacy-reporting-data"));
+}
+
+#[tokio::test]
+async fn a_group_on_no_network_interface_lists_as_unused() {
+    let (rows, _) = demo_list(ServiceType::EC2).await.unwrap();
+    let unused: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.resource_type() == "Security Group" && r.state_label() == "unused")
+        .map(|r| r.name())
+        .collect();
+    // web-sg / reporting-db-sg sit on instances, storefront-alb-sg on the ALB's
+    // ENIs; only the retired batch group is on nothing.
+    assert_eq!(unused, ["legacy-batch-sg"]);
+
+    // The VPC view runs its own scan and agrees.
+    let (rows, _) = demo_list(ServiceType::VPC).await.unwrap();
+    let unused: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.resource_type() == "SecurityGroup" && r.state_label() == "unused")
+        .map(|r| r.name())
+        .collect();
+    assert_eq!(unused, ["legacy-batch-sg"]);
 }
 
 #[tokio::test]

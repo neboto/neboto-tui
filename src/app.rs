@@ -19188,6 +19188,7 @@ impl App {
                         outbound_rules: sg.outbound_rules.clone(),
                         tags: sg.tags.clone(),
                         owner_id: sg.owner_id.clone(),
+                        unused: sg.unused,
                     });
                 }
             }

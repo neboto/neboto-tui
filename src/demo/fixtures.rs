@@ -92,6 +92,9 @@ pub static FIXTURES: &[Fixture] = &[
     // ── EC2 ──────────────────────────────────────────────────────────────────
     fx!("ec2", "DescribeInstances", "DescribeInstances.xml"),
     fx!("ec2", "DescribeSecurityGroups", "DescribeSecurityGroups.xml"),
+    // Instance + ALB network interfaces. `legacy-batch-sg` is on none of them,
+    // so it lists as `unused`; the Used By section narrows by `group-id`.
+    fx!("ec2", "DescribeNetworkInterfaces", "DescribeNetworkInterfaces.xml"),
     // reporting-db-sg allows Postgres from a prefix list; its rule expands to these.
     fx!("ec2", "GetManagedPrefixListEntries", when ["pl-0corpvpn00000001"], "GetManagedPrefixListEntries-corp-vpn.xml"),
     fx!("ec2", "DescribeManagedPrefixLists", "DescribeManagedPrefixLists.xml"),
