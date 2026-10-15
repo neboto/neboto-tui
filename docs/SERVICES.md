@@ -1879,6 +1879,22 @@ the service you're touching.
   root-credential report** (red = root access keys exist, yellow = root MFA
   off), driven off the summary map's `AccountAccessKeysPresent` /
   `AccountMFAEnabled`.
+- **IAM credential report** (Account pane's Credential Report section, #106)
+  — `GetCredentialReport` **only**. `GenerateCredentialReport` writes a
+  report the whole account then sees, so it stays a mutation to the
+  read-only guard (unlike Access Advisor's job, #215). The consequence is
+  the design: a report lives ~4h after someone generates it, so most of the
+  time the call fails `ReportExpired` / `ReportNotPresent` /
+  `ReportInProgress`. Those three are mapped to `Ok` states
+  (`IamCredentialReport::{Expired, NotPresent, InProgress}`) and render a
+  dim "run `aws iam generate-credential-report`, then press r" hint — never
+  an error. The CSV is parsed **by header name** (AWS has added columns
+  before); no field contains a comma. "Old"/"unused" is one 90-day line for
+  keys and passwords. Root is listed first and any active root key is a ⚠.
+  User rows aren't jumpable — the row value is the summary, not the ARN.
+  The demo account answers `ReportExpired`, the realistic state: a present
+  report's CSV is base64 inside the response, so fixture placeholders
+  can't keep its dates relative to now.
 - **IAM Access Analyzer** (Analyzer sub-tab, key 5) — an **extension** of the
   IAM service (second client + a late streaming step), **not** a new
   `ServiceType`; fully error-tolerant so no-analyzer / permission gaps never

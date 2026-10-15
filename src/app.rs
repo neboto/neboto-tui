@@ -20407,6 +20407,29 @@ impl App {
         }
     }
 
+    /// The Account sub-tab's Credential Report section. `GetCredentialReport`
+    /// only — never `GenerateCredentialReport`, which is a write.
+    pub(crate) fn trigger_iam_credential_report_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if !self.get_selected_resource().is_some_and(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::iam::IamAccountSettings>()
+                .is_some()
+        }) {
+            return;
+        }
+        let client = self.aws_clients.iam_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.iam_credential_report,
+            "account".to_string(),
+            event_tx,
+            async move {
+                crate::aws::services::iam::fetch_iam_credential_report(client)
+                    .await
+                    .map_err(|e| format!("Credential report unavailable: {}", e))
+            },
+        );
+    }
+
     /// Trigger a lazy-load of the policy document + attachments for the selected policy.
     pub(crate) fn trigger_iam_policy_details_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if let Some(policy) = self
@@ -28326,6 +28349,7 @@ impl App {
                 return crate::ui::widgets::details_pane::iam_account_section_lines(
                     settings,
                     crate::aws::services::iam::IamAccountDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.iam_credential_report.get("account"),
                 );
             }
             if let Some(policy) = resource

@@ -182,6 +182,9 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("iam", "GetOpenIDConnectProvider", "GetOpenIDConnectProvider.xml"),
     fx!("iam", "GetAccountSummary", "GetAccountSummary.xml"),
     fx!("iam", "GetAccountPasswordPolicy", "GetAccountPasswordPolicy.xml"),
+    // Credential report: expired, the state most accounts are in (neboto never
+    // generates one), so the section shows its "run generate-credential-report" hint.
+    fx!("iam", "GetCredentialReport", "GetCredentialReport-expired.xml"),
     // ── Elastic Load Balancing v2 ────────────────────────────────────────────
     fx!("elasticloadbalancing", "DescribeLoadBalancers", "DescribeLoadBalancers.xml"),
     fx!("elasticloadbalancing", "DescribeTargetGroups", "DescribeTargetGroups.xml"),

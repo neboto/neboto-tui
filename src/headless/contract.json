@@ -866,7 +866,8 @@
     "IAM Account Settings": [
       "Overview",
       "Password Policy",
-      "Usage"
+      "Usage",
+      "Credential Report"
     ],
     "IAM Group": [
       "Overview",
