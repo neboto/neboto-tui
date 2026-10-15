@@ -70,6 +70,33 @@ pub async fn fetch_instance_user_data(
     Ok(raw.map(decode_user_data))
 }
 
+/// Burstable (T-family: t2, t3, t3a, t4g…) — the only types with a CPU credit
+/// specification.
+pub fn is_burstable(instance_type: &str) -> bool {
+    let mut chars = instance_type.chars();
+    chars.next() == Some('t') && chars.next().is_some_and(|c| c.is_ascii_digit())
+}
+
+/// `standard` or `unlimited` for a burstable instance. The credit *balance*
+/// is the CloudWatch `CPUCreditBalance` metric, not part of this call.
+pub async fn fetch_instance_credit_spec(
+    client: aws_sdk_ec2::Client,
+    instance_id: String,
+) -> Result<String> {
+    let resp = client
+        .describe_instance_credit_specifications()
+        .instance_ids(&instance_id)
+        .send()
+        .await
+        .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+    Ok(resp
+        .instance_credit_specifications()
+        .first()
+        .and_then(|c| c.cpu_credits())
+        .unwrap_or("unknown")
+        .to_string())
+}
+
 /// Ceiling on gunzipped user data. AWS caps user data at 16 KB *encoded*, but
 /// gzip can expand that a thousandfold, and the result goes into the pane.
 const USER_DATA_MAX_BYTES: u64 = 1024 * 1024;
@@ -350,6 +377,7 @@ impl AwsService for Ec2Service {
 
         // Snapshots (self-owned only).
         {
+            let mut fast_restore = fetch_fast_restore_map(&self.client).await.unwrap_or_default();
             let mut token: Option<String> = None;
             loop {
                 let resp = self
@@ -362,7 +390,9 @@ impl AwsService for Ec2Service {
                 match resp {
                     Ok(resp) => {
                         for s in resp.snapshots() {
-                            resources.push(Box::new(EbsSnapshot::from_sdk(s)) as Box<dyn Resource>);
+                            let mut snap = EbsSnapshot::from_sdk(s);
+                            snap.fast_restore = fast_restore.remove(&snap.snapshot_id).unwrap_or_default();
+                            resources.push(Box::new(snap) as Box<dyn Resource>);
                         }
                         token = crate::aws::pagination::next_page_token(resp.next_token(), &token);
                         if token.is_none() {
@@ -627,8 +657,19 @@ impl AwsService for Ec2Service {
             }
         }
 
-        // Phase 6: Snapshots (self-owned only).
+        // Phase 6: Snapshots (self-owned only), with fast snapshot restore
+        // state joined in — one account-wide call ahead of the snapshot pages.
         {
+            let mut fast_restore = match fetch_fast_restore_map(&self.client).await {
+                Ok(m) => m,
+                Err(e) => {
+                    let _ = event_tx.send(Event::ResourceLoadWarning {
+                        service: service_type,
+                        warning: format!("Fast snapshot restore: {e}"),
+                    });
+                    HashMap::new()
+                }
+            };
             let mut token: Option<String> = None;
             loop {
                 match self
@@ -642,7 +683,9 @@ impl AwsService for Ec2Service {
                     Ok(resp) => {
                         let mut batch: Vec<Box<dyn Resource>> = Vec::new();
                         for s in resp.snapshots() {
-                            batch.push(Box::new(EbsSnapshot::from_sdk(s)));
+                            let mut snap = EbsSnapshot::from_sdk(s);
+                            snap.fast_restore = fast_restore.remove(&snap.snapshot_id).unwrap_or_default();
+                            batch.push(Box::new(snap));
                             total_loaded += 1;
                         }
                         if !batch.is_empty() {
@@ -1029,7 +1072,7 @@ impl Ec2Instance {
 crate::sections! {
     pub enum Ec2InstanceDetailSection,
     pub static EC2_INSTANCE_SECTIONS = [
-        Details "Details",
+        Details "Details" => crate::app::App::trigger_ec2_credit_spec_load,
         Security "Security" => crate::app::App::trigger_ec2_instance_profile_roles_load,
         Networking "Networking",
         LoadBalancing "Load Balancing" => crate::app::App::trigger_ec2_instance_lb_load,
@@ -2526,7 +2569,46 @@ pub struct EbsSnapshot {
     pub storage_tier: Option<String>,
     pub state_message: Option<String>,
     pub restore_expiry: Option<String>,
+    /// Fast snapshot restore, `(AZ, state)` per AZ it's enabled (or
+    /// enabling/optimizing/disabling) in — billed per AZ-hour. Filled from one
+    /// `DescribeFastSnapshotRestores` per Snapshots load; empty elsewhere.
+    pub fast_restore: Vec<(String, String)>,
     pub tags: HashMap<String, String>,
+}
+
+/// Fast snapshot restore state per snapshot, `snapshot id → [(AZ, state)]`.
+/// One paginated call for the whole account; `disabled` entries (kept for a
+/// while after disabling) are dropped since they no longer bill.
+pub async fn fetch_fast_restore_map(
+    client: &aws_sdk_ec2::Client,
+) -> std::result::Result<HashMap<String, Vec<(String, String)>>, String> {
+    let mut map: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut token: Option<String> = None;
+    loop {
+        let resp = client
+            .describe_fast_snapshot_restores()
+            .set_next_token(token.clone())
+            .send()
+            .await
+            .map_err(|e| crate::error::sdk_error_message(&e))?;
+        for item in resp.fast_snapshot_restores() {
+            let state = item.state().map(|s| s.as_str().to_string()).unwrap_or_default();
+            if state == "disabled" {
+                continue;
+            }
+            if let (Some(id), Some(az)) = (item.snapshot_id(), item.availability_zone()) {
+                map.entry(id.to_string()).or_default().push((az.to_string(), state));
+            }
+        }
+        token = crate::aws::pagination::next_page_token(resp.next_token(), &token);
+        if token.is_none() {
+            break;
+        }
+    }
+    for azs in map.values_mut() {
+        azs.sort();
+    }
+    Ok(map)
 }
 
 impl EbsSnapshot {
@@ -2560,6 +2642,7 @@ impl EbsSnapshot {
                 .filter(|m| !m.is_empty())
                 .map(|m| m.to_string()),
             restore_expiry: s.restore_expiry_time().map(|t| t.to_string()),
+            fast_restore: Vec::new(),
             tags,
         }
     }

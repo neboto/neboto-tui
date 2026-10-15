@@ -633,6 +633,37 @@ pub(super) fn rds_pi_lines(
     rows
 }
 
+/// The blue/green deployment this instance or cluster is part of — which
+/// side it is, the deployment's status, and the other side (jumpable ARN).
+/// Nothing when there's no deployment.
+fn rds_blue_green_rows(bg: Option<&crate::aws::services::rds::RdsBlueGreen>) -> Vec<(String, String)> {
+    let Some(bg) = bg else {
+        return Vec::new();
+    };
+    let mut rows = vec![
+        (String::new(), String::new()),
+        ("Blue/Green Deployment".to_string(), String::new()),
+        ("  Name".to_string(), bg.name.clone()),
+        ("  Deployment ID".to_string(), bg.id.clone()),
+        (
+            "  Role".to_string(),
+            if bg.is_source { "blue — source (production)" } else { "green — staging copy" }.to_string(),
+        ),
+        ("  Status".to_string(), bg.status.clone()),
+    ];
+    if let Some(d) = &bg.status_details {
+        rows.push(("  Status Details".to_string(), d.clone()));
+    }
+    if let Some(other) = &bg.counterpart {
+        let label = if bg.is_source { "  Green (target)" } else { "  Blue (source)" };
+        rows.push((label.to_string(), other.clone()));
+    }
+    if let Some(c) = &bg.created {
+        rows.push(("  Created".to_string(), c.clone()));
+    }
+    rows
+}
+
 pub(super) fn rds_config_lines(db: &RdsInstance) -> Vec<(String, String)> {
     let mut rows = vec![];
 
@@ -661,6 +692,8 @@ pub(super) fn rds_config_lines(db: &RdsInstance) -> Vec<(String, String)> {
     if let Some(db_name) = &db.db_name {
         rows.push(("DB Name".to_string(), db_name.clone()));
     }
+
+    rows.extend(rds_blue_green_rows(db.blue_green.as_ref()));
 
     rows.push(("".to_string(), "".to_string()));
     rows.push((
@@ -954,6 +987,7 @@ pub fn rds_cluster_section_lines(
             if let Some(pg) = &c.cluster_parameter_group {
                 rows.push(("Parameter Group".to_string(), pg.clone()));
             }
+            rows.extend(rds_blue_green_rows(c.blue_green.as_ref()));
 
             rows.push(("".to_string(), "".to_string()));
             rows.push(("Storage".to_string(), "".to_string()));

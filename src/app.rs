@@ -23054,6 +23054,30 @@ impl App {
         );
     }
 
+    /// Lazy `DescribeInstanceCreditSpecifications` for the Details section's
+    /// CPU Credits row — burstable (T-family) instances only; a no-op otherwise.
+    pub(crate) fn trigger_ec2_credit_spec_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(instance_id) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::ec2::Ec2Instance>()
+                .filter(|i| crate::aws::services::ec2::is_burstable(&i.instance_type))
+                .map(|i| i.instance_id.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.ec2_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.ec2_credit_spec,
+            instance_id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::ec2::fetch_instance_credit_spec(client, instance_id)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+        );
+    }
+
     pub(crate) fn trigger_ec2_instance_user_data_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if crate::aws::services::ec2::Ec2InstanceDetailSection::from_index(self.detail_section_idx)
             != Ec2InstanceDetailSection::UserData
@@ -25825,6 +25849,7 @@ impl App {
                     crate::aws::services::ec2::Ec2InstanceDetailSection::from_index(self.detail_section_idx),
                     profile_roles,
                     ssm_status,
+                    self.lazy.ec2_credit_spec.get(&instance.instance_id),
                     user_data,
                     console,
                     lb,
