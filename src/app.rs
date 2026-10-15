@@ -28078,6 +28078,7 @@ impl App {
                     activities_state,
                     self.selected_optimizer_state(),
                     self.co_enrollment.as_ref(),
+                    self.lazy.asg_lifecycle.get(&group.name),
                 );
             }
             if let Some(cluster) = resource
@@ -32591,6 +32592,28 @@ impl App {
                 },
             );
         }
+    }
+
+    /// Lazy lifecycle hooks + warm pool for the selected group's Lifecycle section.
+    pub(crate) fn trigger_asg_lifecycle_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(group_name) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::asg::AsgGroup>()
+                .map(|g| g.name.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.asg_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.asg_lifecycle,
+            group_name.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::asg::fetch_asg_lifecycle(client, group_name)
+                    .await
+                    .map_err(|e| format!("Lifecycle unavailable: {}", e))
+            },
+        );
     }
 
     fn trigger_rds_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {

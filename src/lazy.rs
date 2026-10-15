@@ -819,6 +819,8 @@ pub struct LazyStore {
     pub lb_web_acl: LazyMap<crate::aws::services::elb::LbWebAcl>,
     /// An Auto Scaling group's scaling activities, keyed by group name.
     pub asg_activities: LazyMap<Vec<crate::aws::services::asg::ScalingActivity>>,
+    /// An Auto Scaling group's lifecycle hooks + warm pool, keyed by group name.
+    pub asg_lifecycle: LazyMap<crate::aws::services::asg::AsgLifecycle>,
 }
 
 impl LazyStore {

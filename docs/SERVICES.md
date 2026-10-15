@@ -1991,6 +1991,14 @@ the service you're touching.
   A key the LB type doesn't have (ALBs carry no
   `load_balancing.cross_zone.enabled`; it's always on) just omits its row —
   don't synthesize a default, the value would be a guess.
+- **Auto Scaling Lifecycle section** (#106) — lazy, keyed by group name:
+  `DescribeLifecycleHooks` (unpaginated — 50 hooks per group max) and
+  `DescribeWarmPool` run concurrently and are kept as **separate `Result`s**
+  in `AsgLifecycle`, so a denied warm-pool call doesn't hide the hooks. A
+  group without a warm pool is a *successful* `DescribeWarmPool` with no
+  `WarmPoolConfiguration` — that's `Ok(None)`, "No warm pool", not an error.
+  An unset `MaxGroupPreparedCapacity` means "the group's max size", which is
+  how it's rendered. Warm instances use the Instances section's table shape.
 - **EC2 instance Load Balancing section** (key 4,
   `elb::fetch_instance_lb_membership`) — "is this instance behind a load
   balancer?". **There is no reverse API** (nothing answers "which target

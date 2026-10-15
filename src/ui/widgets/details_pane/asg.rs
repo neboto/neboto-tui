@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) fn render_asg_group_split(app: &App, group: &AsgGroup, area: Rect, frame: &mut Frame) {
     let focused = app.details_focused;
-    let footer = detail_footer(app, focused, 4, "");
+    let footer = detail_footer(app, focused, crate::aws::services::asg::ASG_GROUP_SECTIONS.len(), "");
 
     let mut block = theme::pane_block("Auto Scaling Group", focused);
     block = block.title_bottom(
@@ -84,6 +84,7 @@ pub fn asg_group_section_lines(
     activities_state: Option<&crate::lazy::Lazy<Vec<crate::aws::services::asg::ScalingActivity>>>,
     optimizer: Option<&Lazy<Option<crate::aws::services::computeoptimizer::OptimizerRec>>>,
     enrollment: Option<&crate::aws::services::computeoptimizer::CoEnrollment>,
+    lifecycle: Option<&Lazy<crate::aws::services::asg::AsgLifecycle>>,
 ) -> Vec<(String, String)> {
     match section {
         AsgGroupDetailSection::Capacity => asg_capacity_lines(group),
@@ -91,6 +92,7 @@ pub fn asg_group_section_lines(
         AsgGroupDetailSection::Activities => asg_activities_lines(activities_state),
         AsgGroupDetailSection::Tags => asg_tags_lines(group),
         AsgGroupDetailSection::Optimizer => optimizer_lines(optimizer, enrollment),
+        AsgGroupDetailSection::Lifecycle => asg_lifecycle_lines(lifecycle),
     }
 }
 
@@ -277,4 +279,208 @@ pub(super) fn asg_tags_lines(group: &AsgGroup) -> Vec<(String, String)> {
 
     rows.push(("".to_string(), "".to_string()));
     rows
+}
+
+/// Lifecycle hooks (the pauses on launch / terminate) and the warm pool. The
+/// two calls fail independently, so each half renders its own error.
+pub(super) fn asg_lifecycle_lines(
+    state: Option<&Lazy<crate::aws::services::asg::AsgLifecycle>>,
+) -> Vec<(String, String)> {
+    let mut rows = vec![(String::new(), String::new())];
+    let lc = match state {
+        None | Some(Lazy::Loading) => {
+            rows.push((String::new(), "Loading…".to_string()));
+            return rows;
+        }
+        Some(Lazy::Error(e)) => {
+            rows.extend(error_rows(e));
+            return rows;
+        }
+        Some(Lazy::Loaded(lc)) => lc,
+    };
+
+    match &lc.hooks {
+        Err(e) => {
+            rows.push(("Lifecycle Hooks".to_string(), String::new()));
+            rows.extend(error_rows(e));
+            rows.push((String::new(), String::new()));
+        }
+        Ok(hooks) if hooks.is_empty() => {
+            rows.push(("Lifecycle Hooks".to_string(), String::new()));
+            rows.push((String::new(), String::new()));
+            rows.push((String::new(), "No lifecycle hooks".to_string()));
+            rows.push((String::new(), String::new()));
+        }
+        Ok(hooks) => {
+            rows.push((format!("Lifecycle Hooks ({})", hooks.len()), String::new()));
+            rows.push((String::new(), String::new()));
+            for h in hooks {
+                rows.push((h.name.clone(), String::new()));
+                // "autoscaling:EC2_INSTANCE_LAUNCHING" → "launching".
+                let transition = h
+                    .transition
+                    .rsplit('_')
+                    .next()
+                    .map(|t| t.to_ascii_lowercase())
+                    .unwrap_or_default();
+                rows.push(("  Transition".to_string(), transition));
+                if let Some(t) = h.heartbeat_timeout {
+                    let then = h
+                        .default_result
+                        .as_deref()
+                        .map(|r| format!(", then {r}"))
+                        .unwrap_or_default();
+                    rows.push(("  Heartbeat timeout".to_string(), format!("{t}s{then}")));
+                }
+                if let Some(t) = h.global_timeout {
+                    rows.push(("  Global timeout".to_string(), format!("{t}s")));
+                }
+                if let Some(arn) = &h.notification_target {
+                    rows.push(("  Notification target".to_string(), arn.clone()));
+                }
+                if let Some(arn) = &h.role_arn {
+                    rows.push(("  Role".to_string(), arn.clone()));
+                }
+                if let Some(m) = &h.metadata {
+                    rows.push(("  Metadata".to_string(), m.clone()));
+                }
+                rows.push((String::new(), String::new()));
+            }
+        }
+    }
+
+    rows.push(("Warm Pool".to_string(), String::new()));
+    rows.push((String::new(), String::new()));
+    match &lc.warm_pool {
+        Err(e) => {
+            rows.extend(error_rows(e));
+        }
+        Ok(None) => {
+            rows.push((String::new(), "No warm pool".to_string()));
+        }
+        Ok(Some(p)) => {
+            rows.push(("  Pool state".to_string(), p.pool_state.clone()));
+            if let Some(s) = &p.status {
+                rows.push(("  Status".to_string(), s.clone()));
+            }
+            rows.push((
+                "  Min size".to_string(),
+                p.min_size.map(|n| n.to_string()).unwrap_or_else(|| "0".to_string()),
+            ));
+            rows.push((
+                "  Max prepared capacity".to_string(),
+                p.max_prepared_capacity
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "the group's max size".to_string()),
+            ));
+            rows.push((
+                "  Reuse on scale-in".to_string(),
+                if p.reuse_on_scale_in == Some(true) { "✓ yes" } else { "no" }.to_string(),
+            ));
+            rows.push((String::new(), String::new()));
+            rows.push((format!("Warm Instances ({})", p.instances.len()), String::new()));
+            rows.push((String::new(), String::new()));
+            if p.instances.is_empty() {
+                rows.push((String::new(), "No instances in the pool".to_string()));
+            } else {
+                // Same table shape as the Instances section.
+                rows.push((
+                    format!(
+                        " {:<19}  {:<11}  {:<12}  {:<16}  {:<9}",
+                        "Instance", "Type", "Zone", "Lifecycle", "Health"
+                    ),
+                    String::new(),
+                ));
+                rows.push((
+                    format!(
+                        " {}  {}  {}  {}  {}",
+                        "─".repeat(19),
+                        "─".repeat(11),
+                        "─".repeat(12),
+                        "─".repeat(16),
+                        "─".repeat(9)
+                    ),
+                    String::new(),
+                ));
+                for i in &p.instances {
+                    rows.push((
+                        format!(
+                            " {:<19}  {:<11}  {:<12}  {:<16}  {:<9}",
+                            i.instance_id,
+                            i.instance_type.as_deref().unwrap_or("-"),
+                            i.az.as_deref().unwrap_or("-"),
+                            i.lifecycle_state,
+                            i.health.as_deref().unwrap_or("-"),
+                        ),
+                        String::new(),
+                    ));
+                }
+            }
+        }
+    }
+    rows.push((String::new(), String::new()));
+    rows
+}
+
+#[cfg(test)]
+mod asg_lifecycle_tests {
+    use super::*;
+    use crate::aws::services::asg::{AsgLifecycle, AsgLifecycleHook, AsgWarmInstance, AsgWarmPool};
+
+    fn text(rows: &[(String, String)]) -> String {
+        rows.iter().map(|(k, v)| format!("{k}={v}\n")).collect()
+    }
+
+    #[test]
+    fn a_denied_warm_pool_still_shows_the_hooks() {
+        let lc = Lazy::Loaded(AsgLifecycle {
+            hooks: Ok(vec![AsgLifecycleHook {
+                name: "drain".into(),
+                transition: "autoscaling:EC2_INSTANCE_TERMINATING".into(),
+                heartbeat_timeout: Some(300),
+                global_timeout: None,
+                default_result: Some("CONTINUE".into()),
+                notification_target: None,
+                role_arn: None,
+                metadata: None,
+            }]),
+            warm_pool: Err("AccessDenied: no".into()),
+        });
+        let t = text(&asg_lifecycle_lines(Some(&lc)));
+        assert!(t.contains("  Transition=terminating"), "{t}");
+        assert!(t.contains("300s, then CONTINUE"), "{t}");
+        assert!(t.contains("AccessDenied"), "{t}");
+    }
+
+    #[test]
+    fn no_warm_pool_is_not_an_error() {
+        let lc = Lazy::Loaded(AsgLifecycle { hooks: Ok(vec![]), warm_pool: Ok(None) });
+        let t = text(&asg_lifecycle_lines(Some(&lc)));
+        assert!(t.contains("No lifecycle hooks") && t.contains("No warm pool"), "{t}");
+        assert!(!t.contains('⚠'), "{t}");
+    }
+
+    #[test]
+    fn warm_instances_list_with_their_state() {
+        let lc = Lazy::Loaded(AsgLifecycle {
+            hooks: Ok(vec![]),
+            warm_pool: Ok(Some(AsgWarmPool {
+                pool_state: "Stopped".into(),
+                status: None,
+                min_size: Some(2),
+                max_prepared_capacity: None,
+                reuse_on_scale_in: Some(true),
+                instances: vec![AsgWarmInstance {
+                    instance_id: "i-0123456789abcdef0".into(),
+                    lifecycle_state: "Warmed:Stopped".into(),
+                    az: Some("us-east-1a".into()),
+                    instance_type: Some("t3.large".into()),
+                    health: Some("Healthy".into()),
+                }],
+            })),
+        });
+        let t = text(&asg_lifecycle_lines(Some(&lc)));
+        assert!(t.contains("the group's max size"), "{t}");
+        assert!(t.contains("i-0123456789abcdef0") && t.contains("Warmed:Stopped"), "{t}");
+    }
 }

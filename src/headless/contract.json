@@ -380,7 +380,8 @@
       "Instances",
       "Activities",
       "Tags",
-      "Optimizer"
+      "Optimizer",
+      "Lifecycle"
     ],
     "Backup Plan": [
       "Rules",
