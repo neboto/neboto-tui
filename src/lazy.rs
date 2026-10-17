@@ -192,6 +192,8 @@ pub struct LazyStore {
     /// A parameter group's parameters `(params, total)`, keyed by
     /// `RdsParamGroup::params_key`.
     pub rds_parameters: LazyMap<(Vec<crate::aws::services::rds::RdsParameter>, usize)>,
+    /// An RDS proxy's target groups + targets with health, keyed by proxy name.
+    pub rds_proxy_targets: LazyMap<crate::aws::services::rds::RdsProxyTargets>,
 
     // ── Identity Center ──────────────────────────────────────────────────
     /// Permission-set policies/boundary/tags, keyed by PS ARN.

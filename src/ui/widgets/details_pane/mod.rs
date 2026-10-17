@@ -934,6 +934,13 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         render_rds_param_group_split(app, pg, area, frame);
         return;
     }
+    if let Some(proxy) = resource.and_then(|r| {
+        r.as_any()
+            .downcast_ref::<crate::aws::services::rds::RdsProxy>()
+    }) {
+        render_rds_proxy_split(app, proxy, area, frame);
+        return;
+    }
     if let Some(vol) = resource.and_then(|r| {
         r.as_any()
             .downcast_ref::<crate::aws::services::fsx::FsxVolume>()

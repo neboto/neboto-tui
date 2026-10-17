@@ -1121,6 +1121,10 @@
       "Overview",
       "Parameters"
     ],
+    "RDS Proxy": [
+      "Overview",
+      "Targets"
+    ],
     "RDS Snapshot": [
       "Overview",
       "Encryption",

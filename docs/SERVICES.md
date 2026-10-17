@@ -781,9 +781,10 @@ the service you're touching.
   lazy `DescribePipe` (`lazy.eb_pipe_detail` — filter patterns, role, logging,
   KMS, tags). `arn_jump_target` routes `events`/`scheduler`/`pipes` ARNs to the
   right sub-tab (`JumpView::Eb`).
-- **RDS** (`@rds`) — six sub-tabs: Instances / Clusters / **Snapshots** (3) /
-  **Param Groups** (4) / **Option Groups** (5) / **Subnet Groups** (6), all
-  streamed as best-effort batches after the instances+clusters core.
+- **RDS** (`@rds`) — seven sub-tabs: Instances / Clusters / **Snapshots** (3) /
+  **Param Groups** (4) / **Option Groups** (5) / **Subnet Groups** (6) /
+  **Proxies** (7), all streamed as best-effort batches after the
+  instances+clusters core.
   Snapshots unify `DescribeDBSnapshots` + `DescribeDBClusterSnapshots`
   (self-owned) into one `RdsSnapshot` (**automated/awsbackup snapshots are
   `is_noise()`** so `a` hides the daily churn). The instance pane is Config /
@@ -817,6 +818,18 @@ the service you're touching.
   "Cluster"/"Source Cluster"/"Replication Source" → Clusters, "Snapshot" →
   Snapshots, "Parameter Group"/"Option Group"/"Subnet Group" → their
   sub-tabs, status suffixes stripped).
+- **RDS Proxy** (Proxies sub-tab, key 7, #106) — `DescribeDBProxies` is the
+  last best-effort phase of the load. Pane: Overview (eager — network, TLS,
+  role, idle timeout, debug logging, auth entries) / **Targets** (lazy
+  `DescribeDBProxyTargetGroups` → `DescribeDBProxyTargets` per group, keyed
+  by proxy name in `lazy.rds_proxy_targets`). Auth entries carry a Secrets
+  Manager **ARN** — shown, never resolved (the Secrets line in CLAUDE.md).
+  Target rows are label-keyed for `rds_row_jump_target`: `Target DB` →
+  Instances, `Cluster` → Clusters (a `TRACKED_CLUSTER` target has no health
+  of its own; its instances do, so it reads `—`). `Debug Logging` on is a ⚠:
+  AWS logs SQL statement text, sensitive values included. Targets are lazy,
+  so `U` on an instance can't name the proxy in front of it — that would
+  need the targets fetched per proxy at list time.
 - **Route 53** (`@r53`) — sub-tabs Zones / **Records** / Health Checks.
   Zones stream first, then health checks stream as a second batch
   (`ListHealthChecks`, tags batched 10-at-a-time via `ListTagsForResources`).
