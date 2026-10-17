@@ -96,8 +96,9 @@ pub enum Command {
     /// Show resources' full detail — every detail-pane section, lazy ones
     /// included.
     Get(GetArgs),
-    /// Security audit: load the services the checks read, run every check,
-    /// print the findings. Exits 3 when a finding reaches --fail-on.
+    /// Security audit: load the services the checks read, then the account
+    /// facts and capped per-resource reads, run every check, print the
+    /// findings. Exits 3 when a finding reaches --fail-on.
     Audit(AuditArgs),
 }
 

@@ -188,9 +188,10 @@ matched by exact id (or ARN, where that's its id), then exact name.
 | `--section <NAME>` | Only this section, any case; repeatable. The other sections' data isn't fetched |
 | `--wait <SECS>` | How long to wait for slow sections (default 60); anything still loading prints as not loaded, with a note on stderr |
 
-`audit` loads EC2, RDS, S3, EKS and IAM, runs the same checks as the TUI's
+`audit` loads EC2, RDS, S3, EKS, IAM and KMS, reads the account facts and
+per-resource settings the lists don't carry, runs the same checks as the TUI's
 `@audit`, and prints the findings plus any checks that couldn't run (`-o json`
-puts those under `not_checked`, so a denied load never reads as a clean
+puts those under `not_checked`, so a denied call never reads as a clean
 account).
 
 **To compare two resources**, diff two `get`s. Both come out with the same
@@ -403,7 +404,7 @@ iTerm2).
 @ec2 web             switch to EC2 and fuzzy-search "web"
 ec2:web              colon syntax, same thing
 @all payments        search every warm cache entry, across services
-@audit               security findings from what's loaded (no API calls)
+@audit               security findings from what's loaded (r fetches the rest)
 tag:env=prod         exact tag filter (composes: tag:env=prod api)
 arn:aws:iam::…       paste an ARN — it fuzzy-matches rather than erroring
 ```
@@ -432,9 +433,17 @@ access keys, the password policy, and Access Analyzer's public findings.
 Severity is the row's state, so `F` filters by it and `z` sorts by it.
 `Enter` opens the resource. A check whose service you haven't loaded says
 `not checked — @rds not loaded` rather than passing; `r` loads every missing
-one in the background (EC2, RDS, S3, EKS, IAM) and re-audits as each lands.
-`neboto audit` loads the same services and runs the checks once (#124 has the roadmap: load-everything,
-CIS mappings, rule packs).
+one in the background (EC2, RDS, S3, EKS, IAM, KMS) and re-audits as each lands.
+
+Then `r` reads what no list carries, once per account and region: the S3
+account-level public access block (a bucket finding it covers drops to low),
+EBS encryption by default, a logging multi-region CloudTrail trail, the Config
+recorder, GuardDuty, and an Access Analyzer. It also makes capped per-resource
+reads (100 of each kind): KMS key rotation, IAM users' console-without-MFA and
+access-key age, and EBS/RDS snapshots that are public or shared. A denied call
+becomes a `not checked — no permission for kms:GetKeyRotationStatus` row, not
+an error. `neboto audit` does all of it in one run (#124 has the roadmap: CIS
+mappings, rule packs).
 
 ---
 

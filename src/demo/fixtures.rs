@@ -173,6 +173,9 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("iam", "GetAccessKeyLastUsed", when ["DEPLOYB"], "GetAccessKeyLastUsed-deploy-bot.xml"),
     fx!("iam", "ListMFADevices", when ["UserName=jsmith"], "ListMFADevices-jsmith.xml"),
     fx!("iam", "GetLoginProfile", when ["UserName=jsmith"], "GetLoginProfile-jsmith.xml"),
+    // Everyone else (deploy-bot) has no console password — the real API's
+    // NoSuchEntity, not an empty success that reads as "has one".
+    fx!("iam", "GetLoginProfile", "GetLoginProfile-none.xml"),
     fx!("iam", "ListGroupsForUser", when ["UserName=jsmith"], "ListGroupsForUser-jsmith.xml"),
     fx!("iam", "ListAttachedUserPolicies", when ["UserName=deploy-bot"], "ListAttachedUserPolicies-deploy-bot.xml"),
     fx!("iam", "ListGroups", "ListGroups.xml"),
@@ -332,6 +335,8 @@ pub static FIXTURES: &[Fixture] = &[
     // Not in the dataset yet, but their list calls need a root element the
     // empty-success reply can't supply (it varies per operation).
     fx!("s3", "GET /", "ListBuckets.xml"),
+    // Account-level Block Public Access fully on (`@audit`'s account fact).
+    fx!("s3-control", "GET /v20180820/configuration/publicAccessBlock", "GetPublicAccessBlock-account.xml"),
     fx!("route53", "GET /2013-04-01/hostedzone", "ListHostedZones.xml"),
     fx!("route53", "GET /2013-04-01/healthcheck", "ListHealthChecks.xml"),
 ];

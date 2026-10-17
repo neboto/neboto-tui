@@ -173,6 +173,7 @@ aws-sdk-controlcatalog = { version = "1", default-features = false, features = [
 aws-sdk-servicecatalog = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-s3files = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-s3tables = { version = "1.62.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-s3control = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 similar = "3"
 aws-sdk-oam = { version = "1.111.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 

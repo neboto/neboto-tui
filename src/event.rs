@@ -37,6 +37,12 @@ pub enum Event {
         service: ServiceType,
         result: std::result::Result<(Vec<Box<dyn Resource>>, Vec<String>), String>,
     },
+    /// The account facts and per-resource reads `r` in `@audit` fetches once
+    /// its source lists are in (#206). Same `generation` guard.
+    AuditFactsLoaded {
+        generation: u64,
+        facts: Box<crate::audit::AuditFacts>,
+    },
     ResourcesLoaded {
         service: ServiceType,
         resources: Vec<Box<dyn Resource>>,

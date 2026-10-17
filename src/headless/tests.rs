@@ -210,7 +210,7 @@ pub(super) async fn demo_audit() -> Vec<crate::audit::AuditFinding> {
     let clients = AwsClients::new_demo_for_test().await;
     let roles = vec!["OrganizationAccountAccessRole".to_string()];
     let services = App::build_services(&clients, None, &roles);
-    audit_findings(&services, "us-east-1").await
+    audit_findings(&services, &clients, "us-east-1").await
 }
 
 #[tokio::test]
@@ -224,6 +224,18 @@ async fn audit_loads_its_sources_and_reports_worst_first() {
     assert_eq!(found[0], ("high", "sg-open-world", "web-sg"), "{found:?}");
     assert!(found.contains(&("low", "sg-open-world", "storefront-alb-sg")), "{found:?}");
     assert!(found.contains(&("medium", "ec2-imdsv1", "web-2")), "{found:?}");
+    // Account facts and per-resource reads (#206) ran too.
+    assert!(found.contains(&("medium", "iam-access-key-old", "deploy-bot")), "{found:?}");
+    assert!(found.contains(&("medium", "guardduty-off", "GuardDuty (us-east-1)")), "{found:?}");
+    assert!(
+        !found.iter().any(|f| f.1 == "iam-user-console-no-mfa"),
+        "deploy-bot has no console password: {found:?}"
+    );
+    assert!(
+        rows.iter().all(|f| f.kind != crate::audit::RowKind::NotChecked),
+        "the demo answers every fact: {:?}",
+        rows.iter().filter(|f| !f.is_finding()).map(|f| (&f.check_id, &f.list_note)).collect::<Vec<_>>()
+    );
     // Every source loaded, so nothing is "not checked" for want of a load.
     assert!(
         rows.iter().all(|f| !f.list_note.contains("load @")),

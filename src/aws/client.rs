@@ -514,6 +514,11 @@ impl AwsClients {
         aws_sdk_s3files::Client::new(&self.config)
     }
 
+    /// S3 Control — the account-level Block Public Access setting (`@audit`).
+    pub fn s3control_client(&self) -> aws_sdk_s3control::Client {
+        aws_sdk_s3control::Client::new(&self.config)
+    }
+
     pub fn s3tables_client(&self) -> aws_sdk_s3tables::Client {
         aws_sdk_s3tables::Client::new(&self.config)
     }
