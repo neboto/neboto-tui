@@ -575,6 +575,8 @@ pub struct LazyStore {
     pub iam_idp_details: LazyMap<crate::aws::services::iam::IamIdpDetails>,
     /// The account's IAM credential report (`GetCredentialReport` only), keyed `"account"`.
     pub iam_credential_report: LazyMap<crate::aws::services::iam::IamCredentialReport>,
+    /// Access Advisor report, keyed by the role / user / group / policy ARN.
+    pub iam_last_accessed: LazyMap<crate::aws::services::iam::IamLastAccessed>,
     /// An account's parents/OUs + attached SCPs, keyed by account id.
     pub org_account_details: LazyMap<crate::aws::services::organizations::OrgAccountDetails>,
     /// An SCP's document + attached targets, keyed by policy id.
@@ -694,6 +696,8 @@ pub struct LazyStore {
     pub ecs_service_tasks: LazyMap<Vec<crate::aws::services::ecs::EcsTask>>,
     /// A task definition's full detail, keyed by task-definition ARN.
     pub ecs_taskdef_details: LazyMap<Box<crate::aws::services::ecs::EcsTaskDefinitionDetails>>,
+    /// A cluster's capacity providers (Fargate excluded), keyed by cluster ARN.
+    pub ecs_capacity_providers: LazyMap<Vec<crate::aws::services::ecs::EcsCapacityProviderInfo>>,
 
     // ── FSx ──────────────────────────────────────────────────────────────
     /// A file system's volumes, keyed by file-system id.

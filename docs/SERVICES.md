@@ -691,6 +691,17 @@ the service you're touching.
   merely *looking* at an image would move the "Last Pulled" date people use
   to decide what is safe to delete. `GetDownloadUrlForLayer` has the same
   problem. Don't add either without an explicit opt-in.
+- **ECS cluster Capacity Providers** (#106) — a lazy section from
+  `DescribeCapacityProviders`, called with the cluster's provider names
+  **minus `FARGATE` / `FARGATE_SPOT`**: those are AWS-managed with no ASG,
+  so the pane explains them without a call, and a Fargate-only cluster makes
+  none. The default strategy comes from `DescribeClusters` (already loaded).
+  The ASG ARN row jumps through an `autoscaling` arm in `arn_jump_target`
+  that takes the group name after `:autoScalingGroupName/` and **only** for
+  `autoScalingGroup:` resources — a scaling-policy or lifecycle-hook ARN
+  embeds the same segment followed by `:policyName/…` and is not the group.
+  A provider the cluster lists but the call doesn't return (deleted while
+  still attached) gets a ⚠ row rather than vanishing.
 - **EKS** (`@eks`) — the showcase: eight-section split pane. **Tier 1
   (AWS-API depth) only** — live Kubernetes workloads (pods/nodes via the cluster
   API server) are deliberately out of scope. Add-on "update-available" costs one
@@ -1861,6 +1872,21 @@ the service you're touching.
   `id()` is the ARN; `:instance-profile/` ARNs jump here by name, so the
   EC2 instance's profile ARN and the role pane's rows both land on it. Flat
   pane — `details()` already says everything `ListInstanceProfiles` returns.
+- **IAM Access Advisor** (Last Accessed section on role / user / group /
+  managed-policy panes, #106) — the **only non-Get/List IAM call**:
+  `GenerateServiceLastAccessedDetails` starts a report job, then
+  `GetServiceLastAccessedDetails` is polled once a second until it finishes
+  (60s timeout, then an inline "press r to retry"). It's on `ALLOW_OPS` in
+  `scripts/check-readonly.py` on purpose: AWS rates it a Read action, puts
+  it in `IAMReadOnlyAccess`, and it creates no resource. That reasoning does
+  **not** extend to `GenerateCredentialReport`, which writes a report the
+  whole account then sees — keep that one out. `SERVICE_LEVEL` granularity
+  only: `ACTION_LEVEL` covers a handful of services and would read as
+  "everything else unused". One `LazyMap` keyed by ARN feeds all four panes
+  (`trigger_iam_last_accessed_load` downcasts whichever is selected). A
+  report on a group or policy names the principal that last used each
+  service (`LastAuthenticatedEntity`); on a role or user that's the subject
+  itself, so the renderer hides it.
 - **IAM Identity Providers** (Providers sub-tab, key 6) — SAML + OIDC in one
   list; both list calls are unpaginated, and the OIDC one returns **only
   ARNs**, so everything else rides the lazy `Get*Provider` bundle. A
@@ -1909,6 +1935,20 @@ the service you're touching.
   label is in `search_text`. Every other group stays `stateless()`; world
   *egress* is the AWS default and not flagged. Zero API — this is the
   list-level slice of the shelved `@audit` sweep (#124), not a revival of it.
+  **`unused`** (#106) is the second state: a group no network interface
+  carries is `ResourceState::Idle` (muted `◌`, label `unused`), so `F` picks
+  it like an available EBS volume. Open-to-world wins when both apply — the
+  rule is the risk the moment anything attaches the group. The attached set
+  is one paginated `DescribeNetworkInterfaces` (`fetch_attached_group_ids`):
+  `@ec2` reuses its ENI phase, which is why that phase now runs **before**
+  security groups; `@vpc` makes its own scan ahead of its SG phase. The set
+  is all-or-nothing — a failed page leaves every group unmarked, since a
+  partial set would call attached groups unused. The VPC `default` group is
+  never flagged (it can't be deleted). **Unused ≠ safe to delete**, and the
+  Used By section's empty state says why: a group referenced only by another
+  group's rules, a launch template / launch configuration, or ENIs in a
+  shared-VPC participant account has no ENI this account can see. That's
+  also why there's no "delete candidates" view.
 - **VPC extras** (beyond the core subnet/SG/NACL/endpoint tabs) — tab 3
   **Routing** and tab 4 **Gateways** are *grouped* tabs (pipe filters:
   route tables + prefix lists; IGWs + NAT GWs + **egress-only IGWs**); tab 5

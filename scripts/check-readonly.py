@@ -62,6 +62,7 @@ ALLOW_OPS = {
     "start_query": "CloudWatch Logs Insights StartQuery — runs a read-only log query, creates no resource",
     "start_live_tail": "CloudWatch Logs StartLiveTail — streaming read of log events",
     "test_dns_answer": "Route 53 TestDNSAnswer — simulates a DNS query against a hosted zone, returns the answer, changes nothing",
+    "generate_service_last_accessed_details": "IAM Access Advisor — starts a last-accessed report job and creates no resource; AWS classes it a Read action and grants it in the IAMReadOnlyAccess managed policy (#106). generate_credential_report stays out: it's a write",
 }
 
 READ_ACTIONS_RE = re.compile(
@@ -83,6 +84,7 @@ ALLOW_ACTIONS = {
     "ecs:ExecuteCommand": "ECS Exec (`s` on a task) via the aws CLI — user-initiated, changes no resource",
     "ssm:TerminateSession": "ends our own session",
     "apigateway:GET": "API Gateway's IAM actions are HTTP verbs; GET is the read",
+    "iam:GenerateServiceLastAccessedDetails": "Access Advisor report job (AWS: Read access level, in IAMReadOnlyAccess) — see ALLOW_OPS",
 }
 
 # PERMISSIONS.md names ~220 actions; far fewer means the pattern stopped

@@ -92,6 +92,9 @@ pub static FIXTURES: &[Fixture] = &[
     // ── EC2 ──────────────────────────────────────────────────────────────────
     fx!("ec2", "DescribeInstances", "DescribeInstances.xml"),
     fx!("ec2", "DescribeSecurityGroups", "DescribeSecurityGroups.xml"),
+    // Instance + ALB network interfaces. `legacy-batch-sg` is on none of them,
+    // so it lists as `unused`; the Used By section narrows by `group-id`.
+    fx!("ec2", "DescribeNetworkInterfaces", "DescribeNetworkInterfaces.xml"),
     // reporting-db-sg allows Postgres from a prefix list; its rule expands to these.
     fx!("ec2", "GetManagedPrefixListEntries", when ["pl-0corpvpn00000001"], "GetManagedPrefixListEntries-corp-vpn.xml"),
     fx!("ec2", "DescribeManagedPrefixLists", "DescribeManagedPrefixLists.xml"),
@@ -99,6 +102,9 @@ pub static FIXTURES: &[Fixture] = &[
     // ── ECS ──────────────────────────────────────────────────────────────────
     fx!("ecs", "ListClusters", "ListClusters.json"),
     fx!("ecs", "DescribeClusters", "DescribeClusters.json"),
+    // acme-prod runs on Fargate (+ Spot, 1:3) and keeps a GPU ASG provider
+    // scaled to zero for batch work — the Capacity Providers section.
+    fx!("ecs", "DescribeCapacityProviders", "DescribeCapacityProviders.json"),
     fx!("ecs", "ListServices", "ListServices.json"),
     fx!("ecs", "DescribeServices", "DescribeServices.json"),
     fx!("ecs", "ListTaskDefinitions", "ListTaskDefinitions.json"),
@@ -136,6 +142,12 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("iam", "ListAttachedRolePolicies", when ["RoleName=acme-web-ec2"], "ListAttachedRolePolicies-acme-web-ec2.xml"),
     fx!("iam", "GetInstanceProfile", when ["InstanceProfileName=acme-web"], "GetInstanceProfile-acme-web.xml"),
     fx!("iam", "ListInstanceProfiles", "ListInstanceProfiles.xml"),
+    // Access Advisor (Last Accessed section): the stale legacy role has used
+    // none of what it grants; every other subject shares one mixed report.
+    fx!("iam", "GenerateServiceLastAccessedDetails", when ["legacy-reporting-role"], "GenerateServiceLastAccessedDetails-legacy-reporting-role.xml"),
+    fx!("iam", "GenerateServiceLastAccessedDetails", "GenerateServiceLastAccessedDetails.xml"),
+    fx!("iam", "GetServiceLastAccessedDetails", when ["JobId=demo-access-advisor-legacy"], "GetServiceLastAccessedDetails-legacy-reporting-role.xml"),
+    fx!("iam", "GetServiceLastAccessedDetails", "GetServiceLastAccessedDetails.xml"),
     fx!("iam", "ListAttachedRolePolicies", when ["RoleName=storefront-web-task"], "ListAttachedRolePolicies-storefront-web-task.xml"),
     fx!("iam", "ListAttachedRolePolicies", when ["RoleName=orders-worker-task"], "ListAttachedRolePolicies-orders-worker-task.xml"),
     fx!("iam", "ListAttachedRolePolicies", when ["RoleName=ecs-task-execution"], "ListAttachedRolePolicies-ecs-task-execution.xml"),

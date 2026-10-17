@@ -270,6 +270,9 @@ fn narrow(req: &DemoRequest, body: String) -> String {
     let (param, list, id_tag) = match (req.service.as_str(), req.operation.as_str()) {
         ("ec2", "DescribeSecurityGroups") => ("GroupId", "securityGroupInfo", "groupId"),
         ("ec2", "DescribeVolumes") => ("VolumeId", "volumeSet", "volumeId"),
+        // The SG Used By section filters by `group-id` (the one filter the
+        // app sends); an ENI item's first `groupId` is its first group.
+        ("ec2", "DescribeNetworkInterfaces") => ("Filter.1.Value", "networkInterfaceSet", "groupId"),
         _ => return body,
     };
     let wanted: Vec<String> = (1..)

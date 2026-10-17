@@ -205,13 +205,64 @@ impl AwsService for VpcService {
             "NAT gateways"
         );
 
-        // Phase 6: Security Groups
-        stream_phase!(
-            self.client.describe_security_groups(),
-            security_groups,
-            VpcSecurityGroup,
-            "security groups"
-        );
+        // Phase 6: Security Groups, each marked `unused` when no network
+        // interface carries it (one ENI scan first). A failed scan warns and
+        // leaves every group unmarked rather than guessing.
+        let attached = match crate::aws::services::ec2::fetch_attached_group_ids(&self.client).await {
+            Ok(ids) => Some(ids),
+            Err(e) => {
+                let _ = event_tx.send(Event::ResourceLoadWarning {
+                    service: service_type,
+                    warning: format!("Unused security groups (network interfaces): {e}"),
+                });
+                None
+            }
+        };
+        {
+            let mut pages = self.client.describe_security_groups().into_paginator().send();
+            while let Some(page) = pages.next().await {
+                match page {
+                    Ok(p) => {
+                        let batch: Vec<Box<dyn Resource>> = p
+                            .security_groups()
+                            .iter()
+                            .map(|x| {
+                                let mut sg = VpcSecurityGroup::from_sdk(x);
+                                if let Some(ids) = &attached {
+                                    sg.unused = crate::aws::services::ec2::sg_is_unused(
+                                        &sg.group_name,
+                                        &sg.group_id,
+                                        ids,
+                                    );
+                                }
+                                Box::new(sg) as Box<dyn Resource>
+                            })
+                            .collect();
+                        let count = batch.len();
+                        total_loaded += count;
+                        let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                            service: service_type,
+                            resources: batch,
+                            progress: LoadProgress {
+                                loaded_count: total_loaded,
+                                total_count: None,
+                                status_message: Some(format!("Loaded {count} security groups...")),
+                            },
+                        });
+                    }
+                    Err(e) => {
+                        let _ = event_tx.send(Event::ResourceLoadWarning {
+                            service: service_type,
+                            warning: format!(
+                                "security groups: {}",
+                                crate::error::sdk_error_message(&e)
+                            ),
+                        });
+                        break;
+                    }
+                }
+            }
+        }
 
         // Phase 7: Network ACLs
         stream_phase!(
@@ -1448,6 +1499,8 @@ pub struct VpcSecurityGroup {
     pub tags: HashMap<String, String>,
     /// See `ec2::SecurityGroup::owner_id`.
     pub owner_id: Option<String>,
+    /// See `ec2::SecurityGroup::unused`.
+    pub unused: bool,
 }
 
 impl VpcSecurityGroup {
@@ -1476,6 +1529,7 @@ impl VpcSecurityGroup {
             outbound_rules,
             tags,
             owner_id: sg.owner_id().map(|s| s.to_string()),
+            unused: false,
         }
     }
 }
@@ -1509,11 +1563,11 @@ impl Resource for VpcSecurityGroup {
     }
 
     fn state(&self) -> ResourceState {
-        crate::aws::services::ec2::sg_exposure_state(&self.inbound_rules)
+        crate::aws::services::ec2::sg_exposure_state(&self.inbound_rules, self.unused)
     }
 
     fn state_label(&self) -> String {
-        crate::aws::services::ec2::sg_exposure_label(&self.inbound_rules)
+        crate::aws::services::ec2::sg_exposure_label(&self.inbound_rules, self.unused)
     }
 
     fn tags(&self) -> &HashMap<String, String> {
@@ -1535,6 +1589,9 @@ impl Resource for VpcSecurityGroup {
             .any(crate::aws::services::ec2::SgRule::is_world)
         {
             parts.push(crate::aws::services::ec2::SG_OPEN_TO_WORLD.to_string());
+        }
+        if self.unused {
+            parts.push(crate::aws::services::ec2::SG_UNUSED.to_string());
         }
         for (k, v) in &self.tags {
             parts.push(format!("{}:{}", k, v));

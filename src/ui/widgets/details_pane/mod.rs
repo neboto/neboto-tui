@@ -3276,6 +3276,12 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
     let last_seg = || resource.rsplit(['/', ':']).next().unwrap_or(resource);
 
     match service {
+        // autoScalingGroup:UUID:autoScalingGroupName/NAME — ASG rows resolve by name.
+        // Only the group's own ARN — a scaling policy / lifecycle hook ARN also
+        // carries the group name but isn't the group.
+        "autoscaling" if resource.starts_with("autoScalingGroup:") => resource
+            .split_once(":autoScalingGroupName/")
+            .and_then(|(_, name)| mk(ServiceType::Asg, JumpView::None, name)),
         // Batch rows are keyed by name (queue / compute environment),
         // `name:revision` (job definition) and job id — the ARN's tail.
         "batch" => {
@@ -4868,6 +4874,21 @@ mod ecr_jump_tests {
         assert!(matches!(t.view, JumpView::None));
         // Namespaced repo name preserved (not truncated to the last segment).
         assert_eq!(t.id, "team/app");
+    }
+
+    #[test]
+    fn asg_arn_jumps_to_the_group_by_name() {
+        let t = arn_jump_target(
+            "arn:aws:autoscaling:us-east-1:123456789012:autoScalingGroup:6f1c2d3e-4a5b:autoScalingGroupName/gpu-asg",
+        )
+        .expect("asg arn should jump");
+        assert_eq!(t.service, ServiceType::Asg);
+        assert_eq!(t.id, "gpu-asg");
+        // A scaling-policy ARN names no group to land on.
+        assert!(arn_jump_target(
+            "arn:aws:autoscaling:us-east-1:123456789012:scalingPolicy:abc:autoScalingGroupName/gpu-asg:policyName/p",
+        )
+        .is_none());
     }
 
     #[test]
