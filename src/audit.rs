@@ -14,10 +14,15 @@ use crate::aws::resource::{Resource, ResourceState};
 use crate::aws::service::ServiceType;
 use crate::aws::services::ec2::{Ami, EbsSnapshot, EbsVolume, Ec2Instance, SecurityGroup, SgRule};
 use crate::aws::services::eks::EksCluster;
-use crate::aws::services::iam::{AccessAnalyzerFinding, IamAccountSettings};
+use crate::aws::services::iam::{AccessAnalyzerFinding, IamAccountSettings, IamUser};
 use crate::aws::services::rds::{RdsCluster, RdsInstance, RdsSnapshot};
-use crate::aws::services::s3::S3Bucket;
+use crate::aws::services::kms::KmsKey;
+use crate::aws::services::s3::{PublicAccessBlockConfig, S3Bucket};
 use crate::aws::services::vpc::VpcSecurityGroup;
+
+mod facts;
+pub use facts::{fetch as fetch_facts, AuditFacts, FactTargets};
+use facts::{Fact, Gap, PerResource};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
@@ -56,17 +61,22 @@ pub struct Check {
     pub sources: &'static [ServiceType],
     /// The detail section `⏎` lands on: the one that shows the problem.
     pub section: Option<&'static str>,
-    run: fn(&AuditInput, &mut Vec<AuditFinding>),
+    /// Needs `AuditFacts` (#206) as well as a source list; without them it's
+    /// a "not checked — r fetches account facts" row.
+    pub facts: bool,
+    run: fn(&'static Check, &AuditInput, &mut Vec<AuditFinding>),
 }
 
-/// The checks, in display order. Stage 1 is list-time data only.
-static CHECKS: [Check; 13] = [
+/// The checks, in display order. The `facts: true` ones (#206) also read
+/// `AuditFacts`, which `r` fetches after the source lists land.
+static CHECKS: [Check; 24] = [
     Check {
         id: "sg-open-world",
         title: "Security group open to the world",
         why: "Inbound 0.0.0.0/0 or ::/0 lets anyone on the internet reach whatever the group is attached to. Admin and database ports (SSH, RDP, MySQL, Postgres…) are the ones scanned within minutes of exposure; 80/443 is normal for a public load balancer.",
         sources: &[ServiceType::EC2, ServiceType::VPC],
         section: Some("Inbound"),
+        facts: false,
         run: check_sg_open_world,
     },
     Check {
@@ -75,6 +85,7 @@ static CHECKS: [Check; 13] = [
         why: "A publicly accessible instance gets a public DNS name resolving to a public IP. Its security groups are then the only thing between the database and the internet.",
         sources: &[ServiceType::RDS],
         section: Some("Config"),
+        facts: false,
         run: check_rds_public,
     },
     Check {
@@ -83,6 +94,7 @@ static CHECKS: [Check; 13] = [
         why: "Storage encryption can't be turned on for an existing instance or cluster — it takes a snapshot, an encrypted copy and a restore. Snapshots and read replicas inherit the setting.",
         sources: &[ServiceType::RDS],
         section: Some("Storage"),
+        facts: false,
         run: check_rds_unencrypted,
     },
     Check {
@@ -91,6 +103,7 @@ static CHECKS: [Check; 13] = [
         why: "An unencrypted snapshot restores to an unencrypted database, and can be shared or copied without a KMS key gating it.",
         sources: &[ServiceType::RDS],
         section: None,
+        facts: false,
         run: check_rds_snapshot_unencrypted,
     },
     Check {
@@ -99,6 +112,7 @@ static CHECKS: [Check; 13] = [
         why: "Unencrypted volumes produce unencrypted snapshots. Turning on EBS encryption-by-default covers new volumes only.",
         sources: &[ServiceType::EC2],
         section: Some("Details"),
+        facts: false,
         run: check_ebs_unencrypted,
     },
     Check {
@@ -107,6 +121,7 @@ static CHECKS: [Check; 13] = [
         why: "An unencrypted snapshot can be shared with another account (or made public) with no KMS key policy in the way.",
         sources: &[ServiceType::EC2],
         section: None,
+        facts: false,
         run: check_ebs_snapshot_unencrypted,
     },
     Check {
@@ -115,6 +130,7 @@ static CHECKS: [Check; 13] = [
         why: "IMDSv1 answers unauthenticated GETs, so an SSRF bug in anything on the instance can read its role credentials. IMDSv2 (HttpTokens=required) needs a session token first.",
         sources: &[ServiceType::EC2],
         section: Some("Security"),
+        facts: false,
         run: check_ec2_imdsv1,
     },
     Check {
@@ -123,14 +139,16 @@ static CHECKS: [Check; 13] = [
         why: "A public AMI can be launched by any AWS account — including whatever is baked into it: keys, config, application code.",
         sources: &[ServiceType::EC2],
         section: Some("Permissions"),
+        facts: false,
         run: check_ami_public,
     },
     Check {
         id: "s3-public-access-block",
         title: "S3 bucket public access block not fully on",
-        why: "With any of the four Block Public Access settings off, a bucket policy or ACL can make objects public. The account-level block may still cover this bucket — that setting isn't checked yet (#206).",
+        why: "With any of the four Block Public Access settings off, a bucket policy or ACL can make objects public. The account-level block covers every bucket: where it's on, the bucket's own setting is moot and the finding drops to low.",
         sources: &[ServiceType::S3],
         section: Some("Security"),
+        facts: false,
         run: check_s3_public_access_block,
     },
     Check {
@@ -139,6 +157,7 @@ static CHECKS: [Check; 13] = [
         why: "The cluster's Kubernetes API is reachable from any IP. Authentication still applies, but the endpoint is exposed to credential stuffing and to any future API-server vulnerability.",
         sources: &[ServiceType::Eks],
         section: Some("Networking"),
+        facts: false,
         run: check_eks_public_endpoint,
     },
     // Account-level checks read the IAM Account sub-tab's row, which the IAM
@@ -149,6 +168,7 @@ static CHECKS: [Check; 13] = [
         why: "The root user can do anything, including closing the account, and no policy can restrict it. Without MFA, its password is the only thing protecting it.",
         sources: &[ServiceType::IAM],
         section: Some("Overview"),
+        facts: false,
         run: check_root_mfa,
     },
     Check {
@@ -157,6 +177,7 @@ static CHECKS: [Check; 13] = [
         why: "A root access key is unrestricted, long-lived and can't be scoped by any policy. AWS's guidance is to have none; use roles instead.",
         sources: &[ServiceType::IAM],
         section: Some("Overview"),
+        facts: false,
         run: check_root_access_keys,
     },
     Check {
@@ -165,7 +186,109 @@ static CHECKS: [Check; 13] = [
         why: "The password policy applies to IAM users' console passwords. CIS asks for at least 14 characters and preventing reuse of the last 24. Accounts where nobody signs in as an IAM user (SSO only) can treat this as low priority.",
         sources: &[ServiceType::IAM],
         section: Some("Password Policy"),
+        facts: false,
         run: check_password_policy,
+    },
+    // ── Account facts (#206): one read each, no list needed. ──
+    Check {
+        id: "s3-account-public-access-block",
+        title: "S3 account-level public access block not fully on",
+        why: "The account-level Block Public Access setting overrides every bucket's. With all four on, no bucket policy or ACL in the account can make data public, whatever the bucket says.",
+        sources: &[],
+        section: None,
+        facts: true,
+        run: check_s3_account_block,
+    },
+    Check {
+        id: "ebs-default-encryption",
+        title: "EBS encryption by default is off",
+        why: "With it on, every new volume and snapshot copy in the region is encrypted, so nobody has to remember to tick the box. It's a per-region setting and doesn't touch existing volumes.",
+        sources: &[],
+        section: None,
+        facts: true,
+        run: check_ebs_default_encryption,
+    },
+    Check {
+        id: "cloudtrail-multi-region",
+        title: "No multi-region CloudTrail trail logging",
+        why: "Event history keeps 90 days of management events and nothing else. A multi-region trail is the durable record of who did what, in every region — including the ones nobody watches, where an attacker would start.",
+        sources: &[],
+        section: None,
+        facts: true,
+        run: check_cloudtrail_multi_region,
+    },
+    Check {
+        id: "config-recorder-off",
+        title: "AWS Config recorder not recording",
+        why: "Without a recording Config recorder there's no configuration history in this region, and Config rules, conformance packs and Security Hub controls have nothing to evaluate.",
+        sources: &[],
+        section: None,
+        facts: true,
+        run: check_config_recorder,
+    },
+    Check {
+        id: "guardduty-off",
+        title: "GuardDuty not enabled",
+        why: "GuardDuty watches CloudTrail, VPC flow logs and DNS for compromised credentials, crypto-mining and reconnaissance. It's per-region; a region without it goes unwatched.",
+        sources: &[],
+        section: None,
+        facts: true,
+        run: check_guardduty,
+    },
+    Check {
+        id: "access-analyzer-none",
+        title: "No IAM Access Analyzer",
+        why: "An external-access analyzer proves which resources are shared outside the account or made public. Without one in this region, the Access Analyzer relay below has nothing to relay — a clean result there means nothing.",
+        sources: &[],
+        section: None,
+        facts: true,
+        run: check_access_analyzer_present,
+    },
+    // ── Per-resource reads (#206), capped at facts::MAX_PER_KIND each. ──
+    Check {
+        id: "kms-rotation-off",
+        title: "KMS key rotation off",
+        why: "Automatic rotation gives a customer-managed key new key material every year, keeping the old for decryption. It limits how much data one compromised key version protects. Only symmetric AWS_KMS keys support it.",
+        sources: &[ServiceType::Kms],
+        section: Some("Details"),
+        facts: true,
+        run: check_kms_rotation,
+    },
+    Check {
+        id: "iam-user-console-no-mfa",
+        title: "IAM user has a console password but no MFA",
+        why: "A console password with no MFA device can be phished or guessed, and nothing else stands in the way. CIS asks for MFA on every IAM user with a console password.",
+        sources: &[ServiceType::IAM],
+        section: Some("Access"),
+        facts: true,
+        run: check_user_console_mfa,
+    },
+    Check {
+        id: "iam-access-key-old",
+        title: "IAM access key older than 90 days",
+        why: "Long-lived access keys leak through laptops, CI logs and repositories, and work from anywhere until someone deactivates them. CIS asks for rotation every 90 days; a key that's also unused should simply go.",
+        sources: &[ServiceType::IAM],
+        section: Some("Access"),
+        facts: true,
+        run: check_access_key_age,
+    },
+    Check {
+        id: "ebs-snapshot-shared",
+        title: "EBS snapshot public or shared",
+        why: "A public snapshot can be copied by any AWS account, and a volume made from it shows the whole disk. Sharing with specific accounts is often deliberate, so it's reported low — check the list is the one you meant.",
+        sources: &[ServiceType::EC2],
+        section: None,
+        facts: true,
+        run: check_ebs_snapshot_sharing,
+    },
+    Check {
+        id: "rds-snapshot-shared",
+        title: "RDS snapshot public or shared",
+        why: "A public DB snapshot can be restored by any AWS account into a database it controls. Sharing with specific accounts is often deliberate (cross-account backup), so it's reported low.",
+        sources: &[ServiceType::RDS],
+        section: None,
+        facts: true,
+        run: check_rds_snapshot_sharing,
     },
 ];
 
@@ -177,6 +300,7 @@ static ACCESS_ANALYZER: Check = Check {
     why: "IAM Access Analyzer proved from the resource's policy that anyone can access it. This is AWS's finding, relayed — open it for the principal, actions and conditions.",
     sources: &[ServiceType::IAM],
     section: None,
+    facts: false,
     run: check_access_analyzer_public,
 };
 
@@ -188,11 +312,16 @@ pub const SOURCES: &[ServiceType] = &[
     ServiceType::S3,
     ServiceType::Eks,
     ServiceType::IAM,
+    ServiceType::Kms,
 ];
 
 /// Every check, the Access Analyzer relay included.
 pub fn all_checks() -> impl Iterator<Item = &'static Check> {
     CHECKS.iter().chain(std::iter::once(&ACCESS_ANALYZER))
+}
+
+fn by_id(id: &str) -> &'static Check {
+    all_checks().find(|c| c.id == id).expect("a known check id")
 }
 
 /// Cached lists, one per service that had a warm cache.
@@ -202,6 +331,11 @@ pub struct AuditInput<'a> {
     loading: Vec<ServiceType>,
     /// For telling current-region S3 buckets from other-region stubs.
     region: String,
+    /// Account facts and per-resource reads, once `r` has fetched them.
+    facts: Option<&'a AuditFacts>,
+    facts_loading: bool,
+    /// For key ages. A field, not a clock read, so checks stay pure.
+    now_secs: i64,
 }
 
 impl<'a> AuditInput<'a> {
@@ -210,7 +344,18 @@ impl<'a> AuditInput<'a> {
             lists: HashMap::new(),
             loading: Vec::new(),
             region: region.to_string(),
+            facts: None,
+            facts_loading: false,
+            now_secs: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
         }
+    }
+
+    pub fn set_facts(&mut self, facts: Option<&'a AuditFacts>, loading: bool) {
+        self.facts = facts;
+        self.facts_loading = loading;
     }
 
     pub fn set_loading(&mut self, loading: &[ServiceType]) {
@@ -242,14 +387,23 @@ pub fn run(input: &AuditInput) -> Vec<AuditFinding> {
     let mut notes = Vec::new();
     let mut ran = 0;
     for check in all_checks() {
-        if check.sources.iter().any(|s| input.has(*s)) {
-            ran += 1;
-            (check.run)(input, &mut findings);
-        } else {
+        let listed = check.sources.is_empty() || check.sources.iter().any(|s| input.has(*s));
+        if !listed {
             let loading = check.sources.iter().any(|s| input.loading.contains(s));
             notes.push(AuditFinding::not_checked(check, loading));
+        } else if check.facts && input.facts.is_none() {
+            notes.push(AuditFinding::facts_not_fetched(check, input.facts_loading));
+        } else {
+            ran += 1;
+            (check.run)(check, input, &mut findings);
         }
     }
+    // Fact checks report their own gaps (a denied call, past the cap) as
+    // notes alongside their findings.
+    let (gaps, real): (Vec<_>, Vec<_>) =
+        findings.into_iter().partition(|f: &AuditFinding| f.kind == RowKind::NotChecked);
+    let mut findings = real;
+    notes.extend(gaps);
     notes.extend(s3_coverage_notes(input));
     findings.sort_by(|a, b| {
         a.severity
@@ -348,6 +502,56 @@ impl AuditFinding {
             format!("not checked — {load} not loaded"),
             format!("{load} isn't cached, so this check didn't run. Press r here to load it (or visit {load})."),
         )
+    }
+
+    /// A fact check before `r` has fetched the facts.
+    fn facts_not_fetched(check: &Check, loading: bool) -> Self {
+        if loading {
+            return Self::note(
+                check,
+                check.title.to_string(),
+                "loading…".to_string(),
+                "Account facts are being fetched; this check runs when they land.".to_string(),
+            );
+        }
+        Self::note(
+            check,
+            check.title.to_string(),
+            "not checked — press r to fetch account facts".to_string(),
+            "This check reads data no list carries (an account setting, or one call per resource). Press r here to fetch it — read-only, capped calls.".to_string(),
+        )
+    }
+
+    /// A fact the check needed couldn't be read.
+    fn gap(check: &Check, subject: String, gap: &Gap) -> Self {
+        let why = if gap.denied {
+            format!("{} was denied, so the posture is unknown — not assumed bad or good. ({})", gap.action, gap.message)
+        } else {
+            format!("{} failed: {}", gap.action, gap.message)
+        };
+        Self::note(check, subject, gap.note(), why)
+    }
+
+    /// A finding about the account or region rather than one resource:
+    /// nothing to jump to, so `⏎` reads it.
+    fn account(check: &'static Check, severity: Severity, subject: String, reason: String) -> Self {
+        Self {
+            kind: RowKind::Finding,
+            severity,
+            check_id: check.id,
+            check_title: check.title,
+            why: check.why,
+            section: None,
+            service: None,
+            resource_id: String::new(),
+            row_id: format!("{}:{}", check.id, subject),
+            resource_name: subject,
+            resource_type: "Account".to_string(),
+            list_note: reason.clone(),
+            reason,
+            evidence: Vec::new(),
+            tags: HashMap::new(),
+        }
     }
 
     fn note(check: &Check, name: String, list_note: String, reason: String) -> Self {
@@ -574,7 +778,7 @@ fn describe_rule(rule: &SgRule) -> String {
     }
 }
 
-fn check_sg_open_world(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_sg_open_world(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     // The same group can be cached under @ec2 and @vpc; report it once,
     // preferring @ec2 as the jump target.
     let mut seen = std::collections::HashSet::new();
@@ -600,7 +804,7 @@ fn check_sg_open_world(input: &AuditInput, out: &mut Vec<AuditFinding>) {
             }
         }
         let mut f = AuditFinding::new(
-            &CHECKS[0],
+            check,
             severity,
             svc,
             res,
@@ -621,11 +825,11 @@ fn check_sg_open_world(input: &AuditInput, out: &mut Vec<AuditFinding>) {
     }
 }
 
-fn check_rds_public(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_rds_public(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     for db in input.of::<RdsInstance>(ServiceType::RDS) {
         if db.publicly_accessible {
             out.push(AuditFinding::new(
-                &CHECKS[1],
+                check,
                 Severity::High,
                 ServiceType::RDS,
                 db,
@@ -635,12 +839,12 @@ fn check_rds_public(input: &AuditInput, out: &mut Vec<AuditFinding>) {
     }
 }
 
-fn check_rds_unencrypted(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_rds_unencrypted(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     for db in input.of::<RdsInstance>(ServiceType::RDS) {
         // A cluster member's storage is the cluster's — reported once there.
         if !db.storage_encrypted && db.cluster_identifier.is_none() {
             out.push(AuditFinding::new(
-                &CHECKS[2],
+                check,
                 Severity::Medium,
                 ServiceType::RDS,
                 db,
@@ -651,7 +855,7 @@ fn check_rds_unencrypted(input: &AuditInput, out: &mut Vec<AuditFinding>) {
     for c in input.of::<RdsCluster>(ServiceType::RDS) {
         if !c.storage_encrypted {
             out.push(AuditFinding::new(
-                &CHECKS[2],
+                check,
                 Severity::Medium,
                 ServiceType::RDS,
                 c,
@@ -661,11 +865,11 @@ fn check_rds_unencrypted(input: &AuditInput, out: &mut Vec<AuditFinding>) {
     }
 }
 
-fn check_rds_snapshot_unencrypted(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_rds_snapshot_unencrypted(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     for s in input.of::<RdsSnapshot>(ServiceType::RDS) {
         if !s.encrypted {
             out.push(AuditFinding::new(
-                &CHECKS[3],
+                check,
                 Severity::Low,
                 ServiceType::RDS,
                 s,
@@ -675,23 +879,23 @@ fn check_rds_snapshot_unencrypted(input: &AuditInput, out: &mut Vec<AuditFinding
     }
 }
 
-fn check_ebs_unencrypted(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_ebs_unencrypted(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     for v in input.of::<EbsVolume>(ServiceType::EC2) {
         if !v.encrypted {
             let reason = match &v.attached_instance_id {
                 Some(i) => format!("Encrypted = false (attached to {i})"),
                 None => "Encrypted = false (unattached)".to_string(),
             };
-            out.push(AuditFinding::new(&CHECKS[4], Severity::Medium, ServiceType::EC2, v, reason));
+            out.push(AuditFinding::new(check, Severity::Medium, ServiceType::EC2, v, reason));
         }
     }
 }
 
-fn check_ebs_snapshot_unencrypted(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_ebs_snapshot_unencrypted(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     for s in input.of::<EbsSnapshot>(ServiceType::EC2) {
         if !s.encrypted {
             out.push(AuditFinding::new(
-                &CHECKS[5],
+                check,
                 Severity::Low,
                 ServiceType::EC2,
                 s,
@@ -701,7 +905,7 @@ fn check_ebs_snapshot_unencrypted(input: &AuditInput, out: &mut Vec<AuditFinding
     }
 }
 
-fn check_ec2_imdsv1(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_ec2_imdsv1(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     for i in input.of::<Ec2Instance>(ServiceType::EC2) {
         if matches!(i.state.as_str(), "terminated" | "shutting-down") {
             continue;
@@ -712,7 +916,7 @@ fn check_ec2_imdsv1(input: &AuditInput, out: &mut Vec<AuditFinding>) {
         }
         if md.http_tokens.as_deref() == Some("optional") {
             out.push(AuditFinding::new(
-                &CHECKS[6],
+                check,
                 Severity::Medium,
                 ServiceType::EC2,
                 i,
@@ -722,11 +926,11 @@ fn check_ec2_imdsv1(input: &AuditInput, out: &mut Vec<AuditFinding>) {
     }
 }
 
-fn check_ami_public(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_ami_public(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     for a in input.of::<Ami>(ServiceType::EC2) {
         if a.public {
             out.push(AuditFinding::new(
-                &CHECKS[7],
+                check,
                 Severity::High,
                 ServiceType::EC2,
                 a,
@@ -736,7 +940,7 @@ fn check_ami_public(input: &AuditInput, out: &mut Vec<AuditFinding>) {
     }
 }
 
-fn check_s3_public_access_block(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_s3_public_access_block(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     for b in input.of::<S3Bucket>(ServiceType::S3) {
         if b.region != input.region {
             continue; // other-region stub: no Tier-1 data, see s3_coverage_notes
@@ -745,23 +949,38 @@ fn check_s3_public_access_block(input: &AuditInput, out: &mut Vec<AuditFinding>)
         if pab.all_blocked() {
             continue;
         }
-        let off: Vec<&str> = [
-            (pab.block_public_acls, "BlockPublicAcls"),
-            (pab.ignore_public_acls, "IgnorePublicAcls"),
-            (pab.block_public_policy, "BlockPublicPolicy"),
-            (pab.restrict_public_buckets, "RestrictPublicBuckets"),
-        ]
-        .iter()
-        .filter(|(on, _)| !on)
-        .map(|(_, n)| *n)
-        .collect();
-        let reason = if off.len() == 4 {
+        let off: Vec<&str> = block_flags(pab).iter().filter(|(on, _)| !on).map(|(_, n)| *n).collect();
+        let mut reason = if off.len() == 4 {
             "no bucket-level public access block".to_string()
         } else {
             format!("off: {}", off.join(", "))
         };
-        out.push(AuditFinding::new(&CHECKS[8], Severity::Medium, ServiceType::S3, b, reason));
+        // The account-level block is OR'd with the bucket's, per setting.
+        let mut severity = Severity::Medium;
+        if let Some(Ok(account)) = input.facts.map(|f| &f.account.s3_block) {
+            let account_on: Vec<&str> = account
+                .as_ref()
+                .map(|a| block_flags(a).iter().filter(|(on, _)| *on).map(|(_, n)| *n).collect())
+                .unwrap_or_default();
+            if off.iter().all(|n| account_on.contains(n)) {
+                severity = Severity::Low;
+                reason.push_str(" — covered by the account-level block");
+            } else if off.iter().any(|n| account_on.contains(n)) {
+                let still: Vec<&str> = off.iter().copied().filter(|n| !account_on.contains(n)).collect();
+                reason.push_str(&format!(" — account block leaves {} off", still.join(", ")));
+            }
+        }
+        out.push(AuditFinding::new(check, severity, ServiceType::S3, b, reason));
     }
+}
+
+fn block_flags(pab: &PublicAccessBlockConfig) -> [(bool, &'static str); 4] {
+    [
+        (pab.block_public_acls, "BlockPublicAcls"),
+        (pab.ignore_public_acls, "IgnorePublicAcls"),
+        (pab.block_public_policy, "BlockPublicPolicy"),
+        (pab.restrict_public_buckets, "RestrictPublicBuckets"),
+    ]
 }
 
 /// S3 rows the check had to skip: other-region stubs (no Tier-1 fetch) and
@@ -779,7 +998,7 @@ fn s3_coverage_notes(input: &AuditInput) -> Vec<AuditFinding> {
         }
     }
     let mut notes = Vec::new();
-    let check = &CHECKS[8];
+    let check = by_id("s3-public-access-block");
     if other_region > 0 {
         notes.push(AuditFinding::note(
             check,
@@ -803,14 +1022,14 @@ fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
-fn check_eks_public_endpoint(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_eks_public_endpoint(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     for c in input.of::<EksCluster>(ServiceType::Eks) {
         if c.endpoint_public
             && (c.public_access_cidrs.is_empty()
                 || c.public_access_cidrs.iter().any(|x| x == "0.0.0.0/0" || x == "::/0"))
         {
             out.push(AuditFinding::new(
-                &CHECKS[9],
+                check,
                 Severity::Medium,
                 ServiceType::Eks,
                 c,
@@ -827,11 +1046,11 @@ fn account_settings<'a>(input: &AuditInput<'a>) -> Option<&'a IamAccountSettings
         .find(|a| a.summary_error.is_none())
 }
 
-fn check_root_mfa(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_root_mfa(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     if let Some(a) = account_settings(input) {
         if a.summary_value("AccountMFAEnabled") == Some(0) {
             out.push(AuditFinding::new(
-                &CHECKS[10],
+                check,
                 Severity::High,
                 ServiceType::IAM,
                 a,
@@ -841,11 +1060,11 @@ fn check_root_mfa(input: &AuditInput, out: &mut Vec<AuditFinding>) {
     }
 }
 
-fn check_root_access_keys(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_root_access_keys(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     if let Some(a) = account_settings(input) {
         if let Some(n) = a.summary_value("AccountAccessKeysPresent").filter(|n| *n > 0) {
             out.push(AuditFinding::new(
-                &CHECKS[11],
+                check,
                 Severity::High,
                 ServiceType::IAM,
                 a,
@@ -855,7 +1074,7 @@ fn check_root_access_keys(input: &AuditInput, out: &mut Vec<AuditFinding>) {
     }
 }
 
-fn check_password_policy(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_password_policy(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     let Some(a) = input
         .of::<IamAccountSettings>(ServiceType::IAM)
         .find(|a| a.pw_policy_error.is_none())
@@ -878,14 +1097,14 @@ fn check_password_policy(input: &AuditInput, out: &mut Vec<AuditFinding>) {
             (Severity::Low, format!("{} — CIS asks for length ≥ 14, reuse ≥ 24", short.join(", ")))
         }
     };
-    out.push(AuditFinding::new(&CHECKS[12], severity, ServiceType::IAM, a, reason));
+    out.push(AuditFinding::new(check, severity, ServiceType::IAM, a, reason));
 }
 
-fn check_access_analyzer_public(input: &AuditInput, out: &mut Vec<AuditFinding>) {
+fn check_access_analyzer_public(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     for f in input.of::<AccessAnalyzerFinding>(ServiceType::IAM) {
         if f.status == "ACTIVE" && f.is_public {
             let mut row = AuditFinding::new(
-                &ACCESS_ANALYZER,
+                check,
                 Severity::High,
                 ServiceType::IAM,
                 f,
@@ -895,6 +1114,295 @@ fn check_access_analyzer_public(input: &AuditInput, out: &mut Vec<AuditFinding>)
             out.push(row);
         }
     }
+}
+
+// ── Fact checks (#206) ────────────────────────────────────────────────────────
+
+/// The fact a check reads; `run` only calls a `facts: true` check once
+/// they're present.
+fn facts<'a>(input: &AuditInput<'a>) -> &'a AuditFacts {
+    input.facts.expect("run() gates facts checks")
+}
+
+/// A fact's value, or its gap pushed as a note.
+fn read_fact<'f, T>(
+    check: &'static Check,
+    subject: &str,
+    fact: &'f Fact<T>,
+    out: &mut Vec<AuditFinding>,
+) -> Option<&'f T> {
+    match fact {
+        Ok(v) => Some(v),
+        Err(gap) => {
+            out.push(AuditFinding::gap(check, subject.to_string(), gap));
+            None
+        }
+    }
+}
+
+fn check_s3_account_block(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
+    let subject = "Account S3 Block Public Access";
+    let Some(block) = read_fact(check, subject, &facts(input).account.s3_block, out) else { return };
+    let reason = match block {
+        None => "no account-level public access block".to_string(),
+        Some(b) if b.all_blocked() => return,
+        Some(b) => {
+            let off: Vec<&str> = block_flags(b).iter().filter(|(on, _)| !on).map(|(_, n)| *n).collect();
+            format!("off: {}", off.join(", "))
+        }
+    };
+    out.push(AuditFinding::account(check, Severity::Medium, subject.to_string(), reason));
+}
+
+fn check_ebs_default_encryption(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
+    let subject = format!("EBS default encryption ({})", input.region);
+    let Some(on) = read_fact(check, &subject, &facts(input).account.ebs_default_encryption, out) else { return };
+    if !on {
+        out.push(AuditFinding::account(check, Severity::Low, subject, "EbsEncryptionByDefault = false".into()));
+    }
+}
+
+fn check_cloudtrail_multi_region(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
+    let subject = "CloudTrail";
+    let Some(trails) = read_fact(check, subject, &facts(input).account.trails, out) else { return };
+    let multi: Vec<_> = trails.iter().filter(|t| t.multi_region).collect();
+    if multi.iter().any(|t| t.logging == Some(true)) {
+        return;
+    }
+    // A multi-region trail whose status couldn't be read may well be
+    // logging: unknown, not a finding.
+    if let Some(t) = multi.iter().find(|t| t.logging.is_none()) {
+        out.push(AuditFinding::note(
+            check,
+            format!("trail {}", t.name),
+            "not checked — trail status unreadable".into(),
+            format!("GetTrailStatus failed for the multi-region trail {} (no permission, or it's homed in another region), so whether it's logging is unknown.", t.name),
+        ));
+        return;
+    }
+    let reason = if multi.is_empty() {
+        match trails.len() {
+            0 => "no trails".to_string(),
+            n => format!("{n} single-region trail{}, none multi-region", plural(n)),
+        }
+    } else {
+        let names: Vec<&str> = multi.iter().map(|t| t.name.as_str()).collect();
+        format!("multi-region trail{} not logging: {}", plural(multi.len()), names.join(", "))
+    };
+    let mut f = AuditFinding::account(check, Severity::High, subject.to_string(), reason);
+    f.evidence = trails
+        .iter()
+        .map(|t| {
+            let scope = if t.organization { "organization" } else if t.multi_region { "multi-region" } else { "single-region" };
+            let logging = match t.logging {
+                Some(true) => "logging",
+                Some(false) => "stopped",
+                None => "status not read",
+            };
+            format!("{:<32}  {scope:<13}  {logging}", t.name)
+        })
+        .collect();
+    out.push(f);
+}
+
+fn check_config_recorder(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
+    let subject = format!("AWS Config ({})", input.region);
+    let Some(recorders) = read_fact(check, &subject, &facts(input).account.config_recorders, out) else { return };
+    if recorders.iter().any(|r| r.recording) {
+        return;
+    }
+    let reason = if recorders.is_empty() {
+        "no configuration recorder".to_string()
+    } else {
+        let names: Vec<&str> = recorders.iter().map(|r| r.name.as_str()).collect();
+        format!("recorder stopped: {}", names.join(", "))
+    };
+    out.push(AuditFinding::account(check, Severity::Medium, subject, reason));
+}
+
+fn check_guardduty(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
+    let subject = format!("GuardDuty ({})", input.region);
+    let Some(detectors) = read_fact(check, &subject, &facts(input).account.guardduty_detectors, out) else { return };
+    if detectors.iter().any(|d| d.enabled) {
+        return;
+    }
+    let reason = match detectors.first() {
+        None => "no detector in this region".to_string(),
+        Some(d) => format!("detector {} suspended", d.id),
+    };
+    out.push(AuditFinding::account(check, Severity::Medium, subject, reason));
+}
+
+fn check_access_analyzer_present(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
+    let subject = format!("IAM Access Analyzer ({})", input.region);
+    let Some(analyzers) = read_fact(check, &subject, &facts(input).account.analyzers, out) else { return };
+    // Unused-access analyzers don't find external access.
+    let external = |a: &&facts::AnalyzerFact| matches!(a.kind.as_str(), "ACCOUNT" | "ORGANIZATION");
+    if analyzers.iter().filter(external).any(|a| a.active) {
+        return;
+    }
+    let reason = match analyzers.iter().find(external) {
+        Some(a) => format!("analyzer {} not active", a.name),
+        None => "no external-access analyzer in this region".to_string(),
+    };
+    out.push(AuditFinding::account(check, Severity::Low, subject, reason));
+}
+
+/// Coverage for a per-resource read: denied/failed calls grouped by note,
+/// plus targets with no result (past the cap, or cached after `r`).
+fn per_resource_notes<T>(
+    check: &'static Check,
+    noun: &str,
+    facts: &PerResource<T>,
+    targets: impl Iterator<Item = String>,
+    out: &mut Vec<AuditFinding>,
+) {
+    let mut gaps: Vec<(Gap, usize)> = Vec::new();
+    let mut missing = 0;
+    for id in targets {
+        match facts.results.get(&id) {
+            Some(Err(g)) => match gaps.iter_mut().find(|(seen, _)| seen.note() == g.note()) {
+                Some((_, n)) => *n += 1,
+                None => gaps.push((g.clone(), 1)),
+            },
+            Some(Ok(_)) => {}
+            None => missing += 1,
+        }
+    }
+    for (gap, n) in gaps {
+        out.push(AuditFinding::gap(check, format!("{n} {noun}{}", plural(n)), &gap));
+    }
+    if missing > 0 {
+        let why = if facts.over_cap > 0 {
+            format!("Per-resource reads stop at {} {noun}s, so the rest weren't checked.", facts::MAX_PER_KIND)
+        } else {
+            format!("These {noun}s were cached after the facts were fetched. Press r to read them.")
+        };
+        out.push(AuditFinding::note(
+            check,
+            format!("{missing} {noun}{}", plural(missing)),
+            "not checked — not read (cap, or press r)".into(),
+            why,
+        ));
+    }
+}
+
+fn check_kms_rotation(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
+    let rotation = &facts(input).kms_rotation;
+    let keys: Vec<&KmsKey> = input.of::<KmsKey>(ServiceType::Kms).filter(|k| facts::kms_key_rotatable(k)).collect();
+    for k in &keys {
+        if let Some(Ok(false)) = rotation.results.get(&k.key_id) {
+            let mut f = AuditFinding::new(check, Severity::Medium, ServiceType::Kms, *k, "KeyRotationEnabled = false".into());
+            if let Some(alias) = k.aliases.first() {
+                f.resource_name = alias.clone();
+            }
+            out.push(f);
+        }
+    }
+    per_resource_notes(check, "key", rotation, keys.iter().map(|k| k.key_id.clone()), out);
+}
+
+const DAY: i64 = 86_400;
+const KEY_MAX_AGE_DAYS: i64 = 90;
+
+fn check_user_console_mfa(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
+    let creds = &facts(input).iam_users;
+    let users: Vec<&IamUser> = input.of::<IamUser>(ServiceType::IAM).collect();
+    for u in &users {
+        if let Some(Ok(c)) = creds.results.get(&u.user_name) {
+            if c.console && c.mfa_devices == 0 {
+                out.push(AuditFinding::new(
+                    check,
+                    Severity::High,
+                    ServiceType::IAM,
+                    *u,
+                    "console password, no MFA device".into(),
+                ));
+            }
+        }
+    }
+    per_resource_notes(check, "user", creds, users.iter().map(|u| u.user_name.clone()), out);
+}
+
+fn check_access_key_age(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
+    let creds = &facts(input).iam_users;
+    let users: Vec<&IamUser> = input.of::<IamUser>(ServiceType::IAM).collect();
+    let days = |secs: i64| (input.now_secs - secs) / DAY;
+    for u in &users {
+        let Some(Ok(c)) = creds.results.get(&u.user_name) else { continue };
+        let old: Vec<String> = c
+            .keys
+            .iter()
+            .filter(|k| k.active)
+            .filter_map(|k| {
+                let age = days(k.created_secs?);
+                (age > KEY_MAX_AGE_DAYS).then(|| {
+                    let used = match k.last_used_secs {
+                        Some(t) => match days(t) {
+                            0 => "last used today".to_string(),
+                            1 => "last used yesterday".to_string(),
+                            d => format!("last used {d} days ago"),
+                        },
+                        None => "never used".to_string(),
+                    };
+                    format!("{} {age} days old, {used}", k.id)
+                })
+            })
+            .collect();
+        if old.is_empty() {
+            continue;
+        }
+        let mut f = AuditFinding::new(check, Severity::Medium, ServiceType::IAM, *u, old[0].clone());
+        if old.len() > 1 {
+            f.list_note = format!("{} active keys older than {KEY_MAX_AGE_DAYS} days", old.len());
+            f.reason = f.list_note.clone();
+        }
+        f.evidence = old;
+        out.push(f);
+    }
+    // Same reads as the MFA check — its notes already cover the gaps.
+}
+
+/// High when public, low when shared with named accounts.
+fn sharing_finding(
+    check: &'static Check,
+    svc: ServiceType,
+    r: &dyn Resource,
+    sharing: &facts::Sharing,
+) -> Option<AuditFinding> {
+    let (severity, reason) = if sharing.public {
+        (Severity::High, "public — restorable by any AWS account".to_string())
+    } else if !sharing.accounts.is_empty() {
+        let n = sharing.accounts.len();
+        (Severity::Low, format!("shared with {n} account{}", plural(n)))
+    } else {
+        return None;
+    };
+    let mut f = AuditFinding::new(check, severity, svc, r, reason);
+    f.evidence = sharing.accounts.iter().map(|a| format!("shared with {a}")).collect();
+    Some(f)
+}
+
+fn check_ebs_snapshot_sharing(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
+    let sharing = &facts(input).ebs_snapshots;
+    let snaps: Vec<&EbsSnapshot> = input.of::<EbsSnapshot>(ServiceType::EC2).filter(|s| facts::ebs_snapshot_shareable(s)).collect();
+    for s in &snaps {
+        if let Some(Ok(sh)) = sharing.results.get(&s.snapshot_id) {
+            out.extend(sharing_finding(check, ServiceType::EC2, *s, sh));
+        }
+    }
+    per_resource_notes(check, "snapshot", sharing, snaps.iter().map(|s| s.snapshot_id.clone()), out);
+}
+
+fn check_rds_snapshot_sharing(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
+    let sharing = &facts(input).rds_snapshots;
+    let snaps: Vec<&RdsSnapshot> = input.of::<RdsSnapshot>(ServiceType::RDS).filter(|s| facts::rds_snapshot_shareable(s)).collect();
+    for s in &snaps {
+        if let Some(Ok(sh)) = sharing.results.get(&s.id) {
+            out.extend(sharing_finding(check, ServiceType::RDS, *s, sh));
+        }
+    }
+    per_resource_notes(check, "snapshot", sharing, snaps.iter().map(|s| s.id.clone()), out);
 }
 
 #[cfg(test)]
@@ -982,6 +1490,265 @@ mod tests {
         let good = account(&[("AccountMFAEnabled", 1), ("AccountAccessKeysPresent", 0)], Some(strong));
         // Clean: one all-clear summary row, no findings.
         assert!(ids(&good).is_empty());
+    }
+
+    // ── Fact checks (#206) ──
+
+    use facts::{KeyFact, Sharing, UserCreds};
+
+    fn rows_with(lists: &[(ServiceType, &[Box<dyn Resource>])], facts: Option<&AuditFacts>) -> Vec<AuditFinding> {
+        let mut input = AuditInput::new("us-east-1");
+        for (svc, l) in lists {
+            input.add(*svc, l);
+        }
+        input.now_secs = 1_000 * DAY;
+        input.set_facts(facts, false);
+        run(&input)
+    }
+
+    fn findings(rows: &[AuditFinding]) -> Vec<(&'static str, Severity, String)> {
+        rows.iter().filter(|f| f.is_finding()).map(|f| (f.check_id, f.severity, f.reason.clone())).collect()
+    }
+
+    fn note(rows: &[AuditFinding], check: &str) -> Vec<String> {
+        rows.iter()
+            .filter(|f| f.kind == RowKind::NotChecked && f.check_id == check)
+            .map(|f| format!("{}: {}", f.resource_name, f.list_note))
+            .collect()
+    }
+
+    fn denied(action: &'static str) -> Gap {
+        Gap { action, denied: true, message: "AccessDenied: no".into() }
+    }
+
+    #[test]
+    fn fact_checks_wait_for_r_and_say_so() {
+        let rows = rows_with(&[], None);
+        assert_eq!(
+            note(&rows, "guardduty-off"),
+            vec!["GuardDuty not enabled: not checked — press r to fetch account facts"]
+        );
+        // A list-backed fact check still names its missing list first.
+        assert!(note(&rows, "kms-rotation-off")[0].contains("@kms not loaded"));
+        // A clean account with no lists: every account fact ran, nothing found.
+        let clean = AuditFacts::clean();
+        let rows = rows_with(&[], Some(&clean));
+        assert!(findings(&rows).is_empty());
+        assert_eq!(rows[0].kind, RowKind::AllClear);
+        assert!(note(&rows, "guardduty-off").is_empty());
+    }
+
+    #[test]
+    fn account_facts_produce_account_rows() {
+        let mut f = AuditFacts::clean();
+        f.account.s3_block = Ok(None);
+        f.account.ebs_default_encryption = Ok(false);
+        f.account.trails = Ok(vec![facts::TrailFact { name: "local".into(), multi_region: false, organization: false, logging: Some(true) }]);
+        f.account.config_recorders = Ok(vec![facts::RecorderFact { name: "default".into(), recording: false }]);
+        f.account.guardduty_detectors = Ok(vec![]);
+        f.account.analyzers = Ok(vec![facts::AnalyzerFact { name: "unused".into(), kind: "ACCOUNT_UNUSED_ACCESS".into(), active: true }]);
+        let rows = rows_with(&[], Some(&f));
+        let got = findings(&rows);
+        assert_eq!(got[0], ("cloudtrail-multi-region", Severity::High, "1 single-region trail, none multi-region".into()));
+        let ids: Vec<_> = got.iter().map(|(id, s, _)| (*id, *s)).collect();
+        assert_eq!(
+            ids[1..],
+            [
+                ("config-recorder-off", Severity::Medium),
+                ("guardduty-off", Severity::Medium),
+                ("s3-account-public-access-block", Severity::Medium),
+                ("access-analyzer-none", Severity::Low),
+                ("ebs-default-encryption", Severity::Low),
+            ]
+        );
+        // Account rows have nothing to jump to.
+        assert!(rows.iter().filter(|r| r.is_finding()).all(|r| r.service.is_none()));
+    }
+
+    #[test]
+    fn a_denied_fact_is_coverage_not_a_finding() {
+        let mut f = AuditFacts::clean();
+        f.account.guardduty_detectors = Err(denied("guardduty:ListDetectors"));
+        let rows = rows_with(&[], Some(&f));
+        assert!(findings(&rows).is_empty());
+        assert_eq!(
+            note(&rows, "guardduty-off"),
+            vec!["GuardDuty (us-east-1): not checked — no permission for guardduty:ListDetectors"]
+        );
+        // An unreadable multi-region trail status is unknown, not "not logging".
+        f.account.trails = Ok(vec![facts::TrailFact { name: "org".into(), multi_region: true, organization: true, logging: None }]);
+        let rows = rows_with(&[], Some(&f));
+        assert!(findings(&rows).is_empty());
+        assert_eq!(note(&rows, "cloudtrail-multi-region"), vec!["trail org: not checked — trail status unreadable"]);
+    }
+
+    fn bucket(name: &str, pab: PublicAccessBlockConfig) -> Box<dyn Resource> {
+        let mut b = S3Bucket::stub(name.into(), String::new(), "us-east-1".into());
+        b.public_access_block = Some(pab);
+        Box::new(b)
+    }
+
+    fn pab(acls: bool, policy: bool) -> PublicAccessBlockConfig {
+        PublicAccessBlockConfig {
+            block_public_acls: acls,
+            ignore_public_acls: acls,
+            block_public_policy: policy,
+            restrict_public_buckets: policy,
+        }
+    }
+
+    #[test]
+    fn the_account_block_downgrades_bucket_findings() {
+        let buckets = vec![bucket("open", pab(false, false))];
+        let lists: &[(ServiceType, &[Box<dyn Resource>])] = &[(ServiceType::S3, &buckets)];
+        // No facts: as before.
+        assert_eq!(findings(&rows_with(lists, None))[0].1, Severity::Medium);
+        // Account block fully on: the bucket's setting is moot.
+        let mut f = AuditFacts::clean();
+        let got = findings(&rows_with(lists, Some(&f)));
+        assert_eq!(got[0].1, Severity::Low);
+        assert!(got[0].2.ends_with("covered by the account-level block"), "{}", got[0].2);
+        // Account block covers only the ACL half: still medium, says what's left.
+        f.account.s3_block = Ok(Some(pab(true, false)));
+        let got = findings(&rows_with(lists, Some(&f)));
+        let bucket_row = got.iter().find(|g| g.0 == "s3-public-access-block").unwrap();
+        assert_eq!(bucket_row.1, Severity::Medium);
+        assert!(bucket_row.2.ends_with("account block leaves BlockPublicPolicy, RestrictPublicBuckets off"), "{}", bucket_row.2);
+    }
+
+    fn kms_key(id: &str, manager: &str) -> Box<dyn Resource> {
+        Box::new(KmsKey {
+            key_id: id.into(),
+            arn: format!("arn:aws:kms:us-east-1:1:key/{id}"),
+            aliases: vec![format!("alias/{id}")],
+            description: String::new(),
+            state: "Enabled".into(),
+            key_usage: "ENCRYPT_DECRYPT".into(),
+            key_spec: "SYMMETRIC_DEFAULT".into(),
+            origin: "AWS_KMS".into(),
+            manager: manager.into(),
+            multi_region: false,
+            rotation_enabled: None,
+            creation_date: None,
+            deletion_date: None,
+            tags: HashMap::new(),
+        })
+    }
+
+    #[test]
+    fn kms_rotation_reads_per_key_results_and_reports_gaps() {
+        let keys = vec![kms_key("k1", "CUSTOMER"), kms_key("k2", "CUSTOMER"), kms_key("k3", "CUSTOMER"), kms_key("aws", "AWS")];
+        let lists: &[(ServiceType, &[Box<dyn Resource>])] = &[(ServiceType::Kms, &keys)];
+        let input = {
+            let mut i = AuditInput::new("us-east-1");
+            i.add(ServiceType::Kms, &keys);
+            FactTargets::from_input(&i)
+        };
+        assert_eq!(input.kms_keys, vec!["k1", "k2", "k3"], "AWS-managed keys rotate on their own");
+
+        let mut f = AuditFacts::clean();
+        f.kms_rotation.results.insert("k1".into(), Ok(false));
+        f.kms_rotation.results.insert("k2".into(), Err(denied("kms:GetKeyRotationStatus")));
+        // k3 has no result: cached after the facts were fetched.
+        let rows = rows_with(lists, Some(&f));
+        assert_eq!(findings(&rows), vec![("kms-rotation-off", Severity::Medium, "KeyRotationEnabled = false".into())]);
+        assert_eq!(rows[0].resource_name, "alias/k1", "the alias reads better than a key id");
+        assert_eq!(
+            note(&rows, "kms-rotation-off"),
+            vec![
+                "1 key: not checked — no permission for kms:GetKeyRotationStatus",
+                "1 key: not checked — not read (cap, or press r)",
+            ]
+        );
+    }
+
+    fn user(name: &str) -> Box<dyn Resource> {
+        Box::new(IamUser {
+            user_name: name.into(),
+            arn: format!("arn:aws:iam::1:user/{name}"),
+            user_id: name.to_uppercase(),
+            path: "/".into(),
+            create_date: None,
+            password_last_used: None,
+            tags: HashMap::new(),
+        })
+    }
+
+    #[test]
+    fn iam_users_console_without_mfa_and_old_keys() {
+        let users = vec![user("alice"), user("bot")];
+        let lists: &[(ServiceType, &[Box<dyn Resource>])] = &[(ServiceType::IAM, &users)];
+        let now = 1_000 * DAY;
+        let mut f = AuditFacts::clean();
+        f.iam_users.results.insert(
+            "alice".into(),
+            Ok(UserCreds { console: true, mfa_devices: 0, keys: vec![] }),
+        );
+        f.iam_users.results.insert(
+            "bot".into(),
+            Ok(UserCreds {
+                console: false,
+                mfa_devices: 0,
+                keys: vec![
+                    KeyFact { id: "AKIAOLD".into(), active: true, created_secs: Some(now - 200 * DAY), last_used_secs: None },
+                    KeyFact { id: "AKIANEW".into(), active: true, created_secs: Some(now - 10 * DAY), last_used_secs: Some(now) },
+                    KeyFact { id: "AKIAOFF".into(), active: false, created_secs: Some(now - 900 * DAY), last_used_secs: None },
+                ],
+            }),
+        );
+        let rows = rows_with(lists, Some(&f));
+        assert_eq!(
+            findings(&rows),
+            vec![
+                ("iam-user-console-no-mfa", Severity::High, "console password, no MFA device".into()),
+                ("iam-access-key-old", Severity::Medium, "AKIAOLD 200 days old, never used".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn snapshot_sharing_public_is_high_shared_is_low() {
+        let snap = |id: &str| -> Box<dyn Resource> {
+            Box::new(EbsSnapshot::from_sdk(
+                &aws_sdk_ec2::types::Snapshot::builder()
+                    .snapshot_id(id)
+                    .state(aws_sdk_ec2::types::SnapshotState::Completed)
+                    .encrypted(true)
+                    .build(),
+            ))
+        };
+        let snaps = vec![snap("snap-pub"), snap("snap-shared"), snap("snap-private")];
+        let lists: &[(ServiceType, &[Box<dyn Resource>])] = &[(ServiceType::EC2, &snaps)];
+        let mut f = AuditFacts::clean();
+        let r = &mut f.ebs_snapshots.results;
+        r.insert("snap-pub".into(), Ok(Sharing { public: true, accounts: vec![] }));
+        r.insert("snap-shared".into(), Ok(Sharing { public: false, accounts: vec!["111122223333".into()] }));
+        r.insert("snap-private".into(), Ok(Sharing::default()));
+        let got: Vec<_> = findings(&rows_with(lists, Some(&f)))
+            .into_iter()
+            .filter(|g| g.0 == "ebs-snapshot-shared")
+            .map(|g| (g.1, g.2))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (Severity::High, "public — restorable by any AWS account".into()),
+                (Severity::Low, "shared with 1 account".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn over_the_cap_is_a_coverage_note() {
+        let keys: Vec<Box<dyn Resource>> = (0..3).map(|i| kms_key(&format!("k{i}"), "CUSTOMER")).collect();
+        let lists: &[(ServiceType, &[Box<dyn Resource>])] = &[(ServiceType::Kms, &keys)];
+        let mut f = AuditFacts::clean();
+        f.kms_rotation.results.insert("k0".into(), Ok(true));
+        f.kms_rotation.over_cap = 2;
+        let rows = rows_with(lists, Some(&f));
+        let n: Vec<_> = rows.iter().filter(|r| r.check_id == "kms-rotation-off" && r.kind == RowKind::NotChecked).collect();
+        assert_eq!(n.len(), 1);
+        assert!(n[0].reason.contains("stop at 100 keys"), "{}", n[0].reason);
     }
 
     #[test]

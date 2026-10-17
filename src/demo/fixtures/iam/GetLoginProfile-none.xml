@@ -1,0 +1,5 @@
+!status 404
+<ErrorResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <Error><Type>Sender</Type><Code>NoSuchEntity</Code><Message>Login Profile for User deploy-bot cannot be found.</Message></Error>
+  <RequestId>neboto-demo</RequestId>
+</ErrorResponse>

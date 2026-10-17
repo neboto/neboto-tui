@@ -32,10 +32,26 @@ the service you're touching.
   beside the LazyStore replacement on profile, region and role switches)
   drops late results, so the old account's rows can't be cached under the new
   one. Checks are pure fns over list-time
-  data only. **Before adding a check**, confirm its field is filled at *list*
-  time: KMS `rotation_enabled`, IAM user keys/MFA, snapshot sharing and S3
-  `policy_status_public` are all lazy (the field exists but is `None` in the
-  cache), so they wait for #206. Account checks read the IAM Account sub-tab's
+  data, plus **`AuditFacts`** (#206, `src/audit/facts.rs` — the only audit
+  code that calls AWS). Once the last source list lands, `r` fetches them
+  (`start_audit_facts`, `Event::AuditFactsLoaded`, same generation guard,
+  dropped with the loads on a switch): account facts once each, and capped
+  per-resource reads (`MAX_PER_KIND`, `CONCURRENCY` in flight) whose targets
+  `FactTargets::from_input` picks **from the cached lists** — so the facts
+  wait for the lists and never the other way round. With every source warm,
+  `r` re-reads only the facts. A check with `facts: true` is a "press r"
+  coverage row until they're in. A failed call is a `Gap` and becomes a
+  `not checked — no permission for <action>` note (per-resource gaps grouped
+  by note), never a status-bar warning; a target with no result (past the
+  cap, or cached after the facts) is its own note. KMS rotation results also
+  seed `lazy.kms_rotation`, so the key's Details pane doesn't re-ask. The
+  account-level S3 block is OR'd per setting with each bucket's: fully
+  covered drops the bucket finding to low. **Before adding a check**, confirm
+  its field is filled at *list* time, or add a fact: S3
+  `policy_status_public` is still lazy (the field exists but is `None` in
+  the cache). **`GetLoginProfile` answers "no console password" with
+  NoSuchEntity**, so a fixture-less demo user reads as having one — the demo
+  has a catch-all NoSuchEntity fixture for that. Account checks read the IAM Account sub-tab's
   synthetic `IamAccountSettings` row (summary keys `AccountMFAEnabled` /
   `AccountAccessKeysPresent`), so **renaming those summary keys silently kills
   them**. Security groups are deduped across `@ec2` and `@vpc` by group id.
@@ -45,8 +61,8 @@ the service you're touching.
   Row ids are `check:resource-id` (unique per finding, stable across `r`); the
   list's second column is `list_note` via `resource_list::id_cell`. `⏎` jumps
   through `jump_to_cached_resource` (list row, or the pane's `Resource ID`
-  row); `l` reads the finding. `neboto audit` loads `AUDIT_SOURCES` (EC2,
-  RDS, S3, EKS, IAM; `@vpc` is skipped as a duplicate) and exits 3 on a finding
+  row); `l` reads the finding. `neboto audit` loads `audit::SOURCES` (EC2,
+  RDS, S3, EKS, IAM, KMS; `@vpc` is skipped as a duplicate), then the facts, and exits 3 on a finding
   at or above `--fail-on`. A failed load prints a stderr warning and turns into
   "not checked" rows.
 

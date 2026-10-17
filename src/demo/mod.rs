@@ -70,7 +70,7 @@ pub enum Protocol {
 /// Services whose REST protocol is restXml rather than restJson, by endpoint
 /// host label.
 fn is_rest_xml(service: &str) -> bool {
-    matches!(service, "s3" | "route53" | "cloudfront")
+    matches!(service, "s3" | "s3-control" | "route53" | "cloudfront")
 }
 
 /// What the connector learned from a request.
@@ -99,7 +99,9 @@ impl DemoRequest {
         let mut labels = host.split('.').peekable();
         // Some endpoints carry an `api.` label before the service
         // (`api.ecr.<region>.amazonaws.com`) — the service is the next one.
-        if labels.peek() == Some(&"api") {
+        // S3 Control prefixes the account id
+        // (`<account>.s3-control.<region>.amazonaws.com`) — skip that too.
+        if labels.peek().is_some_and(|l| *l == "api" || (!l.is_empty() && l.bytes().all(|b| b.is_ascii_digit()))) {
             labels.next();
         }
         let service = labels.next().unwrap_or_default().to_string();

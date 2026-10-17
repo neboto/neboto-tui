@@ -1929,6 +1929,11 @@ pub struct App {
     pub audit_loading: Vec<ServiceType>,
     /// Sources that failed during the current `r`, reported once all land.
     audit_load_failures: Vec<String>,
+    /// Account facts + per-resource reads (#206), fetched by `r` once the
+    /// source lists are in. Region- and account-scoped: dropped with the
+    /// in-flight loads on any switch.
+    pub audit_facts: Option<crate::audit::AuditFacts>,
+    pub audit_facts_loading: bool,
     /// The task running the current list load, so a superseding load can
     /// abort it. The generation guard only stops a stale stream's events
     /// from landing — without the abort its fetch keeps paging AWS in the
@@ -3005,6 +3010,8 @@ impl App {
             audit_generation: 0,
             audit_loading: Vec::new(),
             audit_load_failures: Vec::new(),
+            audit_facts: None,
+            audit_facts_loading: false,
             load_task: None,
             watch: WatchState::new(config.watch.unwrap_or(false), config.watch_interval),
             watch_staging: None,
@@ -3388,7 +3395,10 @@ impl App {
                 self.handle_load_stream_event(ev, event_tx);
             }
             Event::AuditSourceLoaded { generation, service, result } => {
-                self.handle_audit_source_loaded(generation, service, result);
+                self.handle_audit_source_loaded(generation, service, result, event_tx);
+            }
+            Event::AuditFactsLoaded { generation, facts } => {
+                self.handle_audit_facts_loaded(generation, facts);
             }
             Event::ResourceRefreshed { id, resource, quiet } => {
                 // Swap the resource in place by id — same position, so the list
@@ -9558,9 +9568,17 @@ impl App {
     /// The `@audit` rows: every check over the warm caches (current region +
     /// globals, each service's current variant — the `@all` walk).
     pub(crate) fn run_audit(&self) -> Vec<Box<dyn Resource>> {
-        let region = self.current_region.as_str().to_string();
-        let mut input = crate::audit::AuditInput::new(&region);
+        crate::audit::run(&self.audit_input())
+            .into_iter()
+            .map(|f| Box::new(f) as Box<dyn Resource>)
+            .collect()
+    }
+
+    /// The warm caches (and any fetched facts) as the checks' input.
+    fn audit_input(&self) -> crate::audit::AuditInput<'_> {
+        let mut input = crate::audit::AuditInput::new(self.current_region.as_str());
         input.set_loading(&self.audit_loading);
+        input.set_facts(self.audit_facts.as_ref(), self.audit_facts_loading);
         for svc in ServiceType::all() {
             if svc.is_virtual() {
                 continue;
@@ -9570,10 +9588,7 @@ impl App {
                 input.add(svc, list);
             }
         }
-        crate::audit::run(&input)
-            .into_iter()
-            .map(|f| Box::new(f) as Box<dyn Resource>)
-            .collect()
+        input
     }
 
     /// Recompute the `@audit` rows in place, keeping the selected row.
@@ -9593,7 +9608,7 @@ impl App {
     /// cached source is left alone (`r` in that service reloads it), so a
     /// second `r` costs nothing once everything is warm.
     fn load_audit_sources(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if !self.audit_loading.is_empty() {
+        if !self.audit_loading.is_empty() || self.audit_facts_loading {
             self.audit_progress_message();
             return;
         }
@@ -9607,16 +9622,14 @@ impl App {
             })
             .collect();
         self.error_message = None;
+        self.audit_load_failures.clear();
         if missing.is_empty() {
-            self.rerun_audit();
-            self.success_message = Some(
-                "Re-audited — every source is cached (r in a service reloads it)".to_string(),
-            );
-            self.success_message_time = Some(Instant::now());
+            // Every list is warm (r in a service reloads it); the facts are
+            // the audit's own data, so r re-reads them.
+            self.start_audit_facts(event_tx);
             return;
         }
         self.audit_loading = missing.clone();
-        self.audit_load_failures.clear();
         let generation = self.audit_generation;
         for svc in missing {
             let service = Arc::clone(&self.services[&svc]);
@@ -9632,10 +9645,69 @@ impl App {
         self.audit_progress_message();
     }
 
+    /// Fetch the account facts and per-resource reads for whatever the
+    /// caches hold now. Runs after the source lists, since the per-resource
+    /// targets (KMS keys, IAM users, snapshots) come from them.
+    fn start_audit_facts(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let targets = crate::audit::FactTargets::from_input(&self.audit_input());
+        let fetch = crate::audit::fetch_facts(&self.aws_clients, targets);
+        let (generation, tx) = (self.audit_generation, event_tx.clone());
+        tokio::spawn(async move {
+            let facts = Box::new(fetch.await);
+            let _ = tx.send(Event::AuditFactsLoaded { generation, facts });
+        });
+        self.audit_facts_loading = true;
+        self.rerun_audit(); // fact checks now read "loading…"
+        self.audit_progress_message();
+    }
+
     fn audit_progress_message(&mut self) {
-        let names: Vec<&str> = self.audit_loading.iter().map(|s| s.prefix()).collect();
+        let mut names: Vec<&str> = self.audit_loading.iter().map(|s| s.prefix()).collect();
+        if self.audit_facts_loading {
+            names.push("account facts");
+        }
         self.success_message = Some(format!("Audit: loading {}…", names.join(" ")));
         self.success_message_time = Some(Instant::now());
+    }
+
+    fn handle_audit_facts_loaded(&mut self, generation: u64, facts: Box<crate::audit::AuditFacts>) {
+        if generation != self.audit_generation || !self.audit_facts_loading {
+            return;
+        }
+        self.audit_facts_loading = false;
+        // Shared with the KMS pane: its Details section reads the same call.
+        for (key_id, r) in &facts.kms_rotation.results {
+            if let Ok(on) = r {
+                if !self.lazy.kms_rotation.contains(key_id) {
+                    self.lazy.kms_rotation.apply(key_id.clone(), Ok(Some(*on)));
+                }
+            }
+        }
+        self.audit_facts = Some(*facts);
+        if self.current_service == Some(ServiceType::Audit) && !self.all_search_mode {
+            self.rerun_audit();
+        }
+        self.audit_done_message();
+    }
+
+    /// The one status line once `r`'s work is all in.
+    fn audit_done_message(&mut self) {
+        if self.audit_load_failures.is_empty() {
+            let n = self
+                .resources
+                .iter()
+                .filter_map(|r| r.as_any().downcast_ref::<crate::audit::AuditFinding>())
+                .filter(|f| f.is_finding())
+                .count();
+            self.success_message = Some(format!("Audit: done — {n} finding{}", if n == 1 { "" } else { "s" }));
+            self.success_message_time = Some(Instant::now());
+        } else {
+            self.success_message = None;
+            self.error_message = Some(format!(
+                "Audit: some checks couldn't run — {}",
+                self.audit_load_failures.join("; ")
+            ));
+        }
     }
 
     /// A profile/region/role switch: in-flight `@audit` loads belong to the
@@ -9644,6 +9716,8 @@ impl App {
         self.audit_generation += 1;
         self.audit_loading.clear();
         self.audit_load_failures.clear();
+        self.audit_facts = None;
+        self.audit_facts_loading = false;
     }
 
     fn handle_audit_source_loaded(
@@ -9651,6 +9725,7 @@ impl App {
         generation: u64,
         service: ServiceType,
         result: std::result::Result<(Vec<Box<dyn Resource>>, Vec<String>), String>,
+        event_tx: &mpsc::UnboundedSender<Event>,
     ) {
         if generation != self.audit_generation || !self.audit_loading.contains(&service) {
             return;
@@ -9669,23 +9744,11 @@ impl App {
         if self.current_service == Some(ServiceType::Audit) && !self.all_search_mode {
             self.rerun_audit();
         }
-        if !self.audit_loading.is_empty() {
-            self.audit_progress_message();
-        } else if self.audit_load_failures.is_empty() {
-            let n = self
-                .resources
-                .iter()
-                .filter_map(|r| r.as_any().downcast_ref::<crate::audit::AuditFinding>())
-                .filter(|f| f.is_finding())
-                .count();
-            self.success_message = Some(format!("Audit: sources loaded — {n} finding{}", if n == 1 { "" } else { "s" }));
-            self.success_message_time = Some(Instant::now());
+        if self.audit_loading.is_empty() {
+            // The lists are in: the per-resource reads can pick their targets.
+            self.start_audit_facts(event_tx);
         } else {
-            self.success_message = None;
-            self.error_message = Some(format!(
-                "Audit: some checks couldn't run — {}",
-                self.audit_load_failures.join("; ")
-            ));
+            self.audit_progress_message();
         }
     }
 
@@ -32158,14 +32221,31 @@ impl App {
             self.error_message = Some("Nothing to export".to_string());
             return;
         }
-        let label = resources
-            .first()
-            .map(|r| r.resource_type().to_string())
-            .unwrap_or_else(|| "export".to_string());
+        let label = self.export_label(resources.iter().map(|r| r.resource_type()));
         let count = resources.len();
         let result = crate::export::export_list(&resources, &label, &self.export_options);
         drop(resources);
         self.report_export_result(count, &label, result);
+    }
+
+    /// The name a list/selection export goes by (file stem + status line):
+    /// the rows' type when they share one, else the view they came from. A
+    /// mixed list (`@audit` findings — whose type is the check title — `@all`
+    /// results, VPC's grouped Routing tab) used to take the *first* row's
+    /// type, naming the whole file after one check or one resource kind.
+    fn export_label<'a>(&self, mut types: impl Iterator<Item = &'a str>) -> String {
+        let Some(first) = types.next() else {
+            return "export".to_string();
+        };
+        if types.all(|t| t == first) && self.current_service != Some(ServiceType::Audit) {
+            return first.to_string();
+        }
+        if self.all_search_mode {
+            return "all".to_string();
+        }
+        self.current_service
+            .map(|s| s.prefix().trim_start_matches('@').to_string())
+            .unwrap_or_else(|| "export".to_string())
     }
 
     /// Set the status line for a list/selection export outcome — shared by
@@ -32201,7 +32281,7 @@ impl App {
             self.error_message = Some("Nothing selected to export".to_string());
             return;
         }
-        let label = resources[0].resource_type().to_string();
+        let label = self.export_label(resources.iter().map(|r| r.resource_type()));
         let count = resources.len();
         let result = crate::export::export_list(&resources, &label, &self.export_options);
         drop(resources);
@@ -32395,13 +32475,14 @@ impl App {
             })
             .collect();
         let count = items.len();
-        let Some(label) = items.first().map(|(r, _)| r.resource_type().to_string()) else {
+        if items.is_empty() {
             drop(items);
             self.pending_deep_export = None;
             self.deep_export_progress = None;
             self.error_message = Some("Nothing selected to export".to_string());
             return;
-        };
+        }
+        let label = self.export_label(items.iter().map(|(r, _)| r.resource_type()));
         let result = crate::export::export_detail_multi(&items, &label, &self.export_options);
         drop(items);
         self.pending_deep_export = None;

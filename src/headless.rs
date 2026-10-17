@@ -373,7 +373,7 @@ async fn audit(
     let roles = config.org_access_roles_resolved();
     let services = App::build_services(clients, config.controltower_audit_target(&roles), &roles);
     let region = clients.current_region().as_str().to_string();
-    let findings = audit_findings(&services, &region).await;
+    let findings = audit_findings(&services, clients, &region).await;
     let code = match fail_on {
         Some(min) if findings.iter().any(|f| f.is_finding() && f.severity <= min) => 3,
         _ => 0,
@@ -381,11 +381,14 @@ async fn audit(
     Ok((render_audit(&region, &findings, format), code))
 }
 
-/// Load `AUDIT_SOURCES` side by side and run the checks. A service that fails
-/// to load is a warning, and its checks come back as "not checked" rows —
-/// a permission gap must never read as a clean bill.
+/// Load `AUDIT_SOURCES` side by side, then the account facts and capped
+/// per-resource reads (#206), and run the checks. A service that fails to
+/// load is a warning, and its checks come back as "not checked" rows — a
+/// permission gap must never read as a clean bill. A denied fact is a
+/// "not checked" row too, never a warning per call.
 pub(crate) async fn audit_findings(
     services: &std::collections::HashMap<ServiceType, Arc<dyn AwsService>>,
+    clients: &AwsClients,
     region: &str,
 ) -> Vec<crate::audit::AuditFinding> {
     let loads = crate::audit::SOURCES.iter().filter_map(|svc| {
@@ -408,6 +411,9 @@ pub(crate) async fn audit_findings(
     for (svc, rows) in &lists {
         input.add(*svc, rows);
     }
+    let targets = crate::audit::FactTargets::from_input(&input);
+    let facts = crate::audit::fetch_facts(clients, targets).await;
+    input.set_facts(Some(&facts), false);
     crate::audit::run(&input)
 }
 

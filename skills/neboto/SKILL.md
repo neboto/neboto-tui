@@ -72,15 +72,20 @@ events / template / drift, ECS deployments, …). Up to 50 ids per call.
 
 ## `audit` — security findings
 
-`neboto audit -o json` loads EC2, RDS, S3, EKS and IAM, then runs neboto's
-built-in checks. Examples: security groups open to `0.0.0.0/0` (high on
-admin and database ports), public RDS, unencrypted EBS and RDS, IMDSv1,
-public AMIs, the S3 public access block, root MFA and keys, the password
-policy, and Access Analyzer's public findings.
+`neboto audit -o json` loads EC2, RDS, S3, EKS, IAM and KMS, reads a few
+account facts and capped per-resource settings, then runs neboto's built-in
+checks. Examples: security groups open to `0.0.0.0/0` (high on admin and
+database ports), public RDS, unencrypted EBS and RDS, IMDSv1, public AMIs,
+the S3 public access block (bucket and account), root MFA and keys, the
+password policy, CloudTrail / Config / GuardDuty / Access Analyzer being off,
+KMS rotation, IAM users with a console password but no MFA, old access keys,
+public or shared snapshots, and Access Analyzer's public findings.
 
-- Each finding names its `service` and `resource_id`, so `neboto get` on that
-  pair gives the full detail.
-- `not_checked` lists checks that couldn't run (usually a denied list call),
+- Each resource finding names its `service` and `resource_id`, so `neboto get`
+  on that pair gives the full detail. Account-level findings (GuardDuty off,
+  no multi-region trail…) have `service: null` and an empty `resource_id`.
+- `not_checked` lists checks that couldn't run (usually a denied call — the
+  reason names the IAM action),
   so an empty `findings` with a non-empty `not_checked` is **not** a clean
   account.
 - `--fail-on high|medium|low|never` (default `low`) sets the exit code: 3

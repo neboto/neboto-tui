@@ -1732,14 +1732,18 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
     let lines = layout_detail_body(app, &rows, content_area, cursor, |idx, key, value, key_w| {
         let line = style_detail_row(key, value, state.as_ref(), key_w);
         let jump = jump_indicator(app, key, value);
-        if Some(idx) == selected {
+        // The visual range (`V`/`J`/`K`/`Ctrl-A`), as the split body draws it
+        // — this flat renderer used to highlight only the cursor line, so a
+        // copy took rows the pane never showed as selected.
+        if focused && app.detail_line_in_selection(idx) {
             let sel = theme::selection_style(true);
             let mut spans: Vec<Span> = line
                 .spans
                 .into_iter()
                 .map(|s| Span::styled(s.content, sel))
                 .collect();
-            if jump.is_some() {
+            // `→` jump hint only on the cursor line, not the whole range.
+            if jump.is_some() && Some(idx) == selected {
                 spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
             }
             Line::from(spans).style(sel)
