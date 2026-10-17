@@ -546,6 +546,8 @@ pub struct LazyStore {
     /// An instance's launch user data, base64-decoded, keyed by instance id.
     /// `Loaded(None)` = no user data configured (the common case).
     pub ec2_instance_user_data: LazyMap<Option<String>>,
+    /// A burstable instance's CPU credit mode (`standard` / `unlimited`), keyed by instance id.
+    pub ec2_credit_spec: LazyMap<String>,
     /// An instance's system console output (`GetConsoleOutput`), keyed by
     /// instance id. `Loaded(None)` = AWS has posted nothing for it yet.
     pub ec2_instance_console: LazyMap<Option<crate::aws::services::ec2::ConsoleOutput>>,
