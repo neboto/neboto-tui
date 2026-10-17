@@ -9,7 +9,12 @@ pub(super) fn render_cognito_user_pool_split(
     frame: &mut Frame,
 ) {
     let focused = app.details_focused;
-    let footer = detail_footer(app, focused, 4, "");
+    let footer = detail_footer(
+        app,
+        focused,
+        crate::aws::services::cognito::COGNITO_USER_POOL_SECTIONS.len(),
+        "",
+    );
     let mut block = theme::pane_block("Cognito User Pool", focused);
     block = block.title_bottom(
         Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
@@ -68,6 +73,7 @@ pub fn cognito_user_pool_section_lines(
     pool: &CognitoUserPool,
     section: CognitoUserPoolDetailSection,
     clients: Option<&crate::lazy::Lazy<Vec<crate::aws::services::cognito::CognitoAppClient>>>,
+    groups: Option<&crate::lazy::Lazy<crate::aws::services::cognito::CognitoGroups>>,
 ) -> Vec<(String, String)> {
     match section {
         CognitoUserPoolDetailSection::Details => {
@@ -145,5 +151,66 @@ pub fn cognito_user_pool_section_lines(
             ]
         }
         CognitoUserPoolDetailSection::Tags => tag_rows(&pool.tags),
+        CognitoUserPoolDetailSection::Groups => cognito_group_lines(groups),
     }
+}
+
+/// One group header per group (precedence order), its settings, then its
+/// members. The role ARN row is jumpable through the IAM ARN classifier.
+fn cognito_group_lines(
+    state: Option<&crate::lazy::Lazy<crate::aws::services::cognito::CognitoGroups>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::cognito::{MAX_COGNITO_GROUPS, MAX_COGNITO_GROUP_MEMBERS};
+    let data = match state {
+        None | Some(crate::lazy::Lazy::Loading) => {
+            return vec![(String::new(), "Loading…".to_string())];
+        }
+        Some(crate::lazy::Lazy::Error(e)) => return error_rows(e),
+        Some(crate::lazy::Lazy::Loaded(d)) => d,
+    };
+    if data.groups.is_empty() {
+        return vec![(String::new(), "No groups".to_string())];
+    }
+    let mut rows = Vec::new();
+    if data.truncated {
+        rows.push((String::new(), format!("· first {MAX_COGNITO_GROUPS} groups shown")));
+        rows.push((String::new(), String::new()));
+    }
+    for g in &data.groups {
+        rows.push((g.name.clone(), String::new()));
+        if let Some(d) = &g.description {
+            rows.push(("  Description".to_string(), d.clone()));
+        }
+        rows.push((
+            "  Precedence".to_string(),
+            g.precedence.map(|p| p.to_string()).unwrap_or_else(|| "—".to_string()),
+        ));
+        if let Some(role) = &g.role_arn {
+            rows.push(("  IAM Role".to_string(), role.clone()));
+        }
+        match &g.members {
+            Err(e) => rows.push(("  Members".to_string(), format!("⚠ {e}"))),
+            Ok(members) => {
+                let count = if g.members_truncated {
+                    format!("{}+ (first {MAX_COGNITO_GROUP_MEMBERS} shown)", members.len())
+                } else {
+                    members.len().to_string()
+                };
+                rows.push(("  Members".to_string(), count));
+                for m in members {
+                    let mut state = m.status.clone().unwrap_or_default();
+                    if !m.enabled {
+                        state = if state.is_empty() {
+                            "disabled".to_string()
+                        } else {
+                            format!("{state} · disabled")
+                        };
+                    }
+                    rows.push((format!("    {}", m.username), state));
+                }
+            }
+        }
+        rows.push((String::new(), String::new()));
+    }
+    rows
 }

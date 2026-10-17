@@ -15937,6 +15937,28 @@ impl App {
         }
     }
 
+    /// Lazy Groups section on a user pool: `ListGroups` + `ListUsersInGroup`.
+    pub(crate) fn trigger_cognito_groups_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(pool_id) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::cognito::CognitoUserPool>()
+                .map(|p| p.id.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.cognito_idp_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.cognito_groups,
+            pool_id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::cognito::fetch_cognito_groups(client, pool_id)
+                    .await
+                    .map_err(|e| format!("Groups unavailable: {}", e))
+            },
+        );
+    }
+
     fn is_selected_ecr_repo(&self) -> bool {
         self.get_selected_resource()
             .map(|r| r.as_any().downcast_ref::<crate::aws::services::ecr::EcrRepository>().is_some())
@@ -27476,6 +27498,7 @@ impl App {
                     pool,
                     crate::aws::services::cognito::CognitoUserPoolDetailSection::from_index(self.detail_section_idx),
                     self.lazy.cognito_clients.get(&pool.id),
+                    self.lazy.cognito_groups.get(&pool.id),
                 );
             }
             if let Some(img) = resource
