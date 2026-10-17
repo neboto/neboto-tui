@@ -2232,6 +2232,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-s3control"
+version = "1.131.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bca2bca4c81bb73bb97c84f77556c4803973537ec9c36a2193ee66ba466b2994"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "aws-types",
+ "fastrand",
+ "http 1.4.0",
+ "md-5",
+ "regex-lite",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "aws-sdk-s3files"
 version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4713,6 +4740,7 @@ dependencies = [
  "aws-sdk-route53profiles",
  "aws-sdk-route53resolver",
  "aws-sdk-s3",
+ "aws-sdk-s3control",
  "aws-sdk-s3files",
  "aws-sdk-s3tables",
  "aws-sdk-scheduler",

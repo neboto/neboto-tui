@@ -676,7 +676,8 @@
     "ECS Cluster": [
       "Overview",
       "Settings",
-      "Tags"
+      "Tags",
+      "Capacity Providers"
     ],
     "ECS Service": [
       "Overview",
@@ -866,7 +867,8 @@
     "IAM Account Settings": [
       "Overview",
       "Password Policy",
-      "Usage"
+      "Usage",
+      "Credential Report"
     ],
     "IAM Group": [
       "Overview",
@@ -903,7 +905,8 @@
     ],
     "IC Application": [
       "Overview",
-      "Assignments"
+      "Assignments",
+      "Auth"
     ],
     "IC Group": [
       "Details",

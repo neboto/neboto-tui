@@ -1862,6 +1862,117 @@ pub struct IamPasswordPolicy {
     pub hard_expiry: bool,
 }
 
+// ── Credential report (Account sub-tab) ───────────────────────────────────
+
+/// One access key slot (`access_key_1` / `access_key_2`) of a report row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CredReportKey {
+    pub slot: u8,
+    pub active: bool,
+    pub last_rotated: Option<i64>,
+    pub last_used: Option<i64>,
+}
+
+/// One row of the credential report: a user, or `<root_account>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CredReportUser {
+    pub user: String,
+    pub arn: String,
+    pub is_root: bool,
+    /// Console password set. Root reports `not_supported` — it always has one.
+    pub password_enabled: bool,
+    pub password_last_used: Option<i64>,
+    pub mfa_active: bool,
+    pub keys: Vec<CredReportKey>,
+}
+
+/// `GetCredentialReport`. neboto never calls `GenerateCredentialReport` (a
+/// write), so the three "no usable report" errors are ordinary outcomes here,
+/// not failures: a report lives ~4h after someone generates it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IamCredentialReport {
+    NotPresent,
+    Expired,
+    InProgress,
+    Present {
+        generated: Option<i64>,
+        users: Vec<CredReportUser>,
+    },
+}
+
+pub async fn fetch_iam_credential_report(client: IamClient) -> Result<IamCredentialReport> {
+    let resp = match client.get_credential_report().send().await {
+        Ok(r) => r,
+        Err(e) => {
+            if let Some(se) = e.as_service_error() {
+                if se.is_credential_report_expired_exception() {
+                    return Ok(IamCredentialReport::Expired);
+                }
+                if se.is_credential_report_not_present_exception() {
+                    return Ok(IamCredentialReport::NotPresent);
+                }
+                if se.is_credential_report_not_ready_exception() {
+                    return Ok(IamCredentialReport::InProgress);
+                }
+            }
+            return Err(crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)));
+        }
+    };
+    let csv = resp
+        .content()
+        .map(|b| String::from_utf8_lossy(b.as_ref()).into_owned())
+        .unwrap_or_default();
+    Ok(IamCredentialReport::Present {
+        generated: resp.generated_time().map(|t| t.secs()),
+        users: parse_credential_report(&csv),
+    })
+}
+
+/// The report CSV → rows. Columns are looked up by header name, so an added
+/// column can't shift the rest. No field ever contains a comma (names, ARNs,
+/// ISO times, `N/A`, `not_supported`, `no_information`), so a plain split holds.
+pub fn parse_credential_report(csv: &str) -> Vec<CredReportUser> {
+    let mut lines = csv.lines();
+    let Some(header) = lines.next() else {
+        return Vec::new();
+    };
+    let cols: Vec<&str> = header.split(',').map(str::trim).collect();
+    let idx = |name: &str| cols.iter().position(|c| *c == name);
+    let time = |v: Option<&str>| {
+        v.and_then(|v| chrono::DateTime::parse_from_rfc3339(v.trim()).ok())
+            .map(|d| d.timestamp())
+    };
+    let mut users = Vec::new();
+    for line in lines.filter(|l| !l.trim().is_empty()) {
+        let fields: Vec<&str> = line.split(',').collect();
+        let get = |name: &str| idx(name).and_then(|i| fields.get(i).copied());
+        let truthy = |name: &str| get(name).map(|v| v.trim() == "true").unwrap_or(false);
+        let user = get("user").unwrap_or_default().to_string();
+        let is_root = user == "<root_account>";
+        let keys = [1u8, 2]
+            .into_iter()
+            .map(|n| CredReportKey {
+                slot: n,
+                active: truthy(&format!("access_key_{n}_active")),
+                last_rotated: time(get(&format!("access_key_{n}_last_rotated"))),
+                last_used: time(get(&format!("access_key_{n}_last_used_date"))),
+            })
+            .collect();
+        users.push(CredReportUser {
+            arn: get("arn").unwrap_or_default().to_string(),
+            password_enabled: is_root || truthy("password_enabled"),
+            password_last_used: time(get("password_last_used")),
+            mfa_active: truthy("mfa_active"),
+            keys,
+            is_root,
+            user,
+        });
+    }
+    // Root first, then users by name.
+    users.sort_by(|a, b| b.is_root.cmp(&a.is_root).then_with(|| a.user.cmp(&b.user)));
+    users
+}
+
 /// One synthetic row: account alias, GetAccountSummary counts/quotas, and the
 /// password policy. Fetched eagerly at load time (three cheap calls); call
 /// failures render inline in the pane's sections.
@@ -1957,6 +2068,7 @@ crate::sections! {
         Overview "Overview",
         PasswordPolicy "Password Policy",
         Usage "Usage",
+        CredentialReport "Credential Report" => crate::app::App::trigger_iam_credential_report_load,
     ]
 }
 

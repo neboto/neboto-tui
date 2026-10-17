@@ -95,6 +95,9 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("ec2", "DescribeInstanceCreditSpecifications", when ["i-0a1b2c3d4e5f60001"], "DescribeInstanceCreditSpecifications-0001.xml"),
     fx!("ec2", "DescribeInstanceCreditSpecifications", when ["i-0a1b2c3d4e5f60002"], "DescribeInstanceCreditSpecifications-0002.xml"),
     fx!("ec2", "DescribeSecurityGroups", "DescribeSecurityGroups.xml"),
+    // Instance + ALB network interfaces. `legacy-batch-sg` is on none of them,
+    // so it lists as `unused`; the Used By section narrows by `group-id`.
+    fx!("ec2", "DescribeNetworkInterfaces", "DescribeNetworkInterfaces.xml"),
     // reporting-db-sg allows Postgres from a prefix list; its rule expands to these.
     fx!("ec2", "GetManagedPrefixListEntries", when ["pl-0corpvpn00000001"], "GetManagedPrefixListEntries-corp-vpn.xml"),
     fx!("ec2", "DescribeManagedPrefixLists", "DescribeManagedPrefixLists.xml"),
@@ -102,6 +105,9 @@ pub static FIXTURES: &[Fixture] = &[
     // ── ECS ──────────────────────────────────────────────────────────────────
     fx!("ecs", "ListClusters", "ListClusters.json"),
     fx!("ecs", "DescribeClusters", "DescribeClusters.json"),
+    // acme-prod runs on Fargate (+ Spot, 1:3) and keeps a GPU ASG provider
+    // scaled to zero for batch work — the Capacity Providers section.
+    fx!("ecs", "DescribeCapacityProviders", "DescribeCapacityProviders.json"),
     fx!("ecs", "ListServices", "ListServices.json"),
     fx!("ecs", "DescribeServices", "DescribeServices.json"),
     fx!("ecs", "ListTaskDefinitions", "ListTaskDefinitions.json"),
@@ -191,6 +197,9 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("iam", "GetOpenIDConnectProvider", "GetOpenIDConnectProvider.xml"),
     fx!("iam", "GetAccountSummary", "GetAccountSummary.xml"),
     fx!("iam", "GetAccountPasswordPolicy", "GetAccountPasswordPolicy.xml"),
+    // Credential report: expired, the state most accounts are in (neboto never
+    // generates one), so the section shows its "run generate-credential-report" hint.
+    fx!("iam", "GetCredentialReport", "GetCredentialReport-expired.xml"),
     // ── Elastic Load Balancing v2 ────────────────────────────────────────────
     fx!("elasticloadbalancing", "DescribeLoadBalancers", "DescribeLoadBalancers.xml"),
     fx!("elasticloadbalancing", "DescribeTargetGroups", "DescribeTargetGroups.xml"),
@@ -341,6 +350,9 @@ pub static FIXTURES: &[Fixture] = &[
     // Not in the dataset yet, but their list calls need a root element the
     // empty-success reply can't supply (it varies per operation).
     fx!("s3", "GET /", "ListBuckets.xml"),
+    // The bucket pane's Access Points section (S3 Control; the account id
+    // label in front of the host is skipped by `DemoRequest::parse`).
+    fx!("s3-control", "GET /v20180820/accesspoint", "ListAccessPoints.xml"),
     fx!("route53", "GET /2013-04-01/hostedzone", "ListHostedZones.xml"),
     fx!("route53", "GET /2013-04-01/healthcheck", "ListHealthChecks.xml"),
 ];
