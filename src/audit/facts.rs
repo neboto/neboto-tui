@@ -107,6 +107,11 @@ pub struct AccountFacts {
     pub config_recorders: Fact<Vec<RecorderFact>>,
     pub guardduty_detectors: Fact<Vec<DetectorFact>>,
     pub analyzers: Fact<Vec<AnalyzerFact>>,
+    /// Whether the account is in an AWS Organization. An organization
+    /// analyzer lives in the management or delegated-admin account, so a
+    /// member account can't see it — and "no analyzer" there isn't a
+    /// finding (#227).
+    pub in_organization: Fact<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -177,6 +182,7 @@ impl AuditFacts {
                 config_recorders: Ok(vec![RecorderFact { name: "default".into(), recording: true }]),
                 guardduty_detectors: Ok(vec![DetectorFact { id: "d1".into(), enabled: true }]),
                 analyzers: Ok(vec![AnalyzerFact { name: "acct".into(), kind: "ACCOUNT".into(), active: true }]),
+                in_organization: Ok(false),
             },
             kms_rotation: PerResource::default(),
             iam_users: PerResource::default(),
@@ -250,17 +256,19 @@ pub fn fetch(clients: &AwsClients, targets: FactTargets) -> impl Future<Output =
     let config = clients.awsconfig_client();
     let guardduty = clients.guardduty_client();
     let analyzer = clients.accessanalyzer_client();
+    let organizations = clients.organizations_client();
     async move {
         let account = async {
-            let (s3_block, ebs_default_encryption, trails, config_recorders, guardduty_detectors, analyzers) = tokio::join!(
+            let (s3_block, ebs_default_encryption, trails, config_recorders, guardduty_detectors, analyzers, in_organization) = tokio::join!(
                 fetch_s3_account_block(&sts, &s3control),
                 fetch_ebs_default_encryption(&ec2),
                 fetch_trails(&cloudtrail),
                 fetch_recorders(&config),
                 fetch_detectors(&guardduty),
                 fetch_analyzers(&analyzer),
+                fetch_in_organization(&organizations),
             );
-            AccountFacts { s3_block, ebs_default_encryption, trails, config_recorders, guardduty_detectors, analyzers }
+            AccountFacts { s3_block, ebs_default_encryption, trails, config_recorders, guardduty_detectors, analyzers, in_organization }
         };
         let (account, kms_rotation, iam_users, ebs_snapshots, rds_snapshots) = tokio::join!(
             account,
@@ -381,20 +389,33 @@ async fn fetch_detectors(gd: &aws_sdk_guardduty::Client) -> Fact<Vec<DetectorFac
 }
 
 async fn fetch_analyzers(aa: &aws_sdk_accessanalyzer::Client) -> Fact<Vec<AnalyzerFact>> {
-    let resp = aa
-        .list_analyzers()
-        .send()
-        .await
-        .map_err(|e| Gap::from_sdk("access-analyzer:ListAnalyzers", &e))?;
-    Ok(resp
-        .analyzers()
-        .iter()
-        .map(|a| AnalyzerFact {
+    let mut pages = aa.list_analyzers().into_paginator().send();
+    let mut out = Vec::new();
+    while let Some(page) = pages.next().await {
+        let page = page.map_err(|e| Gap::from_sdk("access-analyzer:ListAnalyzers", &e))?;
+        out.extend(page.analyzers().iter().map(|a| AnalyzerFact {
             name: a.name().to_string(),
             kind: a.r#type().as_str().to_string(),
             active: a.status().as_str() == "ACTIVE",
-        })
-        .collect())
+        }));
+    }
+    Ok(out)
+}
+
+/// `DescribeOrganization` answers from any account in an org, management or
+/// member; `AWSOrganizationsNotInUseException` means a standalone account.
+async fn fetch_in_organization(org: &aws_sdk_organizations::Client) -> Fact<bool> {
+    match org.describe_organization().send().await {
+        Ok(r) => Ok(r.organization().is_some()),
+        Err(e) if e.as_service_error().is_some_and(|s| s.is_aws_organizations_not_in_use_exception()) => Ok(false),
+        Err(e) => Err(Gap::from_sdk("organizations:DescribeOrganization", &e)),
+    }
+}
+
+/// The `rds_snapshots` key: an instance snapshot and a cluster snapshot may
+/// share an identifier, and they're different snapshots.
+pub fn rds_snapshot_key(id: &str, is_cluster: bool) -> String {
+    format!("{}:{id}", if is_cluster { "cluster" } else { "instance" })
 }
 
 // ── Per-resource reads ────────────────────────────────────────────────────────
@@ -517,7 +538,7 @@ async fn fetch_rds_sharing(rds: aws_sdk_rds::Client, id: String, cluster: bool) 
             })
             .map_err(|e| Gap::from_sdk("rds:DescribeDBSnapshotAttributes", &e))
     };
-    (id, r)
+    (rds_snapshot_key(&id, cluster), r)
 }
 
 #[cfg(test)]

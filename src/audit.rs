@@ -1240,17 +1240,47 @@ fn check_guardduty(check: &'static Check, input: &AuditInput, out: &mut Vec<Audi
 
 fn check_access_analyzer_present(check: &'static Check, input: &AuditInput, out: &mut Vec<AuditFinding>) {
     let subject = format!("IAM Access Analyzer ({})", input.region);
-    let Some(analyzers) = read_fact(check, &subject, &facts(input).account.analyzers, out) else { return };
+    let account = &facts(input).account;
+    let Some(analyzers) = read_fact(check, &subject, &account.analyzers, out) else { return };
     // Unused-access analyzers don't find external access.
     let external = |a: &&facts::AnalyzerFact| matches!(a.kind.as_str(), "ACCOUNT" | "ORGANIZATION");
     if analyzers.iter().filter(external).any(|a| a.active) {
         return;
     }
-    let reason = match analyzers.iter().find(external) {
-        Some(a) => format!("analyzer {} not active", a.name),
-        None => "no external-access analyzer in this region".to_string(),
-    };
-    out.push(AuditFinding::account(check, Severity::Low, subject, reason));
+    if let Some(a) = analyzers.iter().find(external) {
+        let reason = format!("analyzer {} not active", a.name);
+        out.push(AuditFinding::account(check, Severity::Low, subject, reason));
+        return;
+    }
+    // None at all. In an organization that's expected wherever the org
+    // analyzer isn't: it lives in the management or delegated-admin account,
+    // and members can't list it (#227). Unknowable from here, so coverage,
+    // not a finding.
+    match account.in_organization {
+        Ok(true) => out.push(AuditFinding::note(
+            check,
+            subject,
+            "not checked — an organization analyzer isn't visible from here".to_string(),
+            "This account is in an AWS Organization, where the external-access analyzer is usually an \
+             organization analyzer in the management or delegated-admin account — member accounts can't \
+             list it. Check that account; an analyzer here would only be needed for account-level coverage."
+                .to_string(),
+        )),
+        Ok(false) => out.push(AuditFinding::account(
+            check,
+            Severity::Low,
+            subject,
+            "no external-access analyzer in this region".to_string(),
+        )),
+        Err(_) => out.push(AuditFinding::account(
+            check,
+            Severity::Low,
+            subject,
+            "no external-access analyzer visible in this region (couldn't tell whether the account is in an \
+             organization — an organization analyzer in the admin account wouldn't show here)"
+                .to_string(),
+        )),
+    }
 }
 
 /// Coverage for a per-resource read: denied/failed calls grouped by note,
@@ -1408,11 +1438,12 @@ fn check_rds_snapshot_sharing(check: &'static Check, input: &AuditInput, out: &m
     let sharing = &facts(input).rds_snapshots;
     let snaps: Vec<&RdsSnapshot> = input.of::<RdsSnapshot>(ServiceType::RDS).filter(|s| facts::rds_snapshot_shareable(s)).collect();
     for s in &snaps {
-        if let Some(Ok(sh)) = sharing.results.get(&s.id) {
+        if let Some(Ok(sh)) = sharing.results.get(&facts::rds_snapshot_key(&s.id, s.is_cluster)) {
             out.extend(sharing_finding(check, ServiceType::RDS, *s, sh));
         }
     }
-    per_resource_notes(check, "snapshot", sharing, snaps.iter().map(|s| s.id.clone()), out);
+    let keys = snaps.iter().map(|s| facts::rds_snapshot_key(&s.id, s.is_cluster));
+    per_resource_notes(check, "snapshot", sharing, keys, out);
 }
 
 #[cfg(test)]
@@ -1590,6 +1621,69 @@ mod tests {
         let rows = rows_with(&[], Some(&f));
         assert!(findings(&rows).is_empty());
         assert_eq!(note(&rows, "cloudtrail-multi-region"), vec!["trail org: not checked — trail status unreadable"]);
+    }
+
+    /// #227: in an organization the analyzer usually lives in the admin
+    /// account, out of a member's sight — coverage, not a finding (which
+    /// failed `neboto audit`'s default `--fail-on low` in every member).
+    #[test]
+    fn no_analyzer_in_an_org_account_is_coverage_not_a_finding() {
+        let mut f = AuditFacts::clean();
+        f.account.analyzers = Ok(vec![]);
+        f.account.in_organization = Ok(true);
+        let rows = rows_with(&[], Some(&f));
+        assert!(findings(&rows).is_empty());
+        assert_eq!(
+            note(&rows, "access-analyzer-none"),
+            vec!["IAM Access Analyzer (us-east-1): not checked — an organization analyzer isn't visible from here"]
+        );
+
+        // An inactive local analyzer is still this account's problem.
+        f.account.analyzers = Ok(vec![facts::AnalyzerFact { name: "local".into(), kind: "ACCOUNT".into(), active: false }]);
+        let got = findings(&rows_with(&[], Some(&f)));
+        assert_eq!(got, vec![("access-analyzer-none", Severity::Low, "analyzer local not active".into())]);
+    }
+
+    #[test]
+    fn no_analyzer_standalone_is_a_finding_and_unknown_org_says_so() {
+        let mut f = AuditFacts::clean();
+        f.account.analyzers = Ok(vec![]);
+        let got = findings(&rows_with(&[], Some(&f)));
+        assert_eq!(got, vec![("access-analyzer-none", Severity::Low, "no external-access analyzer in this region".into())]);
+
+        f.account.in_organization = Err(denied("organizations:DescribeOrganization"));
+        let got = findings(&rows_with(&[], Some(&f)));
+        assert_eq!(got.len(), 1);
+        assert!(got[0].2.contains("couldn't tell whether the account is in an organization"), "{}", got[0].2);
+    }
+
+    /// #227: an instance snapshot and a cluster snapshot can share an id;
+    /// one's sharing must not be read as the other's.
+    #[test]
+    fn same_named_instance_and_cluster_snapshots_keep_their_own_sharing() {
+        let inst: Box<dyn Resource> = Box::new(RdsSnapshot::from_db(
+            &aws_sdk_rds::types::DbSnapshot::builder()
+                .db_snapshot_identifier("nightly")
+                .snapshot_type("manual")
+                .status("available")
+                .build(),
+        ));
+        let cluster: Box<dyn Resource> = Box::new(RdsSnapshot::from_cluster(
+            &aws_sdk_rds::types::DbClusterSnapshot::builder()
+                .db_cluster_snapshot_identifier("nightly")
+                .snapshot_type("manual")
+                .status("available")
+                .build(),
+        ));
+        let mut f = AuditFacts::clean();
+        f.rds_snapshots.results.insert(facts::rds_snapshot_key("nightly", false), Ok(facts::Sharing::default()));
+        f.rds_snapshots
+            .results
+            .insert(facts::rds_snapshot_key("nightly", true), Ok(facts::Sharing { public: true, accounts: vec![] }));
+        let rows = rows_with(&[(ServiceType::RDS, &[inst, cluster])], Some(&f));
+        let shared: Vec<_> = rows.iter().filter(|r| r.is_finding() && r.check_id == "rds-snapshot-shared").collect();
+        assert_eq!(shared.len(), 1, "only the cluster snapshot is public");
+        assert!(note(&rows, "rds-snapshot-shared").is_empty(), "both were read");
     }
 
     fn bucket(name: &str, pab: PublicAccessBlockConfig) -> Box<dyn Resource> {

@@ -58,6 +58,16 @@ the service you're touching.
   RDS cluster members are skipped for encryption (reported once on the
   cluster). S3 other-region stubs and unreadable public-access blocks become
   "not checked" notes, never findings: an unknown posture isn't an open one.
+  **Access Analyzer in an organization** (#227): the external-access
+  analyzer is usually an *organization* analyzer in the management or
+  delegated-admin account, and `ListAnalyzers` in a member account doesn't
+  list it. So "no analyzer" is a finding only in a standalone account
+  (`DescribeOrganization` → `AWSOrganizationsNotInUseException`); in an org
+  it's a "not checked" note — it used to be a Low finding that failed
+  `neboto audit`'s default `--fail-on low` in every member account. An
+  inactive *local* analyzer is still a finding anywhere. RDS snapshot sharing
+  facts are keyed `instance:<id>` / `cluster:<id>` (`rds_snapshot_key`): the
+  two kinds can share an identifier.
   Row ids are `check:resource-id` (unique per finding, stable across `r`); the
   list's second column is `list_note` via `resource_list::id_cell`. `⏎` jumps
   through `jump_to_cached_resource` (list row, or the pane's `Resource ID`
