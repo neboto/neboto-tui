@@ -206,11 +206,89 @@ fn cognito_group_lines(
                             format!("{state} · disabled")
                         };
                     }
-                    rows.push((format!("    {}", m.username), state));
+                    rows.push((format!("    {}", m.label), state));
                 }
             }
         }
         rows.push((String::new(), String::new()));
     }
     rows
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+    use crate::aws::services::cognito::{CognitoGroup, CognitoGroupMember, CognitoGroups};
+    use crate::lazy::Lazy;
+
+    fn member(label: &str, enabled: bool, status: Option<&str>) -> CognitoGroupMember {
+        CognitoGroupMember {
+            username: label.into(),
+            label: label.into(),
+            enabled,
+            status: status.map(str::to_string),
+        }
+    }
+
+    fn group(name: &str, members: Result<Vec<CognitoGroupMember>, String>, truncated: bool) -> CognitoGroup {
+        CognitoGroup {
+            name: name.into(),
+            description: None,
+            precedence: Some(1),
+            role_arn: None,
+            members,
+            members_truncated: truncated,
+        }
+    }
+
+    fn lines(groups: Vec<CognitoGroup>, truncated: bool) -> Vec<(String, String)> {
+        cognito_group_lines(Some(&Lazy::Loaded(CognitoGroups { groups, truncated })))
+    }
+
+    #[test]
+    fn no_groups_is_a_note() {
+        let rows = lines(vec![], false);
+        assert_eq!(rows, vec![(String::new(), "No groups".to_string())]);
+    }
+
+    #[test]
+    fn truncated_groups_say_so() {
+        let rows = lines(vec![group("admins", Ok(vec![]), false)], true);
+        assert!(rows.iter().any(|(_, v)| v.starts_with("· first 50 groups")), "{rows:?}");
+    }
+
+    #[test]
+    fn a_failed_member_call_warns_on_that_group_only() {
+        let rows = lines(
+            vec![
+                group("admins", Err("AccessDenied: no".into()), false),
+                group("readers", Ok(vec![member("ana@example.com", true, Some("CONFIRMED"))]), false),
+            ],
+            false,
+        );
+        let members: Vec<&String> = rows.iter().filter(|(k, _)| k == "  Members").map(|(_, v)| v).collect();
+        assert_eq!(members, vec!["⚠ AccessDenied: no", "1"], "{rows:?}");
+        assert!(rows.contains(&("    ana@example.com".into(), "CONFIRMED".into())), "{rows:?}");
+    }
+
+    #[test]
+    fn truncated_members_show_the_page_size() {
+        let rows = lines(vec![group("all", Ok(vec![member("a", true, None)]), true)], false);
+        assert!(rows.contains(&("  Members".into(), "1+ (first 60 shown)".into())), "{rows:?}");
+    }
+
+    #[test]
+    fn disabled_members_are_marked_with_or_without_a_status() {
+        let rows = lines(
+            vec![group(
+                "g",
+                Ok(vec![member("a", false, Some("CONFIRMED")), member("b", false, None), member("c", true, None)]),
+                false,
+            )],
+            false,
+        );
+        assert!(rows.contains(&("    a".into(), "CONFIRMED · disabled".into())), "{rows:?}");
+        assert!(rows.contains(&("    b".into(), "disabled".into())), "{rows:?}");
+        assert!(rows.contains(&("    c".into(), String::new())), "{rows:?}");
+    }
 }

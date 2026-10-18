@@ -361,6 +361,8 @@ pub const MAX_COGNITO_GROUP_MEMBERS: i32 = 60;
 #[derive(Debug, Clone)]
 pub struct CognitoGroupMember {
     pub username: String,
+    /// What the member row shows — see `member_label`.
+    pub label: String,
     pub enabled: bool,
     pub status: Option<String>,
 }
@@ -384,6 +386,29 @@ pub struct CognitoGroups {
     pub truncated: bool,
 }
 
+/// The member row's text. A pool that signs in by email or phone sets each
+/// `Username` to the user's `sub` (a UUID), which says nothing about who is in
+/// the group, so those rows show the contact instead. A chosen username is
+/// kept, with the contact beside it.
+pub(crate) fn member_label(
+    username: &str,
+    sub: Option<&str>,
+    email: Option<&str>,
+    phone: Option<&str>,
+) -> String {
+    match email.or(phone).filter(|c| !c.is_empty()) {
+        None => username.to_string(),
+        Some(c) if c == username || sub == Some(username) => c.to_string(),
+        Some(c) => format!("{username} <{c}>"),
+    }
+}
+
+/// Whether the group list stops at the cap: more than `MAX_COGNITO_GROUPS`
+/// arrived, or exactly that many with another page still to come.
+pub(crate) fn groups_truncated(len: usize, more_pages: bool) -> bool {
+    len > MAX_COGNITO_GROUPS || (len == MAX_COGNITO_GROUPS && more_pages)
+}
+
 /// A user pool's groups with their members, inverted from the group side:
 /// `ListGroups` + one `ListUsersInGroup` page per group (4 at a time). The
 /// per-user `AdminListGroupsForUser` is never called — it's one call per user,
@@ -404,7 +429,7 @@ pub async fn fetch_cognito_groups(idp: IdpClient, pool_id: String) -> Result<Cog
             .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
         raw.extend(page.groups().iter().cloned());
         token = next_page_token(page.next_token(), &token);
-        if raw.len() > MAX_COGNITO_GROUPS || (raw.len() == MAX_COGNITO_GROUPS && token.is_some()) {
+        if groups_truncated(raw.len(), token.is_some()) {
             raw.truncate(MAX_COGNITO_GROUPS);
             truncated = true;
             break;
@@ -430,10 +455,22 @@ pub async fn fetch_cognito_groups(idp: IdpClient, pool_id: String) -> Result<Cog
                 Ok(r) => (
                     Ok(r.users()
                         .iter()
-                        .map(|u| CognitoGroupMember {
-                            username: u.username().unwrap_or_default().to_string(),
-                            enabled: u.enabled(),
-                            status: u.user_status().map(|s| s.as_str().to_string()),
+                        .map(|u| {
+                            let attr = |name: &str| {
+                                u.attributes().iter().find(|a| a.name() == name).and_then(|a| a.value())
+                            };
+                            let username = u.username().unwrap_or_default().to_string();
+                            CognitoGroupMember {
+                                label: member_label(
+                                    &username,
+                                    attr("sub"),
+                                    attr("email"),
+                                    attr("phone_number"),
+                                ),
+                                username,
+                                enabled: u.enabled(),
+                                status: u.user_status().map(|s| s.as_str().to_string()),
+                            }
                         })
                         .collect()),
                     r.next_token().is_some_and(|t| !t.is_empty()),
@@ -1057,5 +1094,37 @@ mod user_tests {
         let tail: Vec<&str> = keys.iter().map(String::as_str).skip_while(|k| *k != "sub").collect();
         assert_eq!(tail, ["sub", "name", "custom:tenant"], "sub first, custom:* last: {keys:?}");
         assert!(!keys.iter().any(|k| k == "email"), "shown as Email, not repeated raw");
+    }
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    #[test]
+    fn email_sign_in_members_show_the_email_not_the_sub() {
+        let sub = "a1b2c3d4-0000-4000-8000-000000000001";
+        assert_eq!(member_label(sub, Some(sub), Some("ana@example.com"), None), "ana@example.com");
+        // Phone sign-in falls back to the number.
+        assert_eq!(member_label(sub, Some(sub), None, Some("+15550100")), "+15550100");
+    }
+
+    #[test]
+    fn a_chosen_username_keeps_the_contact_beside_it() {
+        assert_eq!(
+            member_label("ana", Some("a1b2c3d4-0000-4000-8000-000000000001"), Some("ana@example.com"), None),
+            "ana <ana@example.com>"
+        );
+        assert_eq!(member_label("ana@example.com", None, Some("ana@example.com"), None), "ana@example.com");
+        assert_eq!(member_label("ana", None, None, None), "ana");
+        assert_eq!(member_label("ana", None, Some(""), None), "ana");
+    }
+
+    #[test]
+    fn group_cap_counts_a_further_page_only_at_the_cap() {
+        assert!(!groups_truncated(MAX_COGNITO_GROUPS, false));
+        assert!(groups_truncated(MAX_COGNITO_GROUPS, true));
+        assert!(groups_truncated(MAX_COGNITO_GROUPS + 1, false));
+        assert!(!groups_truncated(MAX_COGNITO_GROUPS - 1, true));
     }
 }

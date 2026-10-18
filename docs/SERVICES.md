@@ -992,7 +992,9 @@ the service you're touching.
   Both caps say so in the section when hit. It lives on the pool rather than
   the user because the per-user route, `AdminListGroupsForUser`, is one call
   per user and an `Admin*` action — **never** call it. A single group's
-  member call failing renders `⚠` on that group's Members row only. Groups
+  member call failing renders `⚠` on that group's Members row only. Member
+  rows show the email (or phone) when the username is the user's `sub` — an
+  email/phone sign-in pool's usernames are UUIDs (`member_label`). Groups
   sort by precedence (lower wins when a user's groups carry IAM roles); the
   role ARN row jumps via the IAM classifier.
 - **AppSync** (`@appsync`, `appsync.rs`, **aws-sdk-appsync**) — single list of
