@@ -1387,8 +1387,10 @@ fn nav_hint_label(service: ServiceType, id: Option<&str>) -> String {
 
 /// Structural side of recording a navigation location (shared with
 /// `record_location`, kept pure for testing): when parked mid-history, drop the
-/// stale forward branch; when live, append `loc` unless it duplicates the top.
-/// Caps the timeline and returns the cursor to "live".
+/// stale forward branch and **replace** the parked entry with `loc` — you may
+/// have moved since going back to it (another row, a sub-tab), and `loc` is
+/// where you're actually leaving from; when live, append `loc` unless it
+/// duplicates the top. Caps the timeline and returns the cursor to "live".
 fn record_into<T>(
     history: &mut Vec<T>,
     cursor: &mut Option<usize>,
@@ -1397,7 +1399,10 @@ fn record_into<T>(
     cap: usize,
 ) {
     match *cursor {
-        Some(i) => history.truncate(i + 1),
+        Some(i) => {
+            history.truncate(i);
+            history.push(loc);
+        }
         None => {
             if !is_dup_top {
                 history.push(loc);
@@ -21852,9 +21857,20 @@ impl App {
         let selected_id = selected.map(|r| r.id().to_string());
         let selected_name = selected.map(|r| r.name().to_string());
 
+        // An `@other-service …` query is the switch *away* from here (it's
+        // captured mid-switch, from `update_search`), not this list's filter:
+        // restoring it would re-run the switch and bounce Ctrl-O forward
+        // again. Come back unfiltered instead. `@all` stays — returning to
+        // its results is the point (`jump_to_location`).
+        let query = {
+            use crate::search::query_parser::{parse_all_query, parse_query};
+            let leaving = parse_all_query(&self.search_query).is_none()
+                && parse_query(&self.search_query).service.is_some_and(|s| s != service);
+            if leaving { String::new() } else { self.search_query.clone() }
+        };
         let mut label = service.short_name().to_string();
-        if !self.search_query.is_empty() {
-            label.push_str(&format!("  ·  {}", self.search_query));
+        if !query.is_empty() {
+            label.push_str(&format!("  ·  {}", query));
         }
         if let Some(id) = &selected_id {
             match &selected_name {
@@ -21867,7 +21883,7 @@ impl App {
         Some(NavLocation {
             service,
             view: self.current_jump_view(),
-            query: self.search_query.clone(),
+            query,
             selected_id,
             label,
             s3_object_path: None,
@@ -34704,10 +34720,20 @@ mod nav_tests {
         // stale forward entries (3, 4) and leaves us live.
         let mut hist = vec![1, 2, 3, 4];
         let mut cursor = Some(1);
-        // The leaving place already *is* hist[1], so loc here is unused.
-        record_into(&mut hist, &mut cursor, 99, false, NAV_HISTORY_MAX);
+        record_into(&mut hist, &mut cursor, 2, false, NAV_HISTORY_MAX);
         assert_eq!(hist, vec![1, 2]);
         assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn record_while_parked_replaces_the_entry_with_where_you_left_from() {
+        // Back to index 1 (place 2), then moved to place 99 before jumping:
+        // back must return to 99, not to the 2 you passed through.
+        let mut hist = vec![1, 2, 3, 4];
+        let mut cursor = Some(1);
+        record_into(&mut hist, &mut cursor, 99, false, NAV_HISTORY_MAX);
+        assert_eq!(hist, vec![1, 99]);
+        assert_eq!(nav_back_target(hist.len(), cursor), Some(1));
     }
 
     #[test]
@@ -34729,8 +34755,9 @@ mod nav_tests {
         cursor = nav_back_target(hist.len(), cursor); // Some(1)
         assert_eq!(cursor, Some(1));
         record_into(&mut hist, &mut cursor, 4, false, NAV_HISTORY_MAX);
-        // Forward branch (3) dropped; we're live on the [1,2] trail.
-        assert_eq!(hist, vec![1, 2]);
+        // Forward branch (3) dropped, and the parked entry is where we left
+        // from (4); back from there lands on it.
+        assert_eq!(hist, vec![1, 4]);
         assert_eq!(nav_back_target(hist.len(), cursor), Some(1));
     }
 }

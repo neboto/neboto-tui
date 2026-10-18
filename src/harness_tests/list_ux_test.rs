@@ -195,3 +195,69 @@ async fn the_list_shows_the_summary_column() {
     let screen = draw(&app);
     assert!(screen.contains("t3.micro · i-0abc"), "{screen}");
 }
+
+// ── Back-history sync: what the `⌫ back to …` hint made visible ──────────
+
+fn ec2_rows(app: &mut App, ids: &[&str]) {
+    app.current_service = Some(ServiceType::EC2);
+    app.resources = ids
+        .iter()
+        .map(|id| -> Box<dyn Resource> {
+            Box::new(Ec2Instance::from_sdk(&aws_sdk_ec2::types::Instance::builder().instance_id(*id).build()))
+        })
+        .collect();
+    app.filtered_resources = (0..ids.len()).collect();
+    app.selected_index = Some(0);
+}
+
+/// Back to A, move to B, jump away: back (and the hint) must say B — the
+/// place you left from — not the A you passed through.
+#[tokio::test]
+async fn back_returns_to_where_you_left_not_where_you_went_back_to() {
+    let (mut app, _tx, _rx) = test_app().await;
+    ec2_rows(&mut app, &["i-a", "i-b"]);
+    app.record_location(); // jump away from A
+    app.nav_cursor = Some(0); // ⌫ back to A
+    app.selected_index = Some(1); // j to B
+    app.record_location(); // jump away from B
+    app.current_service = Some(ServiceType::Lambda);
+    assert_eq!(app.nav_back_hint().as_deref(), Some("EC2 i-b"));
+    assert_eq!(app.nav_history.len(), 1);
+}
+
+/// `@lambda` from EC2, then ⌫: back lands on EC2 and stays there. The
+/// switch used to record the half-typed `@lambda` as EC2's query, so the
+/// restore re-ran it and bounced straight back to Lambda.
+#[tokio::test]
+async fn back_after_a_service_search_does_not_bounce_forward() {
+    let (mut app, tx, _rx) = test_app().await;
+    ec2_rows(&mut app, &["i-a"]);
+    app.search_active = true;
+    app.search_query = "@lambda".into();
+    app.update_search();
+    press(&mut app, &tx, KeyCode::Enter).await;
+    assert_eq!(app.current_service, Some(ServiceType::Lambda));
+    assert_eq!(app.nav_history[0].query, "");
+
+    press(&mut app, &tx, KeyCode::Backspace).await;
+    if app.search_needs_update {
+        app.update_search();
+    }
+    assert_eq!(app.current_service, Some(ServiceType::EC2));
+    assert_eq!(app.search_query, "");
+    assert_eq!(app.pending_jump.as_deref(), Some("i-a"), "the row is re-selected");
+}
+
+/// A filter on the list you're leaving is kept — only the switch query is dropped.
+#[tokio::test]
+async fn a_same_service_filter_is_still_recorded() {
+    let (mut app, _tx, _rx) = test_app().await;
+    ec2_rows(&mut app, &["i-a"]);
+    app.search_query = "web".into();
+    app.record_location();
+    assert_eq!(app.nav_history[0].query, "web");
+    app.nav_history.clear();
+    app.search_query = "@all web".into();
+    app.record_location();
+    assert_eq!(app.nav_history[0].query, "@all web", "@all results are a place to come back to");
+}
