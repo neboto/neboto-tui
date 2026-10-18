@@ -350,7 +350,7 @@ full-width; `\` flattens all sections into one scroll.
 | `[[` / `]]` | Previous / next group header |
 | `l` `→` `⏎` | Follow the link under the cursor |
 | `h` `←` `Esc` | Back to the list |
-| `Ctrl-O` | Back through history |
+| `⌫` `Ctrl-O` | Back through history (the footer names where: `⌫ back to EC2 i-0abc`) |
 | `/` | Filter the body text |
 | `Ctrl-W` | Wrap long values onto continuation rows (toggle) |
 | `y` / `c` | Copy the row, or the visual selection |
@@ -386,6 +386,7 @@ the faster route, but nothing needs it.
 | Click a `→` | Follow that link |
 | Click the `↑ vX.Y.Z` chip | Copy the upgrade command (shown when a newer release is out) |
 | Click the detail pane's title bar | Full width (`Z`) |
+| Click `⌫ back to …` in the detail footer | Back through history (`⌫`) |
 | Wheel | Scroll the list, the detail body, a picker, or an in-pane view (the log tail pauses following, as `k` does) |
 | Drag | Select a range of rows (then `y` copies it) |
 | Right-click | Back (`Ctrl-O`); in a popup or an in-pane view (`m`, `t`, `o`, `i`, `W`, `U`, `N`), close it |

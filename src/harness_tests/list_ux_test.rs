@@ -261,3 +261,65 @@ async fn a_same_service_filter_is_still_recorded() {
     app.record_location();
     assert_eq!(app.nav_history[0].query, "@all web", "@all results are a place to come back to");
 }
+
+/// ⌫ goes back from the detail pane too (it used to be list-only, while the
+/// footer hint named it), and the hint is a click target that does the same.
+#[tokio::test]
+async fn back_hint_key_and_click_both_go_back_from_the_detail_pane() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let (mut app, tx, _rx) = test_app().await;
+    ec2_rows(&mut app, &["i-a", "i-b"]);
+    app.record_location(); // leaving A
+    app.selected_index = Some(1);
+    app.details_focused = true;
+
+    press(&mut app, &tx, KeyCode::Backspace).await;
+    assert_eq!(app.nav_cursor, Some(0), "⌫ in the detail pane walks history");
+    assert_eq!(landed_on(&app).as_deref(), Some("i-a"));
+
+    // Again from B, by mouse.
+    app.nav_cursor = None;
+    app.pending_jump = None;
+    app.selected_index = Some(1);
+    app.details_focused = true;
+    let screen = draw(&app);
+    let rect = app
+        .click_regions
+        .borrow()
+        .iter()
+        .find(|r| matches!(r.action, ClickAction::Press(KeyCode::Backspace)))
+        .expect("the back hint is clickable")
+        .rect;
+    let row = screen.lines().nth(rect.y as usize).unwrap();
+    let covered: String = row.chars().skip(rect.x as usize).take(rect.width as usize).collect();
+    assert_eq!(covered, "⌫ back to EC2 i-a", "region sits exactly on the hint");
+
+    let ev = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rect.x + rect.width / 2,
+        row: rect.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_event(Event::Mouse(ev), &tx).await.unwrap();
+    assert_eq!(app.nav_cursor, Some(0));
+    assert_eq!(landed_on(&app).as_deref(), Some("i-a"));
+}
+
+/// The restored row: still pending, or already resolved (the rows are loaded).
+fn landed_on(app: &App) -> Option<String> {
+    app.pending_jump.clone().or_else(|| app.get_selected_resource().map(|r| r.id().to_string()))
+}
+
+/// No history, no hint, no region.
+#[tokio::test]
+async fn no_back_region_without_history() {
+    let (mut app, _tx, _rx) = test_app().await;
+    ec2_rows(&mut app, &["i-a"]);
+    app.details_focused = true;
+    draw(&app);
+    assert!(!app
+        .click_regions
+        .borrow()
+        .iter()
+        .any(|r| matches!(r.action, ClickAction::Press(KeyCode::Backspace))));
+}

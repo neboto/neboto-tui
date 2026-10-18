@@ -330,8 +330,10 @@ pub use workspaces::*;
 pub use xray::*;
 
 pub fn render_details_pane(app: &App, area: Rect, frame: &mut Frame) {
+    app.detail_footer_back.replace(None);
     render_details_pane_inner(app, area, frame);
     render_ownership_ribbon(app, area, frame);
+    record_back_hint_region(app, area);
     // The pane's top border (its title bar) toggles full width, as `Z` does:
     // the mouse route to the one layout key with no visible control.
     if area.height > 0 {
@@ -340,6 +342,38 @@ pub fn render_details_pane(app: &App, area: Rect, frame: &mut Frame) {
             crate::app::ClickAction::Press(crossterm::event::KeyCode::Char('Z')),
         );
     }
+}
+
+/// The footer's `⌫ back to …` hint is a click target (as `⌫`). The footer is
+/// right-aligned inside the bottom border's corners, so the hint's columns
+/// follow from the text `detail_footer` recorded; a footer too wide for the
+/// pane is truncated by the block, so it gets no region rather than a wrong one.
+fn record_back_hint_region(app: &App, area: Rect) {
+    use unicode_width::UnicodeWidthStr;
+    let Some(footer) = app.detail_footer_back.take() else {
+        return;
+    };
+    let Some(hint) = app.nav_back_hint().map(|to| format!("⌫ back to {to}")) else {
+        return;
+    };
+    let Some(at) = footer.find(&hint) else {
+        return;
+    };
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let footer_w = footer.width();
+    if area.height < 2 || footer_w > inner_w {
+        return;
+    }
+    let start = area.x + 1 + (inner_w - footer_w) as u16;
+    app.push_click_region(
+        Rect {
+            x: start + footer[..at].width() as u16,
+            y: area.y + area.height - 1,
+            width: hint.width() as u16,
+            height: 1,
+        },
+        crate::app::ClickAction::Press(crossterm::event::KeyCode::Backspace),
+    );
 }
 
 /// Ownership ribbon: a dim one-liner on the pane's bottom border, left side
@@ -4354,7 +4388,11 @@ fn detail_footer(app: &App, focused: bool, sections: usize, extras: &str) -> Str
         }
         None => parts.push("h back"),
     }
-    format!(" {} ", parts.join(" · "))
+    let footer = format!(" {} ", parts.join(" · "));
+    if back.is_some() {
+        app.detail_footer_back.replace(Some(footer.clone()));
+    }
+    footer
 }
 
 /// One aligned key/value row for the header: `  key_padded  value`.

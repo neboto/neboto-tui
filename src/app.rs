@@ -2377,6 +2377,11 @@ pub struct App {
     /// recomputing the grid's chrome offsets in the mouse handler, which is the
     /// kind of duplicated geometry that silently drifts.
     pub cw_dashboard_regions: RefCell<Vec<(usize, Rect)>>,
+    /// The detail footer drawn this frame when it carries the `⌫ back to …`
+    /// hint (set by `detail_footer`, cleared each frame by
+    /// `render_details_pane`), so the hint's click region is placed from the
+    /// text actually drawn rather than re-deriving ~130 renderers' footers.
+    pub detail_footer_back: RefCell<Option<String>>,
     /// Hit targets of the open `C` / `M` popup. Only one is ever open, so they
     /// share this; each renderer overwrites it every frame it draws.
     pub popup_hits: RefCell<PopupHits>,
@@ -3249,6 +3254,7 @@ impl App {
             cw_dashboard_scroll: 0,
             cw_dashboard_cursor: None,
             cw_dashboard_regions: RefCell::new(Vec::new()),
+            detail_footer_back: RefCell::new(None),
             popup_hits: RefCell::new(PopupHits::default()),
             cw_dashboard_zoomed: false,
             cw_dashboard_range_from_body: true,
@@ -6032,6 +6038,11 @@ impl App {
                 // arm is unreachable here — this block returns first). Plain `o`
                 // stays the S3 object browser above.
                 KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.nav_back(event_tx);
+                }
+                // ⌫ too, as in the list — the footer's `⌫ back to …` hint
+                // names it. (The body search box takes its own ⌫ first.)
+                KeyCode::Backspace if key.modifiers.is_empty() => {
                     self.nav_back(event_tx);
                 }
                 // Tab / Shift-Tab cycle detail sections (resets any selection —

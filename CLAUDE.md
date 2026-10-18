@@ -1047,8 +1047,10 @@ and the approaches you rejected are the part nobody can recover from your code.
   Detail pane — `j`/`k`, `gg`/`G`,
   `[[`/`]]` (group headers), `Tab`/`Shift-Tab` + `1`–`9` (sections),
   `H`/`L` (sub-tabs, as in the list pane),
-  `l`/`→`/`Enter` (follow jump), `h`/`←`/`Esc` (back to list), `Ctrl-O`
-  (nav-back through history, same as the list pane), `y`/`e`,
+  `l`/`→`/`Enter` (follow jump), `h`/`←`/`Esc` (back to list), `⌫`/`Ctrl-O`
+  (nav-back through history, same as the list pane; the footer names the
+  target as a clickable `⌫ back to …` — its region is placed from the text
+  `detail_footer` drew, `App.detail_footer_back`), `y`/`e`,
   `m`/`o`/`i`/`t` (rich views), `W`/`U`/`N` (timeline / referenced-by /
   network-access lenses, also from the list pane), `X` (export detail;
   `Ctrl-X` exports the list),
