@@ -380,7 +380,8 @@
       "Instances",
       "Activities",
       "Tags",
-      "Optimizer"
+      "Optimizer",
+      "Lifecycle"
     ],
     "Backup Plan": [
       "Rules",
@@ -559,7 +560,8 @@
       "Details",
       "App Clients",
       "Policies",
-      "Tags"
+      "Tags",
+      "Groups"
     ],
     "Compliance": [
       "Overview",

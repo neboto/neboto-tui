@@ -15937,6 +15937,28 @@ impl App {
         }
     }
 
+    /// Lazy Groups section on a user pool: `ListGroups` + `ListUsersInGroup`.
+    pub(crate) fn trigger_cognito_groups_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(pool_id) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::cognito::CognitoUserPool>()
+                .map(|p| p.id.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.cognito_idp_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.cognito_groups,
+            pool_id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::cognito::fetch_cognito_groups(client, pool_id)
+                    .await
+                    .map_err(|e| format!("Groups unavailable: {}", e))
+            },
+        );
+    }
+
     fn is_selected_ecr_repo(&self) -> bool {
         self.get_selected_resource()
             .map(|r| r.as_any().downcast_ref::<crate::aws::services::ecr::EcrRepository>().is_some())
@@ -27504,6 +27526,7 @@ impl App {
                     pool,
                     crate::aws::services::cognito::CognitoUserPoolDetailSection::from_index(self.detail_section_idx),
                     self.lazy.cognito_clients.get(&pool.id),
+                    self.lazy.cognito_groups.get(&pool.id),
                 );
             }
             if let Some(img) = resource
@@ -28230,6 +28253,7 @@ impl App {
                     activities_state,
                     self.selected_optimizer_state(),
                     self.co_enrollment.as_ref(),
+                    self.lazy.asg_lifecycle.get(&group.name),
                 );
             }
             if let Some(cluster) = resource
@@ -32749,6 +32773,28 @@ impl App {
                 },
             );
         }
+    }
+
+    /// Lazy lifecycle hooks + warm pool for the selected group's Lifecycle section.
+    pub(crate) fn trigger_asg_lifecycle_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(group_name) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::asg::AsgGroup>()
+                .map(|g| g.name.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.asg_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.asg_lifecycle,
+            group_name.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::asg::fetch_asg_lifecycle(client, group_name)
+                    .await
+                    .map_err(|e| format!("Lifecycle unavailable: {}", e))
+            },
+        );
     }
 
     fn trigger_rds_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {

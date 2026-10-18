@@ -1009,6 +1009,18 @@ the service you're touching.
 - **Transfer Family** (`@transfer`) — N+1 streaming load (`DescribeServer` per
   server); Users lazy. `m` metrics (`AWS/Transfer`, dim `ServerId`):
   bytes/files in+out and on-upload workflow success/failure.
+- **Cognito user-pool Groups** (#106) — a lazy section on the **pool**
+  pane, inverted from the group side: `ListGroups` (capped
+  `MAX_COGNITO_GROUPS=50`) + one `ListUsersInGroup` page per group
+  (`MAX_COGNITO_GROUP_MEMBERS=60`, the API's page max; `buffered(4)`).
+  Both caps say so in the section when hit. It lives on the pool rather than
+  the user because the per-user route, `AdminListGroupsForUser`, is one call
+  per user and an `Admin*` action — **never** call it. A single group's
+  member call failing renders `⚠` on that group's Members row only. Member
+  rows show the email (or phone) when the username is the user's `sub` — an
+  email/phone sign-in pool's usernames are UUIDs (`member_label`). Groups
+  sort by precedence (lower wins when a user's groups carry IAM roles); the
+  role ARN row jumps via the IAM classifier.
 - **AppSync** (`@appsync`, `appsync.rs`, **aws-sdk-appsync**) — single list of
   **GraphQL APIs** (standard + merged); Event APIs (`ListApis`, channel
   namespaces) are not listed yet. `ListGraphqlApis` returns the full config, so
@@ -2060,6 +2072,14 @@ the service you're touching.
   A key the LB type doesn't have (ALBs carry no
   `load_balancing.cross_zone.enabled`; it's always on) just omits its row —
   don't synthesize a default, the value would be a guess.
+- **Auto Scaling Lifecycle section** (#106) — lazy, keyed by group name:
+  `DescribeLifecycleHooks` (unpaginated — 50 hooks per group max) and
+  `DescribeWarmPool` run concurrently and are kept as **separate `Result`s**
+  in `AsgLifecycle`, so a denied warm-pool call doesn't hide the hooks. A
+  group without a warm pool is a *successful* `DescribeWarmPool` with no
+  `WarmPoolConfiguration` — that's `Ok(None)`, "No warm pool", not an error.
+  An unset `MaxGroupPreparedCapacity` means "the group's max size", which is
+  how it's rendered. Warm instances use the Instances section's table shape.
 - **EC2 instance Load Balancing section** (key 4,
   `elb::fetch_instance_lb_membership`) — "is this instance behind a load
   balancer?". **There is no reverse API** (nothing answers "which target

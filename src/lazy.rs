@@ -753,6 +753,8 @@ pub struct LazyStore {
     pub ecr_image_findings: LazyMap<crate::aws::services::ecr::EcrScanFindings>,
     /// A user pool's app clients, keyed by pool id.
     pub cognito_clients: LazyMap<Vec<crate::aws::services::cognito::CognitoAppClient>>,
+    /// A user pool's groups and their members, keyed by pool id.
+    pub cognito_groups: LazyMap<crate::aws::services::cognito::CognitoGroups>,
     /// A backup plan's rules + selections, keyed by plan id.
     pub backup_plan_details: LazyMap<crate::aws::services::backup::BackupPlanDetails>,
     /// A vault's recovery points, keyed by vault name.
@@ -832,6 +834,8 @@ pub struct LazyStore {
     pub lb_web_acl: LazyMap<crate::aws::services::elb::LbWebAcl>,
     /// An Auto Scaling group's scaling activities, keyed by group name.
     pub asg_activities: LazyMap<Vec<crate::aws::services::asg::ScalingActivity>>,
+    /// An Auto Scaling group's lifecycle hooks + warm pool, keyed by group name.
+    pub asg_lifecycle: LazyMap<crate::aws::services::asg::AsgLifecycle>,
 }
 
 impl LazyStore {

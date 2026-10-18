@@ -220,6 +220,7 @@ crate::sections! {
         Activities "Activities" => crate::app::App::trigger_asg_activities_load,
         Tags "Tags",
         Optimizer "Optimizer" => crate::app::App::trigger_optimizer_load,
+        Lifecycle "Lifecycle" => crate::app::App::trigger_asg_lifecycle_load,
     ]
 }
 
@@ -376,6 +377,136 @@ pub struct ScalingActivity {
     pub cause: String,
     pub progress: Option<i32>,
     pub status_message: Option<String>,
+}
+
+/// One lifecycle hook: the pause AWS inserts on launch or terminate.
+#[derive(Debug, Clone)]
+pub struct AsgLifecycleHook {
+    pub name: String,
+    pub transition: String,
+    pub heartbeat_timeout: Option<i32>,
+    pub global_timeout: Option<i32>,
+    pub default_result: Option<String>,
+    pub notification_target: Option<String>,
+    pub role_arn: Option<String>,
+    pub metadata: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AsgWarmInstance {
+    pub instance_id: String,
+    pub lifecycle_state: String,
+    pub az: Option<String>,
+    pub instance_type: Option<String>,
+    pub health: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AsgWarmPool {
+    pub pool_state: String,
+    pub status: Option<String>,
+    pub min_size: Option<i32>,
+    pub max_prepared_capacity: Option<i32>,
+    pub reuse_on_scale_in: Option<bool>,
+    pub instances: Vec<AsgWarmInstance>,
+}
+
+/// The Lifecycle section: hooks and warm pool, fetched independently so a
+/// denial of one still shows the other.
+#[derive(Debug, Clone)]
+pub struct AsgLifecycle {
+    pub hooks: std::result::Result<Vec<AsgLifecycleHook>, String>,
+    /// `Ok(None)` = the group has no warm pool.
+    pub warm_pool: std::result::Result<Option<AsgWarmPool>, String>,
+}
+
+pub async fn fetch_asg_lifecycle(client: AsgClient, group_name: String) -> Result<AsgLifecycle> {
+    let (hooks, warm_pool) = tokio::join!(
+        fetch_lifecycle_hooks(&client, &group_name),
+        fetch_warm_pool(&client, &group_name)
+    );
+    Ok(AsgLifecycle { hooks, warm_pool })
+}
+
+async fn fetch_lifecycle_hooks(
+    client: &AsgClient,
+    group_name: &str,
+) -> std::result::Result<Vec<AsgLifecycleHook>, String> {
+    // Unpaginated: a group holds at most 50 hooks.
+    let resp = client
+        .describe_lifecycle_hooks()
+        .auto_scaling_group_name(group_name)
+        .send()
+        .await
+        .map_err(|e| crate::error::sdk_error_message(&e))?;
+    let mut hooks: Vec<AsgLifecycleHook> = resp
+        .lifecycle_hooks()
+        .iter()
+        .map(|h| AsgLifecycleHook {
+            name: h.lifecycle_hook_name().unwrap_or_default().to_string(),
+            transition: h.lifecycle_transition().unwrap_or_default().to_string(),
+            heartbeat_timeout: h.heartbeat_timeout(),
+            global_timeout: h.global_timeout(),
+            default_result: h.default_result().map(str::to_string),
+            notification_target: h
+                .notification_target_arn()
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            role_arn: h.role_arn().filter(|s| !s.is_empty()).map(str::to_string),
+            metadata: h.notification_metadata().filter(|s| !s.is_empty()).map(str::to_string),
+        })
+        .collect();
+    // Launching before Terminating, then by name.
+    hooks.sort_by(|a, b| a.transition.cmp(&b.transition).then_with(|| a.name.cmp(&b.name)));
+    Ok(hooks)
+}
+
+async fn fetch_warm_pool(
+    client: &AsgClient,
+    group_name: &str,
+) -> std::result::Result<Option<AsgWarmPool>, String> {
+    let mut pool: Option<AsgWarmPool> = None;
+    let mut instances = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let resp = client
+            .describe_warm_pool()
+            .auto_scaling_group_name(group_name)
+            .set_next_token(token.clone())
+            .send()
+            .await
+            .map_err(|e| crate::error::sdk_error_message(&e))?;
+        if pool.is_none() {
+            // No configuration = no warm pool (the call still succeeds).
+            pool = resp.warm_pool_configuration().map(|c| AsgWarmPool {
+                pool_state: c.pool_state().map(|s| s.as_str().to_string()).unwrap_or_default(),
+                status: c.status().map(|s| s.as_str().to_string()),
+                min_size: c.min_size(),
+                // -1 is PutWarmPool's "reset to default"; read it as unset too.
+                max_prepared_capacity: c.max_group_prepared_capacity().filter(|n| *n >= 0),
+                reuse_on_scale_in: c.instance_reuse_policy().and_then(|p| p.reuse_on_scale_in()),
+                instances: Vec::new(),
+            });
+        }
+        instances.extend(resp.instances().iter().map(|i| AsgWarmInstance {
+            instance_id: i.instance_id().unwrap_or_default().to_string(),
+            lifecycle_state: i
+                .lifecycle_state()
+                .map(|s| s.as_str().to_string())
+                .unwrap_or_default(),
+            az: i.availability_zone().map(str::to_string),
+            instance_type: i.instance_type().map(str::to_string),
+            health: i.health_status().map(str::to_string),
+        }));
+        token = crate::aws::pagination::next_page_token(resp.next_token(), &token);
+        if token.is_none() {
+            break;
+        }
+    }
+    Ok(pool.map(|mut p| {
+        p.instances = instances;
+        p
+    }))
 }
 
 pub async fn fetch_scaling_activities(
