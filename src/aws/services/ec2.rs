@@ -70,6 +70,42 @@ pub async fn fetch_instance_user_data(
     Ok(raw.map(decode_user_data))
 }
 
+/// Burstable (T-family: t2, t3, t3a, t4g…) — the only types with a CPU credit
+/// specification. `t1.micro` predates CPU credits and has none; `trn1` is
+/// Trainium, not T.
+pub fn is_burstable(instance_type: &str) -> bool {
+    let mut chars = instance_type.chars();
+    chars.next() == Some('t')
+        && chars.next().is_some_and(|c| c.is_ascii_digit() && c != '1')
+}
+
+/// Whether the Details section shows (and fetches) a CPU Credits row: a
+/// burstable instance that still exists — a terminated one has nothing to
+/// describe.
+pub fn shows_cpu_credits(instance: &Ec2Instance) -> bool {
+    is_burstable(&instance.instance_type) && instance.state != "terminated"
+}
+
+/// `standard` or `unlimited` for a burstable instance. The credit *balance*
+/// is the CloudWatch `CPUCreditBalance` metric, not part of this call.
+pub async fn fetch_instance_credit_spec(
+    client: aws_sdk_ec2::Client,
+    instance_id: String,
+) -> Result<String> {
+    let resp = client
+        .describe_instance_credit_specifications()
+        .instance_ids(&instance_id)
+        .send()
+        .await
+        .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+    Ok(resp
+        .instance_credit_specifications()
+        .first()
+        .and_then(|c| c.cpu_credits())
+        .unwrap_or("unknown")
+        .to_string())
+}
+
 /// Ceiling on gunzipped user data. AWS caps user data at 16 KB *encoded*, but
 /// gzip can expand that a thousandfold, and the result goes into the pane.
 const USER_DATA_MAX_BYTES: u64 = 1024 * 1024;
@@ -350,6 +386,7 @@ impl AwsService for Ec2Service {
 
         // Snapshots (self-owned only).
         {
+            let mut fast_restore = fetch_fast_restore_map(&self.client).await.ok();
             let mut token: Option<String> = None;
             loop {
                 let resp = self
@@ -362,7 +399,10 @@ impl AwsService for Ec2Service {
                 match resp {
                     Ok(resp) => {
                         for s in resp.snapshots() {
-                            resources.push(Box::new(EbsSnapshot::from_sdk(s)) as Box<dyn Resource>);
+                            let mut snap = EbsSnapshot::from_sdk(s);
+                            snap.fast_restore =
+                                fast_restore.as_mut().map(|m| m.remove(&snap.snapshot_id).unwrap_or_default());
+                            resources.push(Box::new(snap) as Box<dyn Resource>);
                         }
                         token = crate::aws::pagination::next_page_token(resp.next_token(), &token);
                         if token.is_none() {
@@ -456,7 +496,61 @@ impl AwsService for Ec2Service {
             }
         }
 
-        // Phase 2: Security Groups (paginated — a bare `.send()` caps at
+        // Phase 2: Network Interfaces (paginated — ENIs are the resource
+        // most likely to exceed one 1000-item page: every Lambda-in-VPC /
+        // ELB node / EKS pod mints them, and a bare `.send()` truncated).
+        // Runs ahead of security groups so the same scan collects which
+        // groups are attached: the SG phase marks the rest `unused`.
+        let mut attached: Option<std::collections::HashSet<String>> =
+            Some(std::collections::HashSet::new());
+        {
+            let mut pages = self
+                .client
+                .describe_network_interfaces()
+                .into_paginator()
+                .send();
+            while let Some(page) = pages.next().await {
+                match page {
+                    Ok(resp) => {
+                        let mut batch: Vec<Box<dyn Resource>> = Vec::new();
+                        for eni in resp.network_interfaces() {
+                            if let Some(ids) = attached.as_mut() {
+                                add_eni_group_ids(ids, eni);
+                            }
+                            batch.push(Box::new(NetworkInterface::from_sdk(eni)));
+                            total_loaded += 1;
+                        }
+                        if !batch.is_empty() {
+                            let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                                service: service_type,
+                                resources: batch,
+                                progress: LoadProgress {
+                                    loaded_count: total_loaded,
+                                    total_count: None,
+                                    status_message: Some(
+                                        "Loading network interfaces…".to_string(),
+                                    ),
+                                },
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        // A partial set would mark attached groups unused.
+                        attached = None;
+                        let _ = event_tx.send(Event::ResourceLoadWarning {
+                            service: service_type,
+                            warning: format!(
+                                "Network interfaces: {}",
+                                crate::error::sdk_error_message(&e)
+                            ),
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Phase 3: Security Groups (paginated — a bare `.send()` caps at
         // 1000 and >1000 SGs is common in older accounts)
         {
             let mut pages = self
@@ -469,7 +563,11 @@ impl AwsService for Ec2Service {
                     Ok(resp) => {
                         let mut batch: Vec<Box<dyn Resource>> = Vec::new();
                         for sg in resp.security_groups() {
-                            batch.push(Box::new(SecurityGroup::from_sdk(sg)));
+                            let mut group = SecurityGroup::from_sdk(sg);
+                            if let Some(ids) = &attached {
+                                group.unused = sg_is_unused(&group.group_name, &group.group_id, ids);
+                            }
+                            batch.push(Box::new(group));
                             total_loaded += 1;
                         }
                         if !batch.is_empty() {
@@ -500,7 +598,7 @@ impl AwsService for Ec2Service {
             }
         }
 
-        // Phase 3: EBS Volumes (paginated — one page caps at 1000 volumes)
+        // Phase 4: EBS Volumes (paginated — one page caps at 1000 volumes)
         {
             let mut pages = self.client.describe_volumes().into_paginator().send();
             while let Some(page) = pages.next().await {
@@ -528,51 +626,6 @@ impl AwsService for Ec2Service {
                             service: service_type,
                             warning: format!(
                                 "EBS volumes: {}",
-                                crate::error::sdk_error_message(&e)
-                            ),
-                        });
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Phase 4: Network Interfaces (paginated — ENIs are the resource
-        // most likely to exceed one 1000-item page: every Lambda-in-VPC /
-        // ELB node / EKS pod mints them, and a bare `.send()` truncated).
-        {
-            let mut pages = self
-                .client
-                .describe_network_interfaces()
-                .into_paginator()
-                .send();
-            while let Some(page) = pages.next().await {
-                match page {
-                    Ok(resp) => {
-                        let mut batch: Vec<Box<dyn Resource>> = Vec::new();
-                        for eni in resp.network_interfaces() {
-                            batch.push(Box::new(NetworkInterface::from_sdk(eni)));
-                            total_loaded += 1;
-                        }
-                        if !batch.is_empty() {
-                            let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
-                                service: service_type,
-                                resources: batch,
-                                progress: LoadProgress {
-                                    loaded_count: total_loaded,
-                                    total_count: None,
-                                    status_message: Some(
-                                        "Loading network interfaces…".to_string(),
-                                    ),
-                                },
-                            });
-                        }
-                    }
-                    Err(e) => {
-                        let _ = event_tx.send(Event::ResourceLoadWarning {
-                            service: service_type,
-                            warning: format!(
-                                "Network interfaces: {}",
                                 crate::error::sdk_error_message(&e)
                             ),
                         });
@@ -627,8 +680,19 @@ impl AwsService for Ec2Service {
             }
         }
 
-        // Phase 6: Snapshots (self-owned only).
+        // Phase 6: Snapshots (self-owned only), with fast snapshot restore
+        // state joined in — one account-wide call ahead of the snapshot pages.
         {
+            let mut fast_restore = match fetch_fast_restore_map(&self.client).await {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    let _ = event_tx.send(Event::ResourceLoadWarning {
+                        service: service_type,
+                        warning: format!("Fast snapshot restore: {e}"),
+                    });
+                    None
+                }
+            };
             let mut token: Option<String> = None;
             loop {
                 match self
@@ -642,7 +706,10 @@ impl AwsService for Ec2Service {
                     Ok(resp) => {
                         let mut batch: Vec<Box<dyn Resource>> = Vec::new();
                         for s in resp.snapshots() {
-                            batch.push(Box::new(EbsSnapshot::from_sdk(s)));
+                            let mut snap = EbsSnapshot::from_sdk(s);
+                            snap.fast_restore =
+                                fast_restore.as_mut().map(|m| m.remove(&snap.snapshot_id).unwrap_or_default());
+                            batch.push(Box::new(snap));
                             total_loaded += 1;
                         }
                         if !batch.is_empty() {
@@ -1029,7 +1096,7 @@ impl Ec2Instance {
 crate::sections! {
     pub enum Ec2InstanceDetailSection,
     pub static EC2_INSTANCE_SECTIONS = [
-        Details "Details",
+        Details "Details" => crate::app::App::trigger_ec2_credit_spec_load,
         Security "Security" => crate::app::App::trigger_ec2_instance_profile_roles_load,
         Networking "Networking",
         LoadBalancing "Load Balancing" => crate::app::App::trigger_ec2_instance_lb_load,
@@ -1288,20 +1355,62 @@ impl SgRule {
 /// Outbound-to-anywhere is the AWS default and deliberately not flagged.
 pub const SG_OPEN_TO_WORLD: &str = "open to world";
 
-pub fn sg_exposure_state(inbound: &[SgRule]) -> ResourceState {
+/// List-level state of a group with no network interface (see
+/// `fetch_attached_group_ids`). Not "safe to delete" — the Used By section
+/// says why.
+pub const SG_UNUSED: &str = "unused";
+
+/// Open-to-world wins over unused: the rule is the risk the moment anything
+/// attaches the group, so it stays the red row.
+pub fn sg_exposure_state(inbound: &[SgRule], unused: bool) -> ResourceState {
     if inbound.iter().any(SgRule::is_world) {
         ResourceState::Unavailable
+    } else if unused {
+        ResourceState::Idle
     } else {
         ResourceState::stateless()
     }
 }
 
-pub fn sg_exposure_label(inbound: &[SgRule]) -> String {
+pub fn sg_exposure_label(inbound: &[SgRule], unused: bool) -> String {
     if inbound.iter().any(SgRule::is_world) {
         SG_OPEN_TO_WORLD.to_string()
+    } else if unused {
+        SG_UNUSED.to_string()
     } else {
         String::new()
     }
+}
+
+/// Every security group id attached to a network interface in the region —
+/// one paginated `DescribeNetworkInterfaces`. A group missing from the set
+/// has no ENI. All-or-nothing: a failed page returns the error, since a
+/// partial set would mark attached groups unused.
+pub async fn fetch_attached_group_ids(
+    client: &aws_sdk_ec2::Client,
+) -> std::result::Result<std::collections::HashSet<String>, String> {
+    let mut ids = std::collections::HashSet::new();
+    let mut pages = client.describe_network_interfaces().into_paginator().send();
+    while let Some(page) = pages.next().await {
+        let page = page.map_err(|e| crate::error::sdk_error_message(&e))?;
+        for eni in page.network_interfaces() {
+            add_eni_group_ids(&mut ids, eni);
+        }
+    }
+    Ok(ids)
+}
+
+pub(crate) fn add_eni_group_ids(
+    ids: &mut std::collections::HashSet<String>,
+    eni: &aws_sdk_ec2::types::NetworkInterface,
+) {
+    ids.extend(eni.groups().iter().filter_map(|g| g.group_id()).map(str::to_string));
+}
+
+/// Unused = attached to no network interface. The VPC's `default` group is
+/// never flagged: it can't be deleted, so the label would be noise.
+pub fn sg_is_unused(group_name: &str, group_id: &str, attached: &std::collections::HashSet<String>) -> bool {
+    group_name != "default" && !attached.contains(group_id)
 }
 
 /// Flatten a list of `IpPermission`s into individual rules, preserving CIDRs,
@@ -1479,6 +1588,9 @@ pub struct SecurityGroup {
     /// The owning account — differs from the session's for a group shared
     /// into this VPC (RAM) or referenced across a peering.
     pub owner_id: Option<String>,
+    /// No network interface carries it — set by the list load
+    /// (`sg_is_unused`); false when the ENI scan didn't complete.
+    pub unused: bool,
 }
 
 impl SecurityGroup {
@@ -1505,6 +1617,7 @@ impl SecurityGroup {
             inbound_rules: parse_sg_rules(sg.ip_permissions()),
             outbound_rules: parse_sg_rules(sg.ip_permissions_egress()),
             tags,
+            unused: false,
         }
     }
 }
@@ -1550,11 +1663,11 @@ impl Resource for SecurityGroup {
     }
 
     fn state(&self) -> ResourceState {
-        sg_exposure_state(&self.inbound_rules)
+        sg_exposure_state(&self.inbound_rules, self.unused)
     }
 
     fn state_label(&self) -> String {
-        sg_exposure_label(&self.inbound_rules)
+        sg_exposure_label(&self.inbound_rules, self.unused)
     }
 
     fn tags(&self) -> &HashMap<String, String> {
@@ -1572,6 +1685,9 @@ impl Resource for SecurityGroup {
         }
         if self.inbound_rules.iter().any(SgRule::is_world) {
             parts.push(SG_OPEN_TO_WORLD.to_string());
+        }
+        if self.unused {
+            parts.push(SG_UNUSED.to_string());
         }
         for (k, v) in &self.tags {
             parts.push(format!("{}:{}", k, v));
@@ -2526,7 +2642,48 @@ pub struct EbsSnapshot {
     pub storage_tier: Option<String>,
     pub state_message: Option<String>,
     pub restore_expiry: Option<String>,
+    /// Fast snapshot restore, `(AZ, state)` per AZ it's enabled (or
+    /// enabling/optimizing/disabling) in — billed per AZ-hour. Filled from one
+    /// `DescribeFastSnapshotRestores` per Snapshots load. `None` = not known:
+    /// the call failed (or this snapshot wasn't joined), which must not read
+    /// as "off" — it's a cost flag.
+    pub fast_restore: Option<Vec<(String, String)>>,
     pub tags: HashMap<String, String>,
+}
+
+/// Fast snapshot restore state per snapshot, `snapshot id → [(AZ, state)]`.
+/// One paginated call for the whole account; `disabled` entries (kept for a
+/// while after disabling) are dropped since they no longer bill.
+pub async fn fetch_fast_restore_map(
+    client: &aws_sdk_ec2::Client,
+) -> std::result::Result<HashMap<String, Vec<(String, String)>>, String> {
+    let mut map: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut token: Option<String> = None;
+    loop {
+        let resp = client
+            .describe_fast_snapshot_restores()
+            .set_next_token(token.clone())
+            .send()
+            .await
+            .map_err(|e| crate::error::sdk_error_message(&e))?;
+        for item in resp.fast_snapshot_restores() {
+            let state = item.state().map(|s| s.as_str().to_string()).unwrap_or_default();
+            if state == "disabled" {
+                continue;
+            }
+            if let (Some(id), Some(az)) = (item.snapshot_id(), item.availability_zone()) {
+                map.entry(id.to_string()).or_default().push((az.to_string(), state));
+            }
+        }
+        token = crate::aws::pagination::next_page_token(resp.next_token(), &token);
+        if token.is_none() {
+            break;
+        }
+    }
+    for azs in map.values_mut() {
+        azs.sort();
+    }
+    Ok(map)
 }
 
 impl EbsSnapshot {
@@ -2560,6 +2717,7 @@ impl EbsSnapshot {
                 .filter(|m| !m.is_empty())
                 .map(|m| m.to_string()),
             restore_expiry: s.restore_expiry_time().map(|t| t.to_string()),
+            fast_restore: None,
             tags,
         }
     }
@@ -3505,6 +3663,30 @@ mod sg_exposure_tests {
         ));
         assert_eq!(vpc_open.state_label(), SG_OPEN_TO_WORLD);
     }
+
+    #[test]
+    fn a_group_on_no_interface_is_unused_except_the_default() {
+        let attached: std::collections::HashSet<String> = ["sg-attached".to_string()].into();
+        assert!(sg_is_unused("web", "sg-1", &attached));
+        assert!(!sg_is_unused("web", "sg-attached", &attached));
+        // The VPC default group can't be deleted; flagging it is noise.
+        assert!(!sg_is_unused("default", "sg-1", &attached));
+
+        let mut idle = SecurityGroup::from_sdk(&sg(vec![perm(22, &["10.0.0.0/8"], &[])], vec![]));
+        idle.unused = true;
+        assert_eq!(idle.state(), ResourceState::Idle);
+        assert_eq!(idle.state_label(), SG_UNUSED);
+        assert!(idle.search_text().contains(SG_UNUSED));
+
+        // Open to the world stays the headline even with nothing attached.
+        let mut open = SecurityGroup::from_sdk(&sg(vec![perm(22, &["0.0.0.0/0"], &[])], vec![]));
+        open.unused = true;
+        assert_eq!(open.state_label(), SG_OPEN_TO_WORLD);
+
+        let mut vpc = crate::aws::services::vpc::VpcSecurityGroup::from_sdk(&sg(vec![], vec![]));
+        vpc.unused = true;
+        assert_eq!(vpc.state_label(), SG_UNUSED);
+    }
 }
 
 #[cfg(test)]
@@ -3555,5 +3737,21 @@ mod prefix_list_rule_tests {
         assert_eq!(target.id, "pl-small");
         // The unexpanded form (flat details) is unchanged.
         assert_eq!(sg_rule_rows("Inbound", &[rule("pl-small")]).len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod burstable_tests {
+    use super::is_burstable;
+
+    #[test]
+    fn only_t_families_with_cpu_credits_are_burstable() {
+        for t in ["t2.micro", "t3.large", "t3a.medium", "t4g.nano"] {
+            assert!(is_burstable(t), "{t}");
+        }
+        // t1 predates CPU credits; trn is Trainium.
+        for t in ["t1.micro", "trn1.2xlarge", "r5.xlarge", "m7g.large", ""] {
+            assert!(!is_burstable(t), "{t}");
+        }
     }
 }

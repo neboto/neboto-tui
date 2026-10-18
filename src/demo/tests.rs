@@ -399,3 +399,19 @@ async fn appsync_fixtures_deserialize_and_keys_are_masked() {
     let schema = crate::aws::services::appsync::fetch_schema(c, id).await.expect("GetIntrospectionSchema");
     assert!(schema.contains("type Mutation"));
 }
+
+#[tokio::test]
+async fn s3control_routes_past_the_account_id_host_label() {
+    // `<account>.s3-control.<region>.amazonaws.com` — the account id label
+    // must not be taken for the service, or this falls through to an empty
+    // reply that the restXml root-element check rejects.
+    let client = aws_sdk_s3control::Client::new(&demo_config().await);
+    let aps = crate::aws::services::s3::fetch_bucket_access_points(
+        client,
+        "123456789012".to_string(),
+        "any-bucket".to_string(),
+    )
+    .await
+    .expect("ListAccessPoints");
+    assert!(aps.is_empty());
+}

@@ -47,6 +47,20 @@ impl AwsService for RdsService {
     ) -> Result<()> {
         let mut total = 0usize;
 
+        // Blue/green deployments, joined onto their source and target
+        // instances/clusters below. One account-wide call; a failure warns and
+        // the rows just carry no deployment.
+        let mut blue_green = match fetch_blue_green_map(&self.client).await {
+            Ok(m) => m,
+            Err(e) => {
+                let _ = event_tx.send(Event::ResourceLoadWarning {
+                    service: service_type,
+                    warning: format!("Blue/green deployments: {e}"),
+                });
+                HashMap::new()
+            }
+        };
+
         let mut inst_paginator = self.client.describe_db_instances().into_paginator().send();
         while let Some(result) = inst_paginator.next().await {
             match result {
@@ -54,7 +68,11 @@ impl AwsService for RdsService {
                     let batch: Vec<Box<dyn Resource>> = page
                         .db_instances()
                         .iter()
-                        .map(|db| Box::new(RdsInstance::from_sdk(db)) as Box<dyn Resource>)
+                        .map(|db| {
+                            let mut inst = RdsInstance::from_sdk(db);
+                            inst.blue_green = blue_green.remove(&inst.arn);
+                            Box::new(inst) as Box<dyn Resource>
+                        })
                         .collect();
                     let count = batch.len();
                     if count == 0 {
@@ -88,7 +106,11 @@ impl AwsService for RdsService {
                     let batch: Vec<Box<dyn Resource>> = page
                         .db_clusters()
                         .iter()
-                        .map(|c| Box::new(RdsCluster::from_sdk(c)) as Box<dyn Resource>)
+                        .map(|c| {
+                            let mut cluster = RdsCluster::from_sdk(c);
+                            cluster.blue_green = blue_green.remove(&cluster.arn);
+                            Box::new(cluster) as Box<dyn Resource>
+                        })
                         .collect();
                     let count = batch.len();
                     if count == 0 {
@@ -381,6 +403,8 @@ fn fmt_dt(t: &aws_sdk_rds::primitives::DateTime) -> String {
 
 #[derive(Debug, Clone)]
 pub struct RdsInstance {
+    /// Set by the list load when a blue/green deployment names this ARN.
+    pub blue_green: Option<RdsBlueGreen>,
     pub db_identifier: String,
     pub arn: String,
     pub db_instance_class: String,
@@ -572,6 +596,76 @@ fn cluster_pending_rows(
     rows
 }
 
+/// The blue/green deployment an instance or cluster takes part in, seen from
+/// its side: blue (the source, production) or green (the staging copy).
+#[derive(Debug, Clone)]
+pub struct RdsBlueGreen {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub status_details: Option<String>,
+    /// True on the blue (source) side.
+    pub is_source: bool,
+    /// The other side's ARN — jumpable.
+    pub counterpart: Option<String>,
+    pub created: Option<String>,
+}
+
+impl RdsBlueGreen {
+    /// Still in flight (or waiting to switch over). The finished and failed
+    /// states stay listed until someone deletes the deployment.
+    pub fn is_active(&self) -> bool {
+        matches!(self.status.as_str(), "PROVISIONING" | "AVAILABLE" | "SWITCHOVER_IN_PROGRESS")
+    }
+
+    /// Source/target describe the databases *before* switchover (the SDK's
+    /// own wording); a switchover renames both sides, so after it "blue is
+    /// production" no longer holds and the labels have to say so.
+    pub fn is_switched_over(&self) -> bool {
+        self.status == "SWITCHOVER_COMPLETED"
+    }
+}
+
+/// Keep one deployment per ARN, preferring an active one: an old completed
+/// deployment and a new one can both name the same database, and the page
+/// order decides nothing.
+fn insert_blue_green(map: &mut HashMap<String, RdsBlueGreen>, arn: &str, side: RdsBlueGreen) {
+    if map.get(arn).is_some_and(|existing| existing.is_active() && !side.is_active()) {
+        return;
+    }
+    map.insert(arn.to_string(), side);
+}
+
+/// `DescribeBlueGreenDeployments` keyed by both the source and the target
+/// ARN, so either side's row finds it.
+pub async fn fetch_blue_green_map(
+    client: &aws_sdk_rds::Client,
+) -> std::result::Result<HashMap<String, RdsBlueGreen>, String> {
+    let mut map = HashMap::new();
+    let mut pages = client.describe_blue_green_deployments().into_paginator().send();
+    while let Some(page) = pages.next().await {
+        let page = page.map_err(|e| crate::error::sdk_error_message(&e))?;
+        for d in page.blue_green_deployments() {
+            let side = |is_source: bool, counterpart: Option<&str>| RdsBlueGreen {
+                id: d.blue_green_deployment_identifier().unwrap_or_default().to_string(),
+                name: d.blue_green_deployment_name().unwrap_or_default().to_string(),
+                status: d.status().unwrap_or_default().to_string(),
+                status_details: d.status_details().filter(|s| !s.is_empty()).map(str::to_string),
+                is_source,
+                counterpart: counterpart.map(str::to_string),
+                created: d.create_time().map(|t| t.to_string()),
+            };
+            if let Some(src) = d.source() {
+                insert_blue_green(&mut map, src, side(true, d.target()));
+            }
+            if let Some(tgt) = d.target() {
+                insert_blue_green(&mut map, tgt, side(false, d.source()));
+            }
+        }
+    }
+    Ok(map)
+}
+
 impl RdsInstance {
     pub fn from_sdk(db: &aws_sdk_rds::types::DbInstance) -> Self {
         let tags: HashMap<String, String> = db
@@ -587,6 +681,7 @@ impl RdsInstance {
             .collect();
 
         Self {
+            blue_green: None,
             db_identifier: db.db_instance_identifier().unwrap_or("").to_string(),
             arn: db.db_instance_arn().unwrap_or("").to_string(),
             db_instance_class: db.db_instance_class().unwrap_or("").to_string(),
@@ -830,6 +925,8 @@ impl Resource for RdsInstance {
 
 #[derive(Debug, Clone)]
 pub struct RdsCluster {
+    /// Set by the list load when a blue/green deployment names this ARN.
+    pub blue_green: Option<RdsBlueGreen>,
     pub cluster_identifier: String,
     pub arn: String,
     pub engine: String,
@@ -903,6 +1000,7 @@ impl RdsCluster {
             c.availability_zones().iter().map(|az| az.to_string()).collect();
 
         Self {
+            blue_green: None,
             cluster_identifier: c.db_cluster_identifier().unwrap_or("").to_string(),
             arn: c.db_cluster_arn().unwrap_or("").to_string(),
             engine: c.engine().unwrap_or("").to_string(),
@@ -2568,5 +2666,43 @@ mod tests {
 
         // Nothing enabled → None (caller shows a friendly message).
         assert_eq!(pick_log_export(&[]), None);
+    }
+}
+
+#[cfg(test)]
+mod blue_green_tests {
+    use super::*;
+
+    fn bg(id: &str, status: &str) -> RdsBlueGreen {
+        RdsBlueGreen {
+            id: id.into(),
+            name: id.into(),
+            status: status.into(),
+            status_details: None,
+            is_source: true,
+            counterpart: None,
+            created: None,
+        }
+    }
+
+    #[test]
+    fn an_active_deployment_wins_over_a_finished_one_whatever_the_order() {
+        let arn = "arn:aws:rds:us-east-1:123456789012:db:orders";
+        for order in [["old", "new"], ["new", "old"]] {
+            let mut map = HashMap::new();
+            for id in order {
+                let status = if id == "old" { "SWITCHOVER_COMPLETED" } else { "AVAILABLE" };
+                insert_blue_green(&mut map, arn, bg(id, status));
+            }
+            assert_eq!(map[arn].id, "new", "{order:?}");
+        }
+    }
+
+    #[test]
+    fn statuses_classify() {
+        assert!(bg("a", "SWITCHOVER_IN_PROGRESS").is_active());
+        assert!(!bg("a", "SWITCHOVER_FAILED").is_active());
+        assert!(bg("a", "SWITCHOVER_COMPLETED").is_switched_over());
+        assert!(!bg("a", "AVAILABLE").is_switched_over());
     }
 }

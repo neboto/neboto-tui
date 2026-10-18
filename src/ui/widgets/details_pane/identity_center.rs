@@ -703,12 +703,84 @@ pub fn ic_instance_section_lines(
     }
 }
 
+/// The Application pane's Auth section. Three independent parts, each with
+/// its own group and its own inline error, so a denied `ListApplicationGrants`
+/// still leaves the methods and scopes readable. Empty reads "none
+/// configured" — most applications have no OAuth configuration.
+fn ic_app_auth_lines(
+    auth: Option<&Lazy<crate::aws::services::identity_center::IcAppAuth>>,
+) -> Vec<(String, String)> {
+    let mut rows = vec![(String::new(), String::new())];
+    let a = match auth {
+        None | Some(Lazy::Loading) => {
+            rows.push((String::new(), "Loading…".to_string()));
+            return rows;
+        }
+        Some(Lazy::Error(e)) => {
+            rows.extend(error_rows(e));
+            return rows;
+        }
+        Some(Lazy::Loaded(a)) => a,
+    };
+    fn part<T>(
+        rows: &mut Vec<(String, String)>,
+        title: &str,
+        part: &Result<Vec<T>, String>,
+        mut item: impl FnMut(&mut Vec<(String, String)>, &T),
+    ) {
+        match part {
+            Ok(items) => {
+                rows.push((format!("{title} ({})", items.len()), String::new()));
+                rows.push((String::new(), String::new()));
+                if items.is_empty() {
+                    rows.push((String::new(), "None configured".to_string()));
+                }
+                for i in items {
+                    item(rows, i);
+                }
+            }
+            Err(e) => {
+                rows.push((title.to_string(), String::new()));
+                rows.push((String::new(), format!("⚠ {e}")));
+            }
+        }
+        rows.push((String::new(), String::new()));
+    }
+
+    part(&mut rows, "Authentication Methods", &a.methods, |rows, m| {
+        rows.push(("  Type".to_string(), m.kind.clone()));
+        if let Some(policy) = &m.policy {
+            rows.push(("  Actor Policy".to_string(), String::new()));
+            for line in policy.lines() {
+                rows.push((format!("    {line}"), String::new()));
+            }
+        }
+    });
+    part(&mut rows, "Access Scopes", &a.scopes, |rows, s| {
+        let targets = if s.targets.is_empty() {
+            "all targets".to_string()
+        } else {
+            s.targets.join(", ")
+        };
+        rows.push((format!("  {}", s.scope), targets));
+    });
+    part(&mut rows, "Grants", &a.grants, |rows, g| {
+        rows.push((format!("  {}", g.kind), String::new()));
+        for (k, v) in &g.details {
+            rows.push((format!("    {k}"), v.clone()));
+        }
+    });
+    rows
+}
+
 pub fn ic_application_section_lines(
     a: &crate::aws::services::identity_center::IcApplication,
     section: IcApplicationDetailSection,
     assignments: Option<&Lazy<Box<crate::aws::services::identity_center::IcAppAssignments>>>,
+    auth: Option<&Lazy<crate::aws::services::identity_center::IcAppAuth>>,
 ) -> Vec<(String, String)> {
     match section {
+        IcApplicationDetailSection::Auth => ic_app_auth_lines(auth),
         IcApplicationDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), a.name.clone()),
@@ -782,5 +854,61 @@ pub fn ic_application_section_lines(
             }
             rows
         }
+    }
+}
+
+#[cfg(test)]
+mod ic_app_auth_tests {
+    use super::*;
+    use crate::aws::services::identity_center::{IcAppAuth, IcAuthMethod, IcGrant, IcScope};
+
+    fn text(rows: &[(String, String)]) -> String {
+        rows.iter().map(|(k, v)| format!("{k}|{v}\n")).collect()
+    }
+
+    #[test]
+    fn a_denied_part_errors_alone() {
+        let auth = Lazy::Loaded(IcAppAuth {
+            methods: Ok(vec![IcAuthMethod {
+                kind: "IAM".into(),
+                policy: Some("{\n  \"Version\": \"2012-10-17\"\n}".into()),
+            }]),
+            scopes: Ok(vec![IcScope { scope: "sso:account:access".into(), targets: vec![] }]),
+            grants: Err("AccessDeniedException: not authorized".into()),
+        });
+        let out = text(&ic_app_auth_lines(Some(&auth)));
+        assert!(out.contains("Authentication Methods (1)"), "{out}");
+        assert!(out.contains("\"Version\""), "{out}");
+        assert!(out.contains("  sso:account:access|all targets"), "{out}");
+        assert!(out.contains("Grants|"), "{out}");
+        assert!(out.contains("⚠ AccessDeniedException"), "{out}");
+    }
+
+    #[test]
+    fn no_oauth_config_reads_none_configured() {
+        let auth = Lazy::Loaded(IcAppAuth { methods: Ok(vec![]), scopes: Ok(vec![]), grants: Ok(vec![]) });
+        let out = text(&ic_app_auth_lines(Some(&auth)));
+        assert_eq!(out.matches("None configured").count(), 3, "{out}");
+        assert!(!out.contains('⚠'), "{out}");
+    }
+
+    #[test]
+    fn jwt_bearer_grant_lists_its_issuers() {
+        let tti = "arn:aws:sso::123456789012:trustedTokenIssuer/ssoins-1/tti-1";
+        let auth = Lazy::Loaded(IcAppAuth {
+            methods: Ok(vec![]),
+            scopes: Ok(vec![]),
+            grants: Ok(vec![IcGrant {
+                kind: "urn:ietf:params:oauth:grant-type:jwt-bearer".into(),
+                details: vec![
+                    ("Trusted Token Issuer".into(), tti.into()),
+                    ("Audiences".into(), "my-app".into()),
+                ],
+            }]),
+        });
+        let out = text(&ic_app_auth_lines(Some(&auth)));
+        assert!(out.contains("Grants (1)"), "{out}");
+        assert!(out.contains(&format!("    Trusted Token Issuer|{tti}")), "{out}");
+        assert!(out.contains("    Audiences|my-app"), "{out}");
     }
 }

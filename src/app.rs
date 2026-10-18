@@ -15772,6 +15772,33 @@ impl App {
 
     /// The S3 bucket pane's File Systems section: one `ListFileSystems`
     /// sweep filtered to this bucket, keyed by bucket name.
+    /// Access Points section: S3 Control `ListAccessPoints` filtered to the
+    /// selected bucket, on the bucket's region. S3 Control needs the account
+    /// id; until it's resolved this does nothing and the section says why.
+    pub(crate) fn trigger_s3_access_points_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(account_id) = self.account_id.clone() else {
+            return;
+        };
+        let Some((name, region)) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::s3::S3Bucket>()
+                .map(|b| (b.name.clone(), b.region.clone()))
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.s3control_client_for_region(&region);
+        self.trigger_lazy(
+            |app| &mut app.lazy.s3_access_points,
+            name.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::s3::fetch_bucket_access_points(client, account_id, name)
+                    .await
+                    .map_err(|e| format!("Access points unavailable: {}", e))
+            },
+        );
+    }
+
     pub(crate) fn trigger_s3_bucket_filesystems_load(
         &mut self,
         event_tx: &mpsc::UnboundedSender<Event>,
@@ -15917,6 +15944,28 @@ impl App {
                 },
             );
         }
+    }
+
+    /// Lazy Groups section on a user pool: `ListGroups` + `ListUsersInGroup`.
+    pub(crate) fn trigger_cognito_groups_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(pool_id) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::cognito::CognitoUserPool>()
+                .map(|p| p.id.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.cognito_idp_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.cognito_groups,
+            pool_id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::cognito::fetch_cognito_groups(client, pool_id)
+                    .await
+                    .map_err(|e| format!("Groups unavailable: {}", e))
+            },
+        );
     }
 
     fn is_selected_ecr_repo(&self) -> bool {
@@ -16239,6 +16288,29 @@ impl App {
     /// first view of the Tasks section, keyed by service ARN. No-op unless the
     /// Tasks section is active and a service is selected; idempotent once
     /// loading/loaded.
+    /// Lazy `DescribeCapacityProviders` for the cluster pane's Capacity
+    /// Providers section, keyed by cluster ARN.
+    pub(crate) fn trigger_ecs_capacity_providers_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some((arn, names)) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::ecs::EcsCluster>()
+                .map(|c| (c.cluster_arn.clone(), c.capacity_providers.clone()))
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.ecs_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.ecs_capacity_providers,
+            arn,
+            event_tx,
+            async move {
+                crate::aws::services::ecs::fetch_capacity_providers(client, names)
+                    .await
+                    .map_err(|e| format!("Capacity providers unavailable: {}", e))
+            },
+        );
+    }
+
     pub(crate) fn trigger_ecs_service_tasks_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if crate::aws::services::ecs::EcsServiceDetailSection::from_index(self.detail_section_idx) != EcsServiceDetailSection::Tasks {
             return;
@@ -16869,6 +16941,27 @@ impl App {
                 },
             );
         }
+    }
+
+    /// The Application pane's Auth section: authentication methods, access
+    /// scopes and grants. Never errors as a whole — each part records its own.
+    pub(crate) fn trigger_ic_app_auth_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(arn) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::identity_center::IcApplication>()
+                .map(|a| a.arn.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.ssoadmin_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.ic_app_auth,
+            arn.clone(),
+            event_tx,
+            async move {
+                Ok::<_, String>(crate::aws::services::identity_center::fetch_app_auth(client, arn).await)
+            },
+        );
     }
 
     fn selected_ga_accelerator_arn(&self) -> Option<String> {
@@ -19174,6 +19267,7 @@ impl App {
                         outbound_rules: sg.outbound_rules.clone(),
                         tags: sg.tags.clone(),
                         owner_id: sg.owner_id.clone(),
+                        unused: sg.unused,
                     });
                 }
             }
@@ -20414,6 +20508,56 @@ impl App {
                 },
             );
         }
+    }
+
+    /// The Account sub-tab's Credential Report section. `GetCredentialReport`
+    /// only — never `GenerateCredentialReport`, which is a write.
+    pub(crate) fn trigger_iam_credential_report_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if !self.get_selected_resource().is_some_and(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::iam::IamAccountSettings>()
+                .is_some()
+        }) {
+            return;
+        }
+        let client = self.aws_clients.iam_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.iam_credential_report,
+            "account".to_string(),
+            event_tx,
+            async move {
+                crate::aws::services::iam::fetch_iam_credential_report(client)
+                    .await
+                    .map_err(|e| format!("Credential report unavailable: {}", e))
+            },
+        );
+    }
+
+    /// Access Advisor (Last Accessed section) for the selected role, user,
+    /// group or managed policy — one report job per ARN, polled to completion.
+    pub(crate) fn trigger_iam_last_accessed_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::iam::{IamGroup, IamPolicy, IamRole, IamUser};
+        let Some(arn) = self.get_selected_resource().and_then(|r| {
+            let any = r.as_any();
+            any.downcast_ref::<IamRole>()
+                .map(|x| x.arn.clone())
+                .or_else(|| any.downcast_ref::<IamUser>().map(|x| x.arn.clone()))
+                .or_else(|| any.downcast_ref::<IamGroup>().map(|x| x.arn.clone()))
+                .or_else(|| any.downcast_ref::<IamPolicy>().map(|x| x.policy_arn.clone()))
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.iam_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.iam_last_accessed,
+            arn.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::iam::fetch_iam_last_accessed(client, arn)
+                    .await
+                    .map_err(|e| format!("Access Advisor unavailable: {}", e))
+            },
+        );
     }
 
     /// Trigger a lazy-load of the policy document + attachments for the selected policy.
@@ -23032,6 +23176,33 @@ impl App {
                 crate::aws::services::ec2::fetch_instance_profile_roles(client, profile_name)
                     .await
                     .map_err(|e| format!("Instance profile roles unavailable: {}", e))
+            },
+        );
+    }
+
+    /// Lazy `DescribeInstanceCreditSpecifications` for the Details section's
+    /// CPU Credits row — burstable (T-family) instances only; a no-op otherwise.
+    pub(crate) fn trigger_ec2_credit_spec_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(instance_id) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::ec2::Ec2Instance>()
+                .filter(|i| crate::aws::services::ec2::shows_cpu_credits(i))
+                .map(|i| i.instance_id.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.ec2_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.ec2_credit_spec,
+            instance_id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::ec2::fetch_instance_credit_spec(client, instance_id)
+                    .await
+                    .map_err(|e| match e {
+                        crate::error::Error::AwsSdk(m) => m,
+                        e => e.to_string(),
+                    })
             },
         );
     }
@@ -25807,6 +25978,7 @@ impl App {
                     crate::aws::services::ec2::Ec2InstanceDetailSection::from_index(self.detail_section_idx),
                     profile_roles,
                     ssm_status,
+                    self.lazy.ec2_credit_spec.get(&instance.instance_id),
                     user_data,
                     console,
                     lb,
@@ -27064,6 +27236,7 @@ impl App {
                     self.account_id.as_deref(),
                     self.lazy.s3_storage_metrics.get(&bucket.name),
                     self.lazy.s3_bucket_filesystems.get(&bucket.name),
+                    self.lazy.s3_access_points.get(&bucket.name),
                 );
             }
             if let Some(rule) = resource
@@ -27189,6 +27362,7 @@ impl App {
                     app,
                     crate::aws::services::identity_center::IcApplicationDetailSection::from_index(self.detail_section_idx),
                     self.lazy.ic_app_assignments.get(&app.arn),
+                    self.lazy.ic_app_auth.get(&app.arn),
                 );
             }
             if let Some(sg) = resource
@@ -27361,6 +27535,7 @@ impl App {
                     pool,
                     crate::aws::services::cognito::CognitoUserPoolDetailSection::from_index(self.detail_section_idx),
                     self.lazy.cognito_clients.get(&pool.id),
+                    self.lazy.cognito_groups.get(&pool.id),
                 );
             }
             if let Some(img) = resource
@@ -28097,6 +28272,7 @@ impl App {
                     activities_state,
                     self.selected_optimizer_state(),
                     self.co_enrollment.as_ref(),
+                    self.lazy.asg_lifecycle.get(&group.name),
                 );
             }
             if let Some(cluster) = resource
@@ -28106,6 +28282,7 @@ impl App {
                 return crate::ui::widgets::details_pane::ecs_cluster_section_lines(
                     cluster,
                     crate::aws::services::ecs::EcsClusterDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.ecs_capacity_providers.get(&cluster.cluster_arn),
                 );
             }
             if let Some(svc) = resource
@@ -28312,6 +28489,7 @@ impl App {
                     details_state,
                     docs_state,
                     &self.instance_profiles_for_role(&role.arn),
+                    self.lazy.iam_last_accessed.get(&role.arn),
                 );
                 if crate::aws::services::iam::IamRoleDetailSection::from_index(self.detail_section_idx) == IamRoleDetailSection::Permissions {
                     lines = self.inject_expanded_policy_docs(lines);
@@ -28345,6 +28523,7 @@ impl App {
                 return crate::ui::widgets::details_pane::iam_account_section_lines(
                     settings,
                     crate::aws::services::iam::IamAccountDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.iam_credential_report.get("account"),
                 );
             }
             if let Some(policy) = resource
@@ -28356,6 +28535,7 @@ impl App {
                     policy,
                     crate::aws::services::iam::IamPolicyDetailSection::from_index(self.detail_section_idx),
                     details_state,
+                    self.lazy.iam_last_accessed.get(&policy.policy_arn),
                 );
             }
             if let Some(user) = resource
@@ -28371,6 +28551,7 @@ impl App {
                     crate::aws::services::iam::IamUserDetailSection::from_index(self.detail_section_idx),
                     details_state,
                     docs_state,
+                    self.lazy.iam_last_accessed.get(&user.arn),
                 );
                 if crate::aws::services::iam::IamUserDetailSection::from_index(self.detail_section_idx) == IamUserDetailSection::Permissions {
                     lines = self.inject_expanded_policy_docs(lines);
@@ -28390,6 +28571,7 @@ impl App {
                     crate::aws::services::iam::IamGroupDetailSection::from_index(self.detail_section_idx),
                     details_state,
                     docs_state,
+                    self.lazy.iam_last_accessed.get(&group.arn),
                 );
                 if crate::aws::services::iam::IamGroupDetailSection::from_index(self.detail_section_idx) == IamGroupDetailSection::Permissions {
                     lines = self.inject_expanded_policy_docs(lines);
@@ -32633,6 +32815,28 @@ impl App {
                 },
             );
         }
+    }
+
+    /// Lazy lifecycle hooks + warm pool for the selected group's Lifecycle section.
+    pub(crate) fn trigger_asg_lifecycle_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(group_name) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::asg::AsgGroup>()
+                .map(|g| g.name.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.asg_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.asg_lifecycle,
+            group_name.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::asg::fetch_asg_lifecycle(client, group_name)
+                    .await
+                    .map_err(|e| format!("Lifecycle unavailable: {}", e))
+            },
+        );
     }
 
     fn trigger_rds_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {

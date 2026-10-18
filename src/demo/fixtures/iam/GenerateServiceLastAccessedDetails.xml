@@ -1,0 +1,6 @@
+<GenerateServiceLastAccessedDetailsResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GenerateServiceLastAccessedDetailsResult>
+    <JobId>demo-access-advisor</JobId>
+  </GenerateServiceLastAccessedDetailsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GenerateServiceLastAccessedDetailsResponse>

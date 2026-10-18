@@ -213,6 +213,9 @@ pub struct LazyStore {
     /// Application assignments, keyed by application ARN.
     pub ic_app_assignments:
         LazyMap<Box<crate::aws::services::identity_center::IcAppAssignments>>,
+    /// Application authentication methods / access scopes / grants, keyed by
+    /// application ARN. Each part carries its own error.
+    pub ic_app_auth: LazyMap<crate::aws::services::identity_center::IcAppAuth>,
 
     // ── Compute Optimizer ────────────────────────────────────────────────
     /// Per-resource recommendation, keyed by ARN. `Loaded(None)` = the call
@@ -545,6 +548,8 @@ pub struct LazyStore {
     /// An instance's launch user data, base64-decoded, keyed by instance id.
     /// `Loaded(None)` = no user data configured (the common case).
     pub ec2_instance_user_data: LazyMap<Option<String>>,
+    /// A burstable instance's CPU credit mode (`standard` / `unlimited`), keyed by instance id.
+    pub ec2_credit_spec: LazyMap<String>,
     /// An instance's system console output (`GetConsoleOutput`), keyed by
     /// instance id. `Loaded(None)` = AWS has posted nothing for it yet.
     pub ec2_instance_console: LazyMap<Option<crate::aws::services::ec2::ConsoleOutput>>,
@@ -575,6 +580,10 @@ pub struct LazyStore {
     pub iam_policy_docs: LazyMap<crate::aws::services::iam::IamPolicyDocs>,
     /// An identity provider's config + tags (SAML/OIDC get call), keyed by ARN.
     pub iam_idp_details: LazyMap<crate::aws::services::iam::IamIdpDetails>,
+    /// The account's IAM credential report (`GetCredentialReport` only), keyed `"account"`.
+    pub iam_credential_report: LazyMap<crate::aws::services::iam::IamCredentialReport>,
+    /// Access Advisor report, keyed by the role / user / group / policy ARN.
+    pub iam_last_accessed: LazyMap<crate::aws::services::iam::IamLastAccessed>,
     /// An account's parents/OUs + attached SCPs, keyed by account id.
     pub org_account_details: LazyMap<crate::aws::services::organizations::OrgAccountDetails>,
     /// An SCP's document + attached targets, keyed by policy id.
@@ -694,6 +703,8 @@ pub struct LazyStore {
     pub ecs_service_tasks: LazyMap<Vec<crate::aws::services::ecs::EcsTask>>,
     /// A task definition's full detail, keyed by task-definition ARN.
     pub ecs_taskdef_details: LazyMap<Box<crate::aws::services::ecs::EcsTaskDefinitionDetails>>,
+    /// A cluster's capacity providers (Fargate excluded), keyed by cluster ARN.
+    pub ecs_capacity_providers: LazyMap<Vec<crate::aws::services::ecs::EcsCapacityProviderInfo>>,
 
     // ── FSx ──────────────────────────────────────────────────────────────
     /// A file system's volumes, keyed by file-system id.
@@ -744,6 +755,8 @@ pub struct LazyStore {
     pub ecr_image_findings: LazyMap<crate::aws::services::ecr::EcrScanFindings>,
     /// A user pool's app clients, keyed by pool id.
     pub cognito_clients: LazyMap<Vec<crate::aws::services::cognito::CognitoAppClient>>,
+    /// A user pool's groups and their members, keyed by pool id.
+    pub cognito_groups: LazyMap<crate::aws::services::cognito::CognitoGroups>,
     /// A backup plan's rules + selections, keyed by plan id.
     pub backup_plan_details: LazyMap<crate::aws::services::backup::BackupPlanDetails>,
     /// A vault's recovery points, keyed by vault name.
@@ -788,6 +801,8 @@ pub struct LazyStore {
     /// sweep — feeds the S3 bucket pane's File Systems section), keyed by
     /// bucket name.
     pub s3_bucket_filesystems: LazyMap<Vec<crate::aws::services::s3files::S3FileSystem>>,
+    /// A bucket's access points (S3 Control `ListAccessPoints`), keyed by bucket name.
+    pub s3_access_points: LazyMap<Vec<crate::aws::services::s3::S3AccessPoint>>,
 
     // ── S3 Tables ────────────────────────────────────────────────────────
     /// A table bucket's encryption config + tags (neither in the list
@@ -821,6 +836,8 @@ pub struct LazyStore {
     pub lb_web_acl: LazyMap<crate::aws::services::elb::LbWebAcl>,
     /// An Auto Scaling group's scaling activities, keyed by group name.
     pub asg_activities: LazyMap<Vec<crate::aws::services::asg::ScalingActivity>>,
+    /// An Auto Scaling group's lifecycle hooks + warm pool, keyed by group name.
+    pub asg_lifecycle: LazyMap<crate::aws::services::asg::AsgLifecycle>,
 }
 
 impl LazyStore {

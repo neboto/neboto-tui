@@ -691,6 +691,17 @@ the service you're touching.
   merely *looking* at an image would move the "Last Pulled" date people use
   to decide what is safe to delete. `GetDownloadUrlForLayer` has the same
   problem. Don't add either without an explicit opt-in.
+- **ECS cluster Capacity Providers** (#106) — a lazy section from
+  `DescribeCapacityProviders`, called with the cluster's provider names
+  **minus `FARGATE` / `FARGATE_SPOT`**: those are AWS-managed with no ASG,
+  so the pane explains them without a call, and a Fargate-only cluster makes
+  none. The default strategy comes from `DescribeClusters` (already loaded).
+  The ASG ARN row jumps through an `autoscaling` arm in `arn_jump_target`
+  that takes the group name after `:autoScalingGroupName/` and **only** for
+  `autoScalingGroup:` resources — a scaling-policy or lifecycle-hook ARN
+  embeds the same segment followed by `:policyName/…` and is not the group.
+  A provider the cluster lists but the call doesn't return (deleted while
+  still attached) gets a ⚠ row rather than vanishing.
 - **EKS** (`@eks`) — the showcase: eight-section split pane. **Tier 1
   (AWS-API depth) only** — live Kubernetes workloads (pods/nodes via the cluster
   API server) are deliberately out of scope. Add-on "update-available" costs one
@@ -819,6 +830,19 @@ the service you're touching.
   AWS logs SQL statement text, sensitive values included. Targets are lazy,
   so `U` on an instance can't name the proxy in front of it — that would
   need the targets fetched per proxy at list time.
+- **RDS blue/green** (#106) — not a sub-tab: one `DescribeBlueGreenDeployments`
+  runs **before** the instance pages (so each streamed batch already carries
+  it), keyed by both the source and the target ARN, and lands as a
+  "Blue/Green Deployment" group on the instance or cluster Config section:
+  which side this is, status, and the other side's ARN (jumpable via the
+  `rds` ARN classifier). A failure warns and the rows carry nothing. A
+  deployment whose green side has been deleted after switchover keeps only
+  the source key, which is the right answer. **Source/target are the
+  pre-switchover sides** (the SDK's wording) and a switchover renames both,
+  so a `SWITCHOVER_COMPLETED` deployment is labelled as history ("was blue —
+  switched over"), never "blue — production". Completed and failed
+  deployments stay listed until deleted, so when two name the same ARN the
+  active one wins (`insert_blue_green`), not whichever page came last.
 - **Route 53** (`@r53`) — sub-tabs Zones / **Records** / Health Checks.
   Zones stream first, then health checks stream as a second batch
   (`ListHealthChecks`, tags batched 10-at-a-time via `ListTagsForResources`).
@@ -998,6 +1022,18 @@ the service you're touching.
 - **Transfer Family** (`@transfer`) — N+1 streaming load (`DescribeServer` per
   server); Users lazy. `m` metrics (`AWS/Transfer`, dim `ServerId`):
   bytes/files in+out and on-upload workflow success/failure.
+- **Cognito user-pool Groups** (#106) — a lazy section on the **pool**
+  pane, inverted from the group side: `ListGroups` (capped
+  `MAX_COGNITO_GROUPS=50`) + one `ListUsersInGroup` page per group
+  (`MAX_COGNITO_GROUP_MEMBERS=60`, the API's page max; `buffered(4)`).
+  Both caps say so in the section when hit. It lives on the pool rather than
+  the user because the per-user route, `AdminListGroupsForUser`, is one call
+  per user and an `Admin*` action — **never** call it. A single group's
+  member call failing renders `⚠` on that group's Members row only. Member
+  rows show the email (or phone) when the username is the user's `sub` — an
+  email/phone sign-in pool's usernames are UUIDs (`member_label`). Groups
+  sort by precedence (lower wins when a user's groups carry IAM roles); the
+  role ARN row jumps via the IAM classifier.
 - **AppSync** (`@appsync`, `appsync.rs`, **aws-sdk-appsync**) — single list of
   **GraphQL APIs** (standard + merged); Event APIs (`ListApis`, channel
   namespaces) are not listed yet. `ListGraphqlApis` returns the full config, so
@@ -1874,6 +1910,21 @@ the service you're touching.
   `id()` is the ARN; `:instance-profile/` ARNs jump here by name, so the
   EC2 instance's profile ARN and the role pane's rows both land on it. Flat
   pane — `details()` already says everything `ListInstanceProfiles` returns.
+- **IAM Access Advisor** (Last Accessed section on role / user / group /
+  managed-policy panes, #106) — the **only non-Get/List IAM call**:
+  `GenerateServiceLastAccessedDetails` starts a report job, then
+  `GetServiceLastAccessedDetails` is polled once a second until it finishes
+  (60s timeout, then an inline "press r to retry"). It's on `ALLOW_OPS` in
+  `scripts/check-readonly.py` on purpose: AWS rates it a Read action, puts
+  it in `IAMReadOnlyAccess`, and it creates no resource. That reasoning does
+  **not** extend to `GenerateCredentialReport`, which writes a report the
+  whole account then sees — keep that one out. `SERVICE_LEVEL` granularity
+  only: `ACTION_LEVEL` covers a handful of services and would read as
+  "everything else unused". One `LazyMap` keyed by ARN feeds all four panes
+  (`trigger_iam_last_accessed_load` downcasts whichever is selected). A
+  report on a group or policy names the principal that last used each
+  service (`LastAuthenticatedEntity`); on a role or user that's the subject
+  itself, so the renderer hides it.
 - **IAM Identity Providers** (Providers sub-tab, key 6) — SAML + OIDC in one
   list; both list calls are unpaginated, and the OIDC one returns **only
   ARNs**, so everything else rides the lazy `Get*Provider` bundle. A
@@ -1892,6 +1943,22 @@ the service you're touching.
   root-credential report** (red = root access keys exist, yellow = root MFA
   off), driven off the summary map's `AccountAccessKeysPresent` /
   `AccountMFAEnabled`.
+- **IAM credential report** (Account pane's Credential Report section, #106)
+  — `GetCredentialReport` **only**. `GenerateCredentialReport` writes a
+  report the whole account then sees, so it stays a mutation to the
+  read-only guard (unlike Access Advisor's job, #215). The consequence is
+  the design: a report lives ~4h after someone generates it, so most of the
+  time the call fails `ReportExpired` / `ReportNotPresent` /
+  `ReportInProgress`. Those three are mapped to `Ok` states
+  (`IamCredentialReport::{Expired, NotPresent, InProgress}`) and render a
+  dim "run `aws iam generate-credential-report`, then press r" hint — never
+  an error. The CSV is parsed **by header name** (AWS has added columns
+  before); no field contains a comma. "Old"/"unused" is one 90-day line for
+  keys and passwords. Root is listed first and any active root key is a ⚠.
+  User rows aren't jumpable — the row value is the summary, not the ARN.
+  The demo account answers `ReportExpired`, the realistic state: a present
+  report's CSV is base64 inside the response, so fixture placeholders
+  can't keep its dates relative to now.
 - **IAM Access Analyzer** (Analyzer sub-tab, key 5) — an **extension** of the
   IAM service (second client + a late streaming step), **not** a new
   `ServiceType`; fully error-tolerant so no-analyzer / permission gaps never
@@ -1906,6 +1973,20 @@ the service you're touching.
   label is in `search_text`. Every other group stays `stateless()`; world
   *egress* is the AWS default and not flagged. Zero API — this is the
   list-level slice of the shelved `@audit` sweep (#124), not a revival of it.
+  **`unused`** (#106) is the second state: a group no network interface
+  carries is `ResourceState::Idle` (muted `◌`, label `unused`), so `F` picks
+  it like an available EBS volume. Open-to-world wins when both apply — the
+  rule is the risk the moment anything attaches the group. The attached set
+  is one paginated `DescribeNetworkInterfaces` (`fetch_attached_group_ids`):
+  `@ec2` reuses its ENI phase, which is why that phase now runs **before**
+  security groups; `@vpc` makes its own scan ahead of its SG phase. The set
+  is all-or-nothing — a failed page leaves every group unmarked, since a
+  partial set would call attached groups unused. The VPC `default` group is
+  never flagged (it can't be deleted). **Unused ≠ safe to delete**, and the
+  Used By section's empty state says why: a group referenced only by another
+  group's rules, a launch template / launch configuration, or ENIs in a
+  shared-VPC participant account has no ENI this account can see. That's
+  also why there's no "delete candidates" view.
 - **VPC extras** (beyond the core subnet/SG/NACL/endpoint tabs) — tab 3
   **Routing** and tab 4 **Gateways** are *grouped* tabs (pipe filters:
   route tables + prefix lists; IGWs + NAT GWs + **egress-only IGWs**); tab 5
@@ -2004,6 +2085,14 @@ the service you're touching.
   A key the LB type doesn't have (ALBs carry no
   `load_balancing.cross_zone.enabled`; it's always on) just omits its row —
   don't synthesize a default, the value would be a guess.
+- **Auto Scaling Lifecycle section** (#106) — lazy, keyed by group name:
+  `DescribeLifecycleHooks` (unpaginated — 50 hooks per group max) and
+  `DescribeWarmPool` run concurrently and are kept as **separate `Result`s**
+  in `AsgLifecycle`, so a denied warm-pool call doesn't hide the hooks. A
+  group without a warm pool is a *successful* `DescribeWarmPool` with no
+  `WarmPoolConfiguration` — that's `Ok(None)`, "No warm pool", not an error.
+  An unset `MaxGroupPreparedCapacity` means "the group's max size", which is
+  how it's rendered. Warm instances use the Instances section's table shape.
 - **EC2 instance Load Balancing section** (key 4,
   `elb::fetch_instance_lb_membership`) — "is this instance behind a load
   balancer?". **There is no reverse API** (nothing answers "which target
@@ -2024,6 +2113,21 @@ the service you're touching.
   every ELB load and watch tick, for a question asked from the instance).
   Only the primary private IP of each ENI is known (`EmbeddedNic`), so an
   `ip`-type registration on a secondary IP isn't matched.
+- **EBS fast snapshot restore** (#106) — one account-wide
+  `DescribeFastSnapshotRestores` ahead of the Snapshots phase, joined by
+  snapshot id onto `EbsSnapshot.fast_restore` (`disabled` entries are
+  dropped — AWS keeps them for a while after, but they no longer bill). It's
+  a ⚠ on the Details section because FSR bills per AZ-hour whether or not
+  anything restores from the snapshot, which is the forgotten-cost case.
+  `fast_restore` is an `Option`: a failed call is `None` and renders
+  **unknown**, never "off" — a cost flag must not read "fine" exactly when
+  it couldn't check. `disabling` AZs are listed but not counted as "on".
+- **EC2 CPU credits** (#106) — the instance Details section's on-enter hook
+  fetches `DescribeInstanceCreditSpecifications` for **T-family only**
+  (`ec2::shows_cpu_credits`: `is_burstable` — t2+, not `t1`, which predates
+  credits, nor `trn` — and not terminated; a no-op for everything else, so
+  no row and no call).
+  The credit *balance* is CloudWatch `CPUCreditBalance` and belongs on `m`.
 - **EBS / AMIs / Snapshots / Launch Templates** — EC2 sub-tabs (keys 3, 5–7),
   **self-owned only**. Cross-jumps: `snap-`→Snapshots, `vol-`→EBS, `i-`→instance.
 - **ENIs** — EC2 sub-tab (`Ec2View::NetworkInterfaces`, key 4): paginated
@@ -2051,7 +2155,19 @@ the service you're touching.
   disabled reads unavailable, title, external IDs = the SCIM/identity-source
   signal, created/updated). Applications load eagerly from `ListApplications`
   (no N+1); Assignments is lazy (+ `GetApplicationAssignmentConfiguration`
-  assignment-required flag). `ic_jump_target` (a specialized classifier) wires
+  assignment-required flag). **Auth** (#106) is lazy too: one `LazyMap`
+  entry (`IcAppAuth`) holding three independent `Result`s —
+  `ListApplicationAuthenticationMethods` / `ListApplicationAccessScopes` /
+  `ListApplicationGrants`, run with `tokio::join!` — so one denied call
+  leaves a ⚠ in its own group and the other two still render; the lazy
+  slot itself never errors. Most applications have no OAuth config, so an
+  empty part reads "None configured", and a `ResourceNotFoundException` on
+  these calls is treated as empty rather than a failure. The IAM method's
+  actor policy is a smithy `Document`, pretty-printed via
+  `aws::document::document_pretty`. Trusted-token-issuer ARNs on a
+  JWT-bearer grant don't jump — issuers live on the Instance pane's Trusted
+  Issuers section, not a list a jump can land on.
+  `ic_jump_target` (a specialized classifier) wires
   `Enter` across the IC graph (members↔users↔groups, assignments→principal/
   account, access→permission set/account, app assignments→principal).
 - **Organizations** (`@org`, `organizations.rs`) — sub-tabs Overview / Accounts
@@ -2968,6 +3084,19 @@ the service you're touching.
     resource selection and `Esc` drops it; the flat view, snapshot walk and
     export never see it. Providers are summarised as counts rather than
     repeated per row — the per-row `provider:` noise was the first draft.
+  - **Access Points section** (#106) — a **separate crate**,
+    `aws-sdk-s3control`: access points are an S3 Control resource, not an
+    S3 one. `ListAccessPoints` takes the **account id on every call** (the
+    SDK puts it in the host, `<account>.s3-control.<region>…`), so the
+    section reads a dim hint until `App.account_id` resolves, and never
+    issues a call without it. The client is pinned to the **bucket's**
+    region (`s3control_client_for_region`) — access points are regional and
+    listed where their bucket is. Only this account's access points come
+    back: a cross-account access point lives in the account that created it,
+    and the empty state says so. `DemoRequest::parse` skips an all-digit
+    leading host label so the demo routes the call to `s3-control`; a
+    restXml call with no fixture fails the root-element check, so the empty
+    `ListAccessPoints.xml` fixture is load-bearing.
 - **S3 Files** (`@s3files`, `s3files.rs`) — the 2026 S3 shared-file-system
   feature (EFS-based NFS file systems linked to a bucket or prefix, two-way
   sync). Single-list (file systems, `ListFileSystems`, cap 200, single-phase
