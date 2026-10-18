@@ -157,7 +157,7 @@ pub(super) fn render_iam_role_split(app: &App, role: &IamRole, area: Rect, frame
     let footer = detail_footer(
         app,
         focused,
-        4,
+        crate::aws::services::iam::IAM_ROLE_SECTIONS.len(),
         if on_policy_row { "⏎ expand · e edit" } else { "e edit" },
     );
 
@@ -234,6 +234,7 @@ pub fn iam_role_section_lines(
     details_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamRoleDetails>>,
     docs_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamPolicyDocs>>,
     instance_profiles: &[(String, String)],
+    last_accessed: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamLastAccessed>>,
 ) -> Vec<(String, String)> {
     match section {
         IamRoleDetailSection::Overview => {
@@ -245,6 +246,7 @@ pub fn iam_role_section_lines(
         IamRoleDetailSection::Permissions => iam_role_permissions_lines(details_state),
         IamRoleDetailSection::Policies => iam_policy_docs_lines(docs_state),
         IamRoleDetailSection::Tags => lazy_tag_lines(details_state, |d| &d.tags),
+        IamRoleDetailSection::LastAccessed => iam_last_accessed_lines(last_accessed, &role.arn),
     }
 }
 
@@ -276,6 +278,88 @@ pub(super) fn lazy_tag_lines<T>(
         }
     }
     rows.push(("".to_string(), "".to_string()));
+    rows
+}
+
+/// Access Advisor: every service the principal (or policy) grants, most
+/// recently used first, then the ones not used in IAM's 400-day tracking
+/// period — the least-privilege signal. `subject_arn` hides the "by" column
+/// when the last user is the subject itself (always, for a role or user).
+pub fn iam_last_accessed_lines(
+    state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamLastAccessed>>,
+    subject_arn: &str,
+) -> Vec<(String, String)> {
+    let mut rows = vec![(String::new(), String::new())];
+    let report = match state {
+        None | Some(crate::lazy::Lazy::Loading) => {
+            rows.push((String::new(), "Loading…".to_string()));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Error(e)) => {
+            rows.extend(error_rows(e));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Loaded(r)) => r,
+    };
+    let (used, unused): (Vec<_>, Vec<_>) =
+        report.services.iter().partition(|s| s.last_authenticated_secs.is_some());
+
+    rows.push(("Summary".to_string(), String::new()));
+    rows.push((String::new(), String::new()));
+    rows.push(("  Services granted".to_string(), report.services.len().to_string()));
+    rows.push(("  Accessed".to_string(), used.len().to_string()));
+    rows.push((
+        "  Not accessed".to_string(),
+        if unused.is_empty() {
+            "0".to_string()
+        } else {
+            format!("⚠ {} — candidates to remove", unused.len())
+        },
+    ));
+    if let Some(c) = &report.completed {
+        rows.push(("  Report generated".to_string(), c.clone()));
+    }
+    rows.push((String::new(), String::new()));
+
+    if report.services.is_empty() {
+        rows.push((String::new(), "No services granted".to_string()));
+        rows.push((String::new(), String::new()));
+        return rows;
+    }
+
+    if !used.is_empty() {
+        rows.push((format!("Accessed ({})", used.len()), String::new()));
+        rows.push((String::new(), String::new()));
+        for s in &used {
+            let secs = s.last_authenticated_secs.unwrap_or_default();
+            let mut value = format!("{} · {}", super::ec2::console_age(secs), crate::aws::services::iam::fmt_epoch_secs(secs));
+            if let Some(region) = &s.region {
+                value.push_str(&format!(" · {region}"));
+            }
+            if let Some(entity) = s.entity.as_deref().filter(|e| *e != subject_arn) {
+                value.push_str(&format!(" · by {}", entity.rsplit('/').next().unwrap_or(entity)));
+            }
+            if let Some(n) = s.total_entities.filter(|n| *n > 1) {
+                value.push_str(&format!(" ({n} principals)"));
+            }
+            rows.push((format!("  {}", s.service_name), value));
+        }
+        rows.push((String::new(), String::new()));
+    }
+
+    if !unused.is_empty() {
+        rows.push((format!("Not accessed in 400 days ({})", unused.len()), String::new()));
+        rows.push((String::new(), String::new()));
+        for s in &unused {
+            rows.push((format!("  {}", s.service_name), s.namespace.clone()));
+        }
+        rows.push((String::new(), String::new()));
+    }
+    rows.push((
+        String::new(),
+        "· IAM tracks 400 days of access; regions added to tracking later report less".to_string(),
+    ));
+    rows.push((String::new(), String::new()));
     rows
 }
 
@@ -419,7 +503,7 @@ pub(super) fn iam_role_permissions_lines(
 pub(super) fn render_iam_policy_split(app: &App, policy: &IamPolicy, area: Rect, frame: &mut Frame) {
     let focused = app.details_focused;
 
-    let footer = detail_footer(app, focused, 4, "");
+    let footer = detail_footer(app, focused, crate::aws::services::iam::IAM_POLICY_SECTIONS.len(), "");
 
     let mut block = theme::pane_block("IAM Policy", focused);
     block = block.title_bottom(
@@ -505,12 +589,14 @@ pub fn iam_policy_section_lines(
     policy: &IamPolicy,
     section: IamPolicyDetailSection,
     details_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamPolicyDetails>>,
+    last_accessed: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamLastAccessed>>,
 ) -> Vec<(String, String)> {
     match section {
         IamPolicyDetailSection::Overview => iam_policy_overview_lines(policy),
         IamPolicyDetailSection::Document => iam_policy_document_lines(details_state),
         IamPolicyDetailSection::AttachedTo => iam_policy_attached_to_lines(details_state),
         IamPolicyDetailSection::Tags => lazy_tag_lines(details_state, |d| &d.tags),
+        IamPolicyDetailSection::LastAccessed => iam_last_accessed_lines(last_accessed, &policy.policy_arn),
     }
 }
 
@@ -617,7 +703,7 @@ pub(super) fn iam_policy_attached_to_lines(
 
 pub(super) fn render_iam_user_split(app: &App, user: &IamUser, area: Rect, frame: &mut Frame) {
     let focused = app.details_focused;
-    let footer = detail_footer(app, focused, 4, "");
+    let footer = detail_footer(app, focused, crate::aws::services::iam::IAM_USER_SECTIONS.len(), "");
     let mut block = theme::pane_block("IAM User", focused);
     block = block.title_bottom(
         Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
@@ -758,9 +844,13 @@ pub fn iam_user_section_lines(
     section: IamUserDetailSection,
     details_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamUserDetails>>,
     docs_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamPolicyDocs>>,
+    last_accessed: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamLastAccessed>>,
 ) -> Vec<(String, String)> {
     if section == IamUserDetailSection::Policies {
         return iam_policy_docs_lines(docs_state);
+    }
+    if section == IamUserDetailSection::LastAccessed {
+        return iam_last_accessed_lines(last_accessed, &user.arn);
     }
     let mut rows = vec![("".to_string(), "".to_string())];
     match section {
@@ -852,7 +942,7 @@ pub fn iam_user_section_lines(
             }
         },
         // Handled by the early return above.
-        IamUserDetailSection::Policies => {}
+        IamUserDetailSection::Policies | IamUserDetailSection::LastAccessed => {}
         IamUserDetailSection::Groups => match details_state {
             None | Some(crate::lazy::Lazy::Loading) => {
                 rows.push(("".to_string(), "Loading…".to_string()));
@@ -885,7 +975,7 @@ pub fn iam_user_section_lines(
 
 pub(super) fn render_iam_group_split(app: &App, group: &IamGroup, area: Rect, frame: &mut Frame) {
     let focused = app.details_focused;
-    let footer = detail_footer(app, focused, 3, "");
+    let footer = detail_footer(app, focused, crate::aws::services::iam::IAM_GROUP_SECTIONS.len(), "");
     let mut block = theme::pane_block("IAM Group", focused);
     block = block.title_bottom(
         Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
@@ -939,7 +1029,11 @@ pub fn iam_group_section_lines(
     section: IamGroupDetailSection,
     details_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamGroupDetails>>,
     docs_state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamPolicyDocs>>,
+    last_accessed: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamLastAccessed>>,
 ) -> Vec<(String, String)> {
+    if section == IamGroupDetailSection::LastAccessed {
+        return iam_last_accessed_lines(last_accessed, &group.arn);
+    }
     // Overview is eager (no fetch) — handle it before the load-state arms so it
     // never shows a spurious "Loading…". Policies has its own fetch.
     if section == IamGroupDetailSection::Overview {
@@ -971,7 +1065,12 @@ pub fn iam_group_section_lines(
             rows.extend(iam_policy_attachment_rows(&d.managed_policies, &d.inline_policy_names));
         }
         // Overview and Policies are handled by the early returns above.
-        (IamGroupDetailSection::Overview | IamGroupDetailSection::Policies, _) => {}
+        (
+            IamGroupDetailSection::Overview
+            | IamGroupDetailSection::Policies
+            | IamGroupDetailSection::LastAccessed,
+            _,
+        ) => {}
     }
     rows.push(("".to_string(), "".to_string()));
     rows
@@ -1139,7 +1238,7 @@ pub fn iam_idp_section_lines(
 
 pub(super) fn render_iam_account_split(app: &App, settings: &IamAccountSettings, area: Rect, frame: &mut Frame) {
     let focused = app.details_focused;
-    let footer = detail_footer(app, focused, 3, "");
+    let footer = detail_footer(app, focused, crate::aws::services::iam::IAM_ACCOUNT_SECTIONS.len(), "");
     let mut block = theme::pane_block("IAM Account Settings", focused);
     block = block.title_bottom(
         Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
@@ -1191,7 +1290,15 @@ pub(super) fn render_iam_account_split(app: &App, settings: &IamAccountSettings,
 pub fn iam_account_section_lines(
     settings: &IamAccountSettings,
     section: IamAccountDetailSection,
+    credential_report: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamCredentialReport>>,
 ) -> Vec<(String, String)> {
+    if section == IamAccountDetailSection::CredentialReport {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or_default();
+        return iam_credential_report_lines(credential_report, now);
+    }
     let mut rows = vec![("".to_string(), "".to_string())];
     match section {
         IamAccountDetailSection::Overview => {
@@ -1296,6 +1403,8 @@ pub fn iam_account_section_lines(
                 ));
             }
         }
+        // Handled by the early return above.
+        IamAccountDetailSection::CredentialReport => {}
         IamAccountDetailSection::Usage => {
             if let Some(e) = &settings.summary_error {
                 rows.extend(error_rows(e));
@@ -1391,5 +1500,177 @@ mod iam_permissions_tests {
         assert_eq!(v["broken"]["Type"], "Inline");
         assert!(rows.iter().any(|(k, val)| k.contains("AccessDenied") || val.contains("AccessDenied")));
         assert!(rows.iter().any(|(_, val)| val.contains("3 more not fetched")));
+    }
+}
+
+/// "Unused" / "old" threshold for the credential report — the common
+/// least-privilege audit line (CIS uses 90 days for key rotation and 45 for
+/// unused credentials; 90 for both keeps the summary to one number to learn).
+const CRED_STALE_SECS: i64 = 90 * 86_400;
+
+/// The Credential Report section. `now` is a parameter so tests can pin it.
+/// No report (never generated, expired, generating) is a dim hint, not an
+/// error: neboto never generates one, so that's the usual state.
+pub fn iam_credential_report_lines(
+    state: Option<&crate::lazy::Lazy<crate::aws::services::iam::IamCredentialReport>>,
+    now: i64,
+) -> Vec<(String, String)> {
+    use crate::aws::services::iam::IamCredentialReport;
+    let blank = || (String::new(), String::new());
+    let mut rows = vec![blank()];
+    let hint = |text: &str| vec![blank(), (String::new(), format!("· {text}")), blank()];
+    let (generated, users) = match state {
+        None | Some(crate::lazy::Lazy::Loading) => {
+            rows.push((String::new(), "Loading…".to_string()));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Error(e)) => {
+            rows.extend(error_rows(e));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Loaded(IamCredentialReport::NotPresent)) => {
+            return hint("No credential report has been generated — run `aws iam generate-credential-report`, then press r");
+        }
+        Some(crate::lazy::Lazy::Loaded(IamCredentialReport::Expired)) => {
+            return hint("The last credential report has expired (reports last ~4h) — run `aws iam generate-credential-report`, then press r");
+        }
+        Some(crate::lazy::Lazy::Loaded(IamCredentialReport::InProgress)) => {
+            return hint("A credential report is being generated — press r in a minute");
+        }
+        Some(crate::lazy::Lazy::Loaded(IamCredentialReport::Present { generated, users })) => (generated, users),
+    };
+
+    let stale = |t: Option<i64>| t.is_none_or(|t| now - t >= CRED_STALE_SECS);
+    let age = |t: i64| {
+        let secs = (now - t).max(0);
+        if secs < 3600 {
+            format!("{}m ago", secs / 60)
+        } else if secs < 86_400 {
+            format!("{}h ago", secs / 3600)
+        } else {
+            format!("{}d ago", secs / 86_400)
+        }
+    };
+    let iam_users: Vec<_> = users.iter().filter(|u| !u.is_root).collect();
+    let no_mfa = iam_users.iter().filter(|u| u.password_enabled && !u.mfa_active).count();
+    let active_keys: Vec<_> = iam_users.iter().flat_map(|u| u.keys.iter().filter(|k| k.active)).collect();
+    let old_keys = active_keys.iter().filter(|k| stale(k.last_rotated)).count();
+    let unused_keys = active_keys.iter().filter(|k| stale(k.last_used)).count();
+    let unused_pw = iam_users
+        .iter()
+        .filter(|u| u.password_enabled && stale(u.password_last_used))
+        .count();
+    let warn_count = |n: usize| if n == 0 { "0".to_string() } else { format!("⚠ {n}") };
+
+    rows.push(("Summary".to_string(), String::new()));
+    rows.push(blank());
+    if let Some(g) = generated {
+        rows.push((
+            "  Report generated".to_string(),
+            format!("{} · {}", crate::aws::services::iam::fmt_epoch_secs(*g), age(*g)),
+        ));
+    }
+    rows.push(("  IAM users".to_string(), iam_users.len().to_string()));
+    rows.push(("  Console users without MFA".to_string(), warn_count(no_mfa)));
+    rows.push(("  Active keys older than 90d".to_string(), warn_count(old_keys)));
+    rows.push(("  Active keys unused 90d+".to_string(), warn_count(unused_keys)));
+    rows.push(("  Passwords unused 90d+".to_string(), warn_count(unused_pw)));
+    rows.push(blank());
+
+    rows.push((format!("Users ({})", users.len()), String::new()));
+    rows.push(blank());
+    for u in users {
+        let mut problems = false;
+        let mut parts: Vec<String> = Vec::new();
+        if u.password_enabled {
+            match u.password_last_used {
+                Some(t) => parts.push(format!("console {}", age(t))),
+                None => parts.push("console never used".to_string()),
+            }
+            if u.mfa_active {
+                parts.push("MFA ✓".to_string());
+            } else {
+                parts.push("no MFA".to_string());
+                problems = true;
+            }
+            if !u.is_root && stale(u.password_last_used) {
+                problems = true;
+            }
+        } else {
+            parts.push("no console".to_string());
+        }
+        let active: Vec<_> = u.keys.iter().filter(|k| k.active).collect();
+        if active.is_empty() {
+            parts.push("no active keys".to_string());
+        }
+        for k in active {
+            let rotated = k.last_rotated.map(age).unwrap_or_else(|| "?".to_string());
+            let used = k.last_used.map(age).unwrap_or_else(|| "never".to_string());
+            parts.push(format!("key{} rotated {rotated}, used {used}", k.slot));
+            // Any active root key is a finding; for users, old or unused ones.
+            if u.is_root || stale(k.last_rotated) || stale(k.last_used) {
+                problems = true;
+            }
+        }
+        let value = parts.join(" · ");
+        rows.push((
+            format!("  {}", u.user),
+            if problems { format!("⚠ {value}") } else { value },
+        ));
+    }
+    rows.push(blank());
+    rows
+}
+
+#[cfg(test)]
+mod credential_report_tests {
+    use super::*;
+    use crate::aws::services::iam::{parse_credential_report, IamCredentialReport};
+    use crate::lazy::Lazy;
+
+    // 2026-10-15T00:00:00Z
+    const NOW: i64 = 1_792_022_400;
+
+    const CSV: &str = "user,arn,user_creation_time,password_enabled,password_last_used,password_last_changed,password_next_rotation,mfa_active,access_key_1_active,access_key_1_last_rotated,access_key_1_last_used_date,access_key_1_last_used_region,access_key_1_last_used_service,access_key_2_active,access_key_2_last_rotated,access_key_2_last_used_date,access_key_2_last_used_region,access_key_2_last_used_service,cert_1_active,cert_1_last_rotated,cert_2_active,cert_2_last_rotated
+jsmith,arn:aws:iam::123456789012:user/jsmith,2025-01-01T00:00:00+00:00,true,2026-10-14T00:00:00+00:00,2025-01-01T00:00:00+00:00,N/A,false,false,N/A,N/A,N/A,N/A,false,N/A,N/A,N/A,N/A,false,N/A,false,N/A
+<root_account>,arn:aws:iam::123456789012:root,2024-01-01T00:00:00+00:00,not_supported,2026-01-01T00:00:00+00:00,not_supported,not_supported,true,false,N/A,N/A,N/A,N/A,false,N/A,N/A,N/A,N/A,false,N/A,false,N/A
+deploy-bot,arn:aws:iam::123456789012:user/deploy-bot,2024-06-01T00:00:00+00:00,false,N/A,N/A,N/A,false,true,2025-01-01T00:00:00+00:00,2026-10-14T00:00:00+00:00,us-east-1,s3,false,N/A,N/A,N/A,N/A,false,N/A,false,N/A
+";
+
+    fn value<'a>(rows: &'a [(String, String)], key: &str) -> &'a str {
+        rows.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()).unwrap_or_else(|| panic!("no row {key}"))
+    }
+
+    #[test]
+    fn parses_by_header_name_with_root_first() {
+        let users = parse_credential_report(CSV);
+        assert_eq!(users.iter().map(|u| u.user.as_str()).collect::<Vec<_>>(), ["<root_account>", "deploy-bot", "jsmith"]);
+        let root = &users[0];
+        assert!(root.is_root && root.password_enabled && root.mfa_active);
+        let bot = &users[1];
+        assert!(!bot.password_enabled && bot.keys[0].active && !bot.keys[1].active);
+        assert!(bot.keys[0].last_rotated.is_some() && bot.keys[1].last_rotated.is_none());
+    }
+
+    #[test]
+    fn summary_flags_missing_mfa_and_old_keys() {
+        let report = Lazy::Loaded(IamCredentialReport::Present { generated: Some(NOW - 3600), users: parse_credential_report(CSV) });
+        let rows = iam_credential_report_lines(Some(&report), NOW);
+        assert_eq!(value(&rows, "  IAM users"), "2");
+        assert_eq!(value(&rows, "  Console users without MFA"), "⚠ 1");
+        assert_eq!(value(&rows, "  Active keys older than 90d"), "⚠ 1");
+        assert_eq!(value(&rows, "  Active keys unused 90d+"), "0");
+        assert!(value(&rows, "  jsmith").starts_with("⚠ console 1d ago · no MFA"));
+        assert!(value(&rows, "  deploy-bot").starts_with("⚠ no console · key1 rotated"));
+        assert!(!value(&rows, "  <root_account>").starts_with('⚠'));
+    }
+
+    #[test]
+    fn no_usable_report_is_a_hint_not_an_error() {
+        for state in [IamCredentialReport::Expired, IamCredentialReport::NotPresent, IamCredentialReport::InProgress] {
+            let rows = iam_credential_report_lines(Some(&Lazy::Loaded(state)), NOW);
+            assert!(rows.iter().any(|(k, v)| k.is_empty() && v.starts_with("· ")), "{rows:?}");
+            assert!(!rows.iter().any(|(_, v)| v.starts_with('⚠')));
+        }
     }
 }

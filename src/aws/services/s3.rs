@@ -1135,6 +1135,55 @@ pub async fn fetch_bucket_details(client: S3Client, bucket_name: String) -> Resu
     })
 }
 
+/// One S3 access point on a bucket (`s3control:ListAccessPoints`).
+#[derive(Debug, Clone)]
+pub struct S3AccessPoint {
+    pub name: String,
+    /// `Internet` or `VPC`.
+    pub network_origin: String,
+    pub vpc_id: Option<String>,
+    pub alias: Option<String>,
+    pub arn: Option<String>,
+}
+
+/// Access points this account has on `bucket`, from the bucket's region.
+/// Access points other accounts created on the bucket (cross-account access
+/// points) belong to *their* account and aren't listed here.
+pub async fn fetch_bucket_access_points(
+    client: aws_sdk_s3control::Client,
+    account_id: String,
+    bucket: String,
+) -> Result<Vec<S3AccessPoint>> {
+    let mut out = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let resp = client
+            .list_access_points()
+            .account_id(&account_id)
+            .bucket(&bucket)
+            .set_next_token(token.clone())
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+        out.extend(resp.access_point_list().iter().map(|ap| S3AccessPoint {
+            name: ap.name().to_string(),
+            network_origin: ap.network_origin().as_str().to_string(),
+            vpc_id: ap
+                .vpc_configuration()
+                .map(|v| v.vpc_id().to_string())
+                .filter(|v| !v.is_empty()),
+            alias: ap.alias().map(str::to_string),
+            arn: ap.access_point_arn().map(str::to_string),
+        }));
+        token = crate::aws::pagination::next_page_token(resp.next_token(), &token);
+        if token.is_none() {
+            break;
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
 crate::sections! {
     pub enum S3BucketDetailSection,
     pub static S3_BUCKET_SECTIONS = [
@@ -1146,6 +1195,7 @@ crate::sections! {
         Metadata "Metadata" => crate::app::App::trigger_s3_storage_metrics_load,
         FileSystems "File Systems" => crate::app::App::trigger_s3_bucket_filesystems_load,
         Tags "Tags",
+        AccessPoints "Access Points" => crate::app::App::trigger_s3_access_points_load,
     ]
 }
 
