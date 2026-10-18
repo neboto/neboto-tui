@@ -482,7 +482,8 @@ async fn fetch_warm_pool(
                 pool_state: c.pool_state().map(|s| s.as_str().to_string()).unwrap_or_default(),
                 status: c.status().map(|s| s.as_str().to_string()),
                 min_size: c.min_size(),
-                max_prepared_capacity: c.max_group_prepared_capacity(),
+                // -1 is PutWarmPool's "reset to default"; read it as unset too.
+                max_prepared_capacity: c.max_group_prepared_capacity().filter(|n| *n >= 0),
                 reuse_on_scale_in: c.instance_reuse_policy().and_then(|p| p.reuse_on_scale_in()),
                 instances: Vec::new(),
             });

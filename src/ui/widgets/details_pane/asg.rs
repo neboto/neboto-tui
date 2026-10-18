@@ -184,9 +184,10 @@ pub(super) fn asg_instances_lines(group: &AsgGroup) -> Vec<(String, String)> {
     }
 
     // Fixed-width table: Instance / Type / Zone / Lifecycle / Health
+    let lw = lifecycle_col_width(group.instances.iter().map(|i| i.lifecycle_state.as_str()));
     rows.push((
         format!(
-            " {:<19}  {:<11}  {:<12}  {:<13}  {:<9}",
+            " {:<19}  {:<11}  {:<12}  {:<lw$}  {:<9}",
             "Instance", "Type", "Zone", "Lifecycle", "Health"
         ),
         "".to_string(),
@@ -197,7 +198,7 @@ pub(super) fn asg_instances_lines(group: &AsgGroup) -> Vec<(String, String)> {
             "─".repeat(19),
             "─".repeat(11),
             "─".repeat(12),
-            "─".repeat(13),
+            "─".repeat(lw),
             "─".repeat(9)
         ),
         "".to_string(),
@@ -206,7 +207,7 @@ pub(super) fn asg_instances_lines(group: &AsgGroup) -> Vec<(String, String)> {
         let itype = inst.instance_type.clone().unwrap_or_else(|| "-".to_string());
         rows.push((
             format!(
-                " {:<19}  {:<11}  {:<12}  {:<13}  {:<9}",
+                " {:<19}  {:<11}  {:<12}  {:<lw$}  {:<9}",
                 inst.instance_id,
                 itype,
                 inst.availability_zone,
@@ -219,6 +220,14 @@ pub(super) fn asg_instances_lines(group: &AsgGroup) -> Vec<(String, String)> {
 
     rows.push(("".to_string(), "".to_string()));
     rows
+}
+
+/// Width of the Lifecycle column: the longest state present, at least the
+/// header. A fixed width can't hold the hook-held states
+/// (`Warmed:Terminating:Retained` is 27 chars), and `{:<N}` never truncates,
+/// so the Health column would shift on exactly the rows that matter.
+fn lifecycle_col_width<'a>(states: impl Iterator<Item = &'a str>) -> usize {
+    states.map(|s| s.chars().count()).max().unwrap_or(0).max("Lifecycle".len())
 }
 
 pub(super) fn asg_activities_lines(state: Option<&crate::lazy::Lazy<Vec<crate::aws::services::asg::ScalingActivity>>>) -> Vec<(String, String)> {
@@ -384,9 +393,10 @@ pub(super) fn asg_lifecycle_lines(
                 rows.push((String::new(), "No instances in the pool".to_string()));
             } else {
                 // Same table shape as the Instances section.
+                let lw = lifecycle_col_width(p.instances.iter().map(|i| i.lifecycle_state.as_str()));
                 rows.push((
                     format!(
-                        " {:<19}  {:<11}  {:<12}  {:<16}  {:<9}",
+                        " {:<19}  {:<11}  {:<12}  {:<lw$}  {:<9}",
                         "Instance", "Type", "Zone", "Lifecycle", "Health"
                     ),
                     String::new(),
@@ -397,7 +407,7 @@ pub(super) fn asg_lifecycle_lines(
                         "─".repeat(19),
                         "─".repeat(11),
                         "─".repeat(12),
-                        "─".repeat(16),
+                        "─".repeat(lw),
                         "─".repeat(9)
                     ),
                     String::new(),
@@ -405,7 +415,7 @@ pub(super) fn asg_lifecycle_lines(
                 for i in &p.instances {
                     rows.push((
                         format!(
-                            " {:<19}  {:<11}  {:<12}  {:<16}  {:<9}",
+                            " {:<19}  {:<11}  {:<12}  {:<lw$}  {:<9}",
                             i.instance_id,
                             i.instance_type.as_deref().unwrap_or("-"),
                             i.az.as_deref().unwrap_or("-"),
@@ -482,5 +492,38 @@ mod asg_lifecycle_tests {
         let t = text(&asg_lifecycle_lines(Some(&lc)));
         assert!(t.contains("the group's max size"), "{t}");
         assert!(t.contains("i-0123456789abcdef0") && t.contains("Warmed:Stopped"), "{t}");
+    }
+
+    #[test]
+    fn long_hook_held_states_keep_the_health_column_aligned() {
+        let inst = |id: &str, state: &str| AsgWarmInstance {
+            instance_id: id.into(),
+            lifecycle_state: state.into(),
+            az: Some("us-east-1a".into()),
+            instance_type: Some("t3.large".into()),
+            health: Some("Healthy".into()),
+        };
+        let lc = Lazy::Loaded(AsgLifecycle {
+            hooks: Ok(vec![]),
+            warm_pool: Ok(Some(AsgWarmPool {
+                pool_state: "Stopped".into(),
+                status: None,
+                min_size: None,
+                max_prepared_capacity: None,
+                reuse_on_scale_in: None,
+                instances: vec![
+                    inst("i-0000000000000000a", "Warmed:Stopped"),
+                    inst("i-0000000000000000b", "Warmed:Terminating:Retained"),
+                ],
+            })),
+        });
+        let rows = asg_lifecycle_lines(Some(&lc));
+        // Header ("Health") + both rows ("Healthy") start the column at one offset.
+        let cols: Vec<usize> = rows
+            .iter()
+            .filter_map(|(k, _)| k.find("Health"))
+            .collect();
+        assert_eq!(cols.len(), 3, "{rows:?}");
+        assert!(cols.iter().all(|c| *c == cols[0]), "{rows:?}");
     }
 }
