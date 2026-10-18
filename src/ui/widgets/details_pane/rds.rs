@@ -229,6 +229,246 @@ pub fn rds_param_group_section_lines(
     rows
 }
 
+// ── RDS Proxy split pane ──────────────────────────────────────────────────────
+
+pub(super) fn render_rds_proxy_split(
+    app: &App,
+    proxy: &crate::aws::services::rds::RdsProxy,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let subtitle = format!("{} · {}", proxy.engine_family, proxy.status);
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "RDS Proxy",
+        &proxy.name,
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::rds::RDS_PROXY_SECTIONS),
+    );
+}
+
+pub fn rds_proxy_section_lines(
+    proxy: &crate::aws::services::rds::RdsProxy,
+    section: crate::aws::services::rds::RdsProxyDetailSection,
+    targets_state: Option<&crate::lazy::Lazy<crate::aws::services::rds::RdsProxyTargets>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::rds::RdsProxyDetailSection;
+    let mut rows = vec![(String::new(), String::new())];
+    match section {
+        RdsProxyDetailSection::Overview => rows.extend(rds_proxy_overview_rows(proxy)),
+        RdsProxyDetailSection::Targets => match targets_state {
+            None | Some(crate::lazy::Lazy::Loading) => {
+                rows.push((String::new(), "Loading…".to_string()));
+            }
+            Some(crate::lazy::Lazy::Error(e)) => rows.extend(error_rows(e)),
+            Some(crate::lazy::Lazy::Loaded(t)) => rows.extend(rds_proxy_target_rows(t)),
+        },
+    }
+    rows.push((String::new(), String::new()));
+    rows
+}
+
+fn rds_proxy_overview_rows(p: &crate::aws::services::rds::RdsProxy) -> Vec<(String, String)> {
+    let kv = |k: &str, v: String| (format!("  {k}"), v);
+    let mut rows = vec![
+        ("Proxy".to_string(), String::new()),
+        (String::new(), String::new()),
+        kv("Name", p.name.clone()),
+        kv("Status", p.status.clone()),
+        kv("Engine Family", p.engine_family.clone()),
+    ];
+    if let Some(e) = &p.endpoint {
+        rows.push(kv("Endpoint", e.clone()));
+    }
+    if !p.arn.is_empty() {
+        rows.push(kv("ARN", p.arn.clone()));
+    }
+    if let Some(c) = &p.created {
+        rows.push(kv("Created", c.clone()));
+    }
+    if let Some(u) = &p.updated {
+        rows.push(kv("Updated", u.clone()));
+    }
+
+    rows.push((String::new(), String::new()));
+    rows.push(("Network".to_string(), String::new()));
+    rows.push((String::new(), String::new()));
+    if let Some(v) = &p.vpc_id {
+        rows.push(kv("VPC", v.clone()));
+    }
+    for s in &p.subnet_ids {
+        rows.push(kv("Subnet", s.clone()));
+    }
+    for sg in &p.security_group_ids {
+        rows.push(kv("Security Group", sg.clone()));
+    }
+    if let Some(t) = &p.endpoint_network_type {
+        rows.push(kv("Endpoint Network", t.clone()));
+    }
+    if let Some(t) = &p.target_network_type {
+        rows.push(kv("Target Network", t.clone()));
+    }
+
+    rows.push((String::new(), String::new()));
+    rows.push(("Security".to_string(), String::new()));
+    rows.push((String::new(), String::new()));
+    rows.push(kv(
+        "Require TLS",
+        if p.require_tls { "✓ yes" } else { "✗ no — clients may connect in plaintext" }.to_string(),
+    ));
+    if let Some(r) = &p.role_arn {
+        rows.push(kv("IAM Role", r.clone()));
+    }
+    if let Some(s) = &p.default_auth_scheme {
+        rows.push(kv("Default Auth Scheme", s.clone()));
+    }
+    if let Some(t) = p.idle_client_timeout {
+        rows.push(kv("Idle Client Timeout", idle_timeout_text(t)));
+    }
+    rows.push(kv(
+        "Debug Logging",
+        if p.debug_logging {
+            // AWS's own warning: it logs SQL statement text, sensitive data included.
+            "⚠ on — logs SQL statement text".to_string()
+        } else {
+            "off".to_string()
+        },
+    ));
+
+    rows.push((String::new(), String::new()));
+    rows.push((format!("Authentication ({})", p.auth.len()), String::new()));
+    rows.push((String::new(), String::new()));
+    if p.auth.is_empty() {
+        rows.push((String::new(), "No credentials configured".to_string()));
+    }
+    for a in &p.auth {
+        let who = a
+            .user_name
+            .clone()
+            .or_else(|| a.description.clone())
+            .unwrap_or_else(|| "any database user".to_string());
+        let mut how: Vec<String> = Vec::new();
+        if let Some(s) = &a.auth_scheme {
+            how.push(s.clone());
+        }
+        if let Some(i) = &a.iam_auth {
+            how.push(format!("IAM {}", i.to_lowercase()));
+        }
+        if let Some(c) = &a.client_password_auth_type {
+            how.push(c.clone());
+        }
+        rows.push((format!("  {who}"), how.join(" · ")));
+        // A reference only — neboto never resolves the secret's value.
+        if let Some(s) = &a.secret_arn {
+            rows.push(("    Secret".to_string(), s.clone()));
+        }
+    }
+    rows
+}
+
+fn rds_proxy_target_rows(t: &crate::aws::services::rds::RdsProxyTargets) -> Vec<(String, String)> {
+    let kv = |k: &str, v: String| (format!("  {k}"), v);
+    let mut rows = Vec::new();
+    for g in &t.groups {
+        let label = if g.is_default {
+            format!("Target Group: {} (default)", g.name)
+        } else {
+            format!("Target Group: {}", g.name)
+        };
+        rows.push((label, String::new()));
+        rows.push((String::new(), String::new()));
+        if let Some(s) = &g.status {
+            rows.push(kv("Status", s.clone()));
+        }
+        if let Some(n) = g.max_connections_percent {
+            rows.push(kv("Max Connections", format!("{n}% of the database's max_connections")));
+        }
+        if let Some(n) = g.max_idle_connections_percent {
+            rows.push(kv("Max Idle Connections", format!("{n}%")));
+        }
+        if let Some(n) = g.borrow_timeout_secs {
+            rows.push(kv("Borrow Timeout", format!("{n}s")));
+        }
+        if !g.session_pinning_filters.is_empty() {
+            rows.push(kv("Session Pinning Filters", g.session_pinning_filters.join(", ")));
+        }
+        if let Some(q) = &g.init_query {
+            rows.push(kv("Init Query", q.clone()));
+        }
+        rows.push((String::new(), String::new()));
+    }
+
+    let unhealthy = t
+        .targets
+        .iter()
+        // Only UNAVAILABLE is a fault: REGISTERING is transient (a new proxy or
+        // target) and UNUSED is a target the proxy isn't routing to.
+        .filter(|x| x.health_state.as_deref() == Some("UNAVAILABLE"))
+        .count();
+    let header = if unhealthy > 0 {
+        format!("Targets ({}) — ⚠ {} not available", t.targets.len(), unhealthy)
+    } else {
+        format!("Targets ({})", t.targets.len())
+    };
+    rows.push((header, String::new()));
+    rows.push((String::new(), String::new()));
+    if t.targets.is_empty() {
+        rows.push((String::new(), "No targets registered — the proxy has nothing to route to".to_string()));
+    }
+    for x in &t.targets {
+        // Row labels are keyed by `rds_row_jump_target`: "Target DB" →
+        // Instances, "Cluster" → Clusters.
+        let label = match x.kind.as_str() {
+            "TRACKED_CLUSTER" => "Cluster",
+            "RDS_INSTANCE" => "Target DB",
+            _ => "Endpoint",
+        };
+        let id = x
+            .resource_id
+            .clone()
+            .or_else(|| x.endpoint.clone())
+            .unwrap_or_else(|| "—".to_string());
+        rows.push((format!("  {label}"), id));
+        let health = match x.health_state.as_deref() {
+            Some("AVAILABLE") => "✓ available".to_string(),
+            Some(state) => {
+                let mut v = if state == "UNAVAILABLE" {
+                    format!("⚠ {}", state.to_lowercase())
+                } else {
+                    // Dimmed annotation (`· ` prefix), not a warning.
+                    format!("· {}", state.to_lowercase())
+                };
+                if let Some(r) = &x.health_reason {
+                    v.push_str(&format!(" · {r}"));
+                }
+                if let Some(d) = &x.health_description {
+                    v.push_str(&format!(" — {d}"));
+                }
+                v
+            }
+            // Tracked clusters carry no health of their own; their instances do.
+            None => "—".to_string(),
+        };
+        rows.push(("    Health".to_string(), health));
+        if let Some(r) = &x.role {
+            rows.push(("    Role".to_string(), r.clone()));
+        }
+        if let (Some(e), "RDS_INSTANCE") = (&x.endpoint, x.kind.as_str()) {
+            let ep = match x.port {
+                Some(p) => format!("{e}:{p}"),
+                None => e.clone(),
+            };
+            rows.push(("    Endpoint".to_string(), ep));
+        }
+        if let Some(c) = x.tracked_cluster.as_ref().filter(|_| x.kind != "TRACKED_CLUSTER") {
+            rows.push(("    Tracked Cluster".to_string(), c.clone()));
+        }
+    }
+    rows
+}
+
 // ── RDS Instance Split Pane ───────────────────────────────────────────────────
 
 pub(super) fn render_rds_instance_split(app: &App, db: &RdsInstance, area: Rect, frame: &mut Frame) {
@@ -633,6 +873,51 @@ pub(super) fn rds_pi_lines(
     rows
 }
 
+/// The blue/green deployment this instance or cluster is part of — which
+/// side it is, the deployment's status, and the other side (jumpable ARN).
+/// Nothing when there's no deployment.
+/// After a switchover the source is no longer production (AWS renames both
+/// sides), so a finished deployment is labelled as history, not as roles.
+fn blue_green_role(bg: &crate::aws::services::rds::RdsBlueGreen) -> &'static str {
+    match (bg.is_switched_over(), bg.is_source) {
+        (false, true) => "blue — source (production)",
+        (false, false) => "green — staging copy",
+        (true, true) => "was blue (source) — switched over",
+        (true, false) => "was green (target) — switched over",
+    }
+}
+
+fn rds_blue_green_rows(bg: Option<&crate::aws::services::rds::RdsBlueGreen>) -> Vec<(String, String)> {
+    let Some(bg) = bg else {
+        return Vec::new();
+    };
+    let mut rows = vec![
+        (String::new(), String::new()),
+        ("Blue/Green Deployment".to_string(), String::new()),
+        ("  Name".to_string(), bg.name.clone()),
+        ("  Deployment ID".to_string(), bg.id.clone()),
+        ("  Role".to_string(), blue_green_role(bg).to_string()),
+        ("  Status".to_string(), bg.status.clone()),
+    ];
+    if let Some(d) = &bg.status_details {
+        rows.push(("  Status Details".to_string(), d.clone()));
+    }
+    if let Some(other) = &bg.counterpart {
+        let label = if bg.is_source { "  Green (target)" } else { "  Blue (source)" };
+        rows.push((label.to_string(), other.clone()));
+    }
+    if bg.is_switched_over() {
+        rows.push((
+            String::new(),
+            "· sides as they were before the switchover, which renamed both — delete the deployment once you're done with it".to_string(),
+        ));
+    }
+    if let Some(c) = &bg.created {
+        rows.push(("  Created".to_string(), c.clone()));
+    }
+    rows
+}
+
 pub(super) fn rds_config_lines(db: &RdsInstance) -> Vec<(String, String)> {
     let mut rows = vec![];
 
@@ -661,6 +946,8 @@ pub(super) fn rds_config_lines(db: &RdsInstance) -> Vec<(String, String)> {
     if let Some(db_name) = &db.db_name {
         rows.push(("DB Name".to_string(), db_name.clone()));
     }
+
+    rows.extend(rds_blue_green_rows(db.blue_green.as_ref()));
 
     rows.push(("".to_string(), "".to_string()));
     rows.push((
@@ -954,6 +1241,7 @@ pub fn rds_cluster_section_lines(
             if let Some(pg) = &c.cluster_parameter_group {
                 rows.push(("Parameter Group".to_string(), pg.clone()));
             }
+            rows.extend(rds_blue_green_rows(c.blue_green.as_ref()));
 
             rows.push(("".to_string(), "".to_string()));
             rows.push(("Storage".to_string(), "".to_string()));
@@ -1110,4 +1398,148 @@ pub fn rds_cluster_section_lines(
     }
     rows.push(("".to_string(), "".to_string()));
     rows
+}
+
+/// `90s`, `300s (5m)`: minutes only when they're exact, since `t / 60`
+/// rounded 90s down to "1m" and anything under a minute to "0m".
+fn idle_timeout_text(t: i32) -> String {
+    if t >= 60 && t % 60 == 0 {
+        format!("{t}s ({}m)", t / 60)
+    } else {
+        format!("{t}s")
+    }
+}
+
+#[cfg(test)]
+mod rds_proxy_tests {
+    use super::*;
+    use crate::aws::services::rds::{
+        RdsProxy, RdsProxyDetailSection, RdsProxyTarget, RdsProxyTargetGroup, RdsProxyTargets,
+    };
+
+    fn target(kind: &str, id: &str, state: Option<&str>) -> RdsProxyTarget {
+        RdsProxyTarget {
+            target_group: "default".to_string(),
+            kind: kind.to_string(),
+            resource_id: Some(id.to_string()),
+            tracked_cluster: None,
+            endpoint: Some(format!("{id}.example")),
+            port: Some(5432),
+            role: Some("READ_WRITE".to_string()),
+            health_state: state.map(str::to_string),
+            health_reason: state.filter(|s| *s != "AVAILABLE").map(|_| "AUTH_FAILURE".to_string()),
+            health_description: None,
+        }
+    }
+
+    #[test]
+    fn an_unavailable_target_warns_and_rows_keep_their_jump_labels() {
+        let proxy = RdsProxy::from_sdk(
+            &aws_sdk_rds::types::DbProxy::builder().db_proxy_name("orders-proxy").build(),
+        );
+        let targets = RdsProxyTargets {
+            groups: vec![RdsProxyTargetGroup {
+                name: "default".to_string(),
+                is_default: true,
+                status: Some("available".to_string()),
+                max_connections_percent: Some(100),
+                max_idle_connections_percent: Some(50),
+                borrow_timeout_secs: Some(120),
+                session_pinning_filters: vec![],
+                init_query: None,
+            }],
+            targets: vec![
+                target("TRACKED_CLUSTER", "orders-cluster", None),
+                target("RDS_INSTANCE", "orders-1", Some("AVAILABLE")),
+                target("RDS_INSTANCE", "orders-2", Some("UNAVAILABLE")),
+            ],
+        };
+        let rows = rds_proxy_section_lines(
+            &proxy,
+            RdsProxyDetailSection::Targets,
+            Some(&crate::lazy::Lazy::Loaded(targets)),
+        );
+        let has = |k: &str, v: &str| rows.iter().any(|(rk, rv)| rk == k && rv.contains(v));
+        assert!(rows.iter().any(|(k, _)| k == "Targets (3) — ⚠ 1 not available"));
+        // `rds_row_jump_target` keys on these exact labels.
+        assert!(has("  Cluster", "orders-cluster"));
+        assert!(has("  Target DB", "orders-2"));
+        assert!(has("    Health", "⚠ unavailable · AUTH_FAILURE"));
+        assert!(has("    Health", "✓ available"));
+    }
+
+    #[test]
+    fn registering_and_unused_targets_are_not_faults() {
+        let proxy = RdsProxy::from_sdk(
+            &aws_sdk_rds::types::DbProxy::builder().db_proxy_name("orders-proxy").build(),
+        );
+        let mut registering = target("RDS_INSTANCE", "orders-3", Some("REGISTERING"));
+        registering.health_reason = Some("PENDING_PROXY_CAPACITY".to_string());
+        let targets = RdsProxyTargets {
+            groups: vec![],
+            targets: vec![registering, target("RDS_INSTANCE", "orders-4", Some("UNUSED"))],
+        };
+        let rows = rds_proxy_section_lines(
+            &proxy,
+            RdsProxyDetailSection::Targets,
+            Some(&crate::lazy::Lazy::Loaded(targets)),
+        );
+        assert!(rows.iter().any(|(k, _)| k == "Targets (2)"), "{rows:?}");
+        let health: Vec<&str> =
+            rows.iter().filter(|(k, _)| k == "    Health").map(|(_, v)| v.as_str()).collect();
+        assert_eq!(health, vec!["· registering · PENDING_PROXY_CAPACITY", "· unused · AUTH_FAILURE"]);
+    }
+
+    #[test]
+    fn idle_timeout_shows_minutes_only_when_exact() {
+        assert_eq!(idle_timeout_text(1800), "1800s (30m)");
+        assert_eq!(idle_timeout_text(90), "90s");
+        assert_eq!(idle_timeout_text(30), "30s");
+    }
+}
+
+#[cfg(test)]
+mod blue_green_row_tests {
+    use super::rds_blue_green_rows;
+    use crate::aws::services::rds::RdsBlueGreen;
+
+    fn bg(is_source: bool, status: &str, counterpart: Option<&str>) -> RdsBlueGreen {
+        RdsBlueGreen {
+            id: "bgd-abc".into(),
+            name: "orders-upgrade".into(),
+            status: status.into(),
+            status_details: None,
+            is_source,
+            counterpart: counterpart.map(str::to_string),
+            created: None,
+        }
+    }
+
+    fn value<'a>(rows: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        rows.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn no_deployment_adds_nothing() {
+        assert!(rds_blue_green_rows(None).is_empty());
+    }
+
+    #[test]
+    fn each_side_names_itself_and_its_counterpart() {
+        let src = rds_blue_green_rows(Some(&bg(true, "AVAILABLE", Some("arn:green"))));
+        assert_eq!(value(&src, "  Role"), Some("blue — source (production)"));
+        assert_eq!(value(&src, "  Green (target)"), Some("arn:green"));
+        let tgt = rds_blue_green_rows(Some(&bg(false, "AVAILABLE", Some("arn:blue"))));
+        assert_eq!(value(&tgt, "  Role"), Some("green — staging copy"));
+        assert_eq!(value(&tgt, "  Blue (source)"), Some("arn:blue"));
+    }
+
+    #[test]
+    fn a_switched_over_deployment_reads_as_history() {
+        let rows = rds_blue_green_rows(Some(&bg(true, "SWITCHOVER_COMPLETED", None)));
+        assert_eq!(value(&rows, "  Role"), Some("was blue (source) — switched over"));
+        assert!(rows.iter().any(|(_, v)| v.contains("before the switchover")), "{rows:?}");
+        let live = rds_blue_green_rows(Some(&bg(true, "AVAILABLE", None)));
+        assert!(!live.iter().any(|(_, v)| v.contains("before the switchover")), "{live:?}");
+    }
 }

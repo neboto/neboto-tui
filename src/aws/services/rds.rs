@@ -47,6 +47,20 @@ impl AwsService for RdsService {
     ) -> Result<()> {
         let mut total = 0usize;
 
+        // Blue/green deployments, joined onto their source and target
+        // instances/clusters below. One account-wide call; a failure warns and
+        // the rows just carry no deployment.
+        let mut blue_green = match fetch_blue_green_map(&self.client).await {
+            Ok(m) => m,
+            Err(e) => {
+                let _ = event_tx.send(Event::ResourceLoadWarning {
+                    service: service_type,
+                    warning: format!("Blue/green deployments: {e}"),
+                });
+                HashMap::new()
+            }
+        };
+
         let mut inst_paginator = self.client.describe_db_instances().into_paginator().send();
         while let Some(result) = inst_paginator.next().await {
             match result {
@@ -54,7 +68,11 @@ impl AwsService for RdsService {
                     let batch: Vec<Box<dyn Resource>> = page
                         .db_instances()
                         .iter()
-                        .map(|db| Box::new(RdsInstance::from_sdk(db)) as Box<dyn Resource>)
+                        .map(|db| {
+                            let mut inst = RdsInstance::from_sdk(db);
+                            inst.blue_green = blue_green.remove(&inst.arn);
+                            Box::new(inst) as Box<dyn Resource>
+                        })
                         .collect();
                     let count = batch.len();
                     if count == 0 {
@@ -88,7 +106,11 @@ impl AwsService for RdsService {
                     let batch: Vec<Box<dyn Resource>> = page
                         .db_clusters()
                         .iter()
-                        .map(|c| Box::new(RdsCluster::from_sdk(c)) as Box<dyn Resource>)
+                        .map(|c| {
+                            let mut cluster = RdsCluster::from_sdk(c);
+                            cluster.blue_green = blue_green.remove(&cluster.arn);
+                            Box::new(cluster) as Box<dyn Resource>
+                        })
                         .collect();
                     let count = batch.len();
                     if count == 0 {
@@ -323,6 +345,41 @@ impl AwsService for RdsService {
             }
         }
 
+        // RDS Proxy — best-effort like the groups above; accounts without
+        // proxies just list none.
+        let mut proxy_paginator = self.client.describe_db_proxies().into_paginator().send();
+        while let Some(result) = proxy_paginator.next().await {
+            match result {
+                Ok(page) => {
+                    let batch: Vec<Box<dyn Resource>> = page
+                        .db_proxies()
+                        .iter()
+                        .map(|p| Box::new(RdsProxy::from_sdk(p)) as Box<dyn Resource>)
+                        .collect();
+                    if batch.is_empty() {
+                        continue;
+                    }
+                    total += batch.len();
+                    let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                        service: service_type,
+                        resources: batch,
+                        progress: LoadProgress {
+                            loaded_count: total,
+                            total_count: None,
+                            status_message: Some("Loading proxies…".to_string()),
+                        },
+                    });
+                }
+                Err(e) => {
+                    let _ = event_tx.send(Event::ResourceLoadWarning {
+                        service: service_type,
+                        warning: format!("DB proxies: {}", crate::error::sdk_error_message(&e)),
+                    });
+                    break;
+                }
+            }
+        }
+
         let _ = event_tx.send(Event::ResourcesFullyLoaded {
             service: service_type,
             total_count: total,
@@ -346,6 +403,8 @@ fn fmt_dt(t: &aws_sdk_rds::primitives::DateTime) -> String {
 
 #[derive(Debug, Clone)]
 pub struct RdsInstance {
+    /// Set by the list load when a blue/green deployment names this ARN.
+    pub blue_green: Option<RdsBlueGreen>,
     pub db_identifier: String,
     pub arn: String,
     pub db_instance_class: String,
@@ -537,6 +596,76 @@ fn cluster_pending_rows(
     rows
 }
 
+/// The blue/green deployment an instance or cluster takes part in, seen from
+/// its side: blue (the source, production) or green (the staging copy).
+#[derive(Debug, Clone)]
+pub struct RdsBlueGreen {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub status_details: Option<String>,
+    /// True on the blue (source) side.
+    pub is_source: bool,
+    /// The other side's ARN — jumpable.
+    pub counterpart: Option<String>,
+    pub created: Option<String>,
+}
+
+impl RdsBlueGreen {
+    /// Still in flight (or waiting to switch over). The finished and failed
+    /// states stay listed until someone deletes the deployment.
+    pub fn is_active(&self) -> bool {
+        matches!(self.status.as_str(), "PROVISIONING" | "AVAILABLE" | "SWITCHOVER_IN_PROGRESS")
+    }
+
+    /// Source/target describe the databases *before* switchover (the SDK's
+    /// own wording); a switchover renames both sides, so after it "blue is
+    /// production" no longer holds and the labels have to say so.
+    pub fn is_switched_over(&self) -> bool {
+        self.status == "SWITCHOVER_COMPLETED"
+    }
+}
+
+/// Keep one deployment per ARN, preferring an active one: an old completed
+/// deployment and a new one can both name the same database, and the page
+/// order decides nothing.
+fn insert_blue_green(map: &mut HashMap<String, RdsBlueGreen>, arn: &str, side: RdsBlueGreen) {
+    if map.get(arn).is_some_and(|existing| existing.is_active() && !side.is_active()) {
+        return;
+    }
+    map.insert(arn.to_string(), side);
+}
+
+/// `DescribeBlueGreenDeployments` keyed by both the source and the target
+/// ARN, so either side's row finds it.
+pub async fn fetch_blue_green_map(
+    client: &aws_sdk_rds::Client,
+) -> std::result::Result<HashMap<String, RdsBlueGreen>, String> {
+    let mut map = HashMap::new();
+    let mut pages = client.describe_blue_green_deployments().into_paginator().send();
+    while let Some(page) = pages.next().await {
+        let page = page.map_err(|e| crate::error::sdk_error_message(&e))?;
+        for d in page.blue_green_deployments() {
+            let side = |is_source: bool, counterpart: Option<&str>| RdsBlueGreen {
+                id: d.blue_green_deployment_identifier().unwrap_or_default().to_string(),
+                name: d.blue_green_deployment_name().unwrap_or_default().to_string(),
+                status: d.status().unwrap_or_default().to_string(),
+                status_details: d.status_details().filter(|s| !s.is_empty()).map(str::to_string),
+                is_source,
+                counterpart: counterpart.map(str::to_string),
+                created: d.create_time().map(|t| t.to_string()),
+            };
+            if let Some(src) = d.source() {
+                insert_blue_green(&mut map, src, side(true, d.target()));
+            }
+            if let Some(tgt) = d.target() {
+                insert_blue_green(&mut map, tgt, side(false, d.source()));
+            }
+        }
+    }
+    Ok(map)
+}
+
 impl RdsInstance {
     pub fn from_sdk(db: &aws_sdk_rds::types::DbInstance) -> Self {
         let tags: HashMap<String, String> = db
@@ -552,6 +681,7 @@ impl RdsInstance {
             .collect();
 
         Self {
+            blue_green: None,
             db_identifier: db.db_instance_identifier().unwrap_or("").to_string(),
             arn: db.db_instance_arn().unwrap_or("").to_string(),
             db_instance_class: db.db_instance_class().unwrap_or("").to_string(),
@@ -795,6 +925,8 @@ impl Resource for RdsInstance {
 
 #[derive(Debug, Clone)]
 pub struct RdsCluster {
+    /// Set by the list load when a blue/green deployment names this ARN.
+    pub blue_green: Option<RdsBlueGreen>,
     pub cluster_identifier: String,
     pub arn: String,
     pub engine: String,
@@ -868,6 +1000,7 @@ impl RdsCluster {
             c.availability_zones().iter().map(|az| az.to_string()).collect();
 
         Self {
+            blue_green: None,
             cluster_identifier: c.db_cluster_identifier().unwrap_or("").to_string(),
             arn: c.db_cluster_arn().unwrap_or("").to_string(),
             engine: c.engine().unwrap_or("").to_string(),
@@ -1888,6 +2021,298 @@ impl Resource for RdsSubnetGroup {
     }
 }
 
+// ── RDS Proxy (Proxies sub-tab) ──────────────────────────────────────────────
+
+/// One database credential a proxy logs in with. The secret is a Secrets
+/// Manager **reference** — shown, never resolved.
+#[derive(Debug, Clone)]
+pub struct RdsProxyAuth {
+    pub description: Option<String>,
+    pub user_name: Option<String>,
+    pub auth_scheme: Option<String>,
+    pub secret_arn: Option<String>,
+    pub iam_auth: Option<String>,
+    pub client_password_auth_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RdsProxy {
+    pub name: String,
+    pub arn: String,
+    pub status: String,
+    pub engine_family: String,
+    pub endpoint: Option<String>,
+    pub vpc_id: Option<String>,
+    pub subnet_ids: Vec<String>,
+    pub security_group_ids: Vec<String>,
+    pub role_arn: Option<String>,
+    pub require_tls: bool,
+    pub idle_client_timeout: Option<i32>,
+    pub debug_logging: bool,
+    pub default_auth_scheme: Option<String>,
+    pub auth: Vec<RdsProxyAuth>,
+    pub endpoint_network_type: Option<String>,
+    pub target_network_type: Option<String>,
+    pub created: Option<String>,
+    pub updated: Option<String>,
+    pub tags: HashMap<String, String>,
+}
+
+fn non_empty(s: Option<&str>) -> Option<String> {
+    s.filter(|v| !v.is_empty()).map(str::to_string)
+}
+
+impl RdsProxy {
+    pub fn from_sdk(p: &aws_sdk_rds::types::DbProxy) -> Self {
+        Self {
+            name: p.db_proxy_name().unwrap_or_default().to_string(),
+            arn: p.db_proxy_arn().unwrap_or_default().to_string(),
+            status: p.status().map(|s| s.as_str().to_string()).unwrap_or_default(),
+            engine_family: p.engine_family().unwrap_or_default().to_string(),
+            endpoint: non_empty(p.endpoint()),
+            vpc_id: non_empty(p.vpc_id()),
+            subnet_ids: p.vpc_subnet_ids().to_vec(),
+            security_group_ids: p.vpc_security_group_ids().to_vec(),
+            role_arn: non_empty(p.role_arn()),
+            require_tls: p.require_tls().unwrap_or(false),
+            idle_client_timeout: p.idle_client_timeout(),
+            debug_logging: p.debug_logging().unwrap_or(false),
+            default_auth_scheme: non_empty(p.default_auth_scheme()),
+            auth: p
+                .auth()
+                .iter()
+                .map(|a| RdsProxyAuth {
+                    description: non_empty(a.description()),
+                    user_name: non_empty(a.user_name()),
+                    auth_scheme: a.auth_scheme().map(|x| x.as_str().to_string()),
+                    secret_arn: non_empty(a.secret_arn()),
+                    iam_auth: a.iam_auth().map(|x| x.as_str().to_string()),
+                    client_password_auth_type: a
+                        .client_password_auth_type()
+                        .map(|x| x.as_str().to_string()),
+                })
+                .collect(),
+            endpoint_network_type: p.endpoint_network_type().map(|x| x.as_str().to_string()),
+            target_network_type: p
+                .target_connection_network_type()
+                .map(|x| x.as_str().to_string()),
+            created: p.created_date().map(fmt_dt),
+            updated: p.updated_date().map(fmt_dt),
+            tags: HashMap::new(),
+        }
+    }
+}
+
+crate::sections! {
+    pub enum RdsProxyDetailSection,
+    pub static RDS_PROXY_SECTIONS = [
+        Overview "Overview",
+        Targets "Targets" => crate::app::App::trigger_rds_proxy_targets_load,
+    ]
+}
+
+impl Resource for RdsProxy {
+    fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
+        Some(&RDS_PROXY_SECTIONS)
+    }
+
+    fn references(&self) -> Vec<(String, String)> {
+        let mut v = sg_refs(self.security_group_ids());
+        let mut r = |l: &str, x: &str| v.push((l.to_string(), x.to_string()));
+        for x in &self.subnet_ids { r("Subnet", x); }
+        if let Some(x) = &self.vpc_id { r("VPC", x); }
+        if let Some(x) = &self.role_arn { r("IAM Role", x); }
+        for a in &self.auth {
+            if let Some(x) = &a.secret_arn { r("Secret", x); }
+        }
+        v
+    }
+
+    fn security_group_ids(&self) -> Vec<String> {
+        self.security_group_ids.clone()
+    }
+
+    fn cli_command(&self) -> Option<String> {
+        Some(format!(
+            "aws rds describe-db-proxies --db-proxy-name {}",
+            crate::aws::resource::shell_quote(&self.name)
+        ))
+    }
+
+    fn id(&self) -> &str {
+        &self.name
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn resource_type(&self) -> &str {
+        "RDS Proxy"
+    }
+
+    fn state(&self) -> ResourceState {
+        match self.status.as_str() {
+            "available" => ResourceState::Available,
+            "creating" => ResourceState::Creating,
+            "deleting" => ResourceState::Deleting,
+            "modifying" | "reactivating" | "suspending" => ResourceState::Pending,
+            "suspended" => ResourceState::Stopped,
+            "" => ResourceState::stateless(),
+            // incompatible-network / insufficient-resource-limits
+            _ => ResourceState::Unavailable,
+        }
+    }
+
+    fn state_label(&self) -> String {
+        native_state_label(&self.status, || self.state())
+    }
+
+    fn tags(&self) -> &HashMap<String, String> {
+        &self.tags
+    }
+
+    fn search_text(&self) -> String {
+        format!(
+            "{} {} {} {} {}",
+            self.name,
+            self.engine_family,
+            self.status,
+            self.endpoint.as_deref().unwrap_or(""),
+            self.vpc_id.as_deref().unwrap_or(""),
+        )
+    }
+
+    fn details(&self) -> Vec<(String, String)> {
+        let mut rows = vec![
+            ("Name".to_string(), self.name.clone()),
+            ("Status".to_string(), self.status.clone()),
+            ("Engine Family".to_string(), self.engine_family.clone()),
+        ];
+        if let Some(e) = &self.endpoint {
+            rows.push(("Endpoint".to_string(), e.clone()));
+        }
+        if !self.arn.is_empty() {
+            rows.push(("ARN".to_string(), self.arn.clone()));
+        }
+        rows
+    }
+
+    fn clone_box(&self) -> Box<dyn Resource> {
+        Box::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn console_url(&self, region: &str) -> Option<String> {
+        Some(format!(
+            "https://{}.console.aws.amazon.com/rds/home?region={}#proxy:id={}",
+            region, region, self.name
+        ))
+    }
+}
+
+/// A proxy target group's connection-pool settings (Targets section).
+#[derive(Debug, Clone)]
+pub struct RdsProxyTargetGroup {
+    pub name: String,
+    pub is_default: bool,
+    pub status: Option<String>,
+    pub max_connections_percent: Option<i32>,
+    pub max_idle_connections_percent: Option<i32>,
+    pub borrow_timeout_secs: Option<i32>,
+    pub session_pinning_filters: Vec<String>,
+    pub init_query: Option<String>,
+}
+
+/// One database a proxy routes to, with its health.
+#[derive(Debug, Clone)]
+pub struct RdsProxyTarget {
+    pub target_group: String,
+    /// RDS_INSTANCE / RDS_SERVERLESS_ENDPOINT / TRACKED_CLUSTER.
+    pub kind: String,
+    /// The instance or cluster identifier (`RdsResourceId`).
+    pub resource_id: Option<String>,
+    pub tracked_cluster: Option<String>,
+    pub endpoint: Option<String>,
+    pub port: Option<i32>,
+    pub role: Option<String>,
+    pub health_state: Option<String>,
+    pub health_reason: Option<String>,
+    pub health_description: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RdsProxyTargets {
+    pub groups: Vec<RdsProxyTargetGroup>,
+    pub targets: Vec<RdsProxyTarget>,
+}
+
+/// `DescribeDBProxyTargetGroups`, then `DescribeDBProxyTargets` per group (a
+/// proxy has a single `default` group today, so two calls in practice).
+pub async fn fetch_rds_proxy_targets(client: RdsClient, proxy: String) -> Result<RdsProxyTargets> {
+    let sdk = crate::error::Error::AwsSdk;
+    let mut groups = Vec::new();
+    let mut pages = client
+        .describe_db_proxy_target_groups()
+        .db_proxy_name(&proxy)
+        .into_paginator()
+        .send();
+    while let Some(page) = pages.next().await {
+        let page = page.map_err(|e| sdk(crate::error::sdk_error_message(&e)))?;
+        for g in page.target_groups() {
+            let pool = g.connection_pool_config();
+            groups.push(RdsProxyTargetGroup {
+                name: g.target_group_name().unwrap_or_default().to_string(),
+                is_default: g.is_default().unwrap_or(false),
+                status: non_empty(g.status()),
+                max_connections_percent: pool.and_then(|p| p.max_connections_percent()),
+                max_idle_connections_percent: pool.and_then(|p| p.max_idle_connections_percent()),
+                borrow_timeout_secs: pool.and_then(|p| p.connection_borrow_timeout()),
+                session_pinning_filters: pool
+                    .map(|p| p.session_pinning_filters().to_vec())
+                    .unwrap_or_default(),
+                init_query: pool.and_then(|p| non_empty(p.init_query())),
+            });
+        }
+    }
+
+    let mut targets = Vec::new();
+    for g in &groups {
+        let mut pages = client
+            .describe_db_proxy_targets()
+            .db_proxy_name(&proxy)
+            .target_group_name(&g.name)
+            .into_paginator()
+            .send();
+        while let Some(page) = pages.next().await {
+            let page = page.map_err(|e| sdk(crate::error::sdk_error_message(&e)))?;
+            for t in page.targets() {
+                let health = t.target_health();
+                targets.push(RdsProxyTarget {
+                    target_group: g.name.clone(),
+                    kind: t.r#type().map(|x| x.as_str().to_string()).unwrap_or_default(),
+                    resource_id: non_empty(t.rds_resource_id()),
+                    tracked_cluster: non_empty(t.tracked_cluster_id()),
+                    endpoint: non_empty(t.endpoint()),
+                    port: t.port(),
+                    role: t.role().map(|x| x.as_str().to_string()),
+                    health_state: health.and_then(|h| h.state()).map(|x| x.as_str().to_string()),
+                    health_reason: health.and_then(|h| h.reason()).map(|x| x.as_str().to_string()),
+                    health_description: health.and_then(|h| non_empty(h.description())),
+                });
+            }
+        }
+    }
+    // Tracked clusters first (they own the instance rows), then by id.
+    targets.sort_by(|a, b| {
+        (a.kind != "TRACKED_CLUSTER", &a.resource_id).cmp(&(b.kind != "TRACKED_CLUSTER", &b.resource_id))
+    });
+    Ok(RdsProxyTargets { groups, targets })
+}
+
 // ── DB log files (lazy `DescribeDBLogFiles` + on-demand download) ────────────
 
 /// Newest-first cap for the Logs section.
@@ -2241,5 +2666,43 @@ mod tests {
 
         // Nothing enabled → None (caller shows a friendly message).
         assert_eq!(pick_log_export(&[]), None);
+    }
+}
+
+#[cfg(test)]
+mod blue_green_tests {
+    use super::*;
+
+    fn bg(id: &str, status: &str) -> RdsBlueGreen {
+        RdsBlueGreen {
+            id: id.into(),
+            name: id.into(),
+            status: status.into(),
+            status_details: None,
+            is_source: true,
+            counterpart: None,
+            created: None,
+        }
+    }
+
+    #[test]
+    fn an_active_deployment_wins_over_a_finished_one_whatever_the_order() {
+        let arn = "arn:aws:rds:us-east-1:123456789012:db:orders";
+        for order in [["old", "new"], ["new", "old"]] {
+            let mut map = HashMap::new();
+            for id in order {
+                let status = if id == "old" { "SWITCHOVER_COMPLETED" } else { "AVAILABLE" };
+                insert_blue_green(&mut map, arn, bg(id, status));
+            }
+            assert_eq!(map[arn].id, "new", "{order:?}");
+        }
+    }
+
+    #[test]
+    fn statuses_classify() {
+        assert!(bg("a", "SWITCHOVER_IN_PROGRESS").is_active());
+        assert!(!bg("a", "SWITCHOVER_FAILED").is_active());
+        assert!(bg("a", "SWITCHOVER_COMPLETED").is_switched_over());
+        assert!(!bg("a", "AVAILABLE").is_switched_over());
     }
 }

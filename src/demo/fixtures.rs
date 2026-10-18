@@ -91,6 +91,9 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("iam", "ListAccountAliases", "ListAccountAliases.xml"),
     // ── EC2 ──────────────────────────────────────────────────────────────────
     fx!("ec2", "DescribeInstances", "DescribeInstances.xml"),
+    // The two t3 web hosts: one unlimited (bills surplus credits), one standard.
+    fx!("ec2", "DescribeInstanceCreditSpecifications", when ["i-0a1b2c3d4e5f60001"], "DescribeInstanceCreditSpecifications-0001.xml"),
+    fx!("ec2", "DescribeInstanceCreditSpecifications", when ["i-0a1b2c3d4e5f60002"], "DescribeInstanceCreditSpecifications-0002.xml"),
     fx!("ec2", "DescribeSecurityGroups", "DescribeSecurityGroups.xml"),
     // Instance + ALB network interfaces. `legacy-batch-sg` is on none of them,
     // so it lists as `unused`; the Used By section narrows by `group-id`.

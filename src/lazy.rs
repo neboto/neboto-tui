@@ -192,6 +192,8 @@ pub struct LazyStore {
     /// A parameter group's parameters `(params, total)`, keyed by
     /// `RdsParamGroup::params_key`.
     pub rds_parameters: LazyMap<(Vec<crate::aws::services::rds::RdsParameter>, usize)>,
+    /// An RDS proxy's target groups + targets with health, keyed by proxy name.
+    pub rds_proxy_targets: LazyMap<crate::aws::services::rds::RdsProxyTargets>,
 
     // ── Identity Center ──────────────────────────────────────────────────
     /// Permission-set policies/boundary/tags, keyed by PS ARN.
@@ -546,6 +548,8 @@ pub struct LazyStore {
     /// An instance's launch user data, base64-decoded, keyed by instance id.
     /// `Loaded(None)` = no user data configured (the common case).
     pub ec2_instance_user_data: LazyMap<Option<String>>,
+    /// A burstable instance's CPU credit mode (`standard` / `unlimited`), keyed by instance id.
+    pub ec2_credit_spec: LazyMap<String>,
     /// An instance's system console output (`GetConsoleOutput`), keyed by
     /// instance id. `Loaded(None)` = AWS has posted nothing for it yet.
     pub ec2_instance_console: LazyMap<Option<crate::aws::services::ec2::ConsoleOutput>>,
@@ -751,6 +755,8 @@ pub struct LazyStore {
     pub ecr_image_findings: LazyMap<crate::aws::services::ecr::EcrScanFindings>,
     /// A user pool's app clients, keyed by pool id.
     pub cognito_clients: LazyMap<Vec<crate::aws::services::cognito::CognitoAppClient>>,
+    /// A user pool's groups and their members, keyed by pool id.
+    pub cognito_groups: LazyMap<crate::aws::services::cognito::CognitoGroups>,
     /// A backup plan's rules + selections, keyed by plan id.
     pub backup_plan_details: LazyMap<crate::aws::services::backup::BackupPlanDetails>,
     /// A vault's recovery points, keyed by vault name.
@@ -830,6 +836,8 @@ pub struct LazyStore {
     pub lb_web_acl: LazyMap<crate::aws::services::elb::LbWebAcl>,
     /// An Auto Scaling group's scaling activities, keyed by group name.
     pub asg_activities: LazyMap<Vec<crate::aws::services::asg::ScalingActivity>>,
+    /// An Auto Scaling group's lifecycle hooks + warm pool, keyed by group name.
+    pub asg_lifecycle: LazyMap<crate::aws::services::asg::AsgLifecycle>,
 }
 
 impl LazyStore {

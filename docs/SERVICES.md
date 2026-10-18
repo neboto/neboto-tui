@@ -797,9 +797,10 @@ the service you're touching.
   lazy `DescribePipe` (`lazy.eb_pipe_detail` — filter patterns, role, logging,
   KMS, tags). `arn_jump_target` routes `events`/`scheduler`/`pipes` ARNs to the
   right sub-tab (`JumpView::Eb`).
-- **RDS** (`@rds`) — six sub-tabs: Instances / Clusters / **Snapshots** (3) /
-  **Param Groups** (4) / **Option Groups** (5) / **Subnet Groups** (6), all
-  streamed as best-effort batches after the instances+clusters core.
+- **RDS** (`@rds`) — seven sub-tabs: Instances / Clusters / **Snapshots** (3) /
+  **Param Groups** (4) / **Option Groups** (5) / **Subnet Groups** (6) /
+  **Proxies** (7), all streamed as best-effort batches after the
+  instances+clusters core.
   Snapshots unify `DescribeDBSnapshots` + `DescribeDBClusterSnapshots`
   (self-owned) into one `RdsSnapshot` (**automated/awsbackup snapshots are
   `is_noise()`** so `a` hides the daily churn). The instance pane is Config /
@@ -833,6 +834,31 @@ the service you're touching.
   "Cluster"/"Source Cluster"/"Replication Source" → Clusters, "Snapshot" →
   Snapshots, "Parameter Group"/"Option Group"/"Subnet Group" → their
   sub-tabs, status suffixes stripped).
+- **RDS Proxy** (Proxies sub-tab, key 7, #106) — `DescribeDBProxies` is the
+  last best-effort phase of the load. Pane: Overview (eager — network, TLS,
+  role, idle timeout, debug logging, auth entries) / **Targets** (lazy
+  `DescribeDBProxyTargetGroups` → `DescribeDBProxyTargets` per group, keyed
+  by proxy name in `lazy.rds_proxy_targets`). Auth entries carry a Secrets
+  Manager **ARN** — shown, never resolved (the Secrets line in CLAUDE.md).
+  Target rows are label-keyed for `rds_row_jump_target`: `Target DB` →
+  Instances, `Cluster` → Clusters (a `TRACKED_CLUSTER` target has no health
+  of its own; its instances do, so it reads `—`). `Debug Logging` on is a ⚠:
+  AWS logs SQL statement text, sensitive values included. Targets are lazy,
+  so `U` on an instance can't name the proxy in front of it — that would
+  need the targets fetched per proxy at list time.
+- **RDS blue/green** (#106) — not a sub-tab: one `DescribeBlueGreenDeployments`
+  runs **before** the instance pages (so each streamed batch already carries
+  it), keyed by both the source and the target ARN, and lands as a
+  "Blue/Green Deployment" group on the instance or cluster Config section:
+  which side this is, status, and the other side's ARN (jumpable via the
+  `rds` ARN classifier). A failure warns and the rows carry nothing. A
+  deployment whose green side has been deleted after switchover keeps only
+  the source key, which is the right answer. **Source/target are the
+  pre-switchover sides** (the SDK's wording) and a switchover renames both,
+  so a `SWITCHOVER_COMPLETED` deployment is labelled as history ("was blue —
+  switched over"), never "blue — production". Completed and failed
+  deployments stay listed until deleted, so when two name the same ARN the
+  active one wins (`insert_blue_green`), not whichever page came last.
 - **Route 53** (`@r53`) — sub-tabs Zones / **Records** / Health Checks.
   Zones stream first, then health checks stream as a second batch
   (`ListHealthChecks`, tags batched 10-at-a-time via `ListTagsForResources`).
@@ -1012,6 +1038,18 @@ the service you're touching.
 - **Transfer Family** (`@transfer`) — N+1 streaming load (`DescribeServer` per
   server); Users lazy. `m` metrics (`AWS/Transfer`, dim `ServerId`):
   bytes/files in+out and on-upload workflow success/failure.
+- **Cognito user-pool Groups** (#106) — a lazy section on the **pool**
+  pane, inverted from the group side: `ListGroups` (capped
+  `MAX_COGNITO_GROUPS=50`) + one `ListUsersInGroup` page per group
+  (`MAX_COGNITO_GROUP_MEMBERS=60`, the API's page max; `buffered(4)`).
+  Both caps say so in the section when hit. It lives on the pool rather than
+  the user because the per-user route, `AdminListGroupsForUser`, is one call
+  per user and an `Admin*` action — **never** call it. A single group's
+  member call failing renders `⚠` on that group's Members row only. Member
+  rows show the email (or phone) when the username is the user's `sub` — an
+  email/phone sign-in pool's usernames are UUIDs (`member_label`). Groups
+  sort by precedence (lower wins when a user's groups carry IAM roles); the
+  role ARN row jumps via the IAM classifier.
 - **AppSync** (`@appsync`, `appsync.rs`, **aws-sdk-appsync**) — single list of
   **GraphQL APIs** (standard + merged); Event APIs (`ListApis`, channel
   namespaces) are not listed yet. `ListGraphqlApis` returns the full config, so
@@ -2063,6 +2101,14 @@ the service you're touching.
   A key the LB type doesn't have (ALBs carry no
   `load_balancing.cross_zone.enabled`; it's always on) just omits its row —
   don't synthesize a default, the value would be a guess.
+- **Auto Scaling Lifecycle section** (#106) — lazy, keyed by group name:
+  `DescribeLifecycleHooks` (unpaginated — 50 hooks per group max) and
+  `DescribeWarmPool` run concurrently and are kept as **separate `Result`s**
+  in `AsgLifecycle`, so a denied warm-pool call doesn't hide the hooks. A
+  group without a warm pool is a *successful* `DescribeWarmPool` with no
+  `WarmPoolConfiguration` — that's `Ok(None)`, "No warm pool", not an error.
+  An unset `MaxGroupPreparedCapacity` means "the group's max size", which is
+  how it's rendered. Warm instances use the Instances section's table shape.
 - **EC2 instance Load Balancing section** (key 4,
   `elb::fetch_instance_lb_membership`) — "is this instance behind a load
   balancer?". **There is no reverse API** (nothing answers "which target
@@ -2083,6 +2129,21 @@ the service you're touching.
   every ELB load and watch tick, for a question asked from the instance).
   Only the primary private IP of each ENI is known (`EmbeddedNic`), so an
   `ip`-type registration on a secondary IP isn't matched.
+- **EBS fast snapshot restore** (#106) — one account-wide
+  `DescribeFastSnapshotRestores` ahead of the Snapshots phase, joined by
+  snapshot id onto `EbsSnapshot.fast_restore` (`disabled` entries are
+  dropped — AWS keeps them for a while after, but they no longer bill). It's
+  a ⚠ on the Details section because FSR bills per AZ-hour whether or not
+  anything restores from the snapshot, which is the forgotten-cost case.
+  `fast_restore` is an `Option`: a failed call is `None` and renders
+  **unknown**, never "off" — a cost flag must not read "fine" exactly when
+  it couldn't check. `disabling` AZs are listed but not counted as "on".
+- **EC2 CPU credits** (#106) — the instance Details section's on-enter hook
+  fetches `DescribeInstanceCreditSpecifications` for **T-family only**
+  (`ec2::shows_cpu_credits`: `is_burstable` — t2+, not `t1`, which predates
+  credits, nor `trn` — and not terminated; a no-op for everything else, so
+  no row and no call).
+  The credit *balance* is CloudWatch `CPUCreditBalance` and belongs on `m`.
 - **EBS / AMIs / Snapshots / Launch Templates** — EC2 sub-tabs (keys 3, 5–7),
   **self-owned only**. Cross-jumps: `snap-`→Snapshots, `vol-`→EBS, `i-`→instance.
 - **ENIs** — EC2 sub-tab (`Ec2View::NetworkInterfaces`, key 4): paginated

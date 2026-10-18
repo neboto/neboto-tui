@@ -1061,7 +1061,8 @@ pub enum RdsView {
     Snapshots,
     ParamGroups,
     OptionGroups,
-    SubnetGroups}
+    SubnetGroups,
+    Proxies}
 
 impl RdsView {
     pub fn resource_type_filter(&self) -> &'static str {
@@ -1071,7 +1072,8 @@ impl RdsView {
             RdsView::Snapshots => "RDS Snapshot",
             RdsView::ParamGroups => "RDS Parameter Group",
             RdsView::OptionGroups => "RDS Option Group",
-            RdsView::SubnetGroups => "RDS Subnet Group"}
+            RdsView::SubnetGroups => "RDS Subnet Group",
+            RdsView::Proxies => "RDS Proxy"}
     }
 }
 
@@ -6596,6 +6598,11 @@ impl App {
                     self.update_search();
                     return Ok(());
                 }
+                KeyCode::Char('7') => {
+                    self.rds_view = RdsView::Proxies;
+                    self.update_search();
+                    return Ok(());
+                }
                 KeyCode::Tab => {
                     self.rds_view = match self.rds_view {
                         RdsView::Instances => RdsView::Clusters,
@@ -6603,18 +6610,20 @@ impl App {
                         RdsView::Snapshots => RdsView::ParamGroups,
                         RdsView::ParamGroups => RdsView::OptionGroups,
                         RdsView::OptionGroups => RdsView::SubnetGroups,
-                        RdsView::SubnetGroups => RdsView::Instances};
+                        RdsView::SubnetGroups => RdsView::Proxies,
+                        RdsView::Proxies => RdsView::Instances};
                     self.update_search();
                     return Ok(());
                 }
                 KeyCode::BackTab => {
                     self.rds_view = match self.rds_view {
-                        RdsView::Instances => RdsView::SubnetGroups,
+                        RdsView::Instances => RdsView::Proxies,
                         RdsView::Clusters => RdsView::Instances,
                         RdsView::Snapshots => RdsView::Clusters,
                         RdsView::ParamGroups => RdsView::Snapshots,
                         RdsView::OptionGroups => RdsView::ParamGroups,
-                        RdsView::SubnetGroups => RdsView::OptionGroups};
+                        RdsView::SubnetGroups => RdsView::OptionGroups,
+                        RdsView::Proxies => RdsView::SubnetGroups};
                     self.update_search();
                     return Ok(());
                 }
@@ -9277,7 +9286,7 @@ impl App {
             Some(ServiceType::RDS) => {
                 align!(
                     self, rtype, rds_view, RdsView,
-                    [Instances, Clusters, Snapshots, ParamGroups, OptionGroups, SubnetGroups]
+                    [Instances, Clusters, Snapshots, ParamGroups, OptionGroups, SubnetGroups, Proxies]
                 )
             }
             Some(ServiceType::IAM) => {
@@ -16000,6 +16009,28 @@ impl App {
                 },
             );
         }
+    }
+
+    /// Lazy Groups section on a user pool: `ListGroups` + `ListUsersInGroup`.
+    pub(crate) fn trigger_cognito_groups_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(pool_id) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::cognito::CognitoUserPool>()
+                .map(|p| p.id.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.cognito_idp_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.cognito_groups,
+            pool_id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::cognito::fetch_cognito_groups(client, pool_id)
+                    .await
+                    .map_err(|e| format!("Groups unavailable: {}", e))
+            },
+        );
     }
 
     fn is_selected_ecr_repo(&self) -> bool {
@@ -22838,7 +22869,7 @@ impl App {
         }
         let view = match key.trim_start() {
             "Cluster" | "Source Cluster" | "Replication Source" => RdsView::Clusters,
-            "Writer" | "Reader" | "Source DB" | "Replica Source" | "Read Replica" => {
+            "Writer" | "Reader" | "Source DB" | "Replica Source" | "Read Replica" | "Target DB" => {
                 RdsView::Instances
             }
             "Snapshot" => RdsView::Snapshots,
@@ -23210,6 +23241,33 @@ impl App {
                 crate::aws::services::ec2::fetch_instance_profile_roles(client, profile_name)
                     .await
                     .map_err(|e| format!("Instance profile roles unavailable: {}", e))
+            },
+        );
+    }
+
+    /// Lazy `DescribeInstanceCreditSpecifications` for the Details section's
+    /// CPU Credits row — burstable (T-family) instances only; a no-op otherwise.
+    pub(crate) fn trigger_ec2_credit_spec_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(instance_id) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::ec2::Ec2Instance>()
+                .filter(|i| crate::aws::services::ec2::shows_cpu_credits(i))
+                .map(|i| i.instance_id.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.ec2_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.ec2_credit_spec,
+            instance_id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::ec2::fetch_instance_credit_spec(client, instance_id)
+                    .await
+                    .map_err(|e| match e {
+                        crate::error::Error::AwsSdk(m) => m,
+                        e => e.to_string(),
+                    })
             },
         );
     }
@@ -25985,6 +26043,7 @@ impl App {
                     crate::aws::services::ec2::Ec2InstanceDetailSection::from_index(self.detail_section_idx),
                     profile_roles,
                     ssm_status,
+                    self.lazy.ec2_credit_spec.get(&instance.instance_id),
                     user_data,
                     console,
                     lb,
@@ -27541,6 +27600,7 @@ impl App {
                     pool,
                     crate::aws::services::cognito::CognitoUserPoolDetailSection::from_index(self.detail_section_idx),
                     self.lazy.cognito_clients.get(&pool.id),
+                    self.lazy.cognito_groups.get(&pool.id),
                 );
             }
             if let Some(img) = resource
@@ -28198,6 +28258,16 @@ impl App {
                     self.lazy.rds_log_files.get(&db.db_identifier),
                 );
             }
+            if let Some(proxy) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::rds::RdsProxy>()
+            {
+                return crate::ui::widgets::details_pane::rds_proxy_section_lines(
+                    proxy,
+                    crate::aws::services::rds::RdsProxyDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.rds_proxy_targets.get(&proxy.name),
+                );
+            }
             if let Some(pg) = resource
                 .as_any()
                 .downcast_ref::<crate::aws::services::rds::RdsParamGroup>()
@@ -28267,6 +28337,7 @@ impl App {
                     activities_state,
                     self.selected_optimizer_state(),
                     self.co_enrollment.as_ref(),
+                    self.lazy.asg_lifecycle.get(&group.name),
                 );
             }
             if let Some(cluster) = resource
@@ -30058,6 +30129,29 @@ impl App {
             event_tx,
             async move {
                 crate::aws::services::rds::fetch_rds_log_files(client, fetch_id)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+        );
+    }
+
+    /// Lazy-load the selected RDS proxy's target groups + targets (Targets
+    /// section — pool settings and per-target health).
+    pub(crate) fn trigger_rds_proxy_targets_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(name) = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::rds::RdsProxy>())
+            .map(|p| p.name.clone())
+        else {
+            return;
+        };
+        let client = self.aws_clients.rds_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.rds_proxy_targets,
+            name.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::rds::fetch_rds_proxy_targets(client, name)
                     .await
                     .map_err(|e| e.to_string())
             },
@@ -32804,6 +32898,28 @@ impl App {
                 },
             );
         }
+    }
+
+    /// Lazy lifecycle hooks + warm pool for the selected group's Lifecycle section.
+    pub(crate) fn trigger_asg_lifecycle_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(group_name) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::asg::AsgGroup>()
+                .map(|g| g.name.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.asg_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.asg_lifecycle,
+            group_name.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::asg::fetch_asg_lifecycle(client, group_name)
+                    .await
+                    .map_err(|e| format!("Lifecycle unavailable: {}", e))
+            },
+        );
     }
 
     fn trigger_rds_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {

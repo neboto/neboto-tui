@@ -351,6 +351,155 @@ pub async fn fetch_cognito_clients(
         .collect())
 }
 
+// ── Groups (lazy, per user pool) ─────────────────────────────────────────────
+
+/// Groups listed per pool — past this the section says it's truncated.
+pub const MAX_COGNITO_GROUPS: usize = 50;
+/// Members listed per group: one `ListUsersInGroup` page (60 is the API max).
+pub const MAX_COGNITO_GROUP_MEMBERS: i32 = 60;
+
+#[derive(Debug, Clone)]
+pub struct CognitoGroupMember {
+    pub username: String,
+    /// What the member row shows — see `member_label`.
+    pub label: String,
+    pub enabled: bool,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CognitoGroup {
+    pub name: String,
+    pub description: Option<String>,
+    pub precedence: Option<i32>,
+    pub role_arn: Option<String>,
+    /// `Err` = this group's `ListUsersInGroup` failed; the others still render.
+    pub members: std::result::Result<Vec<CognitoGroupMember>, String>,
+    /// More members exist than the one page fetched.
+    pub members_truncated: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CognitoGroups {
+    pub groups: Vec<CognitoGroup>,
+    /// More groups exist than `MAX_COGNITO_GROUPS`.
+    pub truncated: bool,
+}
+
+/// The member row's text. A pool that signs in by email or phone sets each
+/// `Username` to the user's `sub` (a UUID), which says nothing about who is in
+/// the group, so those rows show the contact instead. A chosen username is
+/// kept, with the contact beside it.
+pub(crate) fn member_label(
+    username: &str,
+    sub: Option<&str>,
+    email: Option<&str>,
+    phone: Option<&str>,
+) -> String {
+    match email.or(phone).filter(|c| !c.is_empty()) {
+        None => username.to_string(),
+        Some(c) if c == username || sub == Some(username) => c.to_string(),
+        Some(c) => format!("{username} <{c}>"),
+    }
+}
+
+/// Whether the group list stops at the cap: more than `MAX_COGNITO_GROUPS`
+/// arrived, or exactly that many with another page still to come.
+pub(crate) fn groups_truncated(len: usize, more_pages: bool) -> bool {
+    len > MAX_COGNITO_GROUPS || (len == MAX_COGNITO_GROUPS && more_pages)
+}
+
+/// A user pool's groups with their members, inverted from the group side:
+/// `ListGroups` + one `ListUsersInGroup` page per group (4 at a time). The
+/// per-user `AdminListGroupsForUser` is never called — it's one call per user,
+/// and an `Admin*` action.
+pub async fn fetch_cognito_groups(idp: IdpClient, pool_id: String) -> Result<CognitoGroups> {
+    use futures::StreamExt;
+    let mut raw = Vec::new();
+    let mut token: Option<String> = None;
+    let mut truncated = false;
+    loop {
+        let page = idp
+            .list_groups()
+            .user_pool_id(&pool_id)
+            .limit(60)
+            .set_next_token(token.clone())
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+        raw.extend(page.groups().iter().cloned());
+        token = next_page_token(page.next_token(), &token);
+        if groups_truncated(raw.len(), token.is_some()) {
+            raw.truncate(MAX_COGNITO_GROUPS);
+            truncated = true;
+            break;
+        }
+        if token.is_none() {
+            break;
+        }
+    }
+
+    let mut groups: Vec<CognitoGroup> = futures::stream::iter(raw.into_iter().map(|g| {
+        let idp = idp.clone();
+        let pool_id = pool_id.clone();
+        async move {
+            let name = g.group_name().unwrap_or_default().to_string();
+            let resp = idp
+                .list_users_in_group()
+                .user_pool_id(&pool_id)
+                .group_name(&name)
+                .limit(MAX_COGNITO_GROUP_MEMBERS)
+                .send()
+                .await;
+            let (members, members_truncated) = match resp {
+                Ok(r) => (
+                    Ok(r.users()
+                        .iter()
+                        .map(|u| {
+                            let attr = |name: &str| {
+                                u.attributes().iter().find(|a| a.name() == name).and_then(|a| a.value())
+                            };
+                            let username = u.username().unwrap_or_default().to_string();
+                            CognitoGroupMember {
+                                label: member_label(
+                                    &username,
+                                    attr("sub"),
+                                    attr("email"),
+                                    attr("phone_number"),
+                                ),
+                                username,
+                                enabled: u.enabled(),
+                                status: u.user_status().map(|s| s.as_str().to_string()),
+                            }
+                        })
+                        .collect()),
+                    r.next_token().is_some_and(|t| !t.is_empty()),
+                ),
+                Err(e) => (Err(crate::error::sdk_error_message(&e)), false),
+            };
+            CognitoGroup {
+                name,
+                description: g.description().filter(|d| !d.is_empty()).map(str::to_string),
+                precedence: g.precedence(),
+                role_arn: g.role_arn().map(str::to_string),
+                members,
+                members_truncated,
+            }
+        }
+    }))
+    .buffered(4)
+    .collect()
+    .await;
+    // Precedence order (lower wins when a user's groups carry roles), then name.
+    groups.sort_by(|a, b| {
+        a.precedence
+            .unwrap_or(i32::MAX)
+            .cmp(&b.precedence.unwrap_or(i32::MAX))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(CognitoGroups { groups, truncated })
+}
+
 // ── CognitoUserPool ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -430,6 +579,7 @@ crate::sections! {
         AppClients "App Clients" => crate::app::App::trigger_cognito_clients_load,
         Policies "Policies",
         Tags "Tags",
+        Groups "Groups" => crate::app::App::trigger_cognito_groups_load,
     ]
 }
 
@@ -944,5 +1094,37 @@ mod user_tests {
         let tail: Vec<&str> = keys.iter().map(String::as_str).skip_while(|k| *k != "sub").collect();
         assert_eq!(tail, ["sub", "name", "custom:tenant"], "sub first, custom:* last: {keys:?}");
         assert!(!keys.iter().any(|k| k == "email"), "shown as Email, not repeated raw");
+    }
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    #[test]
+    fn email_sign_in_members_show_the_email_not_the_sub() {
+        let sub = "a1b2c3d4-0000-4000-8000-000000000001";
+        assert_eq!(member_label(sub, Some(sub), Some("ana@example.com"), None), "ana@example.com");
+        // Phone sign-in falls back to the number.
+        assert_eq!(member_label(sub, Some(sub), None, Some("+15550100")), "+15550100");
+    }
+
+    #[test]
+    fn a_chosen_username_keeps_the_contact_beside_it() {
+        assert_eq!(
+            member_label("ana", Some("a1b2c3d4-0000-4000-8000-000000000001"), Some("ana@example.com"), None),
+            "ana <ana@example.com>"
+        );
+        assert_eq!(member_label("ana@example.com", None, Some("ana@example.com"), None), "ana@example.com");
+        assert_eq!(member_label("ana", None, None, None), "ana");
+        assert_eq!(member_label("ana", None, Some(""), None), "ana");
+    }
+
+    #[test]
+    fn group_cap_counts_a_further_page_only_at_the_cap() {
+        assert!(!groups_truncated(MAX_COGNITO_GROUPS, false));
+        assert!(groups_truncated(MAX_COGNITO_GROUPS, true));
+        assert!(groups_truncated(MAX_COGNITO_GROUPS + 1, false));
+        assert!(!groups_truncated(MAX_COGNITO_GROUPS - 1, true));
     }
 }
