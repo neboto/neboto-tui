@@ -1240,6 +1240,7 @@ crate::sections! {
     pub static IC_APPLICATION_SECTIONS = [
         Overview "Overview",
         Assignments "Assignments" => crate::app::App::trigger_ic_app_assignments_load,
+        Auth "Auth" => crate::app::App::trigger_ic_app_auth_load,
     ]
 }
 
@@ -1369,6 +1370,164 @@ pub struct IcAppAssignments {
     /// From GetApplicationAssignmentConfiguration — None when the call failed.
     pub assignment_required: Option<bool>,
     pub assignments: Vec<IcAppPrincipal>,
+}
+
+// ── Application auth (Auth section) ───────────────────────────────────────────
+
+/// One way an application may authenticate to Identity Center. Today AWS has
+/// only `IAM`, whose actor policy is a JSON document.
+#[derive(Clone, Debug)]
+pub struct IcAuthMethod {
+    pub kind: String,
+    pub policy: Option<String>,
+}
+
+/// An access scope the application may request, and who it applies to.
+#[derive(Clone, Debug)]
+pub struct IcScope {
+    pub scope: String,
+    pub targets: Vec<String>,
+}
+
+/// One OAuth grant the application may use, with its settings flattened to
+/// `(label, value)` rows (redirect URIs, trusted token issuers + audiences).
+#[derive(Clone, Debug)]
+pub struct IcGrant {
+    pub kind: String,
+    pub details: Vec<(String, String)>,
+}
+
+/// The Auth section's three parts. Each is fetched independently, so one
+/// denied call errors only its own part.
+#[derive(Clone, Debug)]
+pub struct IcAppAuth {
+    pub methods: std::result::Result<Vec<IcAuthMethod>, String>,
+    pub scopes: std::result::Result<Vec<IcScope>, String>,
+    pub grants: std::result::Result<Vec<IcGrant>, String>,
+}
+
+/// A `ResourceNotFoundException` on these list calls means "nothing
+/// configured" for the application, not a failure.
+fn empty_if_not_found<T, E, R>(
+    r: std::result::Result<Vec<T>, aws_sdk_ssoadmin::error::SdkError<E, R>>,
+) -> std::result::Result<Vec<T>, String>
+where
+    E: std::error::Error + Send + Sync + 'static,
+    R: std::fmt::Debug,
+    aws_sdk_ssoadmin::error::SdkError<E, R>: aws_smithy_types::error::metadata::ProvideErrorMetadata,
+{
+    use aws_smithy_types::error::metadata::ProvideErrorMetadata;
+    match r {
+        Ok(v) => Ok(v),
+        Err(e) if e.code() == Some("ResourceNotFoundException") => Ok(Vec::new()),
+        Err(e) => Err(crate::error::sdk_error_message(&e)),
+    }
+}
+
+/// Authentication methods, access scopes and grants for an application —
+/// three paginated calls run concurrently.
+pub async fn fetch_app_auth(client: SsoAdminClient, app_arn: String) -> IcAppAuth {
+    let methods = async {
+        let mut out = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let resp = client
+                .list_application_authentication_methods()
+                .application_arn(&app_arn)
+                .set_next_token(token.clone())
+                .send()
+                .await?;
+            for m in resp.authentication_methods() {
+                let kind = m
+                    .authentication_method_type()
+                    .map(|t| t.as_str().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                let policy = match m.authentication_method() {
+                    Some(aws_sdk_ssoadmin::types::AuthenticationMethod::Iam(iam)) => {
+                        Some(crate::aws::document::document_pretty(iam.actor_policy()))
+                    }
+                    _ => None,
+                };
+                out.push(IcAuthMethod { kind, policy });
+            }
+            token = crate::aws::pagination::next_page_token(resp.next_token(), &token);
+            if token.is_none() {
+                return Ok(out);
+            }
+        }
+    };
+    let scopes = async {
+        let mut out = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let resp = client
+                .list_application_access_scopes()
+                .application_arn(&app_arn)
+                .set_next_token(token.clone())
+                .send()
+                .await?;
+            out.extend(resp.scopes().iter().map(|s| IcScope {
+                scope: s.scope().to_string(),
+                targets: s.authorized_targets().to_vec(),
+            }));
+            token = crate::aws::pagination::next_page_token(resp.next_token(), &token);
+            if token.is_none() {
+                return Ok(out);
+            }
+        }
+    };
+    let grants = async {
+        let mut out = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let resp = client
+                .list_application_grants()
+                .application_arn(&app_arn)
+                .set_next_token(token.clone())
+                .send()
+                .await?;
+            out.extend(resp.grants().iter().map(grant_from_sdk));
+            token = crate::aws::pagination::next_page_token(resp.next_token(), &token);
+            if token.is_none() {
+                return Ok(out);
+            }
+        }
+    };
+    let (methods, scopes, grants) = tokio::join!(methods, scopes, grants);
+    IcAppAuth {
+        methods: empty_if_not_found(methods),
+        scopes: empty_if_not_found(scopes),
+        grants: empty_if_not_found(grants),
+    }
+}
+
+fn grant_from_sdk(g: &aws_sdk_ssoadmin::types::GrantItem) -> IcGrant {
+    use aws_sdk_ssoadmin::types::Grant;
+    let mut details = Vec::new();
+    match g.grant() {
+        Some(Grant::AuthorizationCode(c)) => {
+            for uri in c.redirect_uris() {
+                details.push(("Redirect URI".to_string(), uri.clone()));
+            }
+        }
+        Some(Grant::JwtBearer(j)) => {
+            for issuer in j.authorized_token_issuers() {
+                details.push((
+                    "Trusted Token Issuer".to_string(),
+                    issuer.trusted_token_issuer_arn().unwrap_or("—").to_string(),
+                ));
+                if !issuer.authorized_audiences().is_empty() {
+                    details.push(("Audiences".to_string(), issuer.authorized_audiences().join(", ")));
+                }
+            }
+        }
+        // Refresh-token and token-exchange grants carry no settings.
+        _ => {}
+    }
+    IcGrant {
+        kind: g.grant_type().as_str().to_string(),
+        details,
+    }
 }
 
 /// Fetch who is assigned to an Identity Center application, with principal

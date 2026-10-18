@@ -425,6 +425,7 @@ crate::sections! {
         Overview "Overview",
         Settings "Settings",
         Tags "Tags",
+        CapacityProviders "Capacity Providers" => crate::app::App::trigger_ecs_capacity_providers_load,
     ]
 }
 
@@ -1105,6 +1106,84 @@ pub struct EcsTaskDefinitionDetails {
 }
 
 /// Lazy-load full task-definition detail (containers, roles, network mode, …) keyed by ARN.
+/// The AWS-managed Fargate providers: no Auto Scaling group, nothing to describe.
+pub fn is_fargate_provider(name: &str) -> bool {
+    name == "FARGATE" || name == "FARGATE_SPOT"
+}
+
+/// Managed scaling on an ASG capacity provider.
+#[derive(Debug, Clone)]
+pub struct EcsManagedScaling {
+    pub status: String,
+    pub target_capacity: Option<i32>,
+    pub min_step: Option<i32>,
+    pub max_step: Option<i32>,
+    pub warmup_secs: Option<i32>,
+}
+
+/// One capacity provider from `DescribeCapacityProviders`.
+#[derive(Debug, Clone)]
+pub struct EcsCapacityProviderInfo {
+    pub name: String,
+    pub status: String,
+    /// `EC2_AUTOSCALING`, `MANAGED_INSTANCES`, … (absent on older providers).
+    pub kind: Option<String>,
+    pub update_status: Option<String>,
+    pub update_reason: Option<String>,
+    pub asg_arn: Option<String>,
+    pub managed_scaling: Option<EcsManagedScaling>,
+    pub termination_protection: Option<String>,
+    pub draining: Option<String>,
+    /// ECS Managed Instances: the role ECS uses to run the instances.
+    pub infrastructure_role: Option<String>,
+}
+
+/// Describe a cluster's capacity providers. The Fargate pair are skipped (the
+/// pane explains them without a call); with nothing else, no call is made.
+/// `DescribeCapacityProviders` takes up to 100 names per call.
+pub async fn fetch_capacity_providers(
+    client: EcsClient,
+    names: Vec<String>,
+) -> Result<Vec<EcsCapacityProviderInfo>> {
+    let names: Vec<String> = names.into_iter().filter(|n| !is_fargate_provider(n)).collect();
+    let mut out = Vec::new();
+    for chunk in names.chunks(100) {
+        let resp = client
+            .describe_capacity_providers()
+            .set_capacity_providers(Some(chunk.to_vec()))
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+        for cp in resp.capacity_providers() {
+            let asg = cp.auto_scaling_group_provider();
+            out.push(EcsCapacityProviderInfo {
+                name: cp.name().unwrap_or_default().to_string(),
+                status: cp.status().map(|s| s.as_str().to_string()).unwrap_or_default(),
+                kind: cp.r#type().map(|t| t.as_str().to_string()),
+                update_status: cp.update_status().map(|s| s.as_str().to_string()),
+                update_reason: cp.update_status_reason().filter(|r| !r.is_empty()).map(str::to_string),
+                asg_arn: asg.map(|a| a.auto_scaling_group_arn().to_string()).filter(|a| !a.is_empty()),
+                managed_scaling: asg.and_then(|a| a.managed_scaling()).map(|m| EcsManagedScaling {
+                    status: m.status().map(|s| s.as_str().to_string()).unwrap_or_default(),
+                    target_capacity: m.target_capacity(),
+                    min_step: m.minimum_scaling_step_size(),
+                    max_step: m.maximum_scaling_step_size(),
+                    warmup_secs: m.instance_warmup_period(),
+                }),
+                termination_protection: asg
+                    .and_then(|a| a.managed_termination_protection())
+                    .map(|t| t.as_str().to_string()),
+                draining: asg.and_then(|a| a.managed_draining()).map(|d| d.as_str().to_string()),
+                infrastructure_role: cp
+                    .managed_instances_provider()
+                    .and_then(|m| m.infrastructure_role_arn())
+                    .map(str::to_string),
+            });
+        }
+    }
+    Ok(out)
+}
+
 pub async fn fetch_task_definition_details(
     client: EcsClient,
     arn: String,

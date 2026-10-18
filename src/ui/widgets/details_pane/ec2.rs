@@ -849,6 +849,14 @@ pub fn security_group_section_lines(
                         "  Not attached to any network interface.".to_string(),
                         "".to_string(),
                     ));
+                    // The list's `unused` label means exactly this, and no
+                    // more — say what an ENI scan can't see before anyone
+                    // reads it as a delete list.
+                    rows.push(("".to_string(), "".to_string()));
+                    rows.push(("".to_string(), "· Unused is not the same as safe to delete. A group with no network interface can still be:".to_string()));
+                    rows.push(("".to_string(), "·   referenced by another group's rules (U lists the loaded ones)".to_string()));
+                    rows.push(("".to_string(), "·   named in a launch template, launch configuration or IaC".to_string()));
+                    rows.push(("".to_string(), "·   used by network interfaces in another account (shared VPC subnets)".to_string()));
                 }
                 Some(crate::lazy::Lazy::Loaded(list)) => {
                     rows.push((format!("Network Interfaces ({})", list.len()), "".to_string()));
