@@ -518,6 +518,17 @@ impl AwsClients {
         aws_sdk_s3tables::Client::new(&self.config)
     }
 
+    /// S3 Control pinned to a bucket's region — access points are regional
+    /// and listed from the region their bucket lives in. Every call also takes
+    /// the account id, which the SDK puts in the host
+    /// (`{account}.s3-control.{region}.amazonaws.com`).
+    pub fn s3control_client_for_region(&self, region: &str) -> aws_sdk_s3control::Client {
+        let cfg = aws_sdk_s3control::config::Builder::from(&self.config)
+            .region(aws_sdk_s3control::config::Region::new(region.to_string()))
+            .build();
+        aws_sdk_s3control::Client::from_conf(cfg)
+    }
+
     pub fn accessanalyzer_client(&self) -> aws_sdk_accessanalyzer::Client {
         aws_sdk_accessanalyzer::Client::new(&self.config)
     }

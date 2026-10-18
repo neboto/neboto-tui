@@ -102,6 +102,11 @@ impl DemoRequest {
         if labels.peek() == Some(&"api") {
             labels.next();
         }
+        // S3 Control puts the account id first
+        // (`<account>.s3-control.<region>.amazonaws.com`).
+        if labels.peek().is_some_and(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_digit())) {
+            labels.next();
+        }
         let service = labels.next().unwrap_or_default().to_string();
         let region = labels
             .next()
@@ -270,6 +275,9 @@ fn narrow(req: &DemoRequest, body: String) -> String {
     let (param, list, id_tag) = match (req.service.as_str(), req.operation.as_str()) {
         ("ec2", "DescribeSecurityGroups") => ("GroupId", "securityGroupInfo", "groupId"),
         ("ec2", "DescribeVolumes") => ("VolumeId", "volumeSet", "volumeId"),
+        // The SG Used By section filters by `group-id` (the one filter the
+        // app sends); an ENI item's first `groupId` is its first group.
+        ("ec2", "DescribeNetworkInterfaces") => ("Filter.1.Value", "networkInterfaceSet", "groupId"),
         _ => return body,
     };
     let wanted: Vec<String> = (1..)

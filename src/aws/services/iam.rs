@@ -466,6 +466,7 @@ crate::sections! {
         Permissions "Permissions" => crate::app::App::trigger_iam_role_details_load,
         Policies "Policies" => crate::app::App::trigger_iam_policy_docs_load,
         Tags "Tags" => crate::app::App::trigger_iam_role_details_load,
+        LastAccessed "Last Accessed" => crate::app::App::trigger_iam_last_accessed_load,
     ]
 }
 
@@ -579,6 +580,7 @@ crate::sections! {
         AttachedTo "Attached To" => crate::app::App::trigger_iam_policy_details_load,
         // ListPolicies omits Tags — they ride the lazy bundle (ListPolicyTags).
         Tags "Tags" => crate::app::App::trigger_iam_policy_details_load,
+        LastAccessed "Last Accessed" => crate::app::App::trigger_iam_last_accessed_load,
     ]
 }
 
@@ -684,6 +686,7 @@ crate::sections! {
         Policies "Policies" => crate::app::App::trigger_iam_policy_docs_load,
         Groups "Groups" => crate::app::App::trigger_iam_user_details_load,
         Tags "Tags" => crate::app::App::trigger_iam_user_details_load,
+        LastAccessed "Last Accessed" => crate::app::App::trigger_iam_last_accessed_load,
     ]
 }
 
@@ -906,6 +909,7 @@ crate::sections! {
         Members "Members" => crate::app::App::trigger_iam_group_details_load,
         Permissions "Permissions" => crate::app::App::trigger_iam_group_details_load,
         Policies "Policies" => crate::app::App::trigger_iam_policy_docs_load,
+        LastAccessed "Last Accessed" => crate::app::App::trigger_iam_last_accessed_load,
     ]
 }
 
@@ -1506,7 +1510,7 @@ pub async fn fetch_principal_policy_documents(
 
 // ── Timestamp helpers ─────────────────────────────────────────────────────────
 
-fn fmt_epoch_secs(secs: i64) -> String {
+pub(crate) fn fmt_epoch_secs(secs: i64) -> String {
     let days = secs / 86400;
     let time_rem = secs % 86400;
     let h = time_rem / 3600;
@@ -1739,6 +1743,109 @@ pub async fn fetch_iam_idp_details(
     }
 }
 
+// ── Access Advisor (last accessed, role / user / group / policy) ─────────────
+
+/// One service the principal or policy grants, and when it was last used.
+#[derive(Debug, Clone)]
+pub struct IamServiceLastAccessed {
+    pub service_name: String,
+    pub namespace: String,
+    /// `None` = not accessed in the tracking period (IAM tracks 400 days).
+    pub last_authenticated_secs: Option<i64>,
+    pub region: Option<String>,
+    /// The principal that last used it — set for group and policy reports,
+    /// where several principals share the grant.
+    pub entity: Option<String>,
+    pub total_entities: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IamLastAccessed {
+    pub services: Vec<IamServiceLastAccessed>,
+    pub completed: Option<String>,
+}
+
+/// How long to poll the Access Advisor job before giving up. Jobs normally
+/// finish in a few seconds; a principal with a very large grant can take longer.
+const LAST_ACCESSED_POLL_SECS: u64 = 60;
+
+/// Access Advisor for a role, user, group or managed policy ARN.
+///
+/// `GenerateServiceLastAccessedDetails` is the one non-`Get`/`List` IAM call
+/// neboto makes (an `ALLOW_OPS` exception in `scripts/check-readonly.py`):
+/// it starts a report job and creates no resource. AWS classes it a Read
+/// action and grants it in the `IAMReadOnlyAccess` managed policy. The job
+/// is then polled with `GetServiceLastAccessedDetails`.
+pub async fn fetch_iam_last_accessed(client: IamClient, arn: String) -> Result<IamLastAccessed> {
+    use aws_sdk_iam::types::{AccessAdvisorUsageGranularityType, JobStatusType};
+    let job_id = client
+        .generate_service_last_accessed_details()
+        .arn(&arn)
+        .granularity(AccessAdvisorUsageGranularityType::ServiceLevel)
+        .send()
+        .await
+        .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?
+        .job_id
+        .ok_or_else(|| crate::error::Error::AwsSdk("no job id returned".to_string()))?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(LAST_ACCESSED_POLL_SECS);
+    let mut services = Vec::new();
+    let mut marker: Option<String> = None;
+    loop {
+        let resp = client
+            .get_service_last_accessed_details()
+            .job_id(&job_id)
+            .set_marker(marker.clone())
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+        match resp.job_status() {
+            JobStatusType::InProgress => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(crate::error::Error::AwsSdk(format!(
+                        "the Access Advisor report was still running after {LAST_ACCESSED_POLL_SECS}s — press r to retry"
+                    )));
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+            JobStatusType::Failed => {
+                return Err(match resp.error() {
+                    Some(e) => crate::error::Error::AwsSdk(format!("{}: {}", e.code(), e.message())),
+                    None => crate::error::Error::AwsSdk("the Access Advisor report failed".to_string()),
+                });
+            }
+            _ => {}
+        }
+        services.extend(resp.services_last_accessed().iter().map(|s| IamServiceLastAccessed {
+            service_name: s.service_name().to_string(),
+            namespace: s.service_namespace().to_string(),
+            last_authenticated_secs: s.last_authenticated().map(|d| d.secs()),
+            region: s.last_authenticated_region().map(str::to_string),
+            entity: s.last_authenticated_entity().map(str::to_string),
+            total_entities: s.total_authenticated_entities(),
+        }));
+        let next = if resp.is_truncated() {
+            crate::aws::pagination::next_page_token(resp.marker(), &marker)
+        } else {
+            None
+        };
+        if next.is_none() {
+            // Most recently used first; never-used services after, by name.
+            services.sort_by(|a, b| {
+                b.last_authenticated_secs
+                    .cmp(&a.last_authenticated_secs)
+                    .then_with(|| a.service_name.cmp(&b.service_name))
+            });
+            return Ok(IamLastAccessed {
+                services,
+                completed: Some(fmt_epoch_secs(resp.job_completion_date().secs())),
+            });
+        }
+        marker = next;
+    }
+}
+
 // ── Account settings (IamView::Account) ─────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -1753,6 +1860,117 @@ pub struct IamPasswordPolicy {
     pub max_age: Option<i32>,
     pub reuse_prevention: Option<i32>,
     pub hard_expiry: bool,
+}
+
+// ── Credential report (Account sub-tab) ───────────────────────────────────
+
+/// One access key slot (`access_key_1` / `access_key_2`) of a report row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CredReportKey {
+    pub slot: u8,
+    pub active: bool,
+    pub last_rotated: Option<i64>,
+    pub last_used: Option<i64>,
+}
+
+/// One row of the credential report: a user, or `<root_account>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CredReportUser {
+    pub user: String,
+    pub arn: String,
+    pub is_root: bool,
+    /// Console password set. Root reports `not_supported` — it always has one.
+    pub password_enabled: bool,
+    pub password_last_used: Option<i64>,
+    pub mfa_active: bool,
+    pub keys: Vec<CredReportKey>,
+}
+
+/// `GetCredentialReport`. neboto never calls `GenerateCredentialReport` (a
+/// write), so the three "no usable report" errors are ordinary outcomes here,
+/// not failures: a report lives ~4h after someone generates it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IamCredentialReport {
+    NotPresent,
+    Expired,
+    InProgress,
+    Present {
+        generated: Option<i64>,
+        users: Vec<CredReportUser>,
+    },
+}
+
+pub async fn fetch_iam_credential_report(client: IamClient) -> Result<IamCredentialReport> {
+    let resp = match client.get_credential_report().send().await {
+        Ok(r) => r,
+        Err(e) => {
+            if let Some(se) = e.as_service_error() {
+                if se.is_credential_report_expired_exception() {
+                    return Ok(IamCredentialReport::Expired);
+                }
+                if se.is_credential_report_not_present_exception() {
+                    return Ok(IamCredentialReport::NotPresent);
+                }
+                if se.is_credential_report_not_ready_exception() {
+                    return Ok(IamCredentialReport::InProgress);
+                }
+            }
+            return Err(crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)));
+        }
+    };
+    let csv = resp
+        .content()
+        .map(|b| String::from_utf8_lossy(b.as_ref()).into_owned())
+        .unwrap_or_default();
+    Ok(IamCredentialReport::Present {
+        generated: resp.generated_time().map(|t| t.secs()),
+        users: parse_credential_report(&csv),
+    })
+}
+
+/// The report CSV → rows. Columns are looked up by header name, so an added
+/// column can't shift the rest. No field ever contains a comma (names, ARNs,
+/// ISO times, `N/A`, `not_supported`, `no_information`), so a plain split holds.
+pub fn parse_credential_report(csv: &str) -> Vec<CredReportUser> {
+    let mut lines = csv.lines();
+    let Some(header) = lines.next() else {
+        return Vec::new();
+    };
+    let cols: Vec<&str> = header.split(',').map(str::trim).collect();
+    let idx = |name: &str| cols.iter().position(|c| *c == name);
+    let time = |v: Option<&str>| {
+        v.and_then(|v| chrono::DateTime::parse_from_rfc3339(v.trim()).ok())
+            .map(|d| d.timestamp())
+    };
+    let mut users = Vec::new();
+    for line in lines.filter(|l| !l.trim().is_empty()) {
+        let fields: Vec<&str> = line.split(',').collect();
+        let get = |name: &str| idx(name).and_then(|i| fields.get(i).copied());
+        let truthy = |name: &str| get(name).map(|v| v.trim() == "true").unwrap_or(false);
+        let user = get("user").unwrap_or_default().to_string();
+        let is_root = user == "<root_account>";
+        let keys = [1u8, 2]
+            .into_iter()
+            .map(|n| CredReportKey {
+                slot: n,
+                active: truthy(&format!("access_key_{n}_active")),
+                last_rotated: time(get(&format!("access_key_{n}_last_rotated"))),
+                last_used: time(get(&format!("access_key_{n}_last_used_date"))),
+            })
+            .collect();
+        users.push(CredReportUser {
+            arn: get("arn").unwrap_or_default().to_string(),
+            password_enabled: is_root || truthy("password_enabled"),
+            password_last_used: time(get("password_last_used")),
+            mfa_active: truthy("mfa_active"),
+            keys,
+            is_root,
+            user,
+        });
+    }
+    // Root first, then users by name.
+    users.sort_by(|a, b| b.is_root.cmp(&a.is_root).then_with(|| a.user.cmp(&b.user)));
+    users
 }
 
 /// One synthetic row: account alias, GetAccountSummary counts/quotas, and the
@@ -1850,6 +2068,7 @@ crate::sections! {
         Overview "Overview",
         PasswordPolicy "Password Policy",
         Usage "Usage",
+        CredentialReport "Credential Report" => crate::app::App::trigger_iam_credential_report_load,
     ]
 }
 

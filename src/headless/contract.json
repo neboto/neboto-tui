@@ -380,7 +380,8 @@
       "Instances",
       "Activities",
       "Tags",
-      "Optimizer"
+      "Optimizer",
+      "Lifecycle"
     ],
     "Backup Plan": [
       "Rules",
@@ -677,7 +678,8 @@
     "ECS Cluster": [
       "Overview",
       "Settings",
-      "Tags"
+      "Tags",
+      "Capacity Providers"
     ],
     "ECS Service": [
       "Overview",
@@ -867,13 +869,15 @@
     "IAM Account Settings": [
       "Overview",
       "Password Policy",
-      "Usage"
+      "Usage",
+      "Credential Report"
     ],
     "IAM Group": [
       "Overview",
       "Members",
       "Permissions",
-      "Policies"
+      "Policies",
+      "Last Accessed"
     ],
     "IAM Instance Profile": [
       "Details"
@@ -882,25 +886,29 @@
       "Overview",
       "Document",
       "Attached To",
-      "Tags"
+      "Tags",
+      "Last Accessed"
     ],
     "IAM Role": [
       "Overview",
       "Trust Policy",
       "Permissions",
       "Policies",
-      "Tags"
+      "Tags",
+      "Last Accessed"
     ],
     "IAM User": [
       "Access",
       "Permissions",
       "Policies",
       "Groups",
-      "Tags"
+      "Tags",
+      "Last Accessed"
     ],
     "IC Application": [
       "Overview",
-      "Assignments"
+      "Assignments",
+      "Auth"
     ],
     "IC Group": [
       "Details",
