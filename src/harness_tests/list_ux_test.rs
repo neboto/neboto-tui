@@ -323,3 +323,108 @@ async fn no_back_region_without_history() {
         .iter()
         .any(|r| matches!(r.action, ClickAction::Press(KeyCode::Backspace))));
 }
+
+// ── Forward (Ctrl-F) ─────────────────────────────────────────────────────
+
+fn ctrl(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+}
+
+/// A → jump → B, ⌫ back to A, Ctrl-F forward to B again. Going back from
+/// live records B first — before, "here" was never in the history, so
+/// there was nothing to come forward to.
+#[tokio::test]
+async fn forward_returns_to_where_back_left() {
+    let (mut app, tx, _rx) = test_app().await;
+    ec2_rows(&mut app, &["i-a", "i-b"]);
+    app.record_location(); // jump away from A …
+    app.selected_index = Some(1); // … landing on B
+    app.details_focused = true;
+    assert_eq!(app.nav_forward_hint(), None, "live: nothing ahead");
+
+    press(&mut app, &tx, KeyCode::Backspace).await;
+    assert_eq!(landed_on(&app).as_deref(), Some("i-a"));
+    assert_eq!(app.nav_forward_hint().as_deref(), Some("EC2 i-b"));
+    assert_eq!(app.nav_back_hint(), None, "A is the oldest");
+
+    app.handle_event(Event::Key(ctrl('f')), &tx).await.unwrap();
+    assert_eq!(landed_on(&app).as_deref(), Some("i-b"));
+    assert_eq!(app.nav_forward_hint(), None, "B is the newest");
+    assert_eq!(app.nav_back_hint().as_deref(), Some("EC2 i-a"));
+    assert_eq!(app.nav_history.len(), 2, "back and forth adds no entries");
+}
+
+/// Back, then a new jump: the forward branch is gone, as in a browser.
+#[tokio::test]
+async fn a_new_jump_after_going_back_drops_forward() {
+    let (mut app, tx, _rx) = test_app().await;
+    ec2_rows(&mut app, &["i-a", "i-b", "i-c"]);
+    app.record_location(); // A → B
+    app.selected_index = Some(1);
+    press(&mut app, &tx, KeyCode::Backspace).await; // back to A, B ahead
+    app.pending_jump = None;
+    app.selected_index = Some(2); // move to C, then jump away
+    app.record_location();
+    assert_eq!(app.nav_forward_hint(), None);
+    let ids: Vec<_> = app.nav_history.iter().map(|l| l.selected_id.clone().unwrap()).collect();
+    assert_eq!(ids, vec!["i-c"], "A was replaced by where we left from; B dropped");
+}
+
+/// Ctrl-F must not be eaten by a plain-`f` arm: a log group's detail pane
+/// binds `f` (quick search) without checking modifiers.
+#[tokio::test]
+async fn ctrl_f_is_forward_even_where_f_means_something() {
+    let (mut app, tx, _rx) = test_app().await;
+    let group = |name: &str| -> Box<dyn Resource> {
+        Box::new(crate::aws::services::cloudwatch::CwLogGroup::from_sdk(
+            &aws_sdk_cloudwatchlogs::types::LogGroup::builder()
+                .log_group_name(name)
+                .arn(format!("arn:aws:logs:us-east-1:111122223333:log-group:{name}"))
+                .build(),
+        ))
+    };
+    app.current_service = Some(ServiceType::CloudWatch);
+    app.resources = vec![group("/a"), group("/b")];
+    app.filtered_resources = vec![0, 1];
+    app.selected_index = Some(0);
+    app.record_location();
+    app.selected_index = Some(1);
+    app.details_focused = true;
+    press(&mut app, &tx, KeyCode::Backspace).await;
+    app.details_focused = true;
+
+    app.handle_event(Event::Key(ctrl('f')), &tx).await.unwrap();
+    assert!(!app.log_tail.visible, "Ctrl-F opened the quick search instead");
+    assert_eq!(app.nav_cursor, Some(1));
+}
+
+/// The forward hint is a click target too.
+#[tokio::test]
+async fn forward_hint_is_clickable() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let (mut app, tx, _rx) = test_app().await;
+    ec2_rows(&mut app, &["i-a", "i-b"]);
+    app.record_location();
+    app.selected_index = Some(1);
+    press(&mut app, &tx, KeyCode::Backspace).await;
+    app.details_focused = true;
+    let screen = draw(&app);
+    let rect = app
+        .click_regions
+        .borrow()
+        .iter()
+        .find(|r| matches!(r.action, ClickAction::NavForward))
+        .expect("the forward hint is clickable")
+        .rect;
+    let row = screen.lines().nth(rect.y as usize).unwrap();
+    let covered: String = row.chars().skip(rect.x as usize).take(rect.width as usize).collect();
+    assert_eq!(covered, "⌃F forward to EC2 i-b");
+    let ev = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rect.x + 1,
+        row: rect.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_event(Event::Mouse(ev), &tx).await.unwrap();
+    assert_eq!(landed_on(&app).as_deref(), Some("i-b"));
+}

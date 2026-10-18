@@ -151,6 +151,9 @@ pub enum ClickAction {
     FollowJump(usize),
     /// The service strip's `↑ vX.Y.Z` chip: show how to upgrade.
     UpdateNotice,
+    /// The detail footer's `⌃F forward to …` hint (a `Press` can't carry
+    /// the Ctrl modifier).
+    NavForward,
     /// A Cost period chip on the detail pane's border: show spend over that
     /// period. Periods have no digit of their own (`[`/`]` step them), so a
     /// replayed key can't pick one directly.
@@ -1385,6 +1388,15 @@ fn nav_hint_label(service: ServiceType, id: Option<&str>) -> String {
     format!("{} {tail}", service.short_name())
 }
 
+/// Where forward (`Ctrl-F`) lands: the next entry, but only while parked
+/// mid-history after going back — live, there's nothing ahead.
+fn nav_forward_target(len: usize, cursor: Option<usize>) -> Option<usize> {
+    match cursor {
+        Some(i) if i + 1 < len => Some(i + 1),
+        _ => None,
+    }
+}
+
 /// Structural side of recording a navigation location (shared with
 /// `record_location`, kept pure for testing): when parked mid-history, drop the
 /// stale forward branch and **replace** the parked entry with `loc` — you may
@@ -2378,10 +2390,10 @@ pub struct App {
     /// kind of duplicated geometry that silently drifts.
     pub cw_dashboard_regions: RefCell<Vec<(usize, Rect)>>,
     /// The detail footer drawn this frame when it carries the `⌫ back to …`
-    /// hint (set by `detail_footer`, cleared each frame by
+    /// or `⌃F forward to …` hint (set by `detail_footer`, cleared each frame by
     /// `render_details_pane`), so the hint's click region is placed from the
     /// text actually drawn rather than re-deriving ~130 renderers' footers.
-    pub detail_footer_back: RefCell<Option<String>>,
+    pub detail_footer_nav: RefCell<Option<String>>,
     /// Hit targets of the open `C` / `M` popup. Only one is ever open, so they
     /// share this; each renderer overwrites it every frame it draws.
     pub popup_hits: RefCell<PopupHits>,
@@ -3254,7 +3266,7 @@ impl App {
             cw_dashboard_scroll: 0,
             cw_dashboard_cursor: None,
             cw_dashboard_regions: RefCell::new(Vec::new()),
-            detail_footer_back: RefCell::new(None),
+            detail_footer_nav: RefCell::new(None),
             popup_hits: RefCell::new(PopupHits::default()),
             cw_dashboard_zoomed: false,
             cw_dashboard_range_from_body: true,
@@ -4260,6 +4272,20 @@ impl App {
             && !self.any_pane_overlay_active()
         {
             self.toggle_macro_picker();
+            return Ok(());
+        }
+
+        // `Ctrl-F` (history forward) is intercepted here for the same reason
+        // as `,`, plus one more: several plain `f` arms (log-group search,
+        // the ECS task filter, CloudTrail…) match on the key code alone and
+        // would swallow it as `f`. Same overlay gate.
+        if key.code == KeyCode::Char('f')
+            && key.modifiers == KeyModifiers::CONTROL
+            && !self.search_active
+            && !self.detail_search_active
+            && !self.any_pane_overlay_active()
+        {
+            self.nav_forward(event_tx);
             return Ok(());
         }
 
@@ -21851,6 +21877,19 @@ impl App {
             _ => JumpView::None}
     }
 
+    /// The query a location on `service` records. An `@other-service …`
+    /// query is the switch *away* from here (it's captured mid-switch, from
+    /// `update_search`), not this list's filter: restoring it would re-run
+    /// the switch and bounce Ctrl-O forward again, so it records as no
+    /// filter. `@all` stays — returning to its results is the point
+    /// (`jump_to_location`).
+    fn location_query(&self, service: ServiceType) -> String {
+        use crate::search::query_parser::{parse_all_query, parse_query};
+        let leaving = parse_all_query(&self.search_query).is_none()
+            && parse_query(&self.search_query).service.is_some_and(|s| s != service);
+        if leaving { String::new() } else { self.search_query.clone() }
+    }
+
     /// Snapshot the current location (service + sub-tab + query + selected row).
     /// `None` when no service is active.
     fn current_location(&mut self) -> Option<NavLocation> {
@@ -21868,17 +21907,7 @@ impl App {
         let selected_id = selected.map(|r| r.id().to_string());
         let selected_name = selected.map(|r| r.name().to_string());
 
-        // An `@other-service …` query is the switch *away* from here (it's
-        // captured mid-switch, from `update_search`), not this list's filter:
-        // restoring it would re-run the switch and bounce Ctrl-O forward
-        // again. Come back unfiltered instead. `@all` stays — returning to
-        // its results is the point (`jump_to_location`).
-        let query = {
-            use crate::search::query_parser::{parse_all_query, parse_query};
-            let leaving = parse_all_query(&self.search_query).is_none()
-                && parse_query(&self.search_query).service.is_some_and(|s| s != service);
-            if leaving { String::new() } else { self.search_query.clone() }
-        };
+        let query = self.location_query(service);
         let mut label = service.short_name().to_string();
         if !query.is_empty() {
             label.push_str(&format!("  ·  {}", query));
@@ -21902,6 +21931,55 @@ impl App {
             detail_section})
     }
 
+    /// Whether `loc` is the history's newest entry already (same service,
+    /// query and row) — `record_location`'s de-dup, and how going back from
+    /// live tells whether "here" still needs recording.
+    fn is_history_top(&self, service: ServiceType, query: &str, selected_id: Option<&str>) -> bool {
+        self.nav_history.last().is_some_and(|top| {
+            top.service == service && top.query == query && top.selected_id.as_deref() == selected_id
+        })
+    }
+
+    /// Whether where we are now is already the history's newest entry.
+    fn here_is_history_top(&self) -> bool {
+        let Some(service) = self.current_service else {
+            return false;
+        };
+        let id = self.get_selected_resource().map(|r| r.id().to_string());
+        self.is_history_top(service, &self.location_query(service), id.as_deref())
+    }
+
+    /// Going back (or into the jump list) from live first records where you
+    /// are and parks the cursor on it, so forward has somewhere to return to
+    /// — while live, "here" isn't in the history (each entry is a place you
+    /// *left*). Returns how many entries the cap dropped off the front, for a
+    /// caller holding an index into the old list.
+    fn park_here(&mut self) -> usize {
+        if self.nav_cursor.is_some() || self.nav_history.is_empty() {
+            return 0;
+        }
+        let Some(loc) = self.current_location() else {
+            return 0;
+        };
+        if !self.is_history_top(loc.service, &loc.query, loc.selected_id.as_deref()) {
+            self.nav_history.push(loc);
+        }
+        let overflow = self.nav_history.len().saturating_sub(NAV_HISTORY_MAX);
+        self.nav_history.drain(0..overflow);
+        self.nav_cursor = Some(self.nav_history.len() - 1);
+        overflow
+    }
+
+    /// The entry `⌫` / `Ctrl-O` would land on — `nav_back` after
+    /// `park_here`, computed without recording anything (the footer hint).
+    fn nav_back_index(&self) -> Option<usize> {
+        if self.nav_cursor.is_none() {
+            let skip = if self.here_is_history_top() { 2 } else { 1 };
+            return self.nav_history.len().checked_sub(skip);
+        }
+        nav_back_target(self.nav_history.len(), self.nav_cursor)
+    }
+
     /// Record the current location onto the timeline before navigating away to a
     /// new place. Skips while restoring. The timeline is *not* consumed by going
     /// back (that only moves `nav_cursor`); recording a brand-new jump while
@@ -21914,11 +21992,7 @@ impl App {
         let Some(loc) = self.current_location() else {
             return;
         };
-        let is_dup_top = self.nav_history.last().is_some_and(|top| {
-            top.service == loc.service
-                && top.query == loc.query
-                && top.selected_id == loc.selected_id
-        });
+        let is_dup_top = self.is_history_top(loc.service, &loc.query, loc.selected_id.as_deref());
         record_into(
             &mut self.nav_history,
             &mut self.nav_cursor,
@@ -22003,6 +22077,7 @@ impl App {
     /// entry stays in the list so repeated `Ctrl-O` walks the whole history and
     /// the jump-list picker keeps showing every place).
     fn nav_back(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        self.park_here();
         match nav_back_target(self.nav_history.len(), self.nav_cursor) {
             Some(idx) => {
                 self.nav_cursor = Some(idx);
@@ -22018,11 +22093,32 @@ impl App {
         }
     }
 
+    /// `Ctrl-F`: step forward again after going back — the browser's forward
+    /// button. Forward entries survive until a new jump records over them
+    /// (`record_into` drops the forward branch).
+    pub(crate) fn nav_forward(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        match nav_forward_target(self.nav_history.len(), self.nav_cursor) {
+            Some(idx) => {
+                self.nav_cursor = Some(idx);
+                let loc = self.nav_history[idx].clone();
+                self.jump_to_location(loc, event_tx);
+            }
+            None => self.error_message = Some("Nothing to go forward to".to_string()),
+        }
+    }
+
+    /// Where `Ctrl-F` would go, in the same short form as `nav_back_hint`.
+    pub(crate) fn nav_forward_hint(&self) -> Option<String> {
+        let idx = nav_forward_target(self.nav_history.len(), self.nav_cursor)?;
+        let loc = &self.nav_history[idx];
+        Some(nav_hint_label(loc.service, loc.selected_id.as_deref()))
+    }
+
     /// Where `⌫` / `Ctrl-O` would go, shortened for the detail footer:
     /// `EC2 i-0abc…`, an ARN or path cut to its last segment. `None` when
     /// there's no history behind us, or the entry is where we already are.
     pub(crate) fn nav_back_hint(&self) -> Option<String> {
-        let idx = nav_back_target(self.nav_history.len(), self.nav_cursor)?;
+        let idx = self.nav_back_index()?;
         let loc = &self.nav_history[idx];
         let here = self.get_selected_resource().map(|r| r.id().to_string());
         if Some(loc.service) == self.current_service && loc.selected_id == here {
@@ -22070,6 +22166,11 @@ impl App {
         }
         let sel = self.jump_list_selected.min(n - 1);
         let vec_idx = n - 1 - sel; // display is most-recent-first
+        // Record "here" first so forward can come back; the index is into the
+        // list as displayed, so shift it if the cap dropped the oldest.
+        let Some(vec_idx) = vec_idx.checked_sub(self.park_here()) else {
+            return;
+        };
         self.nav_cursor = Some(vec_idx);
         let loc = self.nav_history[vec_idx].clone();
         self.jump_to_location(loc, event_tx);
@@ -25267,6 +25368,7 @@ impl App {
     ) -> Result<()> {
         match action {
             ClickAction::UpdateNotice => self.open_update_notice(),
+            ClickAction::NavForward => self.nav_forward(event_tx),
             ClickAction::CostPeriod(period) => {
                 // A stale region from before a service switch does nothing.
                 if self.current_service == Some(ServiceType::Cost)
@@ -34638,8 +34740,18 @@ mod flat_view_tests {
 
 #[cfg(test)]
 mod nav_tests {
-    use super::{nav_back_target, nav_hint_label, record_into, NAV_HISTORY_MAX};
+    use super::{nav_back_target, nav_forward_target, nav_hint_label, record_into, NAV_HISTORY_MAX};
     use crate::aws::service::ServiceType;
+
+    // --- nav_forward_target: where Ctrl-F lands ---
+
+    #[test]
+    fn forward_steps_up_only_while_parked() {
+        assert_eq!(nav_forward_target(3, None), None, "live: nothing ahead");
+        assert_eq!(nav_forward_target(3, Some(0)), Some(1));
+        assert_eq!(nav_forward_target(3, Some(1)), Some(2));
+        assert_eq!(nav_forward_target(3, Some(2)), None, "at the newest");
+    }
 
     // --- nav_hint_label: the detail footer's `⌫ back to …` text ---
 

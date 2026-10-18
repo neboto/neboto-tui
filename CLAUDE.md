@@ -1003,6 +1003,10 @@ and the approaches you rejected are the part nobody can recover from your code.
   `l`/`→`/`Enter` (drill into detail), `⌫`/`Ctrl-O`
   (nav-back through history — **not** `h`/`←`: from the detail pane they go
   back to the list, and a second tap popping history lost your place),
+  `Ctrl-F` (forward again; intercepted at the top of `handle_key` like `,`,
+  since plain-`f` arms that ignore modifiers would swallow it — and going
+  back from live first records "here", `park_here`, so forward has
+  somewhere to return to),
   `Tab`/`Shift-Tab` (cycle sub-tabs), `1`–`9` (jump to sub-tab), `H`/`L`
   (previous/next sub-tab from **either** pane — `step_sub_tab` replays
   `Shift-Tab`/`Tab` through the list handlers and re-opens the new tab's
@@ -1049,8 +1053,8 @@ and the approaches you rejected are the part nobody can recover from your code.
   `H`/`L` (sub-tabs, as in the list pane),
   `l`/`→`/`Enter` (follow jump), `h`/`←`/`Esc` (back to list), `⌫`/`Ctrl-O`
   (nav-back through history, same as the list pane; the footer names the
-  target as a clickable `⌫ back to …` — its region is placed from the text
-  `detail_footer` drew, `App.detail_footer_back`), `y`/`e`,
+  targets as clickable `⌫ back to …` / `⌃F forward to …` — regions placed
+  from the text `detail_footer` drew, `App.detail_footer_nav`), `y`/`e`,
   `m`/`o`/`i`/`t` (rich views), `W`/`U`/`N` (timeline / referenced-by /
   network-access lenses, also from the list pane), `X` (export detail;
   `Ctrl-X` exports the list),

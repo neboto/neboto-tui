@@ -330,10 +330,10 @@ pub use workspaces::*;
 pub use xray::*;
 
 pub fn render_details_pane(app: &App, area: Rect, frame: &mut Frame) {
-    app.detail_footer_back.replace(None);
+    app.detail_footer_nav.replace(None);
     render_details_pane_inner(app, area, frame);
     render_ownership_ribbon(app, area, frame);
-    record_back_hint_region(app, area);
+    record_nav_hint_regions(app, area);
     // The pane's top border (its title bar) toggles full width, as `Z` does:
     // the mouse route to the one layout key with no visible control.
     if area.height > 0 {
@@ -344,19 +344,15 @@ pub fn render_details_pane(app: &App, area: Rect, frame: &mut Frame) {
     }
 }
 
-/// The footer's `⌫ back to …` hint is a click target (as `⌫`). The footer is
-/// right-aligned inside the bottom border's corners, so the hint's columns
-/// follow from the text `detail_footer` recorded; a footer too wide for the
-/// pane is truncated by the block, so it gets no region rather than a wrong one.
-fn record_back_hint_region(app: &App, area: Rect) {
+/// The footer's `⌫ back to …` / `⌃F forward to …` hints are click targets
+/// (as `⌫` / `Ctrl-F`). The footer is right-aligned inside the bottom
+/// border's corners, so each hint's columns follow from the text
+/// `detail_footer` recorded; a footer too wide for the pane is truncated by
+/// the block, so it gets no regions rather than wrong ones.
+fn record_nav_hint_regions(app: &App, area: Rect) {
+    use crate::app::ClickAction;
     use unicode_width::UnicodeWidthStr;
-    let Some(footer) = app.detail_footer_back.take() else {
-        return;
-    };
-    let Some(hint) = app.nav_back_hint().map(|to| format!("⌫ back to {to}")) else {
-        return;
-    };
-    let Some(at) = footer.find(&hint) else {
+    let Some(footer) = app.detail_footer_nav.take() else {
         return;
     };
     let inner_w = area.width.saturating_sub(2) as usize;
@@ -365,15 +361,26 @@ fn record_back_hint_region(app: &App, area: Rect) {
         return;
     }
     let start = area.x + 1 + (inner_w - footer_w) as u16;
-    app.push_click_region(
-        Rect {
-            x: start + footer[..at].width() as u16,
-            y: area.y + area.height - 1,
-            width: hint.width() as u16,
-            height: 1,
-        },
-        crate::app::ClickAction::Press(crossterm::event::KeyCode::Backspace),
-    );
+    let hints = [
+        (
+            app.nav_back_hint().map(|to| format!("⌫ back to {to}")),
+            ClickAction::Press(crossterm::event::KeyCode::Backspace),
+        ),
+        (app.nav_forward_hint().map(|to| format!("⌃F forward to {to}")), ClickAction::NavForward),
+    ];
+    for (hint, action) in hints {
+        let Some(hint) = hint else { continue };
+        let Some(at) = footer.find(&hint) else { continue };
+        app.push_click_region(
+            Rect {
+                x: start + footer[..at].width() as u16,
+                y: area.y + area.height - 1,
+                width: hint.width() as u16,
+                height: 1,
+            },
+            action,
+        );
+    }
 }
 
 /// Ownership ribbon: a dim one-liner on the pane's bottom border, left side
@@ -4381,16 +4388,13 @@ fn detail_footer(app: &App, focused: bool, sections: usize, extras: &str) -> Str
         parts.push("W trail");
     }
     let back = app.nav_back_hint().map(|to| format!("⌫ back to {to}"));
-    match &back {
-        Some(b) => {
-            parts.push(b);
-            parts.push("h list");
-        }
-        None => parts.push("h back"),
-    }
+    let forward = app.nav_forward_hint().map(|to| format!("⌃F forward to {to}"));
+    parts.extend(back.as_deref());
+    parts.extend(forward.as_deref());
+    parts.push(if back.is_some() || forward.is_some() { "h list" } else { "h back" });
     let footer = format!(" {} ", parts.join(" · "));
-    if back.is_some() {
-        app.detail_footer_back.replace(Some(footer.clone()));
+    if back.is_some() || forward.is_some() {
+        app.detail_footer_nav.replace(Some(footer.clone()));
     }
     footer
 }
