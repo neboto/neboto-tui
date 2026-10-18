@@ -325,7 +325,7 @@ fn rds_proxy_overview_rows(p: &crate::aws::services::rds::RdsProxy) -> Vec<(Stri
         rows.push(kv("Default Auth Scheme", s.clone()));
     }
     if let Some(t) = p.idle_client_timeout {
-        rows.push(kv("Idle Client Timeout", format!("{t}s ({}m)", t / 60)));
+        rows.push(kv("Idle Client Timeout", idle_timeout_text(t)));
     }
     rows.push(kv(
         "Debug Logging",
@@ -403,7 +403,9 @@ fn rds_proxy_target_rows(t: &crate::aws::services::rds::RdsProxyTargets) -> Vec<
     let unhealthy = t
         .targets
         .iter()
-        .filter(|x| x.health_state.as_deref().is_some_and(|s| s != "AVAILABLE"))
+        // Only UNAVAILABLE is a fault: REGISTERING is transient (a new proxy or
+        // target) and UNUSED is a target the proxy isn't routing to.
+        .filter(|x| x.health_state.as_deref() == Some("UNAVAILABLE"))
         .count();
     let header = if unhealthy > 0 {
         format!("Targets ({}) — ⚠ {} not available", t.targets.len(), unhealthy)
@@ -432,7 +434,12 @@ fn rds_proxy_target_rows(t: &crate::aws::services::rds::RdsProxyTargets) -> Vec<
         let health = match x.health_state.as_deref() {
             Some("AVAILABLE") => "✓ available".to_string(),
             Some(state) => {
-                let mut v = format!("⚠ {}", state.to_lowercase());
+                let mut v = if state == "UNAVAILABLE" {
+                    format!("⚠ {}", state.to_lowercase())
+                } else {
+                    // Dimmed annotation (`· ` prefix), not a warning.
+                    format!("· {}", state.to_lowercase())
+                };
                 if let Some(r) = &x.health_reason {
                     v.push_str(&format!(" · {r}"));
                 }
@@ -1345,6 +1352,16 @@ pub fn rds_cluster_section_lines(
     rows
 }
 
+/// `90s`, `300s (5m)`: minutes only when they're exact, since `t / 60`
+/// rounded 90s down to "1m" and anything under a minute to "0m".
+fn idle_timeout_text(t: i32) -> String {
+    if t >= 60 && t % 60 == 0 {
+        format!("{t}s ({}m)", t / 60)
+    } else {
+        format!("{t}s")
+    }
+}
+
 #[cfg(test)]
 mod rds_proxy_tests {
     use super::*;
@@ -1401,5 +1418,34 @@ mod rds_proxy_tests {
         assert!(has("  Target DB", "orders-2"));
         assert!(has("    Health", "⚠ unavailable · AUTH_FAILURE"));
         assert!(has("    Health", "✓ available"));
+    }
+
+    #[test]
+    fn registering_and_unused_targets_are_not_faults() {
+        let proxy = RdsProxy::from_sdk(
+            &aws_sdk_rds::types::DbProxy::builder().db_proxy_name("orders-proxy").build(),
+        );
+        let mut registering = target("RDS_INSTANCE", "orders-3", Some("REGISTERING"));
+        registering.health_reason = Some("PENDING_PROXY_CAPACITY".to_string());
+        let targets = RdsProxyTargets {
+            groups: vec![],
+            targets: vec![registering, target("RDS_INSTANCE", "orders-4", Some("UNUSED"))],
+        };
+        let rows = rds_proxy_section_lines(
+            &proxy,
+            RdsProxyDetailSection::Targets,
+            Some(&crate::lazy::Lazy::Loaded(targets)),
+        );
+        assert!(rows.iter().any(|(k, _)| k == "Targets (2)"), "{rows:?}");
+        let health: Vec<&str> =
+            rows.iter().filter(|(k, _)| k == "    Health").map(|(_, v)| v.as_str()).collect();
+        assert_eq!(health, vec!["· registering · PENDING_PROXY_CAPACITY", "· unused · AUTH_FAILURE"]);
+    }
+
+    #[test]
+    fn idle_timeout_shows_minutes_only_when_exact() {
+        assert_eq!(idle_timeout_text(1800), "1800s (30m)");
+        assert_eq!(idle_timeout_text(90), "90s");
+        assert_eq!(idle_timeout_text(30), "30s");
     }
 }
