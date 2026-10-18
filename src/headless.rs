@@ -7,14 +7,15 @@
 //! config problems) go to stderr, so `-o json | jq` stays parseable. Exit
 //! codes: 0 success (an empty list included), 1 an AWS or runtime error,
 //! 2 bad usage (unknown service, region, section, or a resource that isn't
-//! there or is ambiguous).
+//! there or is ambiguous). `audit` adds 3: it ran, and found something at
+//! or above `--fail-on`.
 
 use crate::app::App;
 use crate::aws::client::AwsClients;
 use crate::aws::region::Region;
 use crate::aws::resource::Resource;
 use crate::aws::service::{AwsService, ServiceType};
-use crate::cli::{Cli, Command, GetArgs, LsArgs, OutputFormat};
+use crate::cli::{AuditArgs, Cli, Command, GetArgs, LsArgs, OutputFormat};
 use crate::config::Config;
 use crate::event::Event;
 use serde_json::json;
@@ -42,7 +43,7 @@ impl Failure {
             Failure::Error(_) => 1,
         }
     }
-    fn message(&self) -> &str {
+    pub(crate) fn message(&self) -> &str {
         match self {
             Failure::Usage(m) | Failure::Error(m) => m,
         }
@@ -52,22 +53,27 @@ impl Failure {
 /// Run the subcommand in `cli.command` and return the process exit code.
 pub async fn run(cli: Cli) -> i32 {
     let format = cli.output.unwrap_or_else(default_format);
+    let ok = |r: Result<String, Failure>| r.map(|s| (s, 0));
     let result = match &cli.command {
-        Some(Command::Services) => services(format),
+        Some(Command::Services) => ok(services(format)),
         Some(Command::Ls(args)) => match setup(&cli).await {
-            Ok((config, clients)) => ls(&config, &clients, args, format).await,
+            Ok((config, clients)) => ok(ls(&config, &clients, args, format).await),
             Err(f) => Err(f),
         },
         Some(Command::Get(args)) => match setup(&cli).await {
-            Ok((config, clients)) => get(config, clients, args, format).await,
+            Ok((config, clients)) => ok(get(config, clients, args, format).await),
             Err(f) => Err(f),
         },
-        None => Ok(String::new()),
+        Some(Command::Audit(args)) => match setup(&cli).await {
+            Ok((config, clients)) => audit(&config, &clients, args, format).await,
+            Err(f) => Err(f),
+        },
+        None => Ok((String::new(), 0)),
     };
     match result {
-        Ok(out) => {
+        Ok((out, code)) => {
             emit(&out);
-            0
+            code
         }
         Err(f) => {
             eprintln!("neboto: {}", f.message());
@@ -130,11 +136,15 @@ async fn setup(cli: &Cli) -> Result<(Config, AwsClients), Failure> {
 /// `@ec2`, `ec2` and every alias the TUI's `@` search accepts.
 pub fn resolve_service(name: &str) -> Result<ServiceType, Failure> {
     let bare = name.trim().trim_start_matches('@');
-    ServiceType::from_prefix(bare).ok_or_else(|| {
+    let svc = ServiceType::from_prefix(bare).ok_or_else(|| {
         Failure::Usage(format!(
             "unknown service {name} — `neboto services` lists them"
         ))
-    })
+    })?;
+    if svc == ServiceType::Audit {
+        return Err(Failure::Usage("@audit isn't listable — run `neboto audit`".into()));
+    }
+    Ok(svc)
 }
 
 // ── services ────────────────────────────────────────────────────────────────
@@ -341,6 +351,139 @@ fn render_list(svc: ServiceType, region: &str, rows: &[Box<dyn Resource>], forma
                 })
                 .collect();
             table(&["TYPE", "ID", "NAME", "STATE"], &body)
+        }
+    }
+}
+
+// ── audit ───────────────────────────────────────────────────────────────────
+
+
+async fn audit(
+    config: &Config,
+    clients: &AwsClients,
+    args: &AuditArgs,
+    format: OutputFormat,
+) -> Result<(String, i32), Failure> {
+    let fail_on = match args.fail_on.to_ascii_lowercase().as_str() {
+        "never" | "none" => None,
+        s => Some(crate::audit::Severity::parse(s).ok_or_else(|| {
+            Failure::Usage(format!("--fail-on {s}: expected high, medium, low or never"))
+        })?),
+    };
+    let roles = config.org_access_roles_resolved();
+    let services = App::build_services(clients, config.controltower_audit_target(&roles), &roles);
+    let region = clients.current_region().as_str().to_string();
+    let findings = audit_findings(&services, &region).await;
+    let code = match fail_on {
+        Some(min) if findings.iter().any(|f| f.is_finding() && f.severity <= min) => 3,
+        _ => 0,
+    };
+    Ok((render_audit(&region, &findings, format), code))
+}
+
+/// Load `AUDIT_SOURCES` side by side and run the checks. A service that fails
+/// to load is a warning, and its checks come back as "not checked" rows —
+/// a permission gap must never read as a clean bill.
+pub(crate) async fn audit_findings(
+    services: &std::collections::HashMap<ServiceType, Arc<dyn AwsService>>,
+    region: &str,
+) -> Vec<crate::audit::AuditFinding> {
+    let loads = crate::audit::SOURCES.iter().filter_map(|svc| {
+        let service = services.get(svc)?.clone();
+        Some(async move { (*svc, list_all(service, *svc).await) })
+    });
+    let mut lists: Vec<(ServiceType, Vec<Box<dyn Resource>>)> = Vec::new();
+    for (svc, result) in futures::future::join_all(loads).await {
+        match result {
+            Ok((rows, warnings)) => {
+                for w in warnings {
+                    eprintln!("neboto: warning: {}: {w}", svc.prefix());
+                }
+                lists.push((svc, rows));
+            }
+            Err(f) => eprintln!("neboto: warning: {} not audited: {}", svc.prefix(), f.message()),
+        }
+    }
+    let mut input = crate::audit::AuditInput::new(region);
+    for (svc, rows) in &lists {
+        input.add(*svc, rows);
+    }
+    crate::audit::run(&input)
+}
+
+fn render_audit(region: &str, rows: &[crate::audit::AuditFinding], format: OutputFormat) -> String {
+    let findings: Vec<_> = rows.iter().filter(|f| f.is_finding()).collect();
+    let skipped: Vec<_> = rows
+        .iter()
+        .filter(|f| f.kind == crate::audit::RowKind::NotChecked)
+        .collect();
+    let cells = |f: &crate::audit::AuditFinding| -> [String; 5] {
+        [
+            f.severity.label().to_string(),
+            f.check_id.to_string(),
+            f.service.map(|s| s.prefix().to_string()).unwrap_or_default(),
+            f.resource_name.clone(),
+            f.reason.clone(),
+        ]
+    };
+    let body: Vec<[String; 5]> = findings.iter().map(|f| cells(f)).collect();
+    match format {
+        OutputFormat::Json => {
+            let items: Vec<_> = findings
+                .iter()
+                .map(|f| {
+                    json!({
+                        "severity": f.severity.label(),
+                        "check": f.check_id,
+                        "title": f.check_title,
+                        "service": f.service.map(|s| s.prefix().trim_start_matches('@').to_string()),
+                        "resource_id": f.resource_id,
+                        "resource_name": f.resource_name,
+                        "resource_type": f.resource_type,
+                        "reason": f.reason,
+                    })
+                })
+                .collect();
+            let not_checked: Vec<_> = skipped
+                .iter()
+                .map(|f| json!({"check": f.check_id, "subject": f.resource_name, "reason": f.list_note}))
+                .collect();
+            pretty(&json!({
+                "schema": SCHEMA,
+                "region": region,
+                "count": items.len(),
+                "findings": items,
+                "not_checked": not_checked,
+            }))
+        }
+        OutputFormat::Md => {
+            let mut out = markdown_table(&["Severity", "Check", "Service", "Resource", "Finding"], &body);
+            for f in &skipped {
+                out.push_str(&format!("\n- {}: {} — {}", f.check_id, f.resource_name, f.list_note));
+            }
+            out
+        }
+        OutputFormat::Csv => {
+            let mut out = String::from("Severity,Check,Service,Resource,Finding\n");
+            for r in &body {
+                out.push_str(&r.iter().map(|c| csv_cell(c)).collect::<Vec<_>>().join(","));
+                out.push('\n');
+            }
+            out
+        }
+        OutputFormat::Table => {
+            let mut out = if body.is_empty() {
+                "no findings\n".to_string()
+            } else {
+                table(&["SEVERITY", "CHECK", "SERVICE", "RESOURCE", "FINDING"], &body)
+            };
+            for f in &skipped {
+                if !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(&format!("{}: {} — {}\n", f.check_id, f.resource_name, f.list_note));
+            }
+            out
         }
     }
 }

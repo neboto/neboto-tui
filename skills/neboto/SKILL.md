@@ -70,6 +70,22 @@ events / template / drift, ECS deployments, …). Up to 50 ids per call.
   the profiles may prompt for credentials. Each side matches the id or name
   in its own account.
 
+## `audit` — security findings
+
+`neboto audit -o json` loads EC2, RDS, S3, EKS and IAM, then runs neboto's
+built-in checks. Examples: security groups open to `0.0.0.0/0` (high on
+admin and database ports), public RDS, unencrypted EBS and RDS, IMDSv1,
+public AMIs, the S3 public access block, root MFA and keys, the password
+policy, and Access Analyzer's public findings.
+
+- Each finding names its `service` and `resource_id`, so `neboto get` on that
+  pair gives the full detail.
+- `not_checked` lists checks that couldn't run (usually a denied list call),
+  so an empty `findings` with a non-empty `not_checked` is **not** a clean
+  account.
+- `--fail-on high|medium|low|never` (default `low`) sets the exit code: 3
+  means the audit ran and found something at or above that severity.
+
 ## Output
 
 Always pass `-o json` (or `-o md` for text to reason over); the default
@@ -110,6 +126,8 @@ stdout carries only the result; warnings (e.g. a partial load) go to stderr.
   resource that isn't there or is ambiguous. **The message says what to
   pass instead** (the matching ids and types, or the real section names):
   read it and retry.
+- `3` — `audit` only: it ran and found something at or above `--fail-on`.
+  stdout still has the full result.
 
 ## Account, region, credentials
 

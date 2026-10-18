@@ -456,7 +456,61 @@ impl AwsService for Ec2Service {
             }
         }
 
-        // Phase 2: Security Groups (paginated — a bare `.send()` caps at
+        // Phase 2: Network Interfaces (paginated — ENIs are the resource
+        // most likely to exceed one 1000-item page: every Lambda-in-VPC /
+        // ELB node / EKS pod mints them, and a bare `.send()` truncated).
+        // Runs ahead of security groups so the same scan collects which
+        // groups are attached: the SG phase marks the rest `unused`.
+        let mut attached: Option<std::collections::HashSet<String>> =
+            Some(std::collections::HashSet::new());
+        {
+            let mut pages = self
+                .client
+                .describe_network_interfaces()
+                .into_paginator()
+                .send();
+            while let Some(page) = pages.next().await {
+                match page {
+                    Ok(resp) => {
+                        let mut batch: Vec<Box<dyn Resource>> = Vec::new();
+                        for eni in resp.network_interfaces() {
+                            if let Some(ids) = attached.as_mut() {
+                                add_eni_group_ids(ids, eni);
+                            }
+                            batch.push(Box::new(NetworkInterface::from_sdk(eni)));
+                            total_loaded += 1;
+                        }
+                        if !batch.is_empty() {
+                            let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                                service: service_type,
+                                resources: batch,
+                                progress: LoadProgress {
+                                    loaded_count: total_loaded,
+                                    total_count: None,
+                                    status_message: Some(
+                                        "Loading network interfaces…".to_string(),
+                                    ),
+                                },
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        // A partial set would mark attached groups unused.
+                        attached = None;
+                        let _ = event_tx.send(Event::ResourceLoadWarning {
+                            service: service_type,
+                            warning: format!(
+                                "Network interfaces: {}",
+                                crate::error::sdk_error_message(&e)
+                            ),
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Phase 3: Security Groups (paginated — a bare `.send()` caps at
         // 1000 and >1000 SGs is common in older accounts)
         {
             let mut pages = self
@@ -469,7 +523,11 @@ impl AwsService for Ec2Service {
                     Ok(resp) => {
                         let mut batch: Vec<Box<dyn Resource>> = Vec::new();
                         for sg in resp.security_groups() {
-                            batch.push(Box::new(SecurityGroup::from_sdk(sg)));
+                            let mut group = SecurityGroup::from_sdk(sg);
+                            if let Some(ids) = &attached {
+                                group.unused = sg_is_unused(&group.group_name, &group.group_id, ids);
+                            }
+                            batch.push(Box::new(group));
                             total_loaded += 1;
                         }
                         if !batch.is_empty() {
@@ -500,7 +558,7 @@ impl AwsService for Ec2Service {
             }
         }
 
-        // Phase 3: EBS Volumes (paginated — one page caps at 1000 volumes)
+        // Phase 4: EBS Volumes (paginated — one page caps at 1000 volumes)
         {
             let mut pages = self.client.describe_volumes().into_paginator().send();
             while let Some(page) = pages.next().await {
@@ -528,51 +586,6 @@ impl AwsService for Ec2Service {
                             service: service_type,
                             warning: format!(
                                 "EBS volumes: {}",
-                                crate::error::sdk_error_message(&e)
-                            ),
-                        });
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Phase 4: Network Interfaces (paginated — ENIs are the resource
-        // most likely to exceed one 1000-item page: every Lambda-in-VPC /
-        // ELB node / EKS pod mints them, and a bare `.send()` truncated).
-        {
-            let mut pages = self
-                .client
-                .describe_network_interfaces()
-                .into_paginator()
-                .send();
-            while let Some(page) = pages.next().await {
-                match page {
-                    Ok(resp) => {
-                        let mut batch: Vec<Box<dyn Resource>> = Vec::new();
-                        for eni in resp.network_interfaces() {
-                            batch.push(Box::new(NetworkInterface::from_sdk(eni)));
-                            total_loaded += 1;
-                        }
-                        if !batch.is_empty() {
-                            let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
-                                service: service_type,
-                                resources: batch,
-                                progress: LoadProgress {
-                                    loaded_count: total_loaded,
-                                    total_count: None,
-                                    status_message: Some(
-                                        "Loading network interfaces…".to_string(),
-                                    ),
-                                },
-                            });
-                        }
-                    }
-                    Err(e) => {
-                        let _ = event_tx.send(Event::ResourceLoadWarning {
-                            service: service_type,
-                            warning: format!(
-                                "Network interfaces: {}",
                                 crate::error::sdk_error_message(&e)
                             ),
                         });
@@ -1288,20 +1301,62 @@ impl SgRule {
 /// Outbound-to-anywhere is the AWS default and deliberately not flagged.
 pub const SG_OPEN_TO_WORLD: &str = "open to world";
 
-pub fn sg_exposure_state(inbound: &[SgRule]) -> ResourceState {
+/// List-level state of a group with no network interface (see
+/// `fetch_attached_group_ids`). Not "safe to delete" — the Used By section
+/// says why.
+pub const SG_UNUSED: &str = "unused";
+
+/// Open-to-world wins over unused: the rule is the risk the moment anything
+/// attaches the group, so it stays the red row.
+pub fn sg_exposure_state(inbound: &[SgRule], unused: bool) -> ResourceState {
     if inbound.iter().any(SgRule::is_world) {
         ResourceState::Unavailable
+    } else if unused {
+        ResourceState::Idle
     } else {
         ResourceState::stateless()
     }
 }
 
-pub fn sg_exposure_label(inbound: &[SgRule]) -> String {
+pub fn sg_exposure_label(inbound: &[SgRule], unused: bool) -> String {
     if inbound.iter().any(SgRule::is_world) {
         SG_OPEN_TO_WORLD.to_string()
+    } else if unused {
+        SG_UNUSED.to_string()
     } else {
         String::new()
     }
+}
+
+/// Every security group id attached to a network interface in the region —
+/// one paginated `DescribeNetworkInterfaces`. A group missing from the set
+/// has no ENI. All-or-nothing: a failed page returns the error, since a
+/// partial set would mark attached groups unused.
+pub async fn fetch_attached_group_ids(
+    client: &aws_sdk_ec2::Client,
+) -> std::result::Result<std::collections::HashSet<String>, String> {
+    let mut ids = std::collections::HashSet::new();
+    let mut pages = client.describe_network_interfaces().into_paginator().send();
+    while let Some(page) = pages.next().await {
+        let page = page.map_err(|e| crate::error::sdk_error_message(&e))?;
+        for eni in page.network_interfaces() {
+            add_eni_group_ids(&mut ids, eni);
+        }
+    }
+    Ok(ids)
+}
+
+pub(crate) fn add_eni_group_ids(
+    ids: &mut std::collections::HashSet<String>,
+    eni: &aws_sdk_ec2::types::NetworkInterface,
+) {
+    ids.extend(eni.groups().iter().filter_map(|g| g.group_id()).map(str::to_string));
+}
+
+/// Unused = attached to no network interface. The VPC's `default` group is
+/// never flagged: it can't be deleted, so the label would be noise.
+pub fn sg_is_unused(group_name: &str, group_id: &str, attached: &std::collections::HashSet<String>) -> bool {
+    group_name != "default" && !attached.contains(group_id)
 }
 
 /// Flatten a list of `IpPermission`s into individual rules, preserving CIDRs,
@@ -1479,6 +1534,9 @@ pub struct SecurityGroup {
     /// The owning account — differs from the session's for a group shared
     /// into this VPC (RAM) or referenced across a peering.
     pub owner_id: Option<String>,
+    /// No network interface carries it — set by the list load
+    /// (`sg_is_unused`); false when the ENI scan didn't complete.
+    pub unused: bool,
 }
 
 impl SecurityGroup {
@@ -1505,6 +1563,7 @@ impl SecurityGroup {
             inbound_rules: parse_sg_rules(sg.ip_permissions()),
             outbound_rules: parse_sg_rules(sg.ip_permissions_egress()),
             tags,
+            unused: false,
         }
     }
 }
@@ -1550,11 +1609,11 @@ impl Resource for SecurityGroup {
     }
 
     fn state(&self) -> ResourceState {
-        sg_exposure_state(&self.inbound_rules)
+        sg_exposure_state(&self.inbound_rules, self.unused)
     }
 
     fn state_label(&self) -> String {
-        sg_exposure_label(&self.inbound_rules)
+        sg_exposure_label(&self.inbound_rules, self.unused)
     }
 
     fn tags(&self) -> &HashMap<String, String> {
@@ -1572,6 +1631,9 @@ impl Resource for SecurityGroup {
         }
         if self.inbound_rules.iter().any(SgRule::is_world) {
             parts.push(SG_OPEN_TO_WORLD.to_string());
+        }
+        if self.unused {
+            parts.push(SG_UNUSED.to_string());
         }
         for (k, v) in &self.tags {
             parts.push(format!("{}:{}", k, v));
@@ -3504,6 +3566,30 @@ mod sg_exposure_tests {
             vec![],
         ));
         assert_eq!(vpc_open.state_label(), SG_OPEN_TO_WORLD);
+    }
+
+    #[test]
+    fn a_group_on_no_interface_is_unused_except_the_default() {
+        let attached: std::collections::HashSet<String> = ["sg-attached".to_string()].into();
+        assert!(sg_is_unused("web", "sg-1", &attached));
+        assert!(!sg_is_unused("web", "sg-attached", &attached));
+        // The VPC default group can't be deleted; flagging it is noise.
+        assert!(!sg_is_unused("default", "sg-1", &attached));
+
+        let mut idle = SecurityGroup::from_sdk(&sg(vec![perm(22, &["10.0.0.0/8"], &[])], vec![]));
+        idle.unused = true;
+        assert_eq!(idle.state(), ResourceState::Idle);
+        assert_eq!(idle.state_label(), SG_UNUSED);
+        assert!(idle.search_text().contains(SG_UNUSED));
+
+        // Open to the world stays the headline even with nothing attached.
+        let mut open = SecurityGroup::from_sdk(&sg(vec![perm(22, &["0.0.0.0/0"], &[])], vec![]));
+        open.unused = true;
+        assert_eq!(open.state_label(), SG_OPEN_TO_WORLD);
+
+        let mut vpc = crate::aws::services::vpc::VpcSecurityGroup::from_sdk(&sg(vec![], vec![]));
+        vpc.unused = true;
+        assert_eq!(vpc.state_label(), SG_UNUSED);
     }
 }
 

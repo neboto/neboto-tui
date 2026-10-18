@@ -1,0 +1,35 @@
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+type Query {
+  product(id: ID!): Product
+  order(id: ID!): Order @aws_iam
+}
+
+type Mutation {
+  placeOrder(cart: CartInput!): Order
+}
+
+type Product {
+  id: ID!
+  name: String!
+  price: Float!
+}
+
+type Order @aws_api_key @aws_iam {
+  id: ID!
+  status: OrderStatus!
+  total: Float!
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  SHIPPED
+}
+
+input CartInput {
+  items: [ID!]!
+}

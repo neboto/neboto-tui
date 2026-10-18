@@ -1922,6 +1922,13 @@ pub struct App {
     /// clear the new load's flags, poison the cache, or append duplicate
     /// rows (rapid A→B or A→B→A switches raced exactly that way).
     pub load_generation: Arc<AtomicU64>,
+    /// Bumped on every profile/region/role switch: an `@audit` source load
+    /// (`r` in `@audit`) from before the switch is dropped on arrival.
+    pub audit_generation: u64,
+    /// `@audit` sources `r` is loading right now.
+    pub audit_loading: Vec<ServiceType>,
+    /// Sources that failed during the current `r`, reported once all land.
+    audit_load_failures: Vec<String>,
     /// The task running the current list load, so a superseding load can
     /// abort it. The generation guard only stops a stale stream's events
     /// from landing — without the abort its fetch keeps paging AWS in the
@@ -2995,6 +3002,9 @@ impl App {
             loading_complete: false,
             loading_started: false,
             load_generation: Arc::new(AtomicU64::new(0)),
+            audit_generation: 0,
+            audit_loading: Vec::new(),
+            audit_load_failures: Vec::new(),
             load_task: None,
             watch: WatchState::new(config.watch.unwrap_or(false), config.watch_interval),
             watch_staging: None,
@@ -3376,6 +3386,9 @@ impl App {
             | Event::ResourceLoadWarning { .. }
             | Event::ListTagsLoaded { .. }) => {
                 self.handle_load_stream_event(ev, event_tx);
+            }
+            Event::AuditSourceLoaded { generation, service, result } => {
+                self.handle_audit_source_loaded(generation, service, result);
             }
             Event::ResourceRefreshed { id, resource, quiet } => {
                 // Swap the resource in place by id — same position, so the list
@@ -8600,6 +8613,13 @@ impl App {
                         self.focus_details_panel(event_tx);
                     }
                 }
+                // An @audit finding: Enter opens the resource it's about, as
+                // an @all result does; l / → read the finding itself.
+                else if self.current_service == Some(ServiceType::Audit) {
+                    if key.code != KeyCode::Enter || !self.jump_to_audit_finding(event_tx) {
+                        self.focus_details_panel(event_tx);
+                    }
+                }
                 // An out-of-region S3 bucket switches region instead of drilling
                 // into a detail-less stub.
                 else if !self.try_s3_cross_region_drill(event_tx) {
@@ -9535,6 +9555,163 @@ impl App {
         self.jump_to_cached_resource(svc, id, &rtype, true, event_tx);
     }
 
+    /// The `@audit` rows: every check over the warm caches (current region +
+    /// globals, each service's current variant — the `@all` walk).
+    pub(crate) fn run_audit(&self) -> Vec<Box<dyn Resource>> {
+        let region = self.current_region.as_str().to_string();
+        let mut input = crate::audit::AuditInput::new(&region);
+        input.set_loading(&self.audit_loading);
+        for svc in ServiceType::all() {
+            if svc.is_virtual() {
+                continue;
+            }
+            let variant = self.cache_variant(svc);
+            if let Some(list) = self.cache.get_ref(&svc, &self.current_region, variant.as_deref()) {
+                input.add(svc, list);
+            }
+        }
+        crate::audit::run(&input)
+            .into_iter()
+            .map(|f| Box::new(f) as Box<dyn Resource>)
+            .collect()
+    }
+
+    /// Recompute the `@audit` rows in place, keeping the selected row.
+    fn rerun_audit(&mut self) {
+        let keep = self.get_selected_resource_id();
+        self.resources = self.run_audit();
+        self.update_search();
+        // A "loading…" row the cursor sat on is replaced by findings — start
+        // from the top (the worst) rather than wherever the index lands.
+        if !keep.is_some_and(|id| self.restore_selection_by_id(&id)) {
+            self.select_first_resource();
+        }
+    }
+
+    /// `r` in `@audit`: load every source service that isn't cached — in the
+    /// background, straight into the cache — re-auditing as each lands. A
+    /// cached source is left alone (`r` in that service reloads it), so a
+    /// second `r` costs nothing once everything is warm.
+    fn load_audit_sources(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if !self.audit_loading.is_empty() {
+            self.audit_progress_message();
+            return;
+        }
+        let missing: Vec<ServiceType> = crate::audit::SOURCES
+            .iter()
+            .copied()
+            .filter(|s| self.services.contains_key(s))
+            .filter(|s| {
+                let variant = self.cache_variant(*s);
+                self.cache.get_ref(s, &self.current_region, variant.as_deref()).is_none()
+            })
+            .collect();
+        self.error_message = None;
+        if missing.is_empty() {
+            self.rerun_audit();
+            self.success_message = Some(
+                "Re-audited — every source is cached (r in a service reloads it)".to_string(),
+            );
+            self.success_message_time = Some(Instant::now());
+            return;
+        }
+        self.audit_loading = missing.clone();
+        self.audit_load_failures.clear();
+        let generation = self.audit_generation;
+        for svc in missing {
+            let service = Arc::clone(&self.services[&svc]);
+            let tx = event_tx.clone();
+            tokio::spawn(async move {
+                let result = crate::headless::list_all(service, svc)
+                    .await
+                    .map_err(|f| f.message().to_string());
+                let _ = tx.send(Event::AuditSourceLoaded { generation, service: svc, result });
+            });
+        }
+        self.rerun_audit(); // the pending checks now read "loading…"
+        self.audit_progress_message();
+    }
+
+    fn audit_progress_message(&mut self) {
+        let names: Vec<&str> = self.audit_loading.iter().map(|s| s.prefix()).collect();
+        self.success_message = Some(format!("Audit: loading {}…", names.join(" ")));
+        self.success_message_time = Some(Instant::now());
+    }
+
+    /// A profile/region/role switch: in-flight `@audit` loads belong to the
+    /// old account or region.
+    fn drop_audit_loads(&mut self) {
+        self.audit_generation += 1;
+        self.audit_loading.clear();
+        self.audit_load_failures.clear();
+    }
+
+    fn handle_audit_source_loaded(
+        &mut self,
+        generation: u64,
+        service: ServiceType,
+        result: std::result::Result<(Vec<Box<dyn Resource>>, Vec<String>), String>,
+    ) {
+        if generation != self.audit_generation || !self.audit_loading.contains(&service) {
+            return;
+        }
+        self.audit_loading.retain(|s| *s != service);
+        match result {
+            Ok((rows, warnings)) => {
+                let variant = self.cache_variant(service);
+                self.cache.insert(service, self.current_region, variant, rows);
+                for w in warnings {
+                    self.audit_load_failures.push(format!("{} partial: {w}", service.prefix()));
+                }
+            }
+            Err(e) => self.audit_load_failures.push(format!("{}: {e}", service.prefix())),
+        }
+        if self.current_service == Some(ServiceType::Audit) && !self.all_search_mode {
+            self.rerun_audit();
+        }
+        if !self.audit_loading.is_empty() {
+            self.audit_progress_message();
+        } else if self.audit_load_failures.is_empty() {
+            let n = self
+                .resources
+                .iter()
+                .filter_map(|r| r.as_any().downcast_ref::<crate::audit::AuditFinding>())
+                .filter(|f| f.is_finding())
+                .count();
+            self.success_message = Some(format!("Audit: sources loaded — {n} finding{}", if n == 1 { "" } else { "s" }));
+            self.success_message_time = Some(Instant::now());
+        } else {
+            self.success_message = None;
+            self.error_message = Some(format!(
+                "Audit: some checks couldn't run — {}",
+                self.audit_load_failures.join("; ")
+            ));
+        }
+    }
+
+    /// `⏎` on an `@audit` finding (list row, or its detail pane's
+    /// `Resource ID` row): open the resource in its own service. `Ctrl-O` comes back.
+    /// Returns false for rows with no resource (coverage notes).
+    pub(crate) fn jump_to_audit_finding(&mut self, event_tx: &mpsc::UnboundedSender<Event>) -> bool {
+        let Some((svc, id, rtype, section)) = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<crate::audit::AuditFinding>())
+            .and_then(|f| {
+                Some((f.service?, f.resource_id.clone(), f.resource_type.clone(), f.section))
+            })
+        else {
+            return false;
+        };
+        self.record_location();
+        self.details_focused = false;
+        self.details_selected_index = None;
+        self.search_active = false;
+        // Land on the section that shows the problem (an SG's Inbound rules,
+        // the account's Password Policy), not the type's default.
+        self.jump_to_cached_resource_at(svc, id, &rtype, false, section.map(String::from), event_tx);
+        true
+    }
+
     /// Jump to a resource known to exist in `svc`'s list (an `@all` result,
     /// a "referenced by" row, a merged-rule's security group): switch
     /// service if needed, land on the sub-tab that lists `rtype`, and
@@ -9547,6 +9724,20 @@ impl App {
         id: String,
         rtype: &str,
         reload_same_service: bool,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
+        self.jump_to_cached_resource_at(svc, id, rtype, reload_same_service, None, event_tx);
+    }
+
+    /// `jump_to_cached_resource`, landing on the detail section named
+    /// `section` (unknown names fall back to the default, as bookmarks do).
+    fn jump_to_cached_resource_at(
+        &mut self,
+        svc: ServiceType,
+        id: String,
+        rtype: &str,
+        reload_same_service: bool,
+        section: Option<String>,
         event_tx: &mpsc::UnboundedSender<Event>,
     ) {
         if self.current_service != Some(svc) {
@@ -9563,7 +9754,7 @@ impl App {
         self.search_query = id.clone();
         self.pending_jump = Some(id);
         self.pending_jump_focus_details = true;
-        self.pending_jump_section = None;
+        self.pending_jump_section = section;
         if !self.loading {
             self.update_search();
             self.resolve_pending_jump(event_tx);
@@ -10008,6 +10199,7 @@ impl App {
                 // data just refetches on next view, and one epoch keeps the
                 // clear and the in-flight stale-drop atomic (see src/lazy.rs).
                 self.lazy = crate::lazy::LazyStore::new(self.lazy.epoch() + 1);
+                self.drop_audit_loads();
                 self.cancel_pending_deep_export();
 
                 // Reload resources for current service
@@ -10059,6 +10251,7 @@ impl App {
         // store clears every LazyMap, and the epoch bump drops any in-flight
         // fetch — no per-map hand-listing.
         self.lazy = crate::lazy::LazyStore::new(self.lazy.epoch() + 1);
+        self.drop_audit_loads();
         // An armed deep export was collecting the *old* account's sections.
         self.cancel_pending_deep_export();
         // Lazy detail state is credential-scoped — let the flat-view trigger
@@ -10152,7 +10345,7 @@ impl App {
                 // default (splash-at-startup users) falls back to EC2 so the
                 // jump always happens.
                 let land = self.default_service.unwrap_or(ServiceType::EC2);
-                if self.services.contains_key(&land) {
+                if land.is_virtual() || self.services.contains_key(&land) {
                     self.prepare_service_view(land);
                 }
                 self.details_focused = false;
@@ -10533,6 +10726,10 @@ impl App {
             Arc::new(transfer::TransferService::new(aws_clients)),
         );
         services.insert(
+            ServiceType::AppSync,
+            Arc::new(appsync::AppSyncService::new(aws_clients)),
+        );
+        services.insert(
             ServiceType::EventBridge,
             Arc::new(eventbridge::EventBridgeService::new(aws_clients)),
         );
@@ -10716,7 +10913,8 @@ impl App {
     }
 
     fn switch_service(&mut self, service: ServiceType) {
-        if self.services.contains_key(&service) {
+        // A virtual service (`@audit`) has no client but is always available.
+        if service.is_virtual() || self.services.contains_key(&service) {
             self.prepare_service_view(service);
             self.load_service_resources();
         }
@@ -10872,6 +11070,10 @@ impl App {
     }
 
     fn refresh_current_service(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if self.current_service == Some(ServiceType::Audit) && !self.all_search_mode {
+            self.load_audit_sources(event_tx);
+            return;
+        }
         // @all lists other services' cached rows. Reloading the service
         // underneath would be discarded uncached (the stream handlers can't
         // write under @all) — a wasted load, and an emptied lazy store with
@@ -10941,7 +11143,7 @@ impl App {
     /// due and nothing blocks it — a load already in flight, active search,
     /// any modal/overlay, or a region switch all hold the tick over.
     fn watch_tick(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        let blocked = self.current_service.is_none()
+        let blocked = self.current_service.is_none_or(|s| s.is_virtual()) // no stream to watch
             || self.loading
             || self.search_active
             || self.all_search_mode // @all owns `resources`; don't refresh under it
@@ -11072,6 +11274,18 @@ impl App {
         // staging buffer *before* the cache check, or a late FullyLoaded from
         // the abandoned stream could swap a partial set over the fresh data.
         self.watch_staging = None;
+
+        // `@audit` has no client: its rows are computed here, from the other
+        // services' warm caches, every time it's opened or refreshed.
+        if self.current_service == Some(ServiceType::Audit) {
+            self.resources = self.run_audit();
+            self.loading = false;
+            self.loading_progress = None;
+            self.loading_complete = true;
+            self.loading_started = false;
+            self.switching_region = None;
+            return;
+        }
 
         // Check cache first
         if let Some(service) = self.current_service {
@@ -14471,6 +14685,72 @@ impl App {
         }
     }
 
+    fn selected_appsync_api_id(&self) -> Option<String> {
+        self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::appsync::AppSyncApi>()
+                .map(|a| a.api_id.clone())
+        })
+    }
+
+    pub(crate) fn trigger_appsync_data_sources_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(id) = self.selected_appsync_api_id() {
+            let client = self.aws_clients.appsync_client();
+            self.trigger_lazy(|app| &mut app.lazy.appsync_data_sources, id.clone(), event_tx, async move {
+                crate::aws::services::appsync::fetch_data_sources(client, id)
+                    .await
+                    .map_err(|e| format!("Data sources unavailable: {}", e))
+            });
+        }
+    }
+
+    /// Resolvers also fire the Functions fetch: pipeline resolvers list
+    /// function *ids*, and the section names them once Functions is in.
+    pub(crate) fn trigger_appsync_resolvers_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(id) = self.selected_appsync_api_id() {
+            let client = self.aws_clients.appsync_client();
+            self.trigger_lazy(|app| &mut app.lazy.appsync_resolvers, id.clone(), event_tx, async move {
+                crate::aws::services::appsync::fetch_resolvers(client, id)
+                    .await
+                    .map_err(|e| format!("Resolvers unavailable: {}", e))
+            });
+            self.trigger_appsync_functions_load(event_tx);
+        }
+    }
+
+    pub(crate) fn trigger_appsync_functions_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(id) = self.selected_appsync_api_id() {
+            let client = self.aws_clients.appsync_client();
+            self.trigger_lazy(|app| &mut app.lazy.appsync_functions, id.clone(), event_tx, async move {
+                crate::aws::services::appsync::fetch_functions(client, id)
+                    .await
+                    .map_err(|e| format!("Functions unavailable: {}", e))
+            });
+        }
+    }
+
+    pub(crate) fn trigger_appsync_api_keys_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(id) = self.selected_appsync_api_id() {
+            let client = self.aws_clients.appsync_client();
+            self.trigger_lazy(|app| &mut app.lazy.appsync_api_keys, id.clone(), event_tx, async move {
+                crate::aws::services::appsync::fetch_api_keys(client, id)
+                    .await
+                    .map_err(|e| format!("API keys unavailable: {}", e))
+            });
+        }
+    }
+
+    pub(crate) fn trigger_appsync_schema_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(id) = self.selected_appsync_api_id() {
+            let client = self.aws_clients.appsync_client();
+            self.trigger_lazy(|app| &mut app.lazy.appsync_schema, id.clone(), event_tx, async move {
+                crate::aws::services::appsync::fetch_schema(client, id)
+                    .await
+                    .map_err(|e| format!("Schema unavailable: {}", e))
+            });
+        }
+    }
+
     fn is_selected_transfer_server(&self) -> bool {
         self.get_selected_resource()
             .and_then(|r| {
@@ -15483,6 +15763,33 @@ impl App {
 
     /// The S3 bucket pane's File Systems section: one `ListFileSystems`
     /// sweep filtered to this bucket, keyed by bucket name.
+    /// Access Points section: S3 Control `ListAccessPoints` filtered to the
+    /// selected bucket, on the bucket's region. S3 Control needs the account
+    /// id; until it's resolved this does nothing and the section says why.
+    pub(crate) fn trigger_s3_access_points_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(account_id) = self.account_id.clone() else {
+            return;
+        };
+        let Some((name, region)) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::s3::S3Bucket>()
+                .map(|b| (b.name.clone(), b.region.clone()))
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.s3control_client_for_region(&region);
+        self.trigger_lazy(
+            |app| &mut app.lazy.s3_access_points,
+            name.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::s3::fetch_bucket_access_points(client, account_id, name)
+                    .await
+                    .map_err(|e| format!("Access points unavailable: {}", e))
+            },
+        );
+    }
+
     pub(crate) fn trigger_s3_bucket_filesystems_load(
         &mut self,
         event_tx: &mpsc::UnboundedSender<Event>,
@@ -15950,6 +16257,29 @@ impl App {
     /// first view of the Tasks section, keyed by service ARN. No-op unless the
     /// Tasks section is active and a service is selected; idempotent once
     /// loading/loaded.
+    /// Lazy `DescribeCapacityProviders` for the cluster pane's Capacity
+    /// Providers section, keyed by cluster ARN.
+    pub(crate) fn trigger_ecs_capacity_providers_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some((arn, names)) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::ecs::EcsCluster>()
+                .map(|c| (c.cluster_arn.clone(), c.capacity_providers.clone()))
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.ecs_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.ecs_capacity_providers,
+            arn,
+            event_tx,
+            async move {
+                crate::aws::services::ecs::fetch_capacity_providers(client, names)
+                    .await
+                    .map_err(|e| format!("Capacity providers unavailable: {}", e))
+            },
+        );
+    }
+
     pub(crate) fn trigger_ecs_service_tasks_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if crate::aws::services::ecs::EcsServiceDetailSection::from_index(self.detail_section_idx) != EcsServiceDetailSection::Tasks {
             return;
@@ -16580,6 +16910,27 @@ impl App {
                 },
             );
         }
+    }
+
+    /// The Application pane's Auth section: authentication methods, access
+    /// scopes and grants. Never errors as a whole — each part records its own.
+    pub(crate) fn trigger_ic_app_auth_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(arn) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::identity_center::IcApplication>()
+                .map(|a| a.arn.clone())
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.ssoadmin_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.ic_app_auth,
+            arn.clone(),
+            event_tx,
+            async move {
+                Ok::<_, String>(crate::aws::services::identity_center::fetch_app_auth(client, arn).await)
+            },
+        );
     }
 
     fn selected_ga_accelerator_arn(&self) -> Option<String> {
@@ -18885,6 +19236,7 @@ impl App {
                         outbound_rules: sg.outbound_rules.clone(),
                         tags: sg.tags.clone(),
                         owner_id: sg.owner_id.clone(),
+                        unused: sg.unused,
                     });
                 }
             }
@@ -20125,6 +20477,56 @@ impl App {
                 },
             );
         }
+    }
+
+    /// The Account sub-tab's Credential Report section. `GetCredentialReport`
+    /// only — never `GenerateCredentialReport`, which is a write.
+    pub(crate) fn trigger_iam_credential_report_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if !self.get_selected_resource().is_some_and(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::iam::IamAccountSettings>()
+                .is_some()
+        }) {
+            return;
+        }
+        let client = self.aws_clients.iam_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.iam_credential_report,
+            "account".to_string(),
+            event_tx,
+            async move {
+                crate::aws::services::iam::fetch_iam_credential_report(client)
+                    .await
+                    .map_err(|e| format!("Credential report unavailable: {}", e))
+            },
+        );
+    }
+
+    /// Access Advisor (Last Accessed section) for the selected role, user,
+    /// group or managed policy — one report job per ARN, polled to completion.
+    pub(crate) fn trigger_iam_last_accessed_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::iam::{IamGroup, IamPolicy, IamRole, IamUser};
+        let Some(arn) = self.get_selected_resource().and_then(|r| {
+            let any = r.as_any();
+            any.downcast_ref::<IamRole>()
+                .map(|x| x.arn.clone())
+                .or_else(|| any.downcast_ref::<IamUser>().map(|x| x.arn.clone()))
+                .or_else(|| any.downcast_ref::<IamGroup>().map(|x| x.arn.clone()))
+                .or_else(|| any.downcast_ref::<IamPolicy>().map(|x| x.policy_arn.clone()))
+        }) else {
+            return;
+        };
+        let client = self.aws_clients.iam_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.iam_last_accessed,
+            arn.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::iam::fetch_iam_last_accessed(client, arn)
+                    .await
+                    .map_err(|e| format!("Access Advisor unavailable: {}", e))
+            },
+        );
     }
 
     /// Trigger a lazy-load of the policy document + attachments for the selected policy.
@@ -22219,6 +22621,80 @@ impl App {
             id: value.to_string()})
     }
 
+    /// AppSync rows → the resource they name, keyed on the `APPSYNC_ROW_*`
+    /// labels (the values are bare names with no recognizable prefix): the
+    /// Cognito user pool, a DynamoDB table / OpenSearch domain data source,
+    /// and the API's log group. ARN-valued rows (Lambda, roles, WAF, RDS,
+    /// event bus) fall through to the generic classifier.
+    pub fn appsync_row_jump_target(&self, key: &str, value: &str) -> Option<JumpTarget> {
+        use crate::ui::widgets::details_pane as dp;
+        if value.is_empty() || value.starts_with('·') || self.current_service != Some(ServiceType::AppSync) {
+            return None;
+        }
+        let v = value.trim().to_string();
+        match key.trim() {
+            k if k == dp::APPSYNC_ROW_USER_POOL => Some(JumpTarget {
+                service: ServiceType::Cognito,
+                view: JumpView::None,
+                id: v,
+            }),
+            k if k == dp::APPSYNC_ROW_DDB_TABLE => Some(JumpTarget {
+                service: ServiceType::DynamoDb,
+                view: JumpView::None,
+                id: v,
+            }),
+            k if k == dp::APPSYNC_ROW_OPENSEARCH => Some(JumpTarget {
+                service: ServiceType::OpenSearch,
+                view: JumpView::None,
+                id: v,
+            }),
+            k if k == dp::APPSYNC_ROW_LOG_GROUP => Some(JumpTarget {
+                service: ServiceType::CloudWatch,
+                view: JumpView::Cw(CwView::LogGroups),
+                id: v,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The region of the resource an AppSync row jumps to, when the API
+    /// names one: a user pool's `awsRegion`, a data source's table / domain
+    /// region. `None` (stay put) for anything else.
+    fn appsync_row_jump_region(&self, key: &str, value: &str) -> Option<crate::aws::region::Region> {
+        use crate::aws::services::appsync::{opensearch_domain_from_endpoint, AppSyncApi};
+        use crate::ui::widgets::details_pane as dp;
+        self.appsync_row_jump_target(key, value)?;
+        let api = self.get_selected_resource()?.as_any().downcast_ref::<AppSyncApi>()?;
+        let v = value.trim();
+        let region = match key.trim() {
+            k if k == dp::APPSYNC_ROW_USER_POOL => api
+                .auth_modes()
+                .find(|m| m.user_pool_id.as_deref() == Some(v))
+                .and_then(|m| m.user_pool_region.clone()),
+            k if k == dp::APPSYNC_ROW_DDB_TABLE || k == dp::APPSYNC_ROW_OPENSEARCH => {
+                let Some(crate::lazy::Lazy::Loaded(sources)) = self.lazy.appsync_data_sources.get(&api.api_id) else {
+                    return None;
+                };
+                sources
+                    .iter()
+                    .find(|ds| {
+                        if k == dp::APPSYNC_ROW_DDB_TABLE {
+                            ds.dynamodb_table.as_deref() == Some(v)
+                        } else {
+                            ds.opensearch_endpoint
+                                .as_deref()
+                                .and_then(opensearch_domain_from_endpoint)
+                                .as_deref()
+                                == Some(v)
+                        }
+                    })
+                    .and_then(|ds| ds.region.clone())
+            }
+            _ => None,
+        }?;
+        crate::aws::region::Region::from_str(&region)
+    }
+
     /// Elastic Beanstalk rows → the resource they name. Keyed on the row
     /// labels `details_pane` exports as `EB_ROW_*` (names carry no
     /// recognizable id prefix): the application / environment / version
@@ -22528,6 +23004,12 @@ impl App {
             .details_selected_index
             .and_then(|i| rows.get(i))
             .cloned();
+        if current == ServiceType::Audit {
+            // Only the finding's `Resource ID` row leads anywhere.
+            return row.is_some_and(|(k, _)| k == "Resource ID")
+                && allow_cross_service
+                && self.jump_to_audit_finding(event_tx);
+        }
         let target = row
             .as_ref()
             .and_then(|(k, v)| {
@@ -22554,6 +23036,7 @@ impl App {
                     .or_else(|| self.org_row_jump_target(k, v))
                     .or_else(|| self.sh_row_jump_target(k, v))
                     .or_else(|| self.eb_row_jump_target(k, v))
+                    .or_else(|| self.appsync_row_jump_target(k, v))
                     .or_else(|| {
                         crate::ui::widgets::details_pane::resource_jump_target(k, v, current)
                     })
@@ -22561,6 +23044,13 @@ impl App {
         let target = match target {
             Some(t) => t,
             None => return false};
+        // A row can name a resource in another region (an AppSync API's
+        // Cognito pool / DynamoDB table / OpenSearch domain): switch there
+        // too, or the jump searches the current region and finds nothing.
+        let jump_region = jump_region.or_else(|| {
+            row.as_ref()
+                .and_then(|(k, v)| self.appsync_row_jump_region(k, v))
+        });
         let cross = target.service != current;
         if cross && !allow_cross_service {
             return false;
@@ -26652,6 +27142,16 @@ impl App {
                     self.lazy.ses_event_dests.get(&cs.name),
                 );
             }
+            if let Some(api) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::appsync::AppSyncApi>()
+            {
+                return crate::ui::widgets::details_pane::appsync_api_section_lines(
+                    self,
+                    api,
+                    crate::aws::services::appsync::AppSyncApiDetailSection::from_index(self.detail_section_idx),
+                );
+            }
             if let Some(srv) = resource
                 .as_any()
                 .downcast_ref::<crate::aws::services::transfer::TransferServer>()
@@ -26677,6 +27177,7 @@ impl App {
                     self.account_id.as_deref(),
                     self.lazy.s3_storage_metrics.get(&bucket.name),
                     self.lazy.s3_bucket_filesystems.get(&bucket.name),
+                    self.lazy.s3_access_points.get(&bucket.name),
                 );
             }
             if let Some(rule) = resource
@@ -26802,6 +27303,7 @@ impl App {
                     app,
                     crate::aws::services::identity_center::IcApplicationDetailSection::from_index(self.detail_section_idx),
                     self.lazy.ic_app_assignments.get(&app.arn),
+                    self.lazy.ic_app_auth.get(&app.arn),
                 );
             }
             if let Some(sg) = resource
@@ -27709,6 +28211,7 @@ impl App {
                 return crate::ui::widgets::details_pane::ecs_cluster_section_lines(
                     cluster,
                     crate::aws::services::ecs::EcsClusterDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.ecs_capacity_providers.get(&cluster.cluster_arn),
                 );
             }
             if let Some(svc) = resource
@@ -27915,6 +28418,7 @@ impl App {
                     details_state,
                     docs_state,
                     &self.instance_profiles_for_role(&role.arn),
+                    self.lazy.iam_last_accessed.get(&role.arn),
                 );
                 if crate::aws::services::iam::IamRoleDetailSection::from_index(self.detail_section_idx) == IamRoleDetailSection::Permissions {
                     lines = self.inject_expanded_policy_docs(lines);
@@ -27948,6 +28452,7 @@ impl App {
                 return crate::ui::widgets::details_pane::iam_account_section_lines(
                     settings,
                     crate::aws::services::iam::IamAccountDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.iam_credential_report.get("account"),
                 );
             }
             if let Some(policy) = resource
@@ -27959,6 +28464,7 @@ impl App {
                     policy,
                     crate::aws::services::iam::IamPolicyDetailSection::from_index(self.detail_section_idx),
                     details_state,
+                    self.lazy.iam_last_accessed.get(&policy.policy_arn),
                 );
             }
             if let Some(user) = resource
@@ -27974,6 +28480,7 @@ impl App {
                     crate::aws::services::iam::IamUserDetailSection::from_index(self.detail_section_idx),
                     details_state,
                     docs_state,
+                    self.lazy.iam_last_accessed.get(&user.arn),
                 );
                 if crate::aws::services::iam::IamUserDetailSection::from_index(self.detail_section_idx) == IamUserDetailSection::Permissions {
                     lines = self.inject_expanded_policy_docs(lines);
@@ -27993,6 +28500,7 @@ impl App {
                     crate::aws::services::iam::IamGroupDetailSection::from_index(self.detail_section_idx),
                     details_state,
                     docs_state,
+                    self.lazy.iam_last_accessed.get(&group.arn),
                 );
                 if crate::aws::services::iam::IamGroupDetailSection::from_index(self.detail_section_idx) == IamGroupDetailSection::Permissions {
                     lines = self.inject_expanded_policy_docs(lines);
@@ -28527,6 +29035,58 @@ impl App {
                 ".json"
             } else {
                 ".yaml"
+            }
+        }
+
+        // AppSync API on Schema / Resolvers / Functions: the SDL, or every
+        // resolver's / function's code (JS or VTL templates) in one file.
+        if let Some(api) = any.downcast_ref::<crate::aws::services::appsync::AppSyncApi>() {
+            use crate::aws::services::appsync::AppSyncApiDetailSection as S;
+            use crate::lazy::Lazy;
+            let id = api.api_id.as_str();
+            match S::from_index(self.detail_section_idx) {
+                S::Schema => {
+                    if let Some(Lazy::Loaded(s)) = self.lazy.appsync_schema.get(id) {
+                        if !s.trim().is_empty() {
+                            return Some((s.clone(), ".graphql"));
+                        }
+                    }
+                }
+                S::Resolvers => {
+                    if let Some(Lazy::Loaded(r)) = self.lazy.appsync_resolvers.get(id) {
+                        if !r.resolvers.is_empty() {
+                            let (doc, ext) = crate::ui::widgets::details_pane::appsync_code_document(
+                                r.resolvers.iter().map(|x| {
+                                    (
+                                        format!("{}.{}", x.type_name, x.field_name),
+                                        x.code.clone(),
+                                        x.request_template.clone(),
+                                        x.response_template.clone(),
+                                    )
+                                }),
+                            );
+                            return Some((doc, ext));
+                        }
+                    }
+                }
+                S::Functions => {
+                    if let Some(Lazy::Loaded(fs)) = self.lazy.appsync_functions.get(id) {
+                        if !fs.is_empty() {
+                            let (doc, ext) = crate::ui::widgets::details_pane::appsync_code_document(
+                                fs.iter().map(|f| {
+                                    (
+                                        f.name.clone(),
+                                        f.code.clone(),
+                                        f.request_template.clone(),
+                                        f.response_template.clone(),
+                                    )
+                                }),
+                            );
+                            return Some((doc, ext));
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 

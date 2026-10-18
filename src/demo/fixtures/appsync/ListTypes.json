@@ -1,0 +1,34 @@
+{
+  "types": [
+    {
+      "name": "Query",
+      "format": "SDL",
+      "definition": "type Query {\n  product(id: ID!): Product\n  order(id: ID!): Order\n}"
+    },
+    {
+      "name": "Mutation",
+      "format": "SDL",
+      "definition": "type Mutation {\n  placeOrder(cart: CartInput!): Order\n}"
+    },
+    {
+      "name": "Product",
+      "format": "SDL",
+      "definition": "type Product {\n  id: ID!\n  name: String!\n  price: Float!\n}"
+    },
+    {
+      "name": "Order",
+      "format": "SDL",
+      "definition": "type Order {\n  id: ID!\n  status: OrderStatus!\n  total: Float!\n}"
+    },
+    {
+      "name": "OrderStatus",
+      "format": "SDL",
+      "definition": "enum OrderStatus {\n  PENDING\n  PAID\n  SHIPPED\n}"
+    },
+    {
+      "name": "CartInput",
+      "format": "SDL",
+      "definition": "input CartInput {\n  items: [ID!]!\n}"
+    }
+  ]
+}

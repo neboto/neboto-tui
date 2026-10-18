@@ -1,4 +1,5 @@
 mod app;
+mod audit;
 mod aws;
 mod bookmarks;
 mod cli;
@@ -121,6 +122,11 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // service's list would be fetched and discarded a moment later.
     if app.current_service.is_some() && !app.macro_supersedes_startup_load() {
         app.load_service_resources();
+        // A load that completed synchronously (`-s audit`, computed in
+        // place) never streams a FullyLoaded to filter it — do it here.
+        if !app.loading {
+            app.update_search();
+        }
     }
 
     // Load AWS account identity in background

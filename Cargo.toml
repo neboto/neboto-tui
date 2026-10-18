@@ -1,6 +1,6 @@
 [package]
 name = "neboto"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 description = "A fast, keyboard-driven, read-only terminal UI for browsing AWS"
@@ -160,6 +160,7 @@ aws-sdk-batch = { version = "1", default-features = false, features = ["default-
 aws-sdk-xray = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-databasemigration = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-elasticbeanstalk = { version = "1.114", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-appsync = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-scheduler = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-pipes = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-fms = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
@@ -172,6 +173,7 @@ aws-sdk-controlcatalog = { version = "1", default-features = false, features = [
 aws-sdk-servicecatalog = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-s3files = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-s3tables = { version = "1.62.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-s3control = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 similar = "3"
 aws-sdk-oam = { version = "1.111.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 

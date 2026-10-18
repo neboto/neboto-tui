@@ -76,12 +76,16 @@ pub enum ServiceType {
     XRay,
     Dms,
     Beanstalk,
+    AppSync,
     Budgets,
     Invoices,
     ControlTower,
     ServiceCatalog,
     S3Files,
     S3Tables,
+    /// Virtual: security findings computed from the other services' warm
+    /// caches (`src/audit.rs`). No client, never cached (`is_virtual`).
+    Audit,
 }
 
 impl ServiceType {
@@ -148,6 +152,7 @@ impl ServiceType {
             ServiceType::Athena,
             ServiceType::Glue,
             ServiceType::Ses,
+            ServiceType::AppSync,
             ServiceType::Msk,
             ServiceType::Fms,
             ServiceType::Redshift,
@@ -161,6 +166,7 @@ impl ServiceType {
             ServiceType::ServiceCatalog,
             ServiceType::S3Files,
             ServiceType::S3Tables,
+            ServiceType::Audit,
         ]
     }
 
@@ -168,6 +174,13 @@ impl ServiceType {
     /// Used to key the resource cache on a fixed sentinel region instead of
     /// the currently-selected region, so switching regions doesn't force a
     /// refetch of identical data.
+    /// A service with no AWS client: its rows are computed in-app from other
+    /// services' caches (`load_service_resources` short-circuits it), so it
+    /// isn't in `build_services`, is never cached, and watch mode skips it.
+    pub fn is_virtual(&self) -> bool {
+        matches!(self, ServiceType::Audit)
+    }
+
     pub fn is_global(&self) -> bool {
         matches!(
             self,
@@ -245,7 +258,8 @@ impl ServiceType {
             | ServiceType::GuardDuty
             | ServiceType::SecurityHub
             | ServiceType::Inspector
-            | ServiceType::Fms => "Security & Identity",
+            | ServiceType::Fms
+            | ServiceType::Audit => "Security & Identity",
             ServiceType::Athena
             | ServiceType::Glue
             | ServiceType::Kinesis
@@ -256,7 +270,8 @@ impl ServiceType {
             ServiceType::Messaging
             | ServiceType::EventBridge
             | ServiceType::StepFunctions
-            | ServiceType::Ses => "App Integration",
+            | ServiceType::Ses
+            | ServiceType::AppSync => "App Integration",
             ServiceType::CloudFormation
             | ServiceType::CloudWatch
             | ServiceType::XRay
@@ -343,6 +358,7 @@ impl ServiceType {
             ServiceType::Msk => "MSK",
             ServiceType::Dms => "DMS",
             ServiceType::Beanstalk => "Elastic Beanstalk",
+            ServiceType::AppSync => "AppSync",
             ServiceType::Fms => "Firewall Manager",
             ServiceType::Redshift => "Redshift",
             ServiceType::Batch => "Batch",
@@ -352,6 +368,7 @@ impl ServiceType {
             ServiceType::ServiceCatalog => "Service Catalog",
             ServiceType::S3Files => "S3 Files",
             ServiceType::S3Tables => "S3 Tables",
+            ServiceType::Audit => "Audit",
         }
     }
 
@@ -422,6 +439,7 @@ impl ServiceType {
             ServiceType::Msk => "MSK",
             ServiceType::Dms => "DMS",
             ServiceType::Beanstalk => "EB",
+            ServiceType::AppSync => "GQL",
             ServiceType::Fms => "FMS",
             ServiceType::Redshift => "RSH",
             ServiceType::Batch => "BAT",
@@ -431,6 +449,7 @@ impl ServiceType {
             ServiceType::ServiceCatalog => "SC",
             ServiceType::S3Files => "S3F",
             ServiceType::S3Tables => "S3T",
+            ServiceType::Audit => "AUD",
         }
     }
 
@@ -505,12 +524,14 @@ impl ServiceType {
             ServiceType::Batch => "Job Queues, Compute Environments, Jobs, Job Definitions",
             ServiceType::Dms => "Replication Tasks, Instances, Endpoints, Serverless Replications",
             ServiceType::Beanstalk => "Environments (Standard + Cluster Mode), Applications, Versions",
+            ServiceType::AppSync => "GraphQL APIs, Data Sources, Resolvers, Functions",
             ServiceType::Budgets => "Cost & Usage Budgets, Alerts, Subscribers",
             ServiceType::Invoices => "Invoice Summaries & PDF Download",
             ServiceType::ControlTower => "Landing Zone, Enabled Controls, Baselines & Operations",
             ServiceType::ServiceCatalog => "Portfolios, Products, Provisioned Products & TagOptions",
             ServiceType::S3Files => "S3 file systems, mount targets & access points",
             ServiceType::S3Tables => "Table buckets, Iceberg tables, namespaces & maintenance",
+            ServiceType::Audit => "Security findings from what's loaded (no API calls)",
         }
     }
 
@@ -569,6 +590,7 @@ impl ServiceType {
             "efs" | "filesystem" | "filesystems" | "nfs" => Some(ServiceType::Efs),
             "events" | "eventbridge" => Some(ServiceType::EventBridge),
             "eb" | "beanstalk" | "elasticbeanstalk" => Some(ServiceType::Beanstalk),
+            "appsync" | "graphql" | "gql" => Some(ServiceType::AppSync),
             "gd" | "guardduty" | "threats" => Some(ServiceType::GuardDuty),
             "sh" | "securityhub" | "shub" => Some(ServiceType::SecurityHub),
             "cognito" | "userpool" | "userpools" | "idp" => Some(ServiceType::Cognito),
@@ -624,6 +646,7 @@ impl ServiceType {
             "sc" | "catalog" | "servicecatalog" => Some(ServiceType::ServiceCatalog),
             "s3files" | "s3f" | "files" => Some(ServiceType::S3Files),
             "s3tables" | "s3t" | "tables" => Some(ServiceType::S3Tables),
+            "audit" | "security-audit" => Some(ServiceType::Audit),
             _ => None,
         }
     }
@@ -696,6 +719,7 @@ impl ServiceType {
             ServiceType::Msk => "@msk",
             ServiceType::Dms => "@dms",
             ServiceType::Beanstalk => "@eb",
+            ServiceType::AppSync => "@appsync",
             ServiceType::Fms => "@fms",
             ServiceType::Redshift => "@redshift",
             ServiceType::Batch => "@batch",
@@ -705,6 +729,7 @@ impl ServiceType {
             ServiceType::ServiceCatalog => "@sc",
             ServiceType::S3Files => "@s3files",
             ServiceType::S3Tables => "@s3tables",
+            ServiceType::Audit => "@audit",
         }
     }
 }

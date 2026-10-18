@@ -34,6 +34,7 @@ mod cli_picker_test;
 mod batch_test;
 mod dms_test;
 mod org_assume_hint_test;
+mod appsync_test;
 mod beanstalk_test;
 mod s3tables_jump_test;
 mod ec2_lb_test;
@@ -48,6 +49,7 @@ mod r53_test_answer_test;
 mod state_filter_test;
 mod subtab_keys_test;
 mod all_search_nav_test;
+mod audit_test;
 mod ct_cap_test;
 mod session_role_test;
 mod mouse_hints_test;
@@ -205,14 +207,14 @@ async fn check_section_invariants(
 #[tokio::test]
 async fn every_service_type_is_registered() {
     let (mut app, _tx, _rx) = test_app().await;
-    for st in ServiceType::all() {
+    for st in ServiceType::all().into_iter().filter(|s| !s.is_virtual()) {
         assert!(
             app.services.contains_key(&st),
             "{st:?} missing from build_services at startup"
         );
     }
     app.recreate_services();
-    for st in ServiceType::all() {
+    for st in ServiceType::all().into_iter().filter(|s| !s.is_virtual()) {
         assert!(
             app.services.contains_key(&st),
             "{st:?} missing from build_services after recreate_services \

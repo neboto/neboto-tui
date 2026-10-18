@@ -96,6 +96,17 @@ pub enum Command {
     /// Show resources' full detail — every detail-pane section, lazy ones
     /// included.
     Get(GetArgs),
+    /// Security audit: load the services the checks read, run every check,
+    /// print the findings. Exits 3 when a finding reaches --fail-on.
+    Audit(AuditArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct AuditArgs {
+    /// Lowest severity that makes the exit code 3: high, medium, low, or
+    /// never (always exit 0 once the audit ran).
+    #[arg(long, value_name = "SEVERITY", default_value = "low")]
+    pub fail_on: String,
 }
 
 #[derive(Debug, clap::Args)]

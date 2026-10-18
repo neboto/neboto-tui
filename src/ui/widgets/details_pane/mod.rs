@@ -40,6 +40,7 @@ use crate::aws::services::fms::{
 };
 use crate::aws::services::ses::{SesAccountInfo, SesConfigSet, SesIdentity};
 use crate::aws::services::transfer::TransferServer;
+use crate::aws::services::appsync::AppSyncApi;
 use crate::aws::services::eventbridge::{EbEventBus, EbPipe, EbRule, EbSchedule};
 use crate::aws::services::network_firewall::{NfwFirewall, NfwPolicy, NfwRuleGroup};
 use crate::aws::services::guardduty::GdFinding;
@@ -188,6 +189,7 @@ use ratatui::{
 mod acm;
 mod agentcore;
 mod api_gateway;
+mod appsync;
 mod asg;
 mod athena;
 mod awsconfig;
@@ -319,6 +321,7 @@ pub use ses::*;
 pub use ssm::*;
 pub use step_functions::*;
 pub use transfer::*;
+pub use appsync::*;
 pub use transit_gateway::*;
 pub use trusted_advisor::*;
 pub use vpc::*;
@@ -856,6 +859,10 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
     }
     if let Some(i) = resource.and_then(|r| r.as_any().downcast_ref::<SesIdentity>()) {
         render_ses_identity_split(app, i, area, frame);
+        return;
+    }
+    if let Some(api) = resource.and_then(|r| r.as_any().downcast_ref::<AppSyncApi>()) {
+        render_appsync_api_split(app, api, area, frame);
         return;
     }
     if let Some(srv) = resource.and_then(|r| r.as_any().downcast_ref::<TransferServer>()) {
@@ -2044,7 +2051,12 @@ fn style_detail_row(
 /// Objects` top row + `o`), not a section here.
 fn render_s3_bucket_split(app: &App, bucket: &S3Bucket, area: Rect, frame: &mut Frame) {
     let focused = app.details_focused;
-    let footer = detail_footer(app, focused, 6, "o objects");
+    let footer = detail_footer(
+        app,
+        focused,
+        crate::aws::services::s3::S3_BUCKET_SECTIONS.len(),
+        "o objects",
+    );
     let mut block = theme::pane_block("S3 Bucket", focused);
     block = block.title_bottom(
         Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
@@ -2106,6 +2118,65 @@ fn render_s3_bucket_split(app: &App, bucket: &S3Bucket, area: Rect, frame: &mut 
     render_split_section_body(app, chunks[4], frame);
 }
 
+/// The bucket's access points: one block per access point, network origin
+/// first (an `Internet` origin is reachable from anywhere its policy allows;
+/// `VPC` pins it to one VPC, jumpable). Needs the account id — S3 Control
+/// takes it on every call — so before that resolves the section says so
+/// instead of spinning.
+fn s3_access_point_rows(
+    account_id: Option<&str>,
+    state: Option<&crate::lazy::Lazy<Vec<crate::aws::services::s3::S3AccessPoint>>>,
+) -> Vec<(String, String)> {
+    let mut rows = vec![(String::new(), String::new())];
+    if account_id.is_none() {
+        rows.push((
+            String::new(),
+            "· account id not resolved yet — access points are listed per account; press r once it is".to_string(),
+        ));
+        return rows;
+    }
+    let list = match state {
+        None | Some(crate::lazy::Lazy::Loading) => {
+            rows.push((String::new(), "Loading…".to_string()));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Error(e)) => return error_rows(e),
+        Some(crate::lazy::Lazy::Loaded(list)) => list,
+    };
+    if list.is_empty() {
+        rows.push((String::new(), "No access points on this bucket".to_string()));
+        rows.push((String::new(), String::new()));
+        rows.push((
+            String::new(),
+            "· only this account's access points are listed — another account's cross-account access point on this bucket isn't".to_string(),
+        ));
+        return rows;
+    }
+    rows.push((format!("Access Points ({})", list.len()), String::new()));
+    rows.push((String::new(), String::new()));
+    for ap in list {
+        rows.push((ap.name.clone(), String::new()));
+        let origin = if ap.network_origin.eq_ignore_ascii_case("internet") {
+            "Internet".to_string()
+        } else {
+            ap.network_origin.clone()
+        };
+        rows.push(("  Network Origin".to_string(), origin));
+        if let Some(vpc) = &ap.vpc_id {
+            // vpc- → Enter jumps to the VPC.
+            rows.push(("  VPC".to_string(), vpc.clone()));
+        }
+        if let Some(alias) = &ap.alias {
+            rows.push(("  Alias".to_string(), alias.clone()));
+        }
+        if let Some(arn) = &ap.arn {
+            rows.push(("  ARN".to_string(), arn.clone()));
+        }
+        rows.push((String::new(), String::new()));
+    }
+    rows
+}
+
 /// Get S3 bucket details for a section.
 /// Used by `App::get_detail_lines` so rendering, navigation, and copy
 /// all see exactly the same rows.
@@ -2116,6 +2187,7 @@ pub fn s3_bucket_details(
     account_id: Option<&str>,
     metrics: Option<&crate::lazy::Lazy<Box<crate::aws::services::s3::S3StorageMetrics>>>,
     filesystems: Option<&crate::lazy::Lazy<Vec<crate::aws::services::s3files::S3FileSystem>>>,
+    access_points: Option<&crate::lazy::Lazy<Vec<crate::aws::services::s3::S3AccessPoint>>>,
 ) -> Vec<(String, String)> {
     use crate::aws::services::s3::S3BucketDetailSection as S;
     // Tier-2 config is fetched lazily; `cfg` is Some once loaded, and `loading`
@@ -2138,6 +2210,7 @@ pub fn s3_bucket_details(
         S::Website => render_website_details(bucket, cfg, loading),
         S::Advanced => render_advanced_details(bucket, cfg, loading),
         S::Metadata => render_bucket_metadata(bucket, account_id, metrics),
+        S::AccessPoints => s3_access_point_rows(account_id, access_points),
         S::FileSystems => match filesystems {
             None | Some(crate::lazy::Lazy::Loading) => {
                 vec![("".to_string(), "Loading file systems…".to_string())]
@@ -3269,6 +3342,12 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
     let last_seg = || resource.rsplit(['/', ':']).next().unwrap_or(resource);
 
     match service {
+        // autoScalingGroup:UUID:autoScalingGroupName/NAME — ASG rows resolve by name.
+        // Only the group's own ARN — a scaling policy / lifecycle hook ARN also
+        // carries the group name but isn't the group.
+        "autoscaling" if resource.starts_with("autoScalingGroup:") => resource
+            .split_once(":autoScalingGroupName/")
+            .and_then(|(_, name)| mk(ServiceType::Asg, JumpView::None, name)),
         // Batch rows are keyed by name (queue / compute environment),
         // `name:revision` (job definition) and job id — the ARN's tail.
         "batch" => {
@@ -3676,6 +3755,12 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
                 )
             })
         }
+        // AppSync: apis/<apiId> (an API) or apis/<apiId>/… (a type, data
+        // source, resolver) — either way the API row, keyed by its id.
+        "appsync" => resource
+            .strip_prefix("apis/")
+            .and_then(|rest| rest.split('/').next())
+            .and_then(|id| mk(ServiceType::AppSync, JumpView::None, id)),
         "pipes" => {
             // resource = "pipe/NAME"
             resource.strip_prefix("pipe/").and_then(|name| {
@@ -3855,6 +3940,8 @@ pub fn cfn_type_jump_target(
         // arn:…:cluster/name/uuid → name (2nd-from-last, the ELB-ARN shape).
         "AWS::MSK::Cluster" => (Msk, JumpView::None, elb_name()),
         "AWS::Transfer::Server" => (Transfer, JumpView::None, physical_id),
+        // arn:…:apis/<apiId> → the API id (rows are keyed by it).
+        "AWS::AppSync::GraphQLApi" => (AppSync, JumpView::None, after_slash()),
         // Anything else: route by the type's service token — lands in the
         // service with the physical id seeded as a search (the query-style
         // jump), rather than silently not jumping.
@@ -3920,6 +4007,7 @@ fn cfn_service_fallback_jump_target(
         "Redshift" | "RedshiftServerless" => Redshift,
         "MSK" => Msk,
         "Transfer" => Transfer,
+        "AppSync" => AppSync,
         "Cognito" => Cognito,
         "CloudFormation" => CloudFormation,
         "ElasticLoadBalancingV2" | "ElasticLoadBalancing" => Elb,
@@ -4171,6 +4259,10 @@ fn record_jump_arrows(app: &App, area: Rect, row_map: &[usize], lines: &[Line]) 
 
 fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
     let current = app.current_service?;
+    if current == crate::aws::service::ServiceType::Audit {
+        // A finding's `Resource ID` row opens the resource (`trigger_jump`).
+        return (key == "Resource ID" && !value.is_empty()).then_some(true);
+    }
     let target = app
         .ic_jump_target(key, value)
         .or_else(|| app.ecs_service_task_row_jump_target(key, value))
@@ -4192,6 +4284,7 @@ fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
         .or_else(|| app.org_row_jump_target(key, value))
         .or_else(|| app.sh_row_jump_target(key, value))
         .or_else(|| app.eb_row_jump_target(key, value))
+        .or_else(|| app.appsync_row_jump_target(key, value))
         .or_else(|| resource_jump_target(key, value, current))?;
     Some(target.service != current)
 }
@@ -4847,6 +4940,21 @@ mod ecr_jump_tests {
         assert!(matches!(t.view, JumpView::None));
         // Namespaced repo name preserved (not truncated to the last segment).
         assert_eq!(t.id, "team/app");
+    }
+
+    #[test]
+    fn asg_arn_jumps_to_the_group_by_name() {
+        let t = arn_jump_target(
+            "arn:aws:autoscaling:us-east-1:123456789012:autoScalingGroup:6f1c2d3e-4a5b:autoScalingGroupName/gpu-asg",
+        )
+        .expect("asg arn should jump");
+        assert_eq!(t.service, ServiceType::Asg);
+        assert_eq!(t.id, "gpu-asg");
+        // A scaling-policy ARN names no group to land on.
+        assert!(arn_jump_target(
+            "arn:aws:autoscaling:us-east-1:123456789012:scalingPolicy:abc:autoScalingGroupName/gpu-asg:policyName/p",
+        )
+        .is_none());
     }
 
     #[test]

@@ -35,6 +35,15 @@ impl FuzzyMatcher {
             .iter()
             .enumerate()
             .filter_map(|(idx, resource)| {
+                // An exact id or name always matches, first: that's what a
+                // jump, bookmark or `@all` / `@audit` result puts in the
+                // query, and `resolve_pending_jump` only looks at what the
+                // filter kept. A type whose `search_text` omits its own id
+                // (IAM's synthetic account row) was otherwise unreachable.
+                let q = sanitized_query.trim();
+                if resource.id() == q || resource.name() == q {
+                    return Some((idx, i64::MAX));
+                }
                 let text = resource.search_text();
                 self.matcher
                     .fuzzy_match(&text, sanitized_query)
@@ -101,6 +110,61 @@ mod tests {
         fn clone_box(&self) -> Box<dyn Resource> {
             Box::new(self.clone())
         }
+    }
+
+    /// A resource whose search text leaves its id out.
+    #[derive(Clone, Debug)]
+    struct Opaque(MockResource);
+
+    impl Resource for Opaque {
+        fn id(&self) -> &str {
+            self.0.id()
+        }
+        fn name(&self) -> &str {
+            self.0.name()
+        }
+        fn resource_type(&self) -> &str {
+            "Opaque"
+        }
+        fn state(&self) -> ResourceState {
+            ResourceState::stateless()
+        }
+        fn tags(&self) -> &HashMap<String, String> {
+            self.0.tags()
+        }
+        fn search_text(&self) -> String {
+            "account settings password policy".to_string()
+        }
+        fn details(&self) -> Vec<(String, String)> {
+            vec![]
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn clone_box(&self) -> Box<dyn Resource> {
+            Box::new(self.clone())
+        }
+    }
+
+    #[test]
+    fn an_exact_id_or_name_always_matches_first() {
+        let matcher = FuzzyMatcher::new();
+        let resources: Vec<Box<dyn Resource>> = vec![
+            Box::new(MockResource {
+                id: "i-1".to_string(),
+                name: "iam-account-settings-ish".to_string(),
+                tags: HashMap::new(),
+            }),
+            Box::new(Opaque(MockResource {
+                id: "iam-account-settings".to_string(),
+                name: "acme-prod".to_string(),
+                tags: HashMap::new(),
+            })),
+        ];
+        let by_id = matcher.filter_resources("iam-account-settings", &resources);
+        assert_eq!(by_id.first().map(|m| m.0), Some(1), "{by_id:?}");
+        let by_name = matcher.filter_resources("acme-prod", &resources);
+        assert_eq!(by_name.first().map(|m| m.0), Some(1), "{by_name:?}");
     }
 
     #[test]

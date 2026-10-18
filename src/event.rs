@@ -28,6 +28,15 @@ pub enum Event {
     Resize,
 
     // AWS async events
+    /// One `@audit` source service's list, loaded by `r` in `@audit` straight
+    /// into the cache (never `resources`). `generation` is
+    /// `App.audit_generation` at the press; a profile/region/role switch
+    /// bumps it, so a late result can't stamp the old account's rows.
+    AuditSourceLoaded {
+        generation: u64,
+        service: ServiceType,
+        result: std::result::Result<(Vec<Box<dyn Resource>>, Vec<String>), String>,
+    },
     ResourcesLoaded {
         service: ServiceType,
         resources: Vec<Box<dyn Resource>>,

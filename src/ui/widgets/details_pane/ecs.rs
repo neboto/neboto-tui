@@ -67,7 +67,12 @@ pub(super) fn render_ecs_cluster_split(app: &App, cluster: &EcsCluster, area: Re
     render_ecs_split(
         app,
         "ECS Cluster",
-        &detail_footer(app, app.details_focused, 3, ""),
+        &detail_footer(
+            app,
+            app.details_focused,
+            crate::aws::services::ecs::ECS_CLUSTER_SECTIONS.len(),
+            "",
+        ),
         header,
         &tabs,
         area,
@@ -94,6 +99,7 @@ pub(super) fn build_ecs_cluster_header_lines(cluster: &EcsCluster) -> Vec<Line<'
 pub fn ecs_cluster_section_lines(
     cluster: &EcsCluster,
     section: EcsClusterDetailSection,
+    providers: Option<&crate::lazy::Lazy<Vec<crate::aws::services::ecs::EcsCapacityProviderInfo>>>,
 ) -> Vec<(String, String)> {
     match section {
         EcsClusterDetailSection::Overview => {
@@ -153,7 +159,121 @@ pub fn ecs_cluster_section_lines(
             rows
         }
         EcsClusterDetailSection::Tags => map_tags_lines(&cluster.tags),
+        EcsClusterDetailSection::CapacityProviders => ecs_capacity_provider_lines(cluster, providers),
     }
+}
+
+/// The cluster's default strategy, then each provider: the Fargate pair as a
+/// note (AWS-managed, no ASG), the rest from `DescribeCapacityProviders` —
+/// the backing ASG (jumpable), managed scaling, termination protection and
+/// draining.
+fn ecs_capacity_provider_lines(
+    cluster: &EcsCluster,
+    providers: Option<&crate::lazy::Lazy<Vec<crate::aws::services::ecs::EcsCapacityProviderInfo>>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::ecs::is_fargate_provider;
+    let mut rows: Vec<(String, String)> = vec![(String::new(), String::new())];
+    if cluster.capacity_providers.is_empty() {
+        rows.push((
+            String::new(),
+            "No capacity providers — tasks use the launch type each service or run-task names".to_string(),
+        ));
+        rows.push((String::new(), String::new()));
+        return rows;
+    }
+
+    rows.push(("Default Strategy".to_string(), String::new()));
+    if cluster.default_strategy.is_empty() {
+        rows.push(("  (none — launch type applies)".to_string(), String::new()));
+    }
+    for s in &cluster.default_strategy {
+        rows.push((format!("  {s}"), String::new()));
+    }
+    rows.push((String::new(), String::new()));
+
+    for name in cluster.capacity_providers.iter().filter(|n| is_fargate_provider(n)) {
+        rows.push((name.clone(), String::new()));
+        rows.push((
+            String::new(),
+            if name == "FARGATE_SPOT" {
+                "AWS-managed Fargate Spot capacity — no Auto Scaling group; tasks can be interrupted"
+            } else {
+                "AWS-managed Fargate capacity — no Auto Scaling group"
+            }
+            .to_string(),
+        ));
+        rows.push((String::new(), String::new()));
+    }
+
+    if cluster.capacity_providers.iter().all(|n| is_fargate_provider(n)) {
+        return rows;
+    }
+    let list = match providers {
+        None | Some(Lazy::Loading) => {
+            rows.push((String::new(), "Loading…".to_string()));
+            return rows;
+        }
+        Some(Lazy::Error(e)) => {
+            rows.extend(error_rows(e));
+            return rows;
+        }
+        Some(Lazy::Loaded(list)) => list,
+    };
+    for cp in list {
+        rows.push((cp.name.clone(), String::new()));
+        rows.push(("  Status".to_string(), cp.status.clone()));
+        if let Some(k) = &cp.kind {
+            rows.push(("  Type".to_string(), k.clone()));
+        }
+        if let Some(u) = &cp.update_status {
+            let value = match &cp.update_reason {
+                Some(r) if u.ends_with("FAILED") => format!("✗ {u} — {r}"),
+                Some(r) => format!("{u} — {r}"),
+                None => u.clone(),
+            };
+            rows.push(("  Last Update".to_string(), value));
+        }
+        if let Some(asg) = &cp.asg_arn {
+            // autoscaling ARN → Enter jumps to the ASG.
+            rows.push(("  Auto Scaling Group".to_string(), asg.clone()));
+        }
+        if let Some(m) = &cp.managed_scaling {
+            let mut v = m.status.clone();
+            if m.status == "ENABLED" {
+                if let Some(t) = m.target_capacity {
+                    v.push_str(&format!(" · target {t}%"));
+                }
+                if let (Some(lo), Some(hi)) = (m.min_step, m.max_step) {
+                    v.push_str(&format!(" · step {lo}–{hi}"));
+                }
+                if let Some(w) = m.warmup_secs {
+                    v.push_str(&format!(" · warm-up {w}s"));
+                }
+            }
+            rows.push(("  Managed Scaling".to_string(), v));
+        }
+        if let Some(t) = &cp.termination_protection {
+            rows.push(("  Termination Protection".to_string(), t.clone()));
+        }
+        if let Some(d) = &cp.draining {
+            rows.push(("  Managed Draining".to_string(), d.clone()));
+        }
+        if let Some(r) = &cp.infrastructure_role {
+            rows.push(("  Infrastructure Role".to_string(), r.clone()));
+        }
+        rows.push((String::new(), String::new()));
+    }
+    let missing: Vec<&String> = cluster
+        .capacity_providers
+        .iter()
+        .filter(|n| !is_fargate_provider(n) && !list.iter().any(|cp| &cp.name == *n))
+        .collect();
+    for n in missing {
+        rows.push((n.clone(), String::new()));
+        rows.push((String::new(), "⚠ not returned by DescribeCapacityProviders (deleted?)".to_string()));
+        rows.push((String::new(), String::new()));
+    }
+    rows
 }
 
 // ── ECS Service split pane ──────────────────────────────────────────────────

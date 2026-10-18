@@ -1,0 +1,31 @@
+{
+  "resolvers": [
+    {
+      "typeName": "Query",
+      "fieldName": "order",
+      "kind": "UNIT",
+      "dataSourceName": "OrdersLambda",
+      "resolverArn": "arn:aws:appsync:{{region}}:{{account}}:apis/k3st0refr0ntgq1x7m2q9a4b5c/types/Query/resolvers/order",
+      "runtime": {
+        "name": "APPSYNC_JS",
+        "runtimeVersion": "1.0.0"
+      },
+      "code": "export function request(ctx) {\n  return { operation: 'Invoke', payload: { action: 'get', id: ctx.args.id } };\n}\nexport function response(ctx) { return ctx.result; }"
+    },
+    {
+      "typeName": "Query",
+      "fieldName": "product",
+      "kind": "UNIT",
+      "dataSourceName": "CatalogTable",
+      "resolverArn": "arn:aws:appsync:{{region}}:{{account}}:apis/k3st0refr0ntgq1x7m2q9a4b5c/types/Query/resolvers/product",
+      "cachingConfig": {
+        "ttl": 300,
+        "cachingKeys": [
+          "$context.arguments.id"
+        ]
+      },
+      "requestMappingTemplate": "{\n  \"version\": \"2018-05-29\",\n  \"operation\": \"GetItem\",\n  \"key\": { \"id\": $util.dynamodb.toDynamoDBJson($ctx.args.id) }\n}",
+      "responseMappingTemplate": "$util.toJson($ctx.result)"
+    }
+  ]
+}

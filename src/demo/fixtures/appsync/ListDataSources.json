@@ -1,0 +1,31 @@
+{
+  "dataSources": [
+    {
+      "name": "OrdersLambda",
+      "type": "AWS_LAMBDA",
+      "dataSourceArn": "arn:aws:appsync:{{region}}:{{account}}:apis/k3st0refr0ntgq1x7m2q9a4b5c/datasources/OrdersLambda",
+      "description": "orders-api handles order reads/writes",
+      "serviceRoleArn": "arn:aws:iam::{{account}}:role/orders-api-lambda",
+      "lambdaConfig": {
+        "lambdaFunctionArn": "arn:aws:lambda:{{region}}:{{account}}:function:orders-api"
+      }
+    },
+    {
+      "name": "CatalogTable",
+      "type": "AMAZON_DYNAMODB",
+      "dataSourceArn": "arn:aws:appsync:{{region}}:{{account}}:apis/k3st0refr0ntgq1x7m2q9a4b5c/datasources/CatalogTable",
+      "serviceRoleArn": "arn:aws:iam::{{account}}:role/storefront-web-task",
+      "dynamodbConfig": {
+        "tableName": "catalog",
+        "awsRegion": "{{region}}",
+        "useCallerCredentials": false,
+        "versioned": false
+      }
+    },
+    {
+      "name": "None",
+      "type": "NONE",
+      "dataSourceArn": "arn:aws:appsync:{{region}}:{{account}}:apis/k3st0refr0ntgq1x7m2q9a4b5c/datasources/None"
+    }
+  ]
+}

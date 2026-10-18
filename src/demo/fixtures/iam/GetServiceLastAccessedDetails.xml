@@ -1,0 +1,18 @@
+<GetServiceLastAccessedDetailsResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <GetServiceLastAccessedDetailsResult>
+    <JobStatus>COMPLETED</JobStatus>
+    <JobType>SERVICE_LEVEL</JobType>
+    <JobCreationDate>{{iso:now-1m}}</JobCreationDate>
+    <JobCompletionDate>{{iso:now-1m+3s}}</JobCompletionDate>
+    <IsTruncated>false</IsTruncated>
+    <ServicesLastAccessed>
+      <member><ServiceName>Amazon CloudWatch Logs</ServiceName><ServiceNamespace>logs</ServiceNamespace><LastAuthenticated>{{iso:now-12m}}</LastAuthenticated><LastAuthenticatedRegion>{{region}}</LastAuthenticatedRegion><TotalAuthenticatedEntities>1</TotalAuthenticatedEntities></member>
+      <member><ServiceName>Amazon S3</ServiceName><ServiceNamespace>s3</ServiceNamespace><LastAuthenticated>{{iso:now-2h}}</LastAuthenticated><LastAuthenticatedRegion>{{region}}</LastAuthenticatedRegion><TotalAuthenticatedEntities>1</TotalAuthenticatedEntities></member>
+      <member><ServiceName>Amazon DynamoDB</ServiceName><ServiceNamespace>dynamodb</ServiceNamespace><LastAuthenticated>{{iso:now-26h}}</LastAuthenticated><LastAuthenticatedRegion>{{region}}</LastAuthenticatedRegion><TotalAuthenticatedEntities>1</TotalAuthenticatedEntities></member>
+      <member><ServiceName>AWS Key Management Service</ServiceName><ServiceNamespace>kms</ServiceNamespace><LastAuthenticated>{{iso:now-3d}}</LastAuthenticated><LastAuthenticatedRegion>{{region}}</LastAuthenticatedRegion><TotalAuthenticatedEntities>1</TotalAuthenticatedEntities></member>
+      <member><ServiceName>Amazon SQS</ServiceName><ServiceNamespace>sqs</ServiceNamespace><TotalAuthenticatedEntities>0</TotalAuthenticatedEntities></member>
+      <member><ServiceName>Amazon SNS</ServiceName><ServiceNamespace>sns</ServiceNamespace><TotalAuthenticatedEntities>0</TotalAuthenticatedEntities></member>
+    </ServicesLastAccessed>
+  </GetServiceLastAccessedDetailsResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</GetServiceLastAccessedDetailsResponse>

@@ -1,0 +1,37 @@
+{
+  "graphqlApis": [
+    {
+      "name": "storefront-graphql",
+      "apiId": "k3st0refr0ntgq1x7m2q9a4b5c",
+      "apiType": "GRAPHQL",
+      "visibility": "GLOBAL",
+      "authenticationType": "API_KEY",
+      "additionalAuthenticationProviders": [
+        {
+          "authenticationType": "AWS_IAM"
+        }
+      ],
+      "arn": "arn:aws:appsync:{{region}}:{{account}}:apis/k3st0refr0ntgq1x7m2q9a4b5c",
+      "uris": {
+        "GRAPHQL": "https://k3st0refr0ntgq1x7m2q9a4b5c.appsync-api.{{region}}.amazonaws.com/graphql",
+        "REALTIME": "wss://k3st0refr0ntgq1x7m2q9a4b5c.appsync-realtime-api.{{region}}.amazonaws.com/graphql"
+      },
+      "dns": {
+        "GRAPHQL": "k3st0refr0ntgq1x7m2q9a4b5c.appsync-api.{{region}}.amazonaws.com"
+      },
+      "xrayEnabled": false,
+      "logConfig": {
+        "fieldLogLevel": "NONE",
+        "cloudWatchLogsRoleArn": "",
+        "excludeVerboseContent": true
+      },
+      "introspectionConfig": "ENABLED",
+      "queryDepthLimit": 0,
+      "resolverCountLimit": 0,
+      "tags": {
+        "team": "storefront",
+        "env": "prod"
+      }
+    }
+  ]
+}

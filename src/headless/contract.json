@@ -29,6 +29,9 @@
       "--section",
       "--type",
       "--wait"
+    ],
+    "audit": [
+      "--fail-on"
     ]
   },
   "services": {
@@ -99,13 +102,41 @@
       "Value"
     ]
   },
+  "audit": {
+    "envelope": [
+      "schema",
+      "region",
+      "count",
+      "findings",
+      "not_checked"
+    ],
+    "finding": [
+      "severity",
+      "check",
+      "title",
+      "service",
+      "resource_id",
+      "resource_name",
+      "resource_type",
+      "reason"
+    ],
+    "csv": [
+      "Severity",
+      "Check",
+      "Service",
+      "Resource",
+      "Finding"
+    ]
+  },
   "prefixes": [
     "@acm",
     "@agentcore",
     "@anfw",
     "@apigw",
+    "@appsync",
     "@asg",
     "@athena",
+    "@audit",
     "@backup",
     "@batch",
     "@bedrock",
@@ -314,6 +345,16 @@
     "AgentCore Workload Identity": [
       "Overview",
       "Return URLs",
+      "Tags"
+    ],
+    "AppSync API": [
+      "Overview",
+      "Auth",
+      "Data Sources",
+      "Resolvers",
+      "Functions",
+      "API Keys",
+      "Schema",
       "Tags"
     ],
     "Athena Database": [
@@ -635,7 +676,8 @@
     "ECS Cluster": [
       "Overview",
       "Settings",
-      "Tags"
+      "Tags",
+      "Capacity Providers"
     ],
     "ECS Service": [
       "Overview",
@@ -825,13 +867,15 @@
     "IAM Account Settings": [
       "Overview",
       "Password Policy",
-      "Usage"
+      "Usage",
+      "Credential Report"
     ],
     "IAM Group": [
       "Overview",
       "Members",
       "Permissions",
-      "Policies"
+      "Policies",
+      "Last Accessed"
     ],
     "IAM Instance Profile": [
       "Details"
@@ -840,25 +884,29 @@
       "Overview",
       "Document",
       "Attached To",
-      "Tags"
+      "Tags",
+      "Last Accessed"
     ],
     "IAM Role": [
       "Overview",
       "Trust Policy",
       "Permissions",
       "Policies",
-      "Tags"
+      "Tags",
+      "Last Accessed"
     ],
     "IAM User": [
       "Access",
       "Permissions",
       "Policies",
       "Groups",
-      "Tags"
+      "Tags",
+      "Last Accessed"
     ],
     "IC Application": [
       "Overview",
-      "Assignments"
+      "Assignments",
+      "Auth"
     ],
     "IC Group": [
       "Details",
