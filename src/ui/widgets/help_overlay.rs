@@ -93,6 +93,7 @@ const RIGHT_SECTIONS: &[Section] = &[
             ("@all text", "search all cached services (⇥ steps through them)"),
             ("tag:k=v", "exact tag filter"),
             ("Tab", "complete @prefix"),
+            ("↑ / ↓", "earlier searches (this session)"),
         ],
     },
     Section {

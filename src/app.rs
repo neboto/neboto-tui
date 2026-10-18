@@ -1368,6 +1368,23 @@ fn nav_back_target(len: usize, cursor: Option<usize>) -> Option<usize> {
         Some(i) => Some(i - 1)}
 }
 
+/// `{service} {id tail}` for the footer's back hint: an ARN or path keeps
+/// only its last `/` or `:` segment (a Lambda or ECS service ARN reads as its
+/// name), capped so a long id can't crowd out the rest of the footer.
+fn nav_hint_label(service: ServiceType, id: Option<&str>) -> String {
+    const MAX: usize = 28;
+    let Some(id) = id.filter(|id| !id.is_empty()) else {
+        return service.short_name().to_string();
+    };
+    let tail = id.rsplit(['/', ':']).find(|seg| !seg.is_empty()).unwrap_or(id);
+    let tail = if tail.chars().count() > MAX {
+        format!("{}…", tail.chars().take(MAX - 1).collect::<String>())
+    } else {
+        tail.to_string()
+    };
+    format!("{} {tail}", service.short_name())
+}
+
 /// Structural side of recording a navigation location (shared with
 /// `record_location`, kept pure for testing): when parked mid-history, drop the
 /// stale forward branch; when live, append `loc` unless it duplicates the top.
@@ -1910,6 +1927,15 @@ pub struct App {
     pub is_service_switch_query: bool,
     pub search_needs_update: bool, // Flag to defer search processing
     pub search_last_modified: Option<Instant>, // Track when search input last changed
+    /// This session's submitted `/` queries, oldest first, de-duplicated
+    /// (a re-run moves to the end). `↑`/`↓` in the search bar walk it.
+    /// In memory only — queries can hold account names and tag values.
+    pub search_history: Vec<String>,
+    /// Where `↑`/`↓` is in `search_history`; `None` while typing.
+    pub search_history_cursor: Option<usize>,
+    /// The text that was being typed when `↑` started a walk, restored by
+    /// `↓` past the newest entry.
+    pub search_history_draft: String,
     pub loading: bool,
     pub load_started_at: Option<Instant>, // When the current load began (min-visible spinner)
     pub loading_progress: Option<LoadProgress>, // Progress for background loading
@@ -2858,6 +2884,7 @@ impl App {
             startup_warnings.push(format!("theme: {}", theme_warnings.join("; ")));
         }
         startup_warnings.extend(export_warnings);
+        startup_warnings.extend(config.pinned_service_types().1);
         startup_warnings.extend(
             crate::session_launch::SessionLaunch::from_config(config.session_launch.as_deref()).1,
         );
@@ -2985,8 +3012,12 @@ impl App {
             services,
             current_service,
             // The service opened at startup (none on the splash) — not a
-            // fixed EC2, which showed a chip for a service never opened.
-            visited_services: current_service.into_iter().collect(),
+            // fixed EC2, which showed a chip for a service never opened —
+            // plus config `pinned_services`, whose chips show before they load.
+            visited_services: current_service
+                .into_iter()
+                .chain(config.pinned_service_types().0)
+                .collect(),
             resources: Vec::new(),
             filtered_resources: Vec::new(),
             all_search_mode: false,
@@ -3003,6 +3034,9 @@ impl App {
             is_service_switch_query: false,
             search_needs_update: false,
             search_last_modified: None,
+            search_history: Vec::new(),
+            search_history_cursor: None,
+            search_history_draft: String::new(),
             loading: false,
             load_started_at: None,
             loading_progress: None,
@@ -5492,24 +5526,38 @@ impl App {
             match key.code {
                 KeyCode::Char(c) => {
                     self.search_query.push(c);
+                    // Editing a recalled query makes it the new draft.
+                    self.search_history_cursor = None;
                     // Mark that input changed and defer search processing
                     self.search_last_modified = Some(Instant::now());
                     self.search_needs_update = true;
                 }
                 KeyCode::Backspace => {
                     self.search_query.pop();
+                    self.search_history_cursor = None;
                     // Mark that input changed and defer search processing
                     self.search_last_modified = Some(Instant::now());
                     self.search_needs_update = true;
                 }
+                KeyCode::Up | KeyCode::Down => {
+                    if let Some(query) = self.step_search_history(key.code == KeyCode::Up) {
+                        self.search_query = query;
+                        self.search_last_modified = Some(Instant::now());
+                        self.search_needs_update = true;
+                    }
+                }
                 KeyCode::Esc => {
                     self.search_active = false;
+                    self.search_history_cursor = None;
                     self.search_query.clear();
                     self.search_last_modified = None;
                     self.search_needs_update = true;
                 }
                 KeyCode::Enter => {
                     self.search_active = false;
+                    // Recorded before the service-switch rewrite below, so
+                    // recalling it switches service again.
+                    self.record_search_history();
                     if self.is_service_switch_query {
                         // After service switch, keep the search text but remove the prefix
                         // e.g., "@cloudtrail Describe" becomes "Describe"
@@ -9833,6 +9881,45 @@ impl App {
             self.update_search();
             self.resolve_pending_jump(event_tx);
         }
+    }
+
+    /// Push the submitted query onto `search_history` (blank ones aren't
+    /// worth recalling; a repeat moves to the end) and end any walk.
+    fn record_search_history(&mut self) {
+        const MAX_SEARCH_HISTORY: usize = 50;
+        self.search_history_cursor = None;
+        let query = self.search_query.trim();
+        if query.is_empty() {
+            return;
+        }
+        let query = query.to_string();
+        self.search_history.retain(|q| *q != query);
+        self.search_history.push(query);
+        if self.search_history.len() > MAX_SEARCH_HISTORY {
+            self.search_history.remove(0);
+        }
+    }
+
+    /// One `↑` (older) / `↓` (newer) step through `search_history`; returns
+    /// the text the bar should now hold, or `None` when there's nowhere to
+    /// go. `↓` past the newest entry gives back the draft `↑` left.
+    fn step_search_history(&mut self, older: bool) -> Option<String> {
+        let len = self.search_history.len();
+        let next = match (self.search_history_cursor, older) {
+            (None, true) if len > 0 => {
+                self.search_history_draft = self.search_query.clone();
+                Some(len - 1)
+            }
+            (Some(i), true) if i > 0 => Some(i - 1),
+            (Some(i), false) if i + 1 < len => Some(i + 1),
+            (Some(_), false) => {
+                self.search_history_cursor = None;
+                return Some(std::mem::take(&mut self.search_history_draft));
+            }
+            _ => return None,
+        };
+        self.search_history_cursor = next;
+        next.map(|i| self.search_history[i].clone())
     }
 
     pub fn update_search(&mut self) {
@@ -21902,6 +21989,19 @@ impl App {
                 self.error_message = Some("Already at oldest location".to_string());
             }
         }
+    }
+
+    /// Where `⌫` / `Ctrl-O` would go, shortened for the detail footer:
+    /// `EC2 i-0abc…`, an ARN or path cut to its last segment. `None` when
+    /// there's no history behind us, or the entry is where we already are.
+    pub(crate) fn nav_back_hint(&self) -> Option<String> {
+        let idx = nav_back_target(self.nav_history.len(), self.nav_cursor)?;
+        let loc = &self.nav_history[idx];
+        let here = self.get_selected_resource().map(|r| r.id().to_string());
+        if Some(loc.service) == self.current_service && loc.selected_id == here {
+            return None;
+        }
+        Some(nav_hint_label(loc.service, loc.selected_id.as_deref()))
     }
 
     /// Backtick: toggle the jump-list picker (most-recent first). Opens with the
@@ -34511,7 +34611,31 @@ mod flat_view_tests {
 
 #[cfg(test)]
 mod nav_tests {
-    use super::{nav_back_target, record_into, NAV_HISTORY_MAX};
+    use super::{nav_back_target, nav_hint_label, record_into, NAV_HISTORY_MAX};
+    use crate::aws::service::ServiceType;
+
+    // --- nav_hint_label: the detail footer's `⌫ back to …` text ---
+
+    #[test]
+    fn hint_label_cuts_arns_and_paths_to_their_last_segment() {
+        let lambda = "arn:aws:lambda:us-east-1:111122223333:function:orders-api";
+        assert_eq!(nav_hint_label(ServiceType::Lambda, Some(lambda)), "λ orders-api");
+        let ecs = "arn:aws:ecs:us-east-1:111122223333:service/prod/web";
+        assert_eq!(nav_hint_label(ServiceType::ECS, Some(ecs)), "ECS web");
+        assert_eq!(nav_hint_label(ServiceType::EC2, Some("i-0abc")), "EC2 i-0abc");
+        // A trailing separator doesn't leave an empty tail.
+        assert_eq!(nav_hint_label(ServiceType::S3, Some("logs/")), "S3 logs");
+    }
+
+    #[test]
+    fn hint_label_caps_long_ids_and_falls_back_to_the_service() {
+        let long = "a".repeat(40);
+        let label = nav_hint_label(ServiceType::EC2, Some(&long));
+        assert_eq!(label.chars().count(), "EC2 ".len() + 28);
+        assert!(label.ends_with('…'));
+        assert_eq!(nav_hint_label(ServiceType::EC2, None), "EC2");
+        assert_eq!(nav_hint_label(ServiceType::EC2, Some("")), "EC2");
+    }
 
     // --- nav_back_target: where Ctrl-O lands (non-destructive) ---
 

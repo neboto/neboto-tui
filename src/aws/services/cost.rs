@@ -1075,6 +1075,11 @@ crate::sections! {
 }
 
 impl Resource for CostAnomaly {
+    /// Impact and dates — the id is a UUID.
+    fn list_summary(&self) -> Option<String> {
+        Some(self.summary.clone())
+    }
+
     fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
         Some(&COST_ANOMALY_SECTIONS)
     }

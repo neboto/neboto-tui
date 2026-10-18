@@ -4306,7 +4306,10 @@ fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
 /// the conditional `m metrics` / `t tail` (gated by `supports_metrics_overlay`
 /// / `supports_log_tail`). The footer therefore auto-includes only the section
 /// count, detail-pane `/ search`, and `h back` (plus a "⏎ go to resource" hint
-/// when the row references another resource), and `extras` should carry **only
+/// when the row references another resource, and `⌫ back to <where>` when
+/// there's history to go back through — `h` then reads `h list`, since it
+/// returns to the list rather than to the resource you jumped from), and
+/// `extras` should carry **only
 /// genuinely pane-specific** affordances whose key isn't already global — e.g.
 /// `o objects` (S3), `i items` (DynamoDB), `d download` (Lambda code), `f
 /// search` (log group), `x reveal · Y copy value` (secrets). Do NOT put
@@ -4343,7 +4346,14 @@ fn detail_footer(app: &App, focused: bool, sections: usize, extras: &str) -> Str
     if app.supports_trail_lens() {
         parts.push("W trail");
     }
-    parts.push("h back");
+    let back = app.nav_back_hint().map(|to| format!("⌫ back to {to}"));
+    match &back {
+        Some(b) => {
+            parts.push(b);
+            parts.push("h list");
+        }
+        None => parts.push("h back"),
+    }
     format!(" {} ", parts.join(" · "))
 }
 

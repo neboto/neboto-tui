@@ -10,31 +10,11 @@ use ratatui::{
     Frame,
 };
 
-/// A leading `[Type]` badge for Organizations policy rows (SCP / Tag / Backup /
-/// …) — the policies otherwise differ only by name, so the type is the
-/// at-a-glance discriminator. `None` for every other resource type.
-/// The dim second column. Normally the id (when it adds to the name); a
-/// Route 53 record shows what it *answers with* instead — its id is a
-/// compound key nobody wants to read, and a DNS list without values is
-/// half a list.
+/// The dim second column: the type's `list_summary` when it has one,
+/// otherwise the id (when it adds to the name).
 fn id_cell(resource: &dyn crate::aws::resource::Resource) -> String {
-    if let Some(rec) = resource
-        .as_any()
-        .downcast_ref::<crate::aws::services::route53::R53Record>()
-    {
-        return rec.value_summary();
-    }
-    // A cost anomaly's id is a UUID; its impact and dates are what a row
-    // is for.
-    if let Some(a) = resource
-        .as_any()
-        .downcast_ref::<crate::aws::services::cost::CostAnomaly>()
-    {
-        return a.summary().to_string();
-    }
-    // An @audit row's id is a compound key; what was found is the point.
-    if let Some(f) = resource.as_any().downcast_ref::<crate::audit::AuditFinding>() {
-        return f.list_note.clone();
+    if let Some(summary) = resource.list_summary() {
+        return summary;
     }
     if resource.id() != resource.name() {
         resource.id().to_string()
@@ -43,6 +23,9 @@ fn id_cell(resource: &dyn crate::aws::resource::Resource) -> String {
     }
 }
 
+/// A leading `[Type]` badge for Organizations policy rows (SCP / Tag / Backup /
+/// …) — the policies otherwise differ only by name, so the type is the
+/// at-a-glance discriminator. `None` for every other resource type.
 fn org_policy_badge(resource: &dyn crate::aws::resource::Resource) -> Option<String> {
     resource
         .as_any()

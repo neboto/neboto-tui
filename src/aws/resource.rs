@@ -106,6 +106,17 @@ pub trait Resource: Send + Sync + Debug {
         self.state().to_string()
     }
 
+    /// The list's dim second column, when this type has something better to
+    /// show there than its bare id: an instance's type, a function's runtime,
+    /// what a DNS record answers with. Display only — exports and search
+    /// don't read it. `None` (the default) shows the id when it differs from
+    /// the name. Keep it short; the column is capped at a third of the list.
+    /// `summary_with_id` keeps the id beside the summary for types whose id
+    /// is worth reading.
+    fn list_summary(&self) -> Option<String> {
+        None
+    }
+
     /// The split pane's section table, when this type has one — the single
     /// source of truth its section wiring derives from (`src/sections.rs`).
     /// `None` (the default) renders the flat `details()` view.
@@ -261,6 +272,16 @@ impl Clone for Box<dyn Resource> {
 /// Single-quote a value for a copied shell command when it contains anything
 /// beyond the characters safe in every POSIX shell; identifiers (ARNs, ids,
 /// most names) pass through untouched so commands stay readable.
+/// `summary · id` for `Resource::list_summary`, or the summary alone when
+/// the id is already on the row as the name (an untagged instance).
+pub fn summary_with_id(r: &dyn Resource, summary: &str) -> String {
+    if r.id() == r.name() {
+        summary.to_string()
+    } else {
+        format!("{summary} · {}", r.id())
+    }
+}
+
 pub fn shell_quote(s: &str) -> String {
     let safe = |c: char| c.is_ascii_alphanumeric() || "-_./:=@,+".contains(c);
     if !s.is_empty() && s.chars().all(safe) {

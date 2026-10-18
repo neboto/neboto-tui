@@ -787,6 +787,16 @@ impl EcsServiceInfo {
 }
 
 impl Resource for EcsServiceInfo {
+    /// `2/3 running`, plus pending tasks while a rollout or a crash loop has
+    /// some. The id is the service ARN, which the name already says.
+    fn list_summary(&self) -> Option<String> {
+        let mut s = format!("{}/{} running", self.running_count, self.desired_count);
+        if self.pending_count > 0 {
+            s.push_str(&format!(" · {} pending", self.pending_count));
+        }
+        Some(s)
+    }
+
     fn references(&self) -> Vec<(String, String)> {
         let mut v = sg_refs(self.security_group_ids());
         let mut r = |l: &str, x: &str| v.push((l.to_string(), x.to_string()));

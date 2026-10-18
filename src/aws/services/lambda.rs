@@ -257,6 +257,13 @@ crate::sections! {
 }
 
 impl Resource for LambdaFunction {
+    /// The runtime; a container-image function has none ("unknown"), and
+    /// keeps the plain id column. The id is the ARN, which the name already
+    /// says, so it isn't repeated.
+    fn list_summary(&self) -> Option<String> {
+        (!self.runtime.is_empty() && self.runtime != "unknown").then(|| self.runtime.clone())
+    }
+
     fn references(&self) -> Vec<(String, String)> {
         let mut v = sg_refs(self.security_group_ids());
         let mut r = |l: &str, x: &str| v.push((l.to_string(), x.to_string()));

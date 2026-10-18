@@ -118,6 +118,15 @@ pub struct Config {
     /// cost   = 86400
     /// ```
     pub cache_ttls: Option<std::collections::HashMap<String, u64>>,
+    /// Services whose chips are on the service strip from startup, before
+    /// you've opened them — your usual set, one click away. Any prefix or
+    /// alias `@`-search accepts; nothing loads until a chip is opened.
+    /// Unknown prefixes warn at startup and are skipped.
+    ///
+    /// ```toml
+    /// pinned_services = ["ec2", "ecs", "lambda", "cw"]
+    /// ```
+    pub pinned_services: Option<Vec<String>>,
     /// Tag keys read as "owner" for the ownership ribbon on the detail pane,
     /// tried in order, matched case-insensitively (so `owner` also covers
     /// `Owner`). Default: `["owner", "team"]`.
@@ -265,6 +274,22 @@ impl Config {
             })
             .collect()
     }
+
+    /// Resolve `pinned_services` to service types, plus a warning naming any
+    /// prefix that resolves to nothing (skipped, never fatal).
+    pub fn pinned_service_types(&self) -> (Vec<ServiceType>, Option<String>) {
+        let mut pinned = Vec::new();
+        let mut unknown = Vec::new();
+        for prefix in self.pinned_services.iter().flatten() {
+            match ServiceType::from_prefix(prefix.trim_start_matches('@')) {
+                Some(s) => pinned.push(s),
+                None => unknown.push(prefix.as_str()),
+            }
+        }
+        let warning = (!unknown.is_empty())
+            .then(|| format!("pinned_services: unknown service {}", unknown.join(", ")));
+        (pinned, warning)
+    }
 }
 
 #[cfg(test)]
@@ -314,6 +339,16 @@ nosuchservice = 5
         );
         // The unknown prefix parses but resolves to nothing.
         assert_eq!(overrides.len(), 2);
+    }
+
+    #[test]
+    fn pinned_services_resolve_aliases_and_warn_on_unknown() {
+        let config: Config =
+            toml::from_str(r#"pinned_services = ["ec2", "@lambda", "cw", "nosuchservice"]"#).unwrap();
+        let (pinned, warning) = config.pinned_service_types();
+        assert_eq!(pinned, vec![ServiceType::EC2, ServiceType::Lambda, ServiceType::CloudWatch]);
+        assert_eq!(warning.as_deref(), Some("pinned_services: unknown service nosuchservice"));
+        assert_eq!(Config::default().pinned_service_types(), (vec![], None));
     }
 
     #[test]

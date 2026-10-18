@@ -410,6 +410,8 @@ arn:aws:iam::…       paste an ARN — it fuzzy-matches rather than erroring
 ```
 
 Typing `@e` pops a completion dropdown; `Tab` completes to the first match.
+`↑` / `↓` in the search bar recall this session's earlier searches (in memory
+only, never written to disk).
 Matching is fuzzy (Skim) with a score threshold, over every indexed field — ids,
 names, IPs, CIDRs, AZs, tags, ARNs, usernames, emails, and per-service extras
 like every secondary private IP on an ENI or every resource id in a GuardDuty
@@ -507,6 +509,7 @@ template.
 |---|---|
 | `default_service` | Load this service on startup (omit for the welcome splash) |
 | `default_region`, `default_profile` | Where to start |
+| `pinned_services` | Service chips on the strip from startup, e.g. `["ec2", "ecs", "lambda"]` (nothing loads until you open one) |
 | `show_banner` | ASCII banner on startup |
 | `watch`, `watch_interval` | Start in watch mode, and its cadence in seconds |
 | `detail_flat` | Start with the flat all-sections detail view |

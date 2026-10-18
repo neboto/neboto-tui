@@ -91,7 +91,9 @@ AWS.
   `list_resources()`, `get_resource_details()`.
 - **`Resource`** (`src/aws/resource.rs`): `search_text()`, `details()` (flat
   key-value fallback), `console_url()`, `is_noise()`, `state()`, `as_any()`
-  (for downcasting). Heterogeneous collections are `Box<dyn Resource>`.
+  (for downcasting), `list_summary()` (the list's dim second column — an
+  instance's type, a function's runtime; default: the id). Heterogeneous
+  collections are `Box<dyn Resource>`.
 - **`ServiceType`** (`src/aws/service.rs`): one variant per service;
   `from_prefix()` maps `@ec2`→`EC2`; `is_global()` true for IAM / Organizations
   / Cost / CloudFront / Trusted Advisor / Global Accelerator / Health /
@@ -1205,7 +1207,9 @@ and the approaches you rejected are the part nobody can recover from your code.
   and shows as a clickable `↑ vX.Y.Z` service-strip chip),
   `cache_ttl` (base cache freshness in seconds, default 300) +
   `[cache_ttls]` (per-service overrides keyed by any `@`-search prefix;
-  unknown prefixes are ignored).
+  unknown prefixes are ignored),
+  `pinned_services` (prefixes seeded into `visited_services` so their strip
+  chips show before they load; unknown prefixes warn at startup).
   No `default_service` ⇒ welcome splash, nothing loads.
 - **`src/cli.rs`**: clap `Cli` (parsed in `main` before the runtime).
   `-s/--service`, `-r/--region`, `-p/--profile`, `--endpoint-url`,

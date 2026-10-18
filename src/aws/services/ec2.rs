@@ -1109,6 +1109,11 @@ crate::sections! {
 }
 
 impl Resource for Ec2Instance {
+    fn list_summary(&self) -> Option<String> {
+        (!self.instance_type.is_empty())
+            .then(|| crate::aws::resource::summary_with_id(self, &self.instance_type))
+    }
+
     fn references(&self) -> Vec<(String, String)> {
         let mut v = sg_refs(self.security_group_ids());
         let mut r = |l: &str, x: &str| v.push((l.to_string(), x.to_string()));

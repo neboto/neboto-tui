@@ -826,6 +826,14 @@ crate::sections! {
 }
 
 impl Resource for RdsInstance {
+    /// `postgres 16.3 · db.r6g.large`.
+    fn list_summary(&self) -> Option<String> {
+        let engine = format!("{} {}", self.engine, self.engine_version);
+        let parts: Vec<&str> =
+            [engine.trim(), self.db_instance_class.as_str()].into_iter().filter(|p| !p.is_empty()).collect();
+        (!parts.is_empty()).then(|| parts.join(" · "))
+    }
+
     fn references(&self) -> Vec<(String, String)> {
         let mut v = sg_refs(self.security_group_ids());
         let mut r = |l: &str, x: &str| v.push((l.to_string(), x.to_string()));
@@ -1113,6 +1121,15 @@ crate::sections! {
 }
 
 impl Resource for RdsCluster {
+    /// `aurora-postgresql 16.4`, plus the mode when it isn't the default.
+    fn list_summary(&self) -> Option<String> {
+        let mut s = format!("{} {}", self.engine, self.engine_version).trim().to_string();
+        if !self.engine_mode.is_empty() && self.engine_mode != "provisioned" {
+            s.push_str(&format!(" · {}", self.engine_mode));
+        }
+        (!s.is_empty()).then_some(s)
+    }
+
     fn references(&self) -> Vec<(String, String)> {
         let mut v = sg_refs(self.security_group_ids());
         let mut r = |l: &str, x: &str| v.push((l.to_string(), x.to_string()));

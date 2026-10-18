@@ -845,6 +845,12 @@ pub async fn fetch_test_dns_answer(
 }
 
 impl Resource for R53Record {
+    /// What the record answers with — its id is a compound key nobody wants
+    /// to read, and a DNS list without values is half a list.
+    fn list_summary(&self) -> Option<String> {
+        Some(self.value_summary())
+    }
+
     fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
         Some(&R53_RECORD_SECTIONS)
     }

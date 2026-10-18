@@ -600,6 +600,11 @@ impl AuditFinding {
 }
 
 impl Resource for AuditFinding {
+    /// What was found — the id is a compound key.
+    fn list_summary(&self) -> Option<String> {
+        Some(self.list_note.clone())
+    }
+
     fn id(&self) -> &str {
         &self.row_id
     }

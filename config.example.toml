@@ -22,6 +22,12 @@
 # Show the ASCII banner at the top on startup (default: false).
 # show_banner = true
 
+# Services whose chips are on the service strip from the start, one click
+# away, before you've opened them this session. Same prefixes as
+# default_service; nothing loads until you open one. Unknown names warn at
+# startup and are skipped.
+# pinned_services = ["ec2", "ecs", "lambda", "cw"]
+
 # ── View defaults ────────────────────────────────────────────────────────────
 
 # Start in watch mode: auto-refresh the current view. `w` toggles it at
