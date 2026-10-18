@@ -480,7 +480,7 @@ pub(super) fn ec2_details_lines(
     rows.push(("  Instance ID".to_string(), instance.instance_id.clone()));
     rows.push(("  State".to_string(), instance.state.clone()));
     rows.push(("  Type".to_string(), instance.instance_type.clone()));
-    if crate::aws::services::ec2::is_burstable(&instance.instance_type) {
+    if crate::aws::services::ec2::shows_cpu_credits(instance) {
         // Unlimited bills surplus credits once the balance runs out; standard
         // throttles to baseline instead. The balance is on the `m` overlay.
         let credits = match credit_spec {
@@ -1347,7 +1347,7 @@ pub fn snapshot_section_lines(
             if let Some(r) = &snap.restore_expiry {
                 rows.push(("Restore Expiry".to_string(), r.clone()));
             }
-            rows.extend(snapshot_fast_restore_rows(&snap.fast_restore));
+            rows.extend(snapshot_fast_restore_rows(snap.fast_restore.as_deref()));
             rows
         }
         SnapshotDetailSection::Tags => tag_rows(&snap.tags),
@@ -1356,20 +1356,27 @@ pub fn snapshot_section_lines(
 
 /// Fast snapshot restore: a summary row (a ⚠ — it bills per AZ-hour whether
 /// or not anything restores from it) and one row per AZ with its state.
-fn snapshot_fast_restore_rows(azs: &[(String, String)]) -> Vec<(String, String)> {
+fn snapshot_fast_restore_rows(azs: Option<&[(String, String)]>) -> Vec<(String, String)> {
+    let Some(azs) = azs else {
+        return vec![(
+            "Fast Snapshot Restore".to_string(),
+            "unknown — DescribeFastSnapshotRestores failed".to_string(),
+        )];
+    };
     if azs.is_empty() {
         return vec![("Fast Snapshot Restore".to_string(), "off".to_string())];
     }
-    let mut rows = vec![
-        (
-            "Fast Snapshot Restore".to_string(),
-            format!(
-                "⚠ on in {} AZ{} · billed per AZ-hour",
-                azs.len(),
-                if azs.len() == 1 { "" } else { "s" }
-            ),
-        ),
-    ];
+    // `disabling` is on its way out; only these still count as "on".
+    let on = azs
+        .iter()
+        .filter(|(_, s)| matches!(s.as_str(), "enabling" | "optimizing" | "enabled"))
+        .count();
+    let summary = if on == 0 {
+        "disabling".to_string()
+    } else {
+        format!("⚠ on in {on} AZ{} · billed per AZ-hour", if on == 1 { "" } else { "s" })
+    };
+    let mut rows = vec![("Fast Snapshot Restore".to_string(), summary)];
     for (az, state) in azs {
         rows.push((format!("  {az}"), state.clone()));
     }
@@ -1661,5 +1668,38 @@ pub fn eni_section_lines(
             rows
         }
         EniDetailSection::Tags => tag_rows(&eni.tags),
+    }
+}
+
+#[cfg(test)]
+mod fast_restore_tests {
+    use super::snapshot_fast_restore_rows;
+
+    fn azs(states: &[(&str, &str)]) -> Vec<(String, String)> {
+        states.iter().map(|(a, s)| (a.to_string(), s.to_string())).collect()
+    }
+
+    #[test]
+    fn a_failed_lookup_is_unknown_not_off() {
+        let rows = snapshot_fast_restore_rows(None);
+        assert!(rows[0].1.starts_with("unknown"), "{rows:?}");
+        assert_eq!(snapshot_fast_restore_rows(Some(&[]))[0].1, "off");
+    }
+
+    #[test]
+    fn counts_azs_with_the_right_plural() {
+        let one = snapshot_fast_restore_rows(Some(&azs(&[("us-east-1a", "enabled")])));
+        assert_eq!(one[0].1, "⚠ on in 1 AZ · billed per AZ-hour");
+        let two = snapshot_fast_restore_rows(Some(&azs(&[("us-east-1a", "enabled"), ("us-east-1b", "optimizing")])));
+        assert_eq!(two[0].1, "⚠ on in 2 AZs · billed per AZ-hour");
+        assert_eq!(two.len(), 3, "one row per AZ: {two:?}");
+    }
+
+    #[test]
+    fn disabling_azs_dont_count_as_on() {
+        let rows = snapshot_fast_restore_rows(Some(&azs(&[("us-east-1a", "enabled"), ("us-east-1b", "disabling")])));
+        assert_eq!(rows[0].1, "⚠ on in 1 AZ · billed per AZ-hour");
+        let all = snapshot_fast_restore_rows(Some(&azs(&[("us-east-1a", "disabling")])));
+        assert_eq!(all[0].1, "disabling");
     }
 }

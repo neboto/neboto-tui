@@ -71,10 +71,19 @@ pub async fn fetch_instance_user_data(
 }
 
 /// Burstable (T-family: t2, t3, t3a, t4g…) — the only types with a CPU credit
-/// specification.
+/// specification. `t1.micro` predates CPU credits and has none; `trn1` is
+/// Trainium, not T.
 pub fn is_burstable(instance_type: &str) -> bool {
     let mut chars = instance_type.chars();
-    chars.next() == Some('t') && chars.next().is_some_and(|c| c.is_ascii_digit())
+    chars.next() == Some('t')
+        && chars.next().is_some_and(|c| c.is_ascii_digit() && c != '1')
+}
+
+/// Whether the Details section shows (and fetches) a CPU Credits row: a
+/// burstable instance that still exists — a terminated one has nothing to
+/// describe.
+pub fn shows_cpu_credits(instance: &Ec2Instance) -> bool {
+    is_burstable(&instance.instance_type) && instance.state != "terminated"
 }
 
 /// `standard` or `unlimited` for a burstable instance. The credit *balance*
@@ -377,7 +386,7 @@ impl AwsService for Ec2Service {
 
         // Snapshots (self-owned only).
         {
-            let mut fast_restore = fetch_fast_restore_map(&self.client).await.unwrap_or_default();
+            let mut fast_restore = fetch_fast_restore_map(&self.client).await.ok();
             let mut token: Option<String> = None;
             loop {
                 let resp = self
@@ -391,7 +400,8 @@ impl AwsService for Ec2Service {
                     Ok(resp) => {
                         for s in resp.snapshots() {
                             let mut snap = EbsSnapshot::from_sdk(s);
-                            snap.fast_restore = fast_restore.remove(&snap.snapshot_id).unwrap_or_default();
+                            snap.fast_restore =
+                                fast_restore.as_mut().map(|m| m.remove(&snap.snapshot_id).unwrap_or_default());
                             resources.push(Box::new(snap) as Box<dyn Resource>);
                         }
                         token = crate::aws::pagination::next_page_token(resp.next_token(), &token);
@@ -674,13 +684,13 @@ impl AwsService for Ec2Service {
         // state joined in — one account-wide call ahead of the snapshot pages.
         {
             let mut fast_restore = match fetch_fast_restore_map(&self.client).await {
-                Ok(m) => m,
+                Ok(m) => Some(m),
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadWarning {
                         service: service_type,
                         warning: format!("Fast snapshot restore: {e}"),
                     });
-                    HashMap::new()
+                    None
                 }
             };
             let mut token: Option<String> = None;
@@ -697,7 +707,8 @@ impl AwsService for Ec2Service {
                         let mut batch: Vec<Box<dyn Resource>> = Vec::new();
                         for s in resp.snapshots() {
                             let mut snap = EbsSnapshot::from_sdk(s);
-                            snap.fast_restore = fast_restore.remove(&snap.snapshot_id).unwrap_or_default();
+                            snap.fast_restore =
+                                fast_restore.as_mut().map(|m| m.remove(&snap.snapshot_id).unwrap_or_default());
                             batch.push(Box::new(snap));
                             total_loaded += 1;
                         }
@@ -2633,8 +2644,10 @@ pub struct EbsSnapshot {
     pub restore_expiry: Option<String>,
     /// Fast snapshot restore, `(AZ, state)` per AZ it's enabled (or
     /// enabling/optimizing/disabling) in — billed per AZ-hour. Filled from one
-    /// `DescribeFastSnapshotRestores` per Snapshots load; empty elsewhere.
-    pub fast_restore: Vec<(String, String)>,
+    /// `DescribeFastSnapshotRestores` per Snapshots load. `None` = not known:
+    /// the call failed (or this snapshot wasn't joined), which must not read
+    /// as "off" — it's a cost flag.
+    pub fast_restore: Option<Vec<(String, String)>>,
     pub tags: HashMap<String, String>,
 }
 
@@ -2704,7 +2717,7 @@ impl EbsSnapshot {
                 .filter(|m| !m.is_empty())
                 .map(|m| m.to_string()),
             restore_expiry: s.restore_expiry_time().map(|t| t.to_string()),
-            fast_restore: Vec::new(),
+            fast_restore: None,
             tags,
         }
     }
@@ -3724,5 +3737,21 @@ mod prefix_list_rule_tests {
         assert_eq!(target.id, "pl-small");
         // The unexpanded form (flat details) is unchanged.
         assert_eq!(sg_rule_rows("Inbound", &[rule("pl-small")]).len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod burstable_tests {
+    use super::is_burstable;
+
+    #[test]
+    fn only_t_families_with_cpu_credits_are_burstable() {
+        for t in ["t2.micro", "t3.large", "t3a.medium", "t4g.nano"] {
+            assert!(is_burstable(t), "{t}");
+        }
+        // t1 predates CPU credits; trn is Trainium.
+        for t in ["t1.micro", "trn1.2xlarge", "r5.xlarge", "m7g.large", ""] {
+            assert!(!is_burstable(t), "{t}");
+        }
     }
 }

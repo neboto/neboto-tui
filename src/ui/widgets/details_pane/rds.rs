@@ -636,6 +636,17 @@ pub(super) fn rds_pi_lines(
 /// The blue/green deployment this instance or cluster is part of — which
 /// side it is, the deployment's status, and the other side (jumpable ARN).
 /// Nothing when there's no deployment.
+/// After a switchover the source is no longer production (AWS renames both
+/// sides), so a finished deployment is labelled as history, not as roles.
+fn blue_green_role(bg: &crate::aws::services::rds::RdsBlueGreen) -> &'static str {
+    match (bg.is_switched_over(), bg.is_source) {
+        (false, true) => "blue — source (production)",
+        (false, false) => "green — staging copy",
+        (true, true) => "was blue (source) — switched over",
+        (true, false) => "was green (target) — switched over",
+    }
+}
+
 fn rds_blue_green_rows(bg: Option<&crate::aws::services::rds::RdsBlueGreen>) -> Vec<(String, String)> {
     let Some(bg) = bg else {
         return Vec::new();
@@ -645,10 +656,7 @@ fn rds_blue_green_rows(bg: Option<&crate::aws::services::rds::RdsBlueGreen>) -> 
         ("Blue/Green Deployment".to_string(), String::new()),
         ("  Name".to_string(), bg.name.clone()),
         ("  Deployment ID".to_string(), bg.id.clone()),
-        (
-            "  Role".to_string(),
-            if bg.is_source { "blue — source (production)" } else { "green — staging copy" }.to_string(),
-        ),
+        ("  Role".to_string(), blue_green_role(bg).to_string()),
         ("  Status".to_string(), bg.status.clone()),
     ];
     if let Some(d) = &bg.status_details {
@@ -657,6 +665,12 @@ fn rds_blue_green_rows(bg: Option<&crate::aws::services::rds::RdsBlueGreen>) -> 
     if let Some(other) = &bg.counterpart {
         let label = if bg.is_source { "  Green (target)" } else { "  Blue (source)" };
         rows.push((label.to_string(), other.clone()));
+    }
+    if bg.is_switched_over() {
+        rows.push((
+            String::new(),
+            "· sides as they were before the switchover, which renamed both — delete the deployment once you're done with it".to_string(),
+        ));
     }
     if let Some(c) = &bg.created {
         rows.push(("  Created".to_string(), c.clone()));
@@ -1144,4 +1158,50 @@ pub fn rds_cluster_section_lines(
     }
     rows.push(("".to_string(), "".to_string()));
     rows
+}
+
+#[cfg(test)]
+mod blue_green_row_tests {
+    use super::rds_blue_green_rows;
+    use crate::aws::services::rds::RdsBlueGreen;
+
+    fn bg(is_source: bool, status: &str, counterpart: Option<&str>) -> RdsBlueGreen {
+        RdsBlueGreen {
+            id: "bgd-abc".into(),
+            name: "orders-upgrade".into(),
+            status: status.into(),
+            status_details: None,
+            is_source,
+            counterpart: counterpart.map(str::to_string),
+            created: None,
+        }
+    }
+
+    fn value<'a>(rows: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        rows.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn no_deployment_adds_nothing() {
+        assert!(rds_blue_green_rows(None).is_empty());
+    }
+
+    #[test]
+    fn each_side_names_itself_and_its_counterpart() {
+        let src = rds_blue_green_rows(Some(&bg(true, "AVAILABLE", Some("arn:green"))));
+        assert_eq!(value(&src, "  Role"), Some("blue — source (production)"));
+        assert_eq!(value(&src, "  Green (target)"), Some("arn:green"));
+        let tgt = rds_blue_green_rows(Some(&bg(false, "AVAILABLE", Some("arn:blue"))));
+        assert_eq!(value(&tgt, "  Role"), Some("green — staging copy"));
+        assert_eq!(value(&tgt, "  Blue (source)"), Some("arn:blue"));
+    }
+
+    #[test]
+    fn a_switched_over_deployment_reads_as_history() {
+        let rows = rds_blue_green_rows(Some(&bg(true, "SWITCHOVER_COMPLETED", None)));
+        assert_eq!(value(&rows, "  Role"), Some("was blue (source) — switched over"));
+        assert!(rows.iter().any(|(_, v)| v.contains("before the switchover")), "{rows:?}");
+        let live = rds_blue_green_rows(Some(&bg(true, "AVAILABLE", None)));
+        assert!(!live.iter().any(|(_, v)| v.contains("before the switchover")), "{live:?}");
+    }
 }

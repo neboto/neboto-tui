@@ -576,6 +576,31 @@ pub struct RdsBlueGreen {
     pub created: Option<String>,
 }
 
+impl RdsBlueGreen {
+    /// Still in flight (or waiting to switch over). The finished and failed
+    /// states stay listed until someone deletes the deployment.
+    pub fn is_active(&self) -> bool {
+        matches!(self.status.as_str(), "PROVISIONING" | "AVAILABLE" | "SWITCHOVER_IN_PROGRESS")
+    }
+
+    /// Source/target describe the databases *before* switchover (the SDK's
+    /// own wording); a switchover renames both sides, so after it "blue is
+    /// production" no longer holds and the labels have to say so.
+    pub fn is_switched_over(&self) -> bool {
+        self.status == "SWITCHOVER_COMPLETED"
+    }
+}
+
+/// Keep one deployment per ARN, preferring an active one: an old completed
+/// deployment and a new one can both name the same database, and the page
+/// order decides nothing.
+fn insert_blue_green(map: &mut HashMap<String, RdsBlueGreen>, arn: &str, side: RdsBlueGreen) {
+    if map.get(arn).is_some_and(|existing| existing.is_active() && !side.is_active()) {
+        return;
+    }
+    map.insert(arn.to_string(), side);
+}
+
 /// `DescribeBlueGreenDeployments` keyed by both the source and the target
 /// ARN, so either side's row finds it.
 pub async fn fetch_blue_green_map(
@@ -596,10 +621,10 @@ pub async fn fetch_blue_green_map(
                 created: d.create_time().map(|t| t.to_string()),
             };
             if let Some(src) = d.source() {
-                map.insert(src.to_string(), side(true, d.target()));
+                insert_blue_green(&mut map, src, side(true, d.target()));
             }
             if let Some(tgt) = d.target() {
-                map.insert(tgt.to_string(), side(false, d.source()));
+                insert_blue_green(&mut map, tgt, side(false, d.source()));
             }
         }
     }
@@ -2314,5 +2339,43 @@ mod tests {
 
         // Nothing enabled → None (caller shows a friendly message).
         assert_eq!(pick_log_export(&[]), None);
+    }
+}
+
+#[cfg(test)]
+mod blue_green_tests {
+    use super::*;
+
+    fn bg(id: &str, status: &str) -> RdsBlueGreen {
+        RdsBlueGreen {
+            id: id.into(),
+            name: id.into(),
+            status: status.into(),
+            status_details: None,
+            is_source: true,
+            counterpart: None,
+            created: None,
+        }
+    }
+
+    #[test]
+    fn an_active_deployment_wins_over_a_finished_one_whatever_the_order() {
+        let arn = "arn:aws:rds:us-east-1:123456789012:db:orders";
+        for order in [["old", "new"], ["new", "old"]] {
+            let mut map = HashMap::new();
+            for id in order {
+                let status = if id == "old" { "SWITCHOVER_COMPLETED" } else { "AVAILABLE" };
+                insert_blue_green(&mut map, arn, bg(id, status));
+            }
+            assert_eq!(map[arn].id, "new", "{order:?}");
+        }
+    }
+
+    #[test]
+    fn statuses_classify() {
+        assert!(bg("a", "SWITCHOVER_IN_PROGRESS").is_active());
+        assert!(!bg("a", "SWITCHOVER_FAILED").is_active());
+        assert!(bg("a", "SWITCHOVER_COMPLETED").is_switched_over());
+        assert!(!bg("a", "AVAILABLE").is_switched_over());
     }
 }

@@ -23155,7 +23155,7 @@ impl App {
         let Some(instance_id) = self.get_selected_resource().and_then(|r| {
             r.as_any()
                 .downcast_ref::<crate::aws::services::ec2::Ec2Instance>()
-                .filter(|i| crate::aws::services::ec2::is_burstable(&i.instance_type))
+                .filter(|i| crate::aws::services::ec2::shows_cpu_credits(i))
                 .map(|i| i.instance_id.clone())
         }) else {
             return;
@@ -23168,7 +23168,10 @@ impl App {
             async move {
                 crate::aws::services::ec2::fetch_instance_credit_spec(client, instance_id)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| match e {
+                        crate::error::Error::AwsSdk(m) => m,
+                        e => e.to_string(),
+                    })
             },
         );
     }

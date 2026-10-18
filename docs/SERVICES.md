@@ -824,7 +824,12 @@ the service you're touching.
   which side this is, status, and the other side's ARN (jumpable via the
   `rds` ARN classifier). A failure warns and the rows carry nothing. A
   deployment whose green side has been deleted after switchover keeps only
-  the source key, which is the right answer.
+  the source key, which is the right answer. **Source/target are the
+  pre-switchover sides** (the SDK's wording) and a switchover renames both,
+  so a `SWITCHOVER_COMPLETED` deployment is labelled as history ("was blue —
+  switched over"), never "blue — production". Completed and failed
+  deployments stay listed until deleted, so when two name the same ARN the
+  active one wins (`insert_blue_green`), not whichever page came last.
 - **Route 53** (`@r53`) — sub-tabs Zones / **Records** / Health Checks.
   Zones stream first, then health checks stream as a second batch
   (`ListHealthChecks`, tags batched 10-at-a-time via `ListTagsForResources`).
@@ -2081,9 +2086,14 @@ the service you're touching.
   dropped — AWS keeps them for a while after, but they no longer bill). It's
   a ⚠ on the Details section because FSR bills per AZ-hour whether or not
   anything restores from the snapshot, which is the forgotten-cost case.
+  `fast_restore` is an `Option`: a failed call is `None` and renders
+  **unknown**, never "off" — a cost flag must not read "fine" exactly when
+  it couldn't check. `disabling` AZs are listed but not counted as "on".
 - **EC2 CPU credits** (#106) — the instance Details section's on-enter hook
   fetches `DescribeInstanceCreditSpecifications` for **T-family only**
-  (`ec2::is_burstable`; a no-op for everything else, so no row and no call).
+  (`ec2::shows_cpu_credits`: `is_burstable` — t2+, not `t1`, which predates
+  credits, nor `trn` — and not terminated; a no-op for everything else, so
+  no row and no call).
   The credit *balance* is CloudWatch `CPUCreditBalance` and belongs on `m`.
 - **EBS / AMIs / Snapshots / Launch Templates** — EC2 sub-tabs (keys 3, 5–7),
   **self-owned only**. Cross-jumps: `snap-`→Snapshots, `vol-`→EBS, `i-`→instance.
