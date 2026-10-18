@@ -114,8 +114,12 @@ pub struct KeyFact {
     pub id: String,
     pub active: bool,
     pub created_secs: Option<i64>,
-    /// `None`: never used (or `GetAccessKeyLastUsed` failed — see `last_used_gap`).
+    /// `None`: never used — but only when `last_used_gap` is false.
     pub last_used_secs: Option<i64>,
+    /// `GetAccessKeyLastUsed` failed (denied, throttled), so `None` above
+    /// means *unknown*, not "never used". The difference matters: "old and
+    /// never used" reads as "delete it".
+    pub last_used_gap: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -425,19 +429,23 @@ async fn fetch_user_creds(iam: aws_sdk_iam::Client, user: String) -> (String, Fa
         for k in keys.access_key_metadata() {
             let id = k.access_key_id().unwrap_or_default().to_string();
             let active = k.status().is_some_and(|s| s.as_str() == "Active");
-            // Last-used matters only for active keys; a failed read leaves
-            // it unknown rather than failing the user.
-            let last_used_secs = if active && !id.is_empty() {
-                iam.get_access_key_last_used()
-                    .access_key_id(&id)
-                    .send()
-                    .await
-                    .ok()
-                    .and_then(|r| r.access_key_last_used().and_then(|u| u.last_used_date()).map(|d| d.secs()))
+            // Last-used matters only for active keys; a failed read marks it
+            // unknown rather than failing the user.
+            let (last_used_secs, last_used_gap) = if active && !id.is_empty() {
+                match iam.get_access_key_last_used().access_key_id(&id).send().await {
+                    Ok(r) => (r.access_key_last_used().and_then(|u| u.last_used_date()).map(|d| d.secs()), false),
+                    Err(_) => (None, true),
+                }
             } else {
-                None
+                (None, false)
             };
-            out.push(KeyFact { id, active, created_secs: k.create_date().map(|d| d.secs()), last_used_secs });
+            out.push(KeyFact {
+                id,
+                active,
+                created_secs: k.create_date().map(|d| d.secs()),
+                last_used_secs,
+                last_used_gap,
+            });
         }
         Ok(UserCreds { console, mfa_devices: mfa.mfa_devices().len(), keys: out })
     }

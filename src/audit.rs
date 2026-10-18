@@ -1338,6 +1338,9 @@ fn check_access_key_age(check: &'static Check, input: &AuditInput, out: &mut Vec
                 let age = days(k.created_secs?);
                 (age > KEY_MAX_AGE_DAYS).then(|| {
                     let used = match k.last_used_secs {
+                        None if k.last_used_gap => {
+                            "last use unknown — iam:GetAccessKeyLastUsed failed".to_string()
+                        }
                         Some(t) => match days(t) {
                             0 => "last used today".to_string(),
                             1 => "last used yesterday".to_string(),
@@ -1360,7 +1363,9 @@ fn check_access_key_age(check: &'static Check, input: &AuditInput, out: &mut Vec
         f.evidence = old;
         out.push(f);
     }
-    // Same reads as the MFA check — its notes already cover the gaps.
+    // Same reads as the MFA check, but a user that couldn't be read is a gap
+    // for this check too — skipping it silently would read as "no old keys".
+    per_resource_notes(check, "user", creds, users.iter().map(|u| u.user_name.clone()), out);
 }
 
 /// High when public, low when shared with named accounts.
@@ -1690,9 +1695,9 @@ mod tests {
                 console: false,
                 mfa_devices: 0,
                 keys: vec![
-                    KeyFact { id: "AKIAOLD".into(), active: true, created_secs: Some(now - 200 * DAY), last_used_secs: None },
-                    KeyFact { id: "AKIANEW".into(), active: true, created_secs: Some(now - 10 * DAY), last_used_secs: Some(now) },
-                    KeyFact { id: "AKIAOFF".into(), active: false, created_secs: Some(now - 900 * DAY), last_used_secs: None },
+                    KeyFact { id: "AKIAOLD".into(), active: true, created_secs: Some(now - 200 * DAY), last_used_secs: None, last_used_gap: false },
+                    KeyFact { id: "AKIANEW".into(), active: true, created_secs: Some(now - 10 * DAY), last_used_secs: Some(now), last_used_gap: false },
+                    KeyFact { id: "AKIAOFF".into(), active: false, created_secs: Some(now - 900 * DAY), last_used_secs: None, last_used_gap: false },
                 ],
             }),
         );
@@ -1704,6 +1709,47 @@ mod tests {
                 ("iam-access-key-old", Severity::Medium, "AKIAOLD 200 days old, never used".into()),
             ]
         );
+    }
+
+    #[test]
+    fn a_failed_last_used_read_is_unknown_not_never_used() {
+        let users = vec![user("bot")];
+        let lists: &[(ServiceType, &[Box<dyn Resource>])] = &[(ServiceType::IAM, &users)];
+        let now = 1_000 * DAY;
+        let mut f = AuditFacts::clean();
+        f.iam_users.results.insert(
+            "bot".into(),
+            Ok(UserCreds {
+                console: false,
+                mfa_devices: 0,
+                keys: vec![KeyFact {
+                    id: "AKIAOLD".into(),
+                    active: true,
+                    created_secs: Some(now - 200 * DAY),
+                    last_used_secs: None,
+                    last_used_gap: true,
+                }],
+            }),
+        );
+        assert_eq!(
+            findings(&rows_with(lists, Some(&f))),
+            vec![(
+                "iam-access-key-old",
+                Severity::Medium,
+                "AKIAOLD 200 days old, last use unknown — iam:GetAccessKeyLastUsed failed".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn an_unreadable_user_is_not_checked_for_old_keys_too() {
+        let users = vec![user("bot")];
+        let lists: &[(ServiceType, &[Box<dyn Resource>])] = &[(ServiceType::IAM, &users)];
+        let mut f = AuditFacts::clean();
+        f.iam_users.results.insert("bot".into(), Err(denied("iam:ListAccessKeys")));
+        let rows = rows_with(lists, Some(&f));
+        assert_eq!(note(&rows, "iam-access-key-old").len(), 1, "{:?}", note(&rows, "iam-access-key-old"));
+        assert_eq!(note(&rows, "iam-user-console-no-mfa").len(), 1);
     }
 
     #[test]

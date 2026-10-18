@@ -9605,8 +9605,10 @@ impl App {
 
     /// `r` in `@audit`: load every source service that isn't cached — in the
     /// background, straight into the cache — re-auditing as each lands. A
-    /// cached source is left alone (`r` in that service reloads it), so a
-    /// second `r` costs nothing once everything is warm.
+    /// cached source is left alone (`r` in that service reloads it), but the
+    /// account facts are re-read on **every** `r`, warm or not: that's a few
+    /// IAM calls per user (capped at 100 users) plus the per-key and
+    /// per-snapshot reads, so a warm `r` is not free.
     fn load_audit_sources(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if !self.audit_loading.is_empty() || self.audit_facts_loading {
             self.audit_progress_message();
