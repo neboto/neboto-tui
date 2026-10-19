@@ -167,6 +167,20 @@ pub struct LsArgs {
     /// Print at most N rows.
     #[arg(long, value_name = "N")]
     pub limit: Option<usize>,
+
+    /// List across several regions, with a region column: bare `--regions`
+    /// uses config `regions` (plus the current region);
+    /// `--regions=us-east-1,eu-west-1` names them for this run. The `=` is
+    /// required, so `--regions @ec2` still reads @ec2 as the service.
+    #[arg(
+        long,
+        value_name = "LIST",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        value_delimiter = ','
+    )]
+    pub regions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

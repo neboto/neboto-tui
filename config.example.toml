@@ -15,6 +15,11 @@
 # Region to start in (any standard region code). `R` switches at runtime.
 # default_region = "us-west-2"
 
+# The regions you work in. `neboto ls @svc --regions` lists across them (plus
+# the current region), and the `R` picker shows them first. Unknown codes
+# warn at startup and are skipped.
+# regions = ["ap-southeast-2", "us-east-1"]
+
 # Named AWS profile to start with (from ~/.aws/config / ~/.aws/credentials).
 # `P` switches at runtime.
 # default_profile = "myprofile"

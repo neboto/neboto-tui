@@ -1215,7 +1215,9 @@ and the approaches you rejected are the part nobody can recover from your code.
   `[cache_ttls]` (per-service overrides keyed by any `@`-search prefix;
   unknown prefixes are ignored),
   `pinned_services` (prefixes seeded into `visited_services` so their strip
-  chips show before they load; unknown prefixes warn at startup).
+  chips show before they load; unknown prefixes warn at startup),
+  `regions` (your working set: `ls --regions` fans out over it and the `R`
+  picker lists it first; unknown codes warn at startup).
   No `default_service` ⇒ welcome splash, nothing loads.
 - **`src/cli.rs`**: clap `Cli` (parsed in `main` before the runtime).
   `-s/--service`, `-r/--region`, `-p/--profile`, `--endpoint-url`,
@@ -1243,7 +1245,10 @@ guarantee is the point, for scripts and agents (#65 has the roadmap:
 `search`, lenses, MCP). `main` dispatches on `cli.command` before the TUI is
 built. `ls` builds the same services via `App::build_services` and drains
 `list_resources_streaming`'s events (`list_all`), then applies the TUI's
-filters as flags. **`get` runs a terminal-less `App`** (`App::new_headless`):
+filters as flags. `ls --regions` repeats that per region on
+`AwsClients::for_region` (same credentials, region swapped — never a
+rebuild per region) and tags each row; an SCP region deny is `denied`, not a
+failure. **`get` runs a terminal-less `App`** (`App::new_headless`):
 it loads the list the way the main loop does, selects each resource like a
 jump (`headless_select` → `align_view_to_resource_type`), then repeats the
 deep-export walk (`headless_capture`: list-nav side effects + every

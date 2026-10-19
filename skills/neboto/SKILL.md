@@ -33,7 +33,8 @@ neboto get @ec2 i-0abc123 sg-0def456 -o json
 | `-f QUERY` | Fuzzy text plus exact `tag:key=value` terms: `-f 'web tag:env=prod'` |
 | `--state STATE` | Only this state (`running`, `available`, `stopped`, …) |
 | `--hide-noise` | Drop AWS-managed defaults and other noise |
-| `--limit N` | At most N rows |
+| `--limit N` | At most N rows, across all regions with `--regions` |
+| `--regions[=LIST]` | Several regions at once (see below) |
 
 A service lists several types (EC2: instances, security groups, volumes, …;
 ECR: repositories and their images); use `-t` to narrow, e.g.
@@ -142,6 +143,17 @@ stdout carries only the result; warnings (e.g. a partial load) go to stderr.
   different account than you asked for.
 - Global services (IAM, Organizations, CloudFront, Route 53 hosted zones, …)
   report `"region": "global"`.
+- `ls --regions=us-east-1,eu-west-1` lists a regional service in each named
+  region; bare `--regions` uses the user's config `regions` plus the current
+  one (a usage error if they have none). The `=` is required. The JSON swaps
+  `"region"` for `"regions": [{"region", "status", "count", "message"}]`
+  (`status` is `ok`, `denied` — usually an SCP region deny, expected — or
+  `error`), and every row carries `"region"`. Exit 0 if any region listed;
+  check `regions[].status` for the rest:
+
+  ```sh
+  neboto ls @lambda --regions=us-east-1,eu-west-1 -o json
+  ```
 - `--demo` uses a built-in fake account (`acme-prod`) with no credentials.
   Use it to try the commands out; its data is not real.
 

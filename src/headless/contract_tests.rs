@@ -60,6 +60,11 @@ async fn current() -> Value {
     let (rows, _) = super::tests::demo_list(ServiceType::EC2).await.unwrap();
     let ls = serde_json::from_str::<Value>(&render_list(ServiceType::EC2, "us-east-1", &rows, OutputFormat::Json)).unwrap();
     let ls_csv = render_list(ServiceType::EC2, "us-east-1", &rows, OutputFormat::Csv);
+    let multi_rows: Vec<(Region, Box<dyn Resource>)> =
+        super::tests::demo_list(ServiceType::EC2).await.unwrap().0.into_iter().map(|r| (Region::UsEast1, r)).collect();
+    let outcomes = [RegionOutcome { region: Region::UsEast1, status: "ok", message: None }];
+    let multi = serde_json::from_str::<Value>(&render_list_regions(ServiceType::EC2, &outcomes, &multi_rows, OutputFormat::Json)).unwrap();
+    let multi_csv = render_list_regions(ServiceType::EC2, &outcomes, &multi_rows, OutputFormat::Csv);
 
     let one = super::tests::demo_get_json(super::tests::get_args("lambda", &["orders-api"])).await;
     let several = super::tests::demo_get_json(super::tests::get_args("ec2", &["web-1", "web-2"])).await;
@@ -84,6 +89,13 @@ async fn current() -> Value {
             "envelope": keys(&ls),
             "resource": crate::export::CORE_KEYS,
             "csv": csv_header(&ls_csv, 4),
+        },
+        // `ls --regions`: `regions` replaces `region`, and every row carries one.
+        "ls_regions": {
+            "envelope": keys(&multi),
+            "region": keys(&multi["regions"][0]),
+            "resource": ([crate::export::CORE_KEYS.as_slice(), &["region"]].concat()),
+            "csv": csv_header(&multi_csv, 5),
         },
         "get": {
             "one": keys(&one),

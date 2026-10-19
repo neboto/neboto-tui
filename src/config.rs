@@ -27,6 +27,15 @@ pub struct Config {
     pub default_region: Option<String>,
     /// Named AWS profile to start with.
     pub default_profile: Option<String>,
+    /// The regions you work in, for multi-region listing (`neboto ls
+    /// --regions`, #92). Region codes; unknown ones warn at startup and are
+    /// skipped. The current region is always included. Unset = the
+    /// multi-region features are off.
+    ///
+    /// ```toml
+    /// regions = ["ap-southeast-2", "us-east-1"]
+    /// ```
+    pub regions: Option<Vec<String>>,
     /// Whether the ASCII banner is shown at startup (default true).
     pub show_banner: Option<bool>,
     /// Custom AWS endpoint URL for a local emulator (e.g. floci/LocalStack at
@@ -290,6 +299,28 @@ impl Config {
             .then(|| format!("pinned_services: unknown service {}", unknown.join(", ")));
         (pinned, warning)
     }
+
+    /// Resolve config `regions` to `Region`s in the order given, each once,
+    /// plus a warning naming any code that isn't a region (skipped, never
+    /// fatal). `None` when the key is unset, so callers can tell "off" from
+    /// "every entry was a typo".
+    pub fn configured_regions(&self) -> (Option<Vec<Region>>, Option<String>) {
+        let Some(list) = &self.regions else {
+            return (None, None);
+        };
+        let mut regions = Vec::new();
+        let mut unknown = Vec::new();
+        for code in list {
+            match Region::from_str(code.trim()) {
+                Some(r) if !regions.contains(&r) => regions.push(r),
+                Some(_) => {}
+                None => unknown.push(code.as_str()),
+            }
+        }
+        let warning = (!unknown.is_empty())
+            .then(|| format!("regions: unknown region {}", unknown.join(", ")));
+        (Some(regions), warning)
+    }
 }
 
 #[cfg(test)]
@@ -349,6 +380,16 @@ nosuchservice = 5
         assert_eq!(pinned, vec![ServiceType::EC2, ServiceType::Lambda, ServiceType::CloudWatch]);
         assert_eq!(warning.as_deref(), Some("pinned_services: unknown service nosuchservice"));
         assert_eq!(Config::default().pinned_service_types(), (vec![], None));
+    }
+
+    #[test]
+    fn configured_regions_dedupe_keep_order_and_warn_on_unknown() {
+        let config: Config =
+            toml::from_str(r#"regions = ["us-east-1", "ap-southeast-2", "us-east-1", "mars-1"]"#).unwrap();
+        let (regions, warning) = config.configured_regions();
+        assert_eq!(regions, Some(vec![Region::UsEast1, Region::ApSoutheast2]));
+        assert_eq!(warning.as_deref(), Some("regions: unknown region mars-1"));
+        assert_eq!(Config::default().configured_regions(), (None, None));
     }
 
     #[test]

@@ -192,6 +192,10 @@ async fn ls(
     format: OutputFormat,
 ) -> Result<String, Failure> {
     let svc = resolve_service(&args.service)?;
+    if let Some(given) = &args.regions {
+        let regions = fan_out_regions(config, svc, clients.current_region(), given)?;
+        return ls_regions(config, clients, svc, &regions, args, format).await;
+    }
     let roles = config.org_access_roles_resolved();
     let services = App::build_services(clients, config.controltower_audit_target(&roles), &roles);
     let service = services
@@ -215,6 +219,197 @@ async fn ls(
     }
     let region = region_label(svc, clients);
     Ok(render_list(svc, &region, &rows, format))
+}
+
+/// Regions listed at once by `ls --regions`. Rate limits are per region, so
+/// they parallelise, but EC2 alone is several calls per region.
+const REGION_FANOUT: usize = 4;
+
+/// The regions `ls --regions` lists, in order, each once. An explicit
+/// `--regions=a,b` is exactly that list, and a bad code is a usage error
+/// (the `--region` rule: a script must not be answered from somewhere it
+/// didn't ask for). Bare `--regions` is config `regions` plus the current
+/// region; a bad code there warns and is skipped (the config rule), and an
+/// unset key is a usage error that says how to set one.
+fn fan_out_regions(
+    config: &Config,
+    svc: ServiceType,
+    current: Region,
+    given: &[String],
+) -> Result<Vec<Region>, Failure> {
+    if svc.is_global() {
+        return Err(Failure::Usage(format!(
+            "{} is global — there's nothing to list per region",
+            svc.name()
+        )));
+    }
+    let given: Vec<&str> = given.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    if !given.is_empty() {
+        let mut out = Vec::new();
+        for code in given {
+            let r = Region::from_str(code).ok_or_else(|| Failure::Usage(format!("unknown region {code}")))?;
+            if !out.contains(&r) {
+                out.push(r);
+            }
+        }
+        return Ok(out);
+    }
+    let (configured, warning) = config.configured_regions();
+    if let Some(w) = warning {
+        eprintln!("neboto: warning: config: {w}");
+    }
+    let mut regions = configured.ok_or_else(|| {
+        Failure::Usage(
+            "--regions: no `regions` in config — set e.g. regions = [\"us-east-1\", \"eu-west-1\"], \
+             or name them: --regions=us-east-1,eu-west-1"
+                .into(),
+        )
+    })?;
+    if !regions.contains(&current) {
+        regions.insert(0, current);
+    }
+    Ok(regions)
+}
+
+/// How one region's list went, for the `regions` array in the JSON.
+struct RegionOutcome {
+    region: Region,
+    status: &'static str,
+    message: Option<String>,
+}
+
+/// An SCP that denies a region (common in org accounts) is expected, not a
+/// failure: `denied`, which never fails the command on its own.
+fn is_denied_message(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    ["accessdenied", "access denied", "unauthorizedoperation", "not authorized", "explicit deny"]
+        .iter()
+        .any(|p| m.contains(p))
+}
+
+/// `ls --regions`: the same list load once per region (same credentials,
+/// `AwsClients::for_region`), the filters applied per region, then joined in
+/// region order with a region on every row. A region that fails is reported
+/// and skipped; the command fails only when every region did.
+async fn ls_regions(
+    config: &Config,
+    clients: &AwsClients,
+    svc: ServiceType,
+    regions: &[Region],
+    args: &LsArgs,
+    format: OutputFormat,
+) -> Result<String, Failure> {
+    use futures::StreamExt;
+    let roles = config.org_access_roles_resolved();
+    let target = config.controltower_audit_target(&roles);
+    let loads = regions.iter().map(|&region| {
+        let clients = clients.for_region(region);
+        let services = App::build_services(&clients, target.clone(), &roles);
+        async move {
+            let result = match services.get(&svc).cloned() {
+                Some(service) => list_all(service, svc).await,
+                None => Err(Failure::Error(format!("{} isn't available", svc.name()))),
+            };
+            (region, result)
+        }
+    });
+    let results: Vec<_> = futures::stream::iter(loads).buffered(REGION_FANOUT).collect().await;
+
+    let mut outcomes = Vec::new();
+    let mut rows: Vec<(Region, Box<dyn Resource>)> = Vec::new();
+    for (region, result) in results {
+        match result {
+            Ok((resources, warnings)) => {
+                for w in &warnings {
+                    eprintln!("neboto: warning: {region}: {w}");
+                }
+                rows.extend(filter_unlimited(resources, args).into_iter().map(|r| (region, r)));
+                outcomes.push(RegionOutcome { region, status: "ok", message: None });
+            }
+            Err(f) => {
+                let denied = is_denied_message(f.message());
+                eprintln!(
+                    "neboto: warning: {region}: {}{}",
+                    if denied { "denied — " } else { "" },
+                    f.message()
+                );
+                outcomes.push(RegionOutcome {
+                    region,
+                    status: if denied { "denied" } else { "error" },
+                    message: Some(f.message().to_string()),
+                });
+            }
+        }
+    }
+    if outcomes.iter().all(|o| o.status != "ok") {
+        return Err(Failure::Error(format!(
+            "no region could be listed ({})",
+            outcomes.iter().map(|o| format!("{} {}", o.region, o.status)).collect::<Vec<_>>().join(", ")
+        )));
+    }
+    if let Some(n) = args.limit {
+        rows.truncate(n);
+    }
+    Ok(render_list_regions(svc, &outcomes, &rows, format))
+}
+
+fn render_list_regions(
+    svc: ServiceType,
+    outcomes: &[RegionOutcome],
+    rows: &[(Region, Box<dyn Resource>)],
+    format: OutputFormat,
+) -> String {
+    let refs: Vec<&dyn Resource> = rows.iter().map(|(_, r)| r.as_ref()).collect();
+    let codes: Vec<&str> = rows.iter().map(|(region, _)| region.as_str()).collect();
+    match format {
+        OutputFormat::Json => {
+            let items: Vec<_> = rows
+                .iter()
+                .map(|(region, r)| {
+                    let mut o = crate::export::resource_object(r.as_ref());
+                    if let Some(m) = o.as_object_mut() {
+                        m.insert("region".into(), json!(region.as_str()));
+                    }
+                    o
+                })
+                .collect();
+            let regions: Vec<_> = outcomes
+                .iter()
+                .map(|o| {
+                    json!({
+                        "region": o.region.as_str(),
+                        "status": o.status,
+                        "count": rows.iter().filter(|(r, _)| *r == o.region).count(),
+                        "message": o.message,
+                    })
+                })
+                .collect();
+            pretty(&json!({
+                "schema": SCHEMA,
+                "service": svc.prefix().trim_start_matches('@'),
+                "regions": regions,
+                "count": items.len(),
+                "resources": items,
+            }))
+        }
+        OutputFormat::Md => crate::export::list_markdown_in_regions(&refs, Some(&codes), svc.name()),
+        OutputFormat::Csv => crate::export::list_csv_in_regions(&refs, Some(&codes)),
+        OutputFormat::Table => {
+            let body: Vec<[String; 5]> = rows
+                .iter()
+                .map(|(region, r)| {
+                    [
+                        region.as_str().to_string(),
+                        r.resource_type().to_string(),
+                        r.id().to_string(),
+                        r.name().to_string(),
+                        r.state_label(),
+                    ]
+                })
+                .collect();
+            table(&["REGION", "TYPE", "ID", "NAME", "STATE"], &body)
+        }
+    }
 }
 
 /// Run one service's list load to completion, collecting every streamed
@@ -289,6 +484,16 @@ pub(crate) fn type_matches(filter: &str, resource_type: &str) -> bool {
 /// The TUI's list filters, as flags: resource type, state, noise, then the
 /// search query (exact `tag:` terms + fuzzy text, best match first).
 pub(crate) fn filter(resources: Vec<Box<dyn Resource>>, args: &LsArgs) -> Vec<Box<dyn Resource>> {
+    let mut kept = filter_unlimited(resources, args);
+    if let Some(n) = args.limit {
+        kept.truncate(n);
+    }
+    kept
+}
+
+/// `filter` without `--limit`, which `ls --regions` applies once across
+/// every region instead of per region.
+fn filter_unlimited(resources: Vec<Box<dyn Resource>>, args: &LsArgs) -> Vec<Box<dyn Resource>> {
     let (tag_filters, text) = args
         .filter
         .as_deref()
@@ -310,17 +515,13 @@ pub(crate) fn filter(resources: Vec<Box<dyn Resource>>, args: &LsArgs) -> Vec<Bo
         .filter(|r| tag_filters.iter().all(|f| f.matches(r.tags())))
         .collect();
 
-    let mut kept = if text.trim().is_empty() {
+    if text.trim().is_empty() {
         kept
     } else {
         let order = crate::search::fuzzy::FuzzyMatcher::new().filter_resources(text.trim(), &kept);
         let mut slots: Vec<Option<Box<dyn Resource>>> = kept.into_iter().map(Some).collect();
         order.into_iter().filter_map(|(i, _)| slots[i].take()).collect()
-    };
-    if let Some(n) = args.limit {
-        kept.truncate(n);
     }
-    kept
 }
 
 fn render_list(svc: ServiceType, region: &str, rows: &[Box<dyn Resource>], format: OutputFormat) -> String {

@@ -22,6 +22,7 @@
       "--filter",
       "--hide-noise",
       "--limit",
+      "--regions",
       "--state",
       "--type"
     ],
@@ -62,6 +63,36 @@
       "tags"
     ],
     "csv": [
+      "Type",
+      "ID",
+      "Name",
+      "State"
+    ]
+  },
+  "ls_regions": {
+    "envelope": [
+      "schema",
+      "service",
+      "regions",
+      "count",
+      "resources"
+    ],
+    "region": [
+      "region",
+      "status",
+      "count",
+      "message"
+    ],
+    "resource": [
+      "type",
+      "id",
+      "name",
+      "state",
+      "tags",
+      "region"
+    ],
+    "csv": [
+      "Region",
       "Type",
       "ID",
       "Name",

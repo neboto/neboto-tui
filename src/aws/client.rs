@@ -271,6 +271,23 @@ impl AwsClients {
         .await
     }
 
+    /// The same credentials pointed at another region, without rebuilding:
+    /// the multi-region fan-out (`neboto ls --regions`, #92) lists one
+    /// service in several regions side by side, and re-resolving the
+    /// profile (or re-assuming an org role) once per region would be N
+    /// credential chains for one identity. The `cloudwatch_us_west_2_client`
+    /// precedent, for the whole client set.
+    pub fn for_region(&self, region: Region) -> Self {
+        Self {
+            config: self.config.clone().into_builder().region(region.to_sdk_region()).build(),
+            region,
+            profile: self.profile.clone(),
+            endpoint_url: self.endpoint_url.clone(),
+            assumed_role: self.assumed_role.clone(),
+            prompting_credentials: self.prompting_credentials,
+        }
+    }
+
     /// Switch to a different profile, keeping the current region + endpoint.
     /// Drops any assumed role — picking a profile is an explicit credential
     /// change that supersedes the cross-account hop.

@@ -647,7 +647,22 @@ pub(crate) fn detail_markdown(resource: &dyn Resource, sections: &[(String, Vec<
 /// widest), which a Markdown viewer scrolls. Also what `y` copies for a list
 /// selection and `neboto ls --format md` prints.
 pub fn list_markdown(resources: &[&dyn Resource], label: &str) -> String {
-    let columns = list_columns(resources);
+    list_markdown_in_regions(resources, None, label)
+}
+
+/// `list_markdown` with a leading Region column when `regions` (one per
+/// row) is given — `neboto ls --regions`.
+pub(crate) fn list_markdown_in_regions(
+    resources: &[&dyn Resource],
+    regions: Option<&[&str]>,
+    label: &str,
+) -> String {
+    let mut columns = list_columns(resources);
+    if regions.is_some() {
+        // A list-level "Region" field would be a second, identical column.
+        columns.retain(|c| c != "Region");
+        columns.insert(0, "Region".into());
+    }
     let mut md = format!("# {} ({})\n\n", label, resources.len());
     let header: Vec<String> = columns.iter().map(|c| md_cell(c)).collect();
     md.push_str(&format!(
@@ -655,13 +670,32 @@ pub fn list_markdown(resources: &[&dyn Resource], label: &str) -> String {
         header.join(" | "),
         " --- |".repeat(columns.len())
     ));
-    for r in resources {
+    for (i, r) in resources.iter().enumerate() {
         let fields: std::collections::HashMap<String, String> =
             resource_fields(*r).into_iter().collect();
-        let cells: Vec<String> = columns.iter().map(|c| md_cell(&list_cell(*r, &fields, c))).collect();
+        let cells: Vec<String> = columns
+            .iter()
+            .map(|c| md_cell(&region_or_cell(*r, &fields, c, regions, i)))
+            .collect();
         md.push_str(&format!("| {} |\n", cells.join(" | ")));
     }
     md
+}
+
+/// A list cell, or row `i`'s region for the leading Region column (only
+/// there when `regions` is, so a list-level "Region" field still prints in
+/// the single-region lists).
+fn region_or_cell(
+    r: &dyn Resource,
+    fields: &std::collections::HashMap<String, String>,
+    col: &str,
+    regions: Option<&[&str]>,
+    i: usize,
+) -> String {
+    match regions {
+        Some(regions) if col == "Region" => regions.get(i).copied().unwrap_or_default().to_string(),
+        _ => list_cell(r, fields, col),
+    }
 }
 
 /// Which files an export writes (config `export_formats`, default all
@@ -842,16 +876,27 @@ fn list_cell(r: &dyn Resource, fields: &std::collections::HashMap<String, String
 }
 
 pub(crate) fn list_csv(resources: &[&dyn Resource]) -> String {
-    let columns = list_columns(resources);
+    list_csv_in_regions(resources, None)
+}
+
+/// `list_csv` with a leading Region column when `regions` (one per row) is
+/// given — `neboto ls --regions`.
+pub(crate) fn list_csv_in_regions(resources: &[&dyn Resource], regions: Option<&[&str]>) -> String {
+    let mut columns = list_columns(resources);
+    if regions.is_some() {
+        // A list-level "Region" field would be a second, identical column.
+        columns.retain(|c| c != "Region");
+        columns.insert(0, "Region".into());
+    }
     let mut out = String::new();
     out.push_str(&columns.iter().map(|c| csv_escape(c)).collect::<Vec<_>>().join(","));
     out.push('\n');
-    for r in resources {
+    for (i, r) in resources.iter().enumerate() {
         let fields: std::collections::HashMap<String, String> =
             resource_fields(*r).into_iter().collect();
         let mut row: Vec<String> = Vec::with_capacity(columns.len());
         for col in &columns {
-            row.push(csv_escape(&list_cell(*r, &fields, col)));
+            row.push(csv_escape(&region_or_cell(*r, &fields, col, regions, i)));
         }
         out.push_str(&row.join(","));
         out.push('\n');

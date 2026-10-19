@@ -2907,6 +2907,7 @@ impl App {
         }
         startup_warnings.extend(export_warnings);
         startup_warnings.extend(config.pinned_service_types().1);
+        startup_warnings.extend(config.configured_regions().1);
         startup_warnings.extend(
             crate::session_launch::SessionLaunch::from_config(config.session_launch.as_deref()).1,
         );
@@ -3084,7 +3085,7 @@ impl App {
             help_scroll: 0,
             help_max_scroll: Cell::new(0),
             tick_count: 0,
-            region_selector: RegionSelectorState::new(),
+            region_selector: RegionSelectorState::with_first(&config.configured_regions().0.unwrap_or_default()),
             profile_selector: ProfileSelectorState::new(),
             org_access_roles: org_access_roles.clone(),
             org_access_role: org_access_roles[0].clone(),

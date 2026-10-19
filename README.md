@@ -160,6 +160,8 @@ neboto ls @ec2 -t volume --state available        # unattached EBS volumes
 neboto ls @iam -t role -f 'deploy'                # IAM roles, fuzzy-matched
 neboto ls @ecs -f 'tag:team=storefront' -o md     # a Markdown table
 neboto ls @lambda --demo -o json | jq '.resources[].name'
+neboto ls @ec2 -t instance --regions               # across config `regions`
+neboto ls @rds --regions=us-east-1,eu-west-1      # across these, for one run
 neboto get @lambda orders-api                     # every detail-pane section
 neboto get @iam deploy-role --section permissions -o json
 neboto get @ec2 web-1 web-2 sg-0123abcd -o md     # several, one document
@@ -176,6 +178,7 @@ neboto audit --fail-on high -o json               # gate CI on high severity onl
 | `--state <STATE>` | Only rows in this state (`running`, `available`, …) |
 | `--hide-noise` | Drop AWS-managed defaults and other noise rows (the TUI's `a`) |
 | `--limit <N>` | At most N rows |
+| `--regions[=LIST]` | List across several regions, with a region column: bare, config `regions` plus the current region; `=a,b` names them. Regional services only. A region an SCP denies is reported (`denied`) and skipped; the command fails only when no region could be listed |
 | `-o`, `--output <FORMAT>` | `table` (default on a terminal), `json` (default when piped), `md`, `csv` |
 
 `get <@svc> <ID|NAME>...` prints what the detail pane shows — every section,
@@ -512,6 +515,7 @@ template.
 |---|---|
 | `default_service` | Load this service on startup (omit for the welcome splash) |
 | `default_region`, `default_profile` | Where to start |
+| `regions` | The regions you work in, e.g. `["ap-southeast-2", "us-east-1"]`: what `neboto ls --regions` lists across, and the top of the `R` picker |
 | `pinned_services` | Service chips on the strip from startup, e.g. `["ec2", "ecs", "lambda"]` (nothing loads until you open one) |
 | `show_banner` | ASCII banner on startup |
 | `watch`, `watch_interval` | Start in watch mode, and its cadence in seconds |

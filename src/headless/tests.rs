@@ -12,6 +12,7 @@ fn args(service: &str) -> LsArgs {
         state: None,
         hide_noise: false,
         limit: None,
+        regions: None,
     }
 }
 
@@ -801,4 +802,103 @@ async fn get_delegated_admin_stack_set_carries_call_as() {
     let config = v["sections"]["Config"].to_string();
     assert!(!config.contains("DELEGATED_ADMIN"), "{config}");
     assert!(config.contains("AWSCloudFormationStackSetExecutionRole"), "{config}");
+}
+
+// ── ls --regions (#92) ──────────────────────────────────────────────────────
+
+#[test]
+fn regions_flag_bare_listed_or_before_the_service() {
+    let regions = |argv: &[&str]| match Cli::try_parse_from(argv).unwrap().command {
+        Some(Command::Ls(a)) => (a.service, a.regions),
+        _ => unreachable!(),
+    };
+    assert_eq!(regions(&["neboto", "ls", "@ec2"]), ("@ec2".into(), None));
+    assert_eq!(regions(&["neboto", "ls", "@ec2", "--regions"]), ("@ec2".into(), Some(vec![String::new()])));
+    assert_eq!(
+        regions(&["neboto", "ls", "@ec2", "--regions=us-east-1,eu-west-1"]),
+        ("@ec2".into(), Some(vec!["us-east-1".into(), "eu-west-1".into()]))
+    );
+    // `=` is required, so a bare flag never swallows the service.
+    assert_eq!(regions(&["neboto", "ls", "--regions", "@ec2"]), ("@ec2".into(), Some(vec![String::new()])));
+}
+
+#[test]
+fn fan_out_regions_explicit_configured_and_refused() {
+    let none = Config::default();
+    let bare = vec![String::new()];
+    let current = Region::ApSoutheast2;
+    // Explicit: exactly that list, deduped; a bad code is usage.
+    let given = vec!["us-east-1".into(), "eu-west-1".into(), "us-east-1".into()];
+    assert_eq!(
+        fan_out_regions(&none, ServiceType::EC2, current, &given).unwrap(),
+        vec![Region::UsEast1, Region::EuWest1]
+    );
+    let bad = vec!["mars-1".into()];
+    assert_eq!(fan_out_regions(&none, ServiceType::EC2, current, &bad).unwrap_err().code(), 2);
+    // Bare: config regions, the current one first when it isn't listed.
+    let config: Config = toml::from_str(r#"regions = ["us-east-1", "eu-west-1"]"#).unwrap();
+    assert_eq!(
+        fan_out_regions(&config, ServiceType::EC2, current, &bare).unwrap(),
+        vec![Region::ApSoutheast2, Region::UsEast1, Region::EuWest1]
+    );
+    assert_eq!(
+        fan_out_regions(&config, ServiceType::EC2, Region::EuWest1, &bare).unwrap(),
+        vec![Region::UsEast1, Region::EuWest1]
+    );
+    // Bare with no config, or a global service: usage, saying what to do.
+    let err = fan_out_regions(&none, ServiceType::EC2, current, &bare).unwrap_err();
+    assert_eq!(err.code(), 2);
+    assert!(err.message().contains("regions = ["), "{}", err.message());
+    assert_eq!(fan_out_regions(&config, ServiceType::IAM, current, &bare).unwrap_err().code(), 2);
+}
+
+#[test]
+fn region_denies_are_told_apart_from_errors() {
+    assert!(is_denied_message(
+        "UnauthorizedOperation: You are not authorized to perform this operation. with an explicit deny in a service control policy"
+    ));
+    assert!(is_denied_message("AccessDeniedException: User is not authorized to perform: lambda:ListFunctions"));
+    assert!(!is_denied_message("dispatch failure: io error: connection refused"));
+}
+
+async fn demo_ls_regions(regions: &[Region], args: &LsArgs, format: OutputFormat) -> String {
+    let clients = AwsClients::new_demo_for_test().await;
+    ls_regions(&Config::default(), &clients, ServiceType::EC2, regions, args, format)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn ls_regions_lists_each_region_and_tags_every_row() {
+    let (single, _) = demo_list(ServiceType::EC2).await.unwrap();
+    let regions = [Region::UsEast1, Region::EuWest1];
+    let doc: serde_json::Value =
+        serde_json::from_str(&demo_ls_regions(&regions, &args("ec2"), OutputFormat::Json).await).unwrap();
+    assert_eq!(doc["count"], single.len() * 2);
+    assert!(doc.get("region").is_none(), "the single-region key would be a lie here");
+    let per: Vec<_> = doc["regions"].as_array().unwrap().iter().collect();
+    assert_eq!(per.len(), 2);
+    for (o, want) in per.iter().zip(["us-east-1", "eu-west-1"]) {
+        assert_eq!(o["region"], want);
+        assert_eq!(o["status"], "ok");
+        assert_eq!(o["count"], single.len());
+        assert!(o["message"].is_null());
+    }
+    let resources = doc["resources"].as_array().unwrap();
+    assert_eq!(resources[0]["region"], "us-east-1");
+    assert_eq!(resources.last().unwrap()["region"], "eu-west-1");
+
+    // --limit is across regions, not per region.
+    let limited = LsArgs { limit: Some(3), ..args("ec2") };
+    let doc: serde_json::Value =
+        serde_json::from_str(&demo_ls_regions(&regions, &limited, OutputFormat::Json).await).unwrap();
+    assert_eq!(doc["count"], 3);
+
+    let table = demo_ls_regions(&regions, &args("ec2"), OutputFormat::Table).await;
+    assert!(table.starts_with("REGION"), "{table}");
+    let csv = demo_ls_regions(&regions, &args("ec2"), OutputFormat::Csv).await;
+    assert!(csv.starts_with("Region,Type,ID,Name,State"), "{csv}");
+    assert_eq!(csv.matches("\neu-west-1,").count(), single.len());
+    let md = demo_ls_regions(&regions, &args("ec2"), OutputFormat::Md).await;
+    assert!(md.contains("| Region | Type |"), "{md}");
 }

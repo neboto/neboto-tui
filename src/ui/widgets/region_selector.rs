@@ -31,11 +31,19 @@ fn matches(region: &Region, query: &str) -> bool {
 
 impl RegionSelectorState {
     pub fn new() -> Self {
+        Self::with_first(&[])
+    }
+
+    /// The picker with `first` (config `regions`, your working set) at the
+    /// top in that order, then every other region.
+    pub fn with_first(first: &[Region]) -> Self {
+        let mut regions = first.to_vec();
+        regions.extend(Region::all().into_iter().filter(|r| !first.contains(r)));
         Self {
             visible: false,
             selected_index: 0,
             query: String::new(),
-            regions: Region::all(),
+            regions,
             viewport: std::cell::Cell::new(0),
         }
     }
@@ -258,4 +266,18 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_regions_lead_the_list_once() {
+        let state = RegionSelectorState::with_first(&[Region::ApSoutheast2, Region::UsEast1]);
+        let all = state.filtered();
+        assert_eq!(&all[..2], &[Region::ApSoutheast2, Region::UsEast1]);
+        assert_eq!(all.len(), Region::all().len());
+        assert_eq!(all.iter().filter(|r| **r == Region::UsEast1).count(), 1);
+    }
 }
