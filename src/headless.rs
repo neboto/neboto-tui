@@ -223,7 +223,7 @@ async fn ls(
 
 /// Regions listed at once by `ls --regions`. Rate limits are per region, so
 /// they parallelise, but EC2 alone is several calls per region.
-const REGION_FANOUT: usize = 4;
+pub(crate) const REGION_FANOUT: usize = 4;
 
 /// The regions `ls --regions` lists, in order, each once. An explicit
 /// `--regions=a,b` is exactly that list, and a bad code is a usage error
@@ -280,7 +280,7 @@ struct RegionOutcome {
 
 /// An SCP that denies a region (common in org accounts) is expected, not a
 /// failure: `denied`, which never fails the command on its own.
-fn is_denied_message(message: &str) -> bool {
+pub(crate) fn is_denied_message(message: &str) -> bool {
     let m = message.to_ascii_lowercase();
     ["accessdenied", "access denied", "unauthorizedoperation", "not authorized", "explicit deny"]
         .iter()

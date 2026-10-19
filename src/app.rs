@@ -34,7 +34,7 @@ use crate::event::{Event, LoadProgress};
 use crate::ui::widgets::ct_filter_modal::{CtFilterModalState, CtFilterPhase};
 use crate::ui::widgets::profile_selector::ProfileSelectorState;
 use crate::ui::widgets::quota_service_selector::QuotaServiceSelectorState;
-use crate::ui::widgets::region_selector::RegionSelectorState;
+use crate::ui::widgets::region_selector::{RegionCount, RegionSelectorState};
 use crate::ui::widgets::service_selector::ServiceSelectorState;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
@@ -1970,6 +1970,17 @@ pub struct App {
     /// Bumped on every profile/region/role switch: an `@audit` source load
     /// (`r` in `@audit`) from before the switch is dropped on arrival.
     pub audit_generation: u64,
+    /// Config `regions` (#92), in order: the `R` picker lists them first and
+    /// counts the current service in each.
+    pub configured_regions: Vec<Region>,
+    /// The `R` picker's fan-out (#92): the current service listed in each
+    /// configured region, straight into that region's cache slot. An entry
+    /// is here only while a region loads or after it failed — a success *is*
+    /// the cache entry, so the count expires with the cache TTL.
+    pub region_fanout: HashMap<(ServiceType, Region), RegionCount>,
+    /// Bumped on a profile/role switch (another account). A region switch
+    /// keeps it: the other regions' lists are still this account's.
+    pub region_fanout_generation: u64,
     /// `@audit` sources `r` is loading right now.
     pub audit_loading: Vec<ServiceType>,
     /// Sources that failed during the current `r`, reported once all land.
@@ -3067,6 +3078,9 @@ impl App {
             loading_started: false,
             load_generation: Arc::new(AtomicU64::new(0)),
             audit_generation: 0,
+            configured_regions: config.configured_regions().0.unwrap_or_default(),
+            region_fanout: HashMap::new(),
+            region_fanout_generation: 0,
             audit_loading: Vec::new(),
             audit_load_failures: Vec::new(),
             audit_facts: None,
@@ -3459,6 +3473,9 @@ impl App {
             }
             Event::AuditFactsLoaded { generation, facts } => {
                 self.handle_audit_facts_loaded(generation, facts);
+            }
+            Event::RegionFanoutLoaded { generation, service, region, result } => {
+                self.handle_region_fanout_loaded(generation, service, region, result);
             }
             Event::ResourceRefreshed { id, resource, quiet } => {
                 // Swap the resource in place by id — same position, so the list
@@ -6128,6 +6145,7 @@ impl App {
                 }
                 KeyCode::Char('R') => {
                     self.region_selector.show(self.current_region);
+                    self.start_region_fanout(event_tx);
                 }
                 KeyCode::Char('P') => {
                     self.profile_selector.show(
@@ -8908,6 +8926,7 @@ impl App {
             // Region selector
             (KeyCode::Char('R'), KeyModifiers::SHIFT) => {
                 self.region_selector.show(self.current_region);
+                self.start_region_fanout(event_tx);
             }
             (KeyCode::Char('P'), KeyModifiers::SHIFT) => {
                 self.profile_selector.show(
@@ -9812,6 +9831,138 @@ impl App {
         }
     }
 
+    /// The service the `R` picker counts across config `regions` (#92), if
+    /// any: a regional, non-virtual service whose list doesn't depend on App
+    /// state. Every service that does (Cost's grouping, GuardDuty's severity
+    /// scope, CloudTrail's query…) is variant-cached, and a fresh
+    /// `build_services` would list it with the default instead.
+    fn region_fanout_service(&self) -> Option<ServiceType> {
+        let svc = self.current_service?;
+        (!self.configured_regions.is_empty()
+            && !self.all_search_mode
+            && !svc.is_global()
+            && !svc.is_virtual()
+            && self.cache_variant(svc).is_none())
+        .then_some(svc)
+    }
+
+    /// Opening `R`: list the current service in every configured region
+    /// that has no fresh cache entry, a few at a time, each into its own
+    /// cache slot. The current region is the normal load's; a region already
+    /// loading is left alone, and so is one that said `denied` (an SCP region
+    /// deny doesn't lift between two presses). A failure is retried on the
+    /// next open.
+    pub(crate) fn start_region_fanout(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use futures::StreamExt;
+        let Some(svc) = self.region_fanout_service() else {
+            return;
+        };
+        let targets: Vec<Region> = self
+            .configured_regions
+            .iter()
+            .copied()
+            .filter(|r| *r != self.current_region)
+            .filter(|r| self.cache.get_ref(&svc, r, None).is_none())
+            .filter(|r| {
+                !matches!(
+                    self.region_fanout.get(&(svc, *r)),
+                    Some(RegionCount::Loading | RegionCount::Denied)
+                )
+            })
+            .collect();
+        let generation = self.region_fanout_generation;
+        let mut loads = Vec::new();
+        for region in targets {
+            let clients = self.aws_clients.for_region(region);
+            let services =
+                Self::build_services(&clients, self.controltower_audit.clone(), &self.org_access_roles);
+            let Some(service) = services.get(&svc).cloned() else {
+                continue;
+            };
+            self.region_fanout.insert((svc, region), RegionCount::Loading);
+            let tx = event_tx.clone();
+            loads.push(async move {
+                // Partial-load warnings are dropped: the rows still count, and
+                // switching to the region reloads it with the warning shown.
+                let result = crate::headless::list_all(service, svc)
+                    .await
+                    .map(|(rows, _)| rows)
+                    .map_err(|f| f.message().to_string());
+                let _ = tx.send(Event::RegionFanoutLoaded { generation, service: svc, region, result });
+            });
+        }
+        if loads.is_empty() {
+            return;
+        }
+        tokio::spawn(async move {
+            futures::stream::iter(loads)
+                .buffer_unordered(crate::headless::REGION_FANOUT)
+                .collect::<Vec<()>>()
+                .await;
+        });
+    }
+
+    fn handle_region_fanout_loaded(
+        &mut self,
+        generation: u64,
+        service: ServiceType,
+        region: Region,
+        result: std::result::Result<Vec<Box<dyn Resource>>, String>,
+    ) {
+        if generation != self.region_fanout_generation {
+            return;
+        }
+        match result {
+            Ok(rows) => {
+                self.region_fanout.remove(&(service, region));
+                self.cache.insert(service, region, None, rows);
+            }
+            Err(e) => {
+                let status = if crate::headless::is_denied_message(&e) {
+                    RegionCount::Denied
+                } else {
+                    RegionCount::Failed
+                };
+                self.region_fanout.insert((service, region), status);
+            }
+        }
+    }
+
+    /// What the `R` picker shows beside each region: the current service's
+    /// rows in the active sub-tab (so EC2's Instances tab counts instances,
+    /// not every ENI and volume), from that region's cache, or the fan-out's
+    /// status. Nothing for a region that hasn't been listed — never a `0`.
+    pub fn region_counts(&self) -> HashMap<Region, RegionCount> {
+        let mut out = HashMap::new();
+        let Some(svc) = self.region_fanout_service() else {
+            return out;
+        };
+        let filter = self.active_type_filter();
+        let regions = std::iter::once(self.current_region).chain(self.configured_regions.iter().copied());
+        for region in regions {
+            if let Some(status) = self.region_fanout.get(&(svc, region)) {
+                out.insert(region, *status);
+            } else if let Some(rows) = self.cache.get_ref(&svc, &region, None) {
+                let n = rows
+                    .iter()
+                    .filter(|r| filter.is_none_or(|f| type_filter_matches(f, r.resource_type())))
+                    .count();
+                out.insert(region, RegionCount::Count(n));
+            }
+        }
+        out
+    }
+
+    /// What `region_counts` counts, for the picker's title: the sub-tab's
+    /// type(s), else the service.
+    pub fn region_count_label(&self) -> Option<String> {
+        let svc = self.region_fanout_service()?;
+        Some(match self.active_type_filter() {
+            Some(f) => f.replace('|', " + "),
+            None => svc.name().to_string(),
+        })
+    }
+
     /// A profile/region/role switch: in-flight `@audit` loads belong to the
     /// old account or region.
     fn drop_audit_loads(&mut self) {
@@ -10383,8 +10534,10 @@ impl App {
                 // Recreate all services with new clients
                 self.recreate_services();
 
-                // Clear the cache (old region's data is no longer valid)
-                self.cache = self.new_cache();
+                // The cache stays: it's keyed by region, so the old region's
+                // lists are still that region's (and switching back within
+                // the TTL is instant), and the `R` fan-out (#92) has filled
+                // the new region's slot when it could.
 
                 // SSM connectability is region-scoped — drop it so it refetches.
                 self.ssm_instance_status.clear();
@@ -10456,6 +10609,8 @@ impl App {
         // fetch — no per-map hand-listing.
         self.lazy = crate::lazy::LazyStore::new(self.lazy.epoch() + 1);
         self.drop_audit_loads();
+        self.region_fanout_generation += 1;
+        self.region_fanout.clear();
         // An armed deep export was collecting the *old* account's sections.
         self.cancel_pending_deep_export();
         // Lazy detail state is credential-scoped — let the flat-view trigger

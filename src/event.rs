@@ -37,6 +37,16 @@ pub enum Event {
         service: ServiceType,
         result: std::result::Result<(Vec<Box<dyn Resource>>, Vec<String>), String>,
     },
+    /// One configured region's list of the current service, loaded when the
+    /// `R` picker opened (#92) — into that region's cache slot, never
+    /// `resources`. `generation` is `App.region_fanout_generation` at the
+    /// press; a profile/role switch bumps it.
+    RegionFanoutLoaded {
+        generation: u64,
+        service: ServiceType,
+        region: crate::aws::region::Region,
+        result: std::result::Result<Vec<Box<dyn Resource>>, String>,
+    },
     /// The account facts and per-resource reads `r` in `@audit` fetches once
     /// its source lists are in (#206). Same `generation` guard.
     AuditFactsLoaded {

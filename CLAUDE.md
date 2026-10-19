@@ -806,6 +806,17 @@ never echoed: while `View.input` is set only `⏎`/`Esc` show.
   load supersedes the watch pass).
 - **Global services** key the cache on `Region::UsEast1` (data doesn't vary by
   region). Client region and cache region are independent.
+- **A region switch keeps the cache** (it's region-keyed; only a profile/role
+  switch replaces it). That's what makes the **`R` fan-out** (#92) pay off:
+  opening the picker with config `regions` set lists the current service in
+  each uncached configured region (`start_region_fanout`, on
+  `AwsClients::for_region`, via the headless `list_all`) straight into that
+  region's slot (`Event::RegionFanoutLoaded`, `region_fanout_generation` —
+  bumped on profile/role switches only), and the picker shows
+  `region_counts()`: rows of the active sub-tab's type per region. Skipped
+  for global, virtual and **variant-cached** services — every service whose
+  list depends on App state is variant-cached, and a fresh `build_services`
+  would list it with the default.
 - **Variant key**: `CacheKey.variant` lets one service cache several result sets
   (`App::cache_variant`): Cost `{group_by}-{period}`, WAF `{scope}`, Service
   Quotas `{service_code}`.
@@ -1216,8 +1227,9 @@ and the approaches you rejected are the part nobody can recover from your code.
   unknown prefixes are ignored),
   `pinned_services` (prefixes seeded into `visited_services` so their strip
   chips show before they load; unknown prefixes warn at startup),
-  `regions` (your working set: `ls --regions` fans out over it and the `R`
-  picker lists it first; unknown codes warn at startup).
+  `regions` (your working set: `ls --regions` fans out over it, and the `R`
+  picker lists it first and counts the current service in each; unknown
+  codes warn at startup).
   No `default_service` ⇒ welcome splash, nothing loads.
 - **`src/cli.rs`**: clap `Cli` (parsed in `main` before the runtime).
   `-s/--service`, `-r/--region`, `-p/--profile`, `--endpoint-url`,

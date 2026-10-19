@@ -533,6 +533,8 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
         region_selector::render_region_selector(
             &app.region_selector,
             app.current_region,
+            &app.region_counts(),
+            app.region_count_label().as_deref(),
             &app.popup_hits,
             frame,
         );

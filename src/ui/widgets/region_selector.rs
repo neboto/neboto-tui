@@ -10,6 +10,17 @@ use ratatui::{
     Frame,
 };
 
+/// What the picker shows beside a region: the current service's count there
+/// (config `regions`, #92), or why there isn't one yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionCount {
+    Loading,
+    Count(usize),
+    /// AccessDenied — usually an SCP region deny, which is expected.
+    Denied,
+    Failed,
+}
+
 pub struct RegionSelectorState {
     pub visible: bool,
     pub selected_index: usize,
@@ -135,6 +146,8 @@ impl RegionSelectorState {
 pub fn render_region_selector(
     state: &RegionSelectorState,
     current_region: Region,
+    counts: &std::collections::HashMap<Region, RegionCount>,
+    count_label: Option<&str>,
     hits: &std::cell::RefCell<crate::app::PopupHits>,
     frame: &mut Frame,
 ) {
@@ -146,7 +159,14 @@ pub fn render_region_selector(
     frame.render_widget(Clear, area);
 
     let (pos, total) = state.position();
-    let block = theme::popup_block("Select AWS Region")
+    let mut block = theme::popup_block("Select AWS Region");
+    if let (Some(label), false) = (count_label, counts.is_empty()) {
+        block = block.title(
+            Line::from(Span::styled(format!(" {label} per region "), Style::default().fg(theme::text_dim())))
+                .right_aligned(),
+        );
+    }
+    let block = block
         .title_bottom(
             theme::hint_line(&[
                 ("type", "filter"),
@@ -192,14 +212,18 @@ pub fn render_region_selector(
             } else {
                 Style::default().fg(crate::ui::theme::text_primary())
             };
-            ListItem::new(Line::from(vec![
+            let mut spans = vec![
                 marker,
                 Span::styled(format!("{:<16}", region.as_str()), code_style),
                 Span::styled(
-                    region.display_name().to_string(),
+                    format!("{:<28}", region.display_name()),
                     Style::default().fg(crate::ui::theme::text_muted()),
                 ),
-            ]))
+            ];
+            if let Some(count) = counts.get(region) {
+                spans.push(count_span(*count));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
@@ -214,6 +238,17 @@ pub fn render_region_selector(
 
     frame.render_stateful_widget(list, chunks[1], &mut list_state);
     hits.borrow_mut().record_list(area, chunks[1], list_state.offset(), filtered.len());
+}
+
+fn count_span(count: RegionCount) -> Span<'static> {
+    let dim = Style::default().fg(theme::text_dim());
+    match count {
+        RegionCount::Loading => Span::styled("…", dim),
+        RegionCount::Count(0) => Span::styled("0", dim),
+        RegionCount::Count(n) => Span::styled(n.to_string(), Style::default().fg(theme::text_primary())),
+        RegionCount::Denied => Span::styled("denied", dim),
+        RegionCount::Failed => Span::styled("error", Style::default().fg(theme::warning())),
+    }
 }
 
 /// Shared search-input row for the selector popups: `❯ <query>` (or a dim hint
