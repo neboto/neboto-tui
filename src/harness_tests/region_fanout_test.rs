@@ -164,3 +164,88 @@ async fn switching_back_to_a_cached_region_shows_its_list() {
     assert_eq!(app.pending_jump, None);
     assert_eq!(app.get_selected_resource().map(|r| r.id()), Some("i-0sydney"));
 }
+
+fn instance(id: &str) -> Box<dyn Resource> {
+    Box::new(crate::aws::services::ec2::Ec2Instance::from_sdk(
+        &aws_sdk_ec2::types::Instance::builder().instance_id(id).build(),
+    ))
+}
+
+/// Handle whatever the last step queued (the picker's and nav-back's
+/// `RegionSwitchRequested`) — the main loop's job.
+async fn drain(app: &mut App, tx: &mpsc::UnboundedSender<Event>, rx: &mut mpsc::UnboundedReceiver<Event>) {
+    while let Ok(ev) = rx.try_recv() {
+        app.handle_event(ev, tx).await.unwrap();
+    }
+}
+
+async fn press(app: &mut App, tx: &mpsc::UnboundedSender<Event>, k: crossterm::event::KeyEvent) {
+    app.handle_event(Event::Key(k), tx).await.unwrap();
+}
+
+fn selected(app: &App) -> Option<String> {
+    app.get_selected_resource().map(|r| r.id().to_string())
+}
+
+/// `⌫` / `⌃F` across a region switch: the switch is a history step, going
+/// back switches region and lands on the row, and the footer hint says which
+/// region it's going to.
+#[tokio::test]
+async fn back_and_forward_cross_region_switches() {
+    let (mut app, tx, mut rx) = test_app().await;
+    let home = app.current_region;
+    let away = Region::ApSoutheast2;
+    assert_ne!(home, away);
+    app.cache.insert(ServiceType::EC2, home, None, vec![instance("i-0home")]);
+    app.cache.insert(ServiceType::EC2, away, None, vec![instance("i-0away")]);
+    app.current_service = Some(ServiceType::EC2);
+    app.load_service_resources();
+    app.update_search();
+    app.selected_index = Some(0);
+    assert_eq!(selected(&app).as_deref(), Some("i-0home"));
+
+    // R → pick ap-southeast-2 → ⏎.
+    press(&mut app, &tx, crossterm::event::KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT)).await;
+    for c in "ap-southeast-2".chars() {
+        press(&mut app, &tx, key(KeyCode::Char(c))).await;
+    }
+    press(&mut app, &tx, key(KeyCode::Enter)).await;
+    drain(&mut app, &tx, &mut rx).await;
+    assert_eq!(app.current_region, away);
+    app.selected_index = Some(0);
+    assert_eq!(selected(&app).as_deref(), Some("i-0away"));
+    assert_eq!(app.nav_back_hint().as_deref(), Some(&*format!("EC2 i-0home · {home}")));
+
+    // ⌫: back to the home region, on the row we left.
+    press(&mut app, &tx, key(KeyCode::Backspace)).await;
+    drain(&mut app, &tx, &mut rx).await;
+    assert_eq!(app.current_region, home);
+    assert_eq!(selected(&app).as_deref(), Some("i-0home"));
+    assert_eq!(app.pending_jump, None);
+    assert_eq!(app.nav_forward_hint().as_deref(), Some("EC2 i-0away · ap-southeast-2"));
+
+    // ⌃F: forward to where we went.
+    press(&mut app, &tx, crossterm::event::KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL)).await;
+    drain(&mut app, &tx, &mut rx).await;
+    assert_eq!(app.current_region, away);
+    assert_eq!(selected(&app).as_deref(), Some("i-0away"));
+}
+
+/// A global service's location carries no region, so going back to it never
+/// switches region; neither does a bookmark saved before regions were.
+#[tokio::test]
+async fn global_and_regionless_locations_stay_in_the_current_region() {
+    let (mut app, tx, mut rx) = test_app().await;
+    let here = app.current_region;
+    app.current_service = Some(ServiceType::IAM);
+    assert_eq!(app.current_location().unwrap().region, None);
+    app.current_service = Some(ServiceType::EC2);
+    assert_eq!(app.current_location().unwrap().region.as_deref(), Some(here.as_str()));
+
+    let mut old = app.current_location().unwrap();
+    old.region = None;
+    app.jump_to_location(old, &tx);
+    drain(&mut app, &tx, &mut rx).await;
+    assert_eq!(app.current_region, here);
+    assert_eq!(app.pending_jump_region, None);
+}

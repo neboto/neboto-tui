@@ -354,7 +354,7 @@ full-width; `\` flattens all sections into one scroll.
 | `[[` / `]]` | Previous / next group header |
 | `l` `→` `⏎` | Follow the link under the cursor |
 | `h` `←` `Esc` | Back to the list |
-| `⌫` `Ctrl-O` | Back through history (the footer names where: `⌫ back to EC2 i-0abc`) |
+| `⌫` `Ctrl-O` | Back through history (the footer names where: `⌫ back to EC2 i-0abc`, plus the region when going back switches it) |
 | `Ctrl-F` | Forward again, after going back (`⌃F forward to …`) |
 | `/` | Filter the body text |
 | `Ctrl-W` | Wrap long values onto continuation rows (toggle) |

@@ -59,6 +59,7 @@ mod tests {
             s3_object_path: None,
             details_focused: true,
             detail_section: Some("Networking".to_string()),
+            region: Some("ap-southeast-2".to_string()),
         };
         let json = serde_json::to_string(std::slice::from_ref(&loc)).unwrap();
         let back: Vec<NavLocation> = serde_json::from_str(&json).unwrap();
@@ -69,6 +70,7 @@ mod tests {
         assert_eq!(back[0].label, "ECS · web (abc)");
         assert!(back[0].details_focused);
         assert_eq!(back[0].detail_section.as_deref(), Some("Networking"));
+        assert_eq!(back[0].region.as_deref(), Some("ap-southeast-2"));
     }
 
     #[test]
@@ -83,14 +85,17 @@ mod tests {
             s3_object_path: None,
             details_focused: true,
             detail_section: Some("Tags".to_string()),
+            region: Some("us-east-1".to_string()),
         };
         let mut value = serde_json::to_value(&loc).unwrap();
         let obj = value.as_object_mut().unwrap();
         obj.remove("details_focused");
         obj.remove("detail_section");
+        obj.remove("region");
         let back: NavLocation = serde_json::from_value(value).unwrap();
         assert!(!back.details_focused);
         assert!(back.detail_section.is_none());
+        assert!(back.region.is_none(), "an old bookmark restores in the current region");
     }
 
     #[test]

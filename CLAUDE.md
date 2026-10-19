@@ -618,7 +618,13 @@ rides `detail_sections_snapshot_with_active()` (the descriptor walk also
 reports the active index) and `restore_detail_section_by_name` (the label
 position in the descriptor IS the section index — a direct jump, only the
 target's on-enter hook fires); unknown names fall back to the default
-section.
+section. `NavLocation.region` (the capture region; `None` for global
+services and old bookmark files) makes history cross-region: picking a
+region in `R` records "here" like a service switch, and restoring a
+location from another region goes through the cross-region jump below
+(`pending_jump_region` + `RegionSwitchRequested`), whose handler filters
+and resolves on a cache hit. The footer hint, jump list and bookmark list
+name the region when it isn't the current one (`other_region`).
 
 **Cross-region jump (Resource Explorer)**: `trigger_jump` captures the selected
 resource's region *before* clearing selection; if it differs from

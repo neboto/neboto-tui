@@ -1181,7 +1181,24 @@ pub struct NavLocation {
     /// order) — restored by cycling from the default section. Name-keyed so
     /// stale bookmarks survive a pane reshuffle (unknown name = default).
     #[serde(default)]
-    pub detail_section: Option<String>}
+    pub detail_section: Option<String>,
+    /// The region the location was captured in (a region code); `None` for
+    /// a global service, and for history and bookmarks written before this
+    /// existed — those restore in whichever region is current, as they
+    /// always did. Restoring one from another region switches there first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>}
+
+impl NavLocation {
+    /// The captured region, when it isn't `current` — what the footer hint,
+    /// the jump list and the bookmark list name beside the place.
+    pub fn other_region(&self, current: Region) -> Option<Region> {
+        self.region
+            .as_deref()
+            .and_then(Region::from_str)
+            .filter(|r| *r != current)
+    }
+}
 
 /// Cap on the navigation timeline length (oldest entries drop off the front).
 const NAV_HISTORY_MAX: usize = 25;
@@ -4531,6 +4548,11 @@ impl App {
                 KeyCode::Enter => {
                     if let Some(region) = self.region_selector.selected_region() {
                         self.region_selector.hide();
+                        // A region switch is a place you left, like a service
+                        // switch: `⌫` comes back to this row in this region.
+                        if region != self.current_region {
+                            self.record_location();
+                        }
                         self.details_focused = false;
                         self.details_selected_index = None;
                         let _ = event_tx.send(Event::RegionSwitchRequested { region });
@@ -20453,7 +20475,8 @@ impl App {
                 label: format!("S3 · s3://{}/{}", bucket, basename),
                 s3_object_path: Some((bucket, key)),
                 details_focused: false,
-                detail_section: None};
+                detail_section: None,
+                region: Some(self.current_region.as_str().to_string())};
             self.bookmarks.push(loc);
             self.s3_object_browser.message = Some("Bookmarked".to_string());
         }
@@ -22092,15 +22115,26 @@ impl App {
             label,
             s3_object_path: None,
             details_focused,
-            detail_section})
+            detail_section,
+            region: self.location_region(service)})
+    }
+
+    /// The region a location in `service` is captured in: the current one,
+    /// or `None` for a global service (the same list in every region, so
+    /// restoring it must never switch region).
+    fn location_region(&self, service: ServiceType) -> Option<String> {
+        (!service.is_global()).then(|| self.current_region.as_str().to_string())
     }
 
     /// Whether `loc` is the history's newest entry already (same service,
     /// query and row) — `record_location`'s de-dup, and how going back from
     /// live tells whether "here" still needs recording.
-    fn is_history_top(&self, service: ServiceType, query: &str, selected_id: Option<&str>) -> bool {
+    fn is_history_top(&self, loc: &NavLocation) -> bool {
         self.nav_history.last().is_some_and(|top| {
-            top.service == service && top.query == query && top.selected_id.as_deref() == selected_id
+            top.service == loc.service
+                && top.query == loc.query
+                && top.selected_id == loc.selected_id
+                && top.region == loc.region
         })
     }
 
@@ -22110,7 +22144,12 @@ impl App {
             return false;
         };
         let id = self.get_selected_resource().map(|r| r.id().to_string());
-        self.is_history_top(service, &self.location_query(service), id.as_deref())
+        self.nav_history.last().is_some_and(|top| {
+            top.service == service
+                && top.query == self.location_query(service)
+                && top.selected_id == id
+                && top.region == self.location_region(service)
+        })
     }
 
     /// Going back (or into the jump list) from live first records where you
@@ -22125,7 +22164,7 @@ impl App {
         let Some(loc) = self.current_location() else {
             return 0;
         };
-        if !self.is_history_top(loc.service, &loc.query, loc.selected_id.as_deref()) {
+        if !self.is_history_top(&loc) {
             self.nav_history.push(loc);
         }
         let overflow = self.nav_history.len().saturating_sub(NAV_HISTORY_MAX);
@@ -22156,7 +22195,7 @@ impl App {
         let Some(loc) = self.current_location() else {
             return;
         };
-        let is_dup_top = self.is_history_top(loc.service, &loc.query, loc.selected_id.as_deref());
+        let is_dup_top = self.is_history_top(&loc);
         record_into(
             &mut self.nav_history,
             &mut self.nav_cursor,
@@ -22205,9 +22244,13 @@ impl App {
         // Re-select the exact row by id once results are present (resolve_pending_jump
         // matches the id; the *Loaded handlers resolve it on a cache miss).
         self.pending_jump = loc.selected_id.clone();
-        // Nav-back is same-region; clear any stale cross-region guard so the
-        // selection resolves here regardless of `current_region`.
-        self.pending_jump_region = None;
+        // A location from another region switches there first, through the
+        // cross-region jump `@explorer` uses: the guard holds the selection
+        // until that region's list is in (a cache hit when it's warm — the
+        // cache survives region switches). Otherwise it clears any stale
+        // guard, so the selection resolves here.
+        let other_region = loc.other_region(self.current_region);
+        self.pending_jump_region = other_region;
         // Fidelity: a location captured at detail depth restores into the
         // detail pane — at its captured section — once its row resolves. S3
         // object bookmarks re-open the object browser instead, so the focus
@@ -22229,9 +22272,12 @@ impl App {
             let prefix = key.rsplit_once('/').map(|(p, _)| format!("{}/", p)).unwrap_or_default();
             self.s3_object_browser.visible = true;
             self.s3_object_browser.bucket = bucket;
-            self.s3_object_browser.region = self.current_region.as_str().to_string();
+            self.s3_object_browser.region = other_region.unwrap_or(self.current_region).as_str().to_string();
             self.s3_object_browser.set_prefix(prefix);
             self.pending_s3_object_key = Some(key);
+        }
+        if let Some(region) = other_region {
+            let _ = event_tx.send(Event::RegionSwitchRequested { region });
         }
 
         self.suppress_nav_record = false;
@@ -22274,8 +22320,17 @@ impl App {
     /// Where `Ctrl-F` would go, in the same short form as `nav_back_hint`.
     pub(crate) fn nav_forward_hint(&self) -> Option<String> {
         let idx = nav_forward_target(self.nav_history.len(), self.nav_cursor)?;
-        let loc = &self.nav_history[idx];
-        Some(nav_hint_label(loc.service, loc.selected_id.as_deref()))
+        Some(self.nav_location_hint(&self.nav_history[idx]))
+    }
+
+    /// `nav_hint_label`, plus the region when it isn't this one — the step
+    /// switches region, so the hint should say so.
+    fn nav_location_hint(&self, loc: &NavLocation) -> String {
+        let label = nav_hint_label(loc.service, loc.selected_id.as_deref());
+        match loc.other_region(self.current_region) {
+            Some(r) => format!("{label} · {r}"),
+            None => label,
+        }
     }
 
     /// Where `⌫` / `Ctrl-O` would go, shortened for the detail footer:
@@ -22285,10 +22340,13 @@ impl App {
         let idx = self.nav_back_index()?;
         let loc = &self.nav_history[idx];
         let here = self.get_selected_resource().map(|r| r.id().to_string());
-        if Some(loc.service) == self.current_service && loc.selected_id == here {
+        if Some(loc.service) == self.current_service
+            && loc.selected_id == here
+            && loc.other_region(self.current_region).is_none()
+        {
             return None;
         }
-        Some(nav_hint_label(loc.service, loc.selected_id.as_deref()))
+        Some(self.nav_location_hint(loc))
     }
 
     /// Backtick: toggle the jump-list picker (most-recent first). Opens with the

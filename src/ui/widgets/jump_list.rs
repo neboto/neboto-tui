@@ -72,6 +72,7 @@ pub fn render_jump_list(app: &App, frame: &mut Frame) {
                         loc.label.clone(),
                         theme::selection_style(true).add_modifier(Modifier::BOLD),
                     ),
+                    other_region_span(loc, app.current_region),
                 ])
             } else {
                 Line::from(vec![
@@ -84,6 +85,7 @@ pub fn render_jump_list(app: &App, frame: &mut Frame) {
                         }),
                     ),
                     Span::styled(loc.label.clone(), Style::default().fg(crate::ui::theme::text_primary())),
+                    other_region_span(loc, app.current_region),
                 ])
             }
         })
@@ -142,11 +144,13 @@ pub fn render_bookmarks(app: &App, frame: &mut Frame) {
                         loc.label.clone(),
                         theme::selection_style(true).add_modifier(Modifier::BOLD),
                     ),
+                    other_region_span(loc, app.current_region),
                 ])
             } else {
                 Line::from(vec![
                     Span::styled("★ ", Style::default().fg(theme::text_dim())),
                     Span::styled(loc.label.clone(), Style::default().fg(crate::ui::theme::text_primary())),
+                    other_region_span(loc, app.current_region),
                 ])
             }
         })
@@ -173,4 +177,13 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vert[1])[1]
+}
+
+/// `  ·  ap-southeast-4` after a place captured in another region — picking
+/// it switches region (blank for the current region and global services).
+fn other_region_span(loc: &crate::app::NavLocation, current: crate::aws::region::Region) -> Span<'static> {
+    match loc.other_region(current) {
+        Some(r) => Span::styled(format!("  ·  {r}"), Style::default().fg(theme::text_dim())),
+        None => Span::raw(""),
+    }
 }
