@@ -3501,6 +3501,14 @@ impl App {
             }
             Event::RegionSwitchRequested { region } => {
                 self.switch_region(region).await?;
+                // A cache hit (the region was listed within the TTL — by an
+                // earlier visit or the `R` fan-out) fills `resources` without
+                // a load, so no FullyLoaded will filter them or resolve a
+                // cross-region jump: do both now, as `trigger_jump` does.
+                if !self.loading && self.current_region == region {
+                    self.update_search();
+                    self.resolve_pending_jump(event_tx);
+                }
             }
             Event::ProfileSwitchRequested { profile } => {
                 self.switch_profile(profile, event_tx).await?;

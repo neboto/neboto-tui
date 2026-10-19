@@ -135,3 +135,32 @@ fn screen_of(app: &App) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+/// Switching back to a region whose list is cached shows it straight away.
+/// A cache hit in `load_service_resources` fills `resources` but leaves the
+/// filtering to the caller; the region switch never did it, which nothing
+/// noticed while every switch cleared the cache.
+#[tokio::test]
+async fn switching_back_to_a_cached_region_shows_its_list() {
+    let (mut app, tx, _rx) = test_app().await;
+    let instance: Box<dyn Resource> = Box::new(crate::aws::services::ec2::Ec2Instance::from_sdk(
+        &aws_sdk_ec2::types::Instance::builder().instance_id("i-0sydney").build(),
+    ));
+    app.current_service = Some(ServiceType::EC2);
+    app.cache.insert(ServiceType::EC2, Region::ApSoutheast2, None, vec![instance]);
+    assert_ne!(app.current_region, Region::ApSoutheast2);
+    // A cross-region jump (Resource Explorer) waiting on this region too.
+    app.pending_jump = Some("i-0sydney".into());
+    app.pending_jump_region = Some(Region::ApSoutheast2);
+
+    app.handle_event(Event::RegionSwitchRequested { region: Region::ApSoutheast2 }, &tx)
+        .await
+        .unwrap();
+    assert_eq!(app.current_region, Region::ApSoutheast2);
+    assert!(!app.loading, "a cache hit isn't a load");
+    let shown: Vec<&str> = app.filtered_resources.iter().map(|&i| app.resources[i].id()).collect();
+    assert_eq!(shown, ["i-0sydney"]);
+    // …and the jump resolved instead of waiting for a load that never comes.
+    assert_eq!(app.pending_jump, None);
+    assert_eq!(app.get_selected_resource().map(|r| r.id()), Some("i-0sydney"));
+}
