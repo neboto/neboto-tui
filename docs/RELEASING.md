@@ -109,6 +109,18 @@ forgotten bump fails in the first job rather than shipping mislabelled
 binaries. A tag with a pre-release suffix (`v0.2.0-rc.1`) is published as a
 GitHub *pre-release* and never becomes *latest*.
 
+**Release notes come from PR labels.** `--generate-notes` groups merged PRs
+by the categories in `.github/release.yml`, first match wins, so give every
+PR one label when you open it (`gh pr create --label …`): `bug`,
+`area:security`, `area:new-service`, `area:service-depth`, `area:ux`,
+`area:platform`, `documentation`, or `dependencies` / `github_actions` /
+`area:testing` for build work. The release PR itself and pure chores get
+`skip-changelog`. Dependabot PRs are dropped by author. An unlabelled PR
+lands under "Other changes", which is how all of v0.7.0 ended up there.
+The workflow publishes on its own, so check `gh release view vX.Y.Z` once it
+has, and put a short highlights paragraph on top with `gh release edit
+--notes-file`.
+
 **Something failed mid-way?** The draft stays a draft with whichever assets
 made it. Fix the problem on `main`, then delete the draft and the tag and
 re-tag:
@@ -345,4 +357,4 @@ signal that it is an emulator — leave it in.
   musl C toolchain, so it's a `cross` job like the arm64 one.
 - **Windows**: `crossterm` and the SDK support it, but the `$EDITOR` / SSM
   session hand-offs and the browser opener are Unix-shaped. Untested.
-- **CHANGELOG.md**: release notes are GitHub's auto-generated PR list today.
+- **CHANGELOG.md**: release notes are GitHub's auto-generated PR list today; #236 adds a hand-written one and an in-app "What's new" pane.
