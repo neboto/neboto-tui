@@ -2387,6 +2387,34 @@ the service you're touching.
   insights (`GetInsightSummaries`), per-group service maps, and CloudWatch
   Application Signals / Transaction Search (spans sent there instead of
   X-Ray don't appear here).
+- **Changes** (`@changes`, `changes.rs`, #241) — "what changed just before
+  this started?", account-wide (the `W` timeline is per resource). One
+  regional list, newest first (the Executions default-sort exception), over
+  a `[`/`]` window (15m / 1h / 6h / 24h / 7d, variant-cached like X-Ray).
+  Sub-tabs filter by source via resource types: **All / CloudTrail / Config
+  / Deploys** (CFN + CodePipeline) **/ Scaling & RDS**. All six sources run
+  concurrently and each streams its batch when done; a failing source is a
+  `ResourceLoadWarning`, never the load. Rows are flat `details()`; the
+  `Resource` row carries an ARN where the source has one, so `⏎` follows
+  the generic ARN jump. **CloudTrail is the expensive source**:
+  `LookupEvents` is 2 TPS × 50 events and shared with every other caller,
+  so it takes `ReadOnly=false` (the one server-side filter it can spend),
+  reads at most `CT_PAGES` (10) pages newest first, and a cap hit warns
+  "newest 500 write events only (back to HH:MM)" instead of looking
+  complete. AWS-service and session-churn events (`AWSService` identity,
+  `invokedBy`, service-linked roles, `AssumeRole*` / `ConsoleLogin` /
+  `CreateLogStream`…) are `is_noise()` — `a` hides them. **Config** is one
+  `SelectResourceConfig` on `configurationItemCaptureTime >= start` (what,
+  not who; needs recording on — `NoSuchConfigurationRecorder` is silent;
+  `AWS::Config::ResourceCompliance` items are Config's bookkeeping and
+  dropped). **CFN**: `ListStacks` (deleted ones too) → the 15 most
+  recently touched → their newest events page, keeping stack-level and
+  failed rows only (an update writes one row per resource). **CodePipeline**:
+  5 runs per pipeline (capped 200 pipelines, `buffered(4)`). **ASG**:
+  `DescribeScalingActivities` with no group is account-wide, newest first.
+  **RDS**: `DescribeEvents` by duration (14-day retention). Deliberately v2:
+  ECS deployments (CloudTrail's `UpdateService` covers the deploy call),
+  scanning further back past the CloudTrail cap, a people-only default.
 - **CloudTrail** (`@cloudtrail`) — sub-tabs **Events / Trails / Insights**.
   Events: JSON parsed **eagerly** (no extra API calls); `is_noise()` returns
   `read_only` so `a` hides reads (noise is **shown by default** app-wide). `f`

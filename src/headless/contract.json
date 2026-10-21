@@ -173,6 +173,7 @@
     "@bedrock",
     "@budgets",
     "@cfn",
+    "@changes",
     "@cloudfront",
     "@cloudtrail",
     "@code",
