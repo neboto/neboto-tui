@@ -574,7 +574,13 @@ in `any_pane_overlay_active` (which gates the mouse).
   (`cached_security_groups`, converting `VpcSecurityGroup`) and the rest
   from one `DescribeSecurityGroups` (`Event::AccessLensLoaded`,
   `access_generation`-guarded; off the LazyStore like the other lenses, `r`
-  refetches all). `merge_rules` collapses identical `(direction, protocol,
+  refetches all). Below the SG rows come the **subnet NACLs** (#246): the
+  subnets are the `Subnet` rows of `references()` (so a type that lists its
+  subnets there gets NACLs for free), the ACLs come from the warm VPC cache
+  (`cached_network_acls`) or `DescribeNetworkAcls` by `association.subnet-id`
+  in the same task. NACL rows keep **rule order** (first match wins — never
+  the SG port sort), the `32767` catch-all reads `*`, and an ACL whose first
+  rule each way allows everything is labelled `allow-all`. `merge_rules` collapses identical `(direction, protocol,
   ports, source)` rules and lists the contributing groups; sorted inbound
   first then by port. `t` cycles inbound → outbound → both (sticky across
   opens), open-to-world sources render in the warning colour, a source that

@@ -208,6 +208,8 @@ pub struct LoadBalancer {
     pub vpc_id: Option<String>,
     pub ip_address_type: Option<String>,
     pub availability_zones: Vec<String>,
+    /// One per zone — what the `N` lens resolves NACLs from.
+    pub subnet_ids: Vec<String>,
     pub security_groups: Vec<String>,
     pub created_time: String,
     pub tags: HashMap<String, String>,
@@ -219,6 +221,11 @@ impl LoadBalancer {
             .availability_zones()
             .iter()
             .filter_map(|az| az.zone_name().map(|s| s.to_string()))
+            .collect();
+        let subnet_ids: Vec<String> = lb
+            .availability_zones()
+            .iter()
+            .filter_map(|az| az.subnet_id().map(|s| s.to_string()))
             .collect();
 
         let (state_code, state_reason) = match lb.state() {
@@ -240,6 +247,7 @@ impl LoadBalancer {
             vpc_id: lb.vpc_id().map(|s| s.to_string()),
             ip_address_type: lb.ip_address_type().map(|t| t.as_str().to_string()),
             availability_zones,
+            subnet_ids,
             security_groups: lb.security_groups().to_vec(),
             created_time: lb
                 .created_time()
@@ -267,6 +275,7 @@ impl Resource for LoadBalancer {
     fn references(&self) -> Vec<(String, String)> {
         let mut v = sg_refs(self.security_group_ids());
         if let Some(x) = &self.vpc_id { v.push(("VPC".to_string(), x.clone())); }
+        for x in &self.subnet_ids { v.push(("Subnet".to_string(), x.clone())); }
         v
     }
 

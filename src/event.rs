@@ -587,12 +587,14 @@ pub enum Event {
         rows: Result<Vec<crate::timeline::TimelineRow>, String>,
     },
 
-    /// Network-access lens (`N`): the `DescribeSecurityGroups` result for
-    /// the groups that weren't in a warm cache. Generation-guarded like the
-    /// timeline sources.
+    /// Network-access lens (`N`): the `DescribeSecurityGroups` and
+    /// `DescribeNetworkAcls` results for what no warm cache had (an empty
+    /// request is skipped and comes back `Ok(vec![])`). Generation-guarded
+    /// like the timeline sources.
     AccessLensLoaded {
         generation: u64,
         groups: Result<Vec<crate::aws::services::ec2::SecurityGroup>, String>,
+        nacls: Result<Vec<crate::aws::services::vpc::NetworkAcl>, String>,
     },
 
     /// Fired when an API Gateway API's CloudWatch metrics have been fetched.

@@ -102,6 +102,9 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("ec2", "GetManagedPrefixListEntries", when ["pl-0corpvpn00000001"], "GetManagedPrefixListEntries-corp-vpn.xml"),
     fx!("ec2", "DescribeManagedPrefixLists", "DescribeManagedPrefixLists.xml"),
     fx!("ec2", "DescribeVolumes", "DescribeVolumes.xml"),
+    // The public subnets keep the default allow-all ACL; the private one has
+    // its own, denying SSH ahead of the allows — the `N` lens's NACL rows.
+    fx!("ec2", "DescribeNetworkAcls", "DescribeNetworkAcls.xml"),
     // ── ECS ──────────────────────────────────────────────────────────────────
     fx!("ecs", "ListClusters", "ListClusters.json"),
     fx!("ecs", "DescribeClusters", "DescribeClusters.json"),

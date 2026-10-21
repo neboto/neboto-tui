@@ -60,6 +60,7 @@ mod mouse_pane_views_test;
 mod timeline_test;
 mod list_ux_test;
 mod region_fanout_test;
+mod access_lens_test;
 mod mocks_compute;
 mod mocks_containers;
 mod mocks_ai;

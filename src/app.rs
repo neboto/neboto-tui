@@ -3857,13 +3857,17 @@ impl App {
                     }
                 }
             }
-            Event::AccessLensLoaded { generation, groups } => {
+            Event::AccessLensLoaded { generation, groups, nacls } => {
                 if generation == self.access_generation {
                     if let Some(st) = self.access_in_pane.as_mut() {
                         st.loading = false;
                         match groups {
                             Ok(groups) => st.add_groups(groups),
                             Err(e) => st.error = Some(e),
+                        }
+                        match nacls {
+                            Ok(nacls) => st.add_nacls(nacls),
+                            Err(e) => st.nacl_error = Some(e),
                         }
                     }
                 }
@@ -19579,11 +19583,12 @@ impl App {
 
     // ── Network-access lens (`N`) ───────────────────────────────────────
 
-    /// Open the merged security-group view for the selected resource.
-    /// Groups already in the warm EC2 / VPC caches (or on screen) resolve
-    /// instantly; the rest come from one `DescribeSecurityGroups`.
+    /// Open the merged security-group view for the selected resource, with
+    /// its subnets' NACLs below. Groups and ACLs already in the warm EC2 /
+    /// VPC caches (or on screen) resolve instantly; the rest come from one
+    /// `DescribeSecurityGroups` + one `DescribeNetworkAcls`.
     fn open_access_lens(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        let (title, ids) = match self.get_selected_resource() {
+        let (title, ids, subnets) = match self.get_selected_resource() {
             Some(r) => {
                 let mut ids: Vec<String> = Vec::new();
                 for id in r.security_group_ids() {
@@ -19592,7 +19597,16 @@ impl App {
                         ids.push(id);
                     }
                 }
-                (r.name().to_string(), ids)
+                // Subnets ride `references()` — every network-placed type
+                // already lists them there for the `U` lens.
+                let mut subnets: Vec<String> = Vec::new();
+                for (_, v) in r.references() {
+                    let v = v.trim().to_string();
+                    if v.starts_with("subnet-") && !subnets.contains(&v) {
+                        subnets.push(v);
+                    }
+                }
+                (r.name().to_string(), ids, subnets)
             }
             None => {
                 self.error_message = Some("No resource selected".to_string());
@@ -19609,16 +19623,48 @@ impl App {
             .as_ref()
             .map(|s| s.direction)
             .unwrap_or_default();
-        let mut st =
-            crate::ui::widgets::access_lens::AccessLensState::open(title, ids, direction);
+        let mut st = crate::ui::widgets::access_lens::AccessLensState::open(
+            title, ids, subnets, direction,
+        );
         (st.lb_by_sg, st.elb_loaded) = self.cached_lb_security_groups();
         st.add_groups(self.cached_security_groups(&st.sg_ids));
-        let missing = st.missing();
+        st.add_nacls(self.cached_network_acls(&st.subnet_ids));
+        let (missing, missing_subnets) = (st.missing(), st.missing_subnets());
         self.details_focused = true;
         self.access_in_pane = Some(st);
-        if !missing.is_empty() {
-            self.trigger_access_lens_fetch(event_tx, missing);
+        if !missing.is_empty() || !missing_subnets.is_empty() {
+            self.trigger_access_lens_fetch(event_tx, missing, missing_subnets);
         }
+    }
+
+    /// Network ACLs associated with any of `subnets`, from the warm VPC
+    /// cache (or the on-screen VPC list).
+    fn cached_network_acls(&self, subnets: &[String]) -> Vec<crate::aws::services::vpc::NetworkAcl> {
+        use crate::aws::services::vpc::NetworkAcl;
+        let mut found: Vec<NetworkAcl> = Vec::new();
+        if subnets.is_empty() {
+            return found;
+        }
+        let mut take = |res: &dyn Resource| {
+            if let Some(acl) = res.as_any().downcast_ref::<NetworkAcl>() {
+                if acl.associations.iter().any(|a| subnets.contains(&a.subnet_id))
+                    && !found.iter().any(|f| f.acl_id == acl.acl_id)
+                {
+                    found.push(acl.clone());
+                }
+            }
+        };
+        if let Some(list) = self.cache.get_ref(&ServiceType::VPC, &self.current_region, None) {
+            for r in list {
+                take(r.as_ref());
+            }
+        }
+        if !self.all_search_mode && self.current_service == Some(ServiceType::VPC) {
+            for r in &self.resources {
+                take(r.as_ref());
+            }
+        }
+        found
     }
 
     /// Security groups among `ids` that are already loaded — the EC2 cache
@@ -19704,34 +19750,66 @@ impl App {
         (map, loaded)
     }
 
-    /// One `DescribeSecurityGroups` for the ids no cache had.
+    /// One `DescribeSecurityGroups` for the ids no cache had, and one
+    /// `DescribeNetworkAcls` for the subnets no cached ACL covers — in one
+    /// task so the pair shares a generation.
     fn trigger_access_lens_fetch(
         &mut self,
         event_tx: &mpsc::UnboundedSender<Event>,
         ids: Vec<String>,
+        subnets: Vec<String>,
     ) {
         self.access_generation += 1;
         let generation = self.access_generation;
         if let Some(st) = self.access_in_pane.as_mut() {
             st.loading = true;
             st.error = None;
+            st.nacl_error = None;
         }
         let client = self.aws_clients.ec2_client();
         let tx = event_tx.clone();
         tokio::spawn(async move {
-            let groups = client
-                .describe_security_groups()
-                .set_group_ids(Some(ids))
-                .send()
-                .await
-                .map(|resp| {
-                    resp.security_groups()
-                        .iter()
-                        .map(crate::aws::services::ec2::SecurityGroup::from_sdk)
-                        .collect::<Vec<_>>()
-                })
-                .map_err(|e| crate::error::sdk_error_message(&e));
-            let _ = tx.send(Event::AccessLensLoaded { generation, groups });
+            let groups = async {
+                if ids.is_empty() {
+                    return Ok(Vec::new());
+                }
+                client
+                    .describe_security_groups()
+                    .set_group_ids(Some(ids))
+                    .send()
+                    .await
+                    .map(|resp| {
+                        resp.security_groups()
+                            .iter()
+                            .map(crate::aws::services::ec2::SecurityGroup::from_sdk)
+                            .collect::<Vec<_>>()
+                    })
+                    .map_err(|e| crate::error::sdk_error_message(&e))
+            };
+            let nacls = async {
+                if subnets.is_empty() {
+                    return Ok(Vec::new());
+                }
+                client
+                    .describe_network_acls()
+                    .filters(
+                        aws_sdk_ec2::types::Filter::builder()
+                            .name("association.subnet-id")
+                            .set_values(Some(subnets))
+                            .build(),
+                    )
+                    .send()
+                    .await
+                    .map(|resp| {
+                        resp.network_acls()
+                            .iter()
+                            .map(crate::aws::services::vpc::NetworkAcl::from_sdk)
+                            .collect::<Vec<_>>()
+                    })
+                    .map_err(|e| crate::error::sdk_error_message(&e))
+            };
+            let (groups, nacls) = tokio::join!(groups, nacls);
+            let _ = tx.send(Event::AccessLensLoaded { generation, groups, nacls });
         });
     }
 
@@ -19808,30 +19886,31 @@ impl App {
                     (st.lb_by_sg, st.elb_loaded) = lbs;
                     st.groups.clear();
                     st.all_rows.clear();
+                    st.nacls.clear();
+                    st.all_nacl_rows.clear();
                     st.rebuild();
-                    st.sg_ids.clone()
+                    (st.sg_ids.clone(), st.subnet_ids.clone())
                 });
-                if let Some(ids) = ids {
-                    self.trigger_access_lens_fetch(event_tx, ids);
+                if let Some((ids, subnets)) = ids {
+                    self.trigger_access_lens_fetch(event_tx, ids, subnets);
                 }
             }
-            // Go to the row's security group (closes the lens; Ctrl-O returns).
+            // Go to the row's security group or NACL (closes the lens;
+            // Ctrl-O returns).
             KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
-                let target = self
-                    .access_in_pane
-                    .as_ref()
-                    .and_then(|st| st.selected_row())
-                    .and_then(|row| row.jump_group());
-                if let Some(id) = target {
+                let target = self.access_in_pane.as_ref().and_then(|st| {
+                    st.selected_row()
+                        .and_then(|row| row.jump_group())
+                        .map(|id| (ServiceType::EC2, id, "Security Group"))
+                        .or_else(|| {
+                            st.selected_nacl()
+                                .map(|row| (ServiceType::VPC, row.acl_id.clone(), "NetworkAcl"))
+                        })
+                });
+                if let Some((svc, id, rtype)) = target {
                     self.close_access_lens();
                     self.record_location();
-                    self.jump_to_cached_resource(
-                        ServiceType::EC2,
-                        id,
-                        "Security Group",
-                        false,
-                        event_tx,
-                    );
+                    self.jump_to_cached_resource(svc, id, rtype, false, event_tx);
                 }
             }
             // The whole merged table in $EDITOR.
@@ -19845,8 +19924,7 @@ impl App {
                 if let Some(text) = self
                     .access_in_pane
                     .as_ref()
-                    .and_then(|st| st.selected_row())
-                    .map(|row| row.text())
+                    .and_then(|st| st.selected_text())
                 {
                     self.copy_to_clipboard(&text, "rule");
                 }

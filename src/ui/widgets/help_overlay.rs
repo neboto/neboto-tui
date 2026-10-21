@@ -74,7 +74,7 @@ const RIGHT_SECTIONS: &[Section] = &[
             ("f", "log search · event filter"),
             ("W", "CloudTrail lens (who did this)"),
             ("U", "Referenced-by lens (what uses this, from loaded services)"),
-            ("N", "Network-access lens (merged security-group rules)"),
+            ("N", "Network-access lens (merged security-group rules + subnet NACLs)"),
             ("o / i", "S3 objects / DynamoDB items"),
             ("s", "SSM session · ECS exec"),
             ("x / Y", "reveal / copy secret value · x: test a DNS record's answer"),

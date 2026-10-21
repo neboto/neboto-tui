@@ -20,8 +20,16 @@
 //! `⇠ ALB my-alb` (from the warm ELB cache — zero API): on an instance that
 //! separates "traffic the LB forwards" from ports opened some other way. A
 //! cold ELB cache says so in the header rather than guessing.
+//!
+//! Below the security-group rows come the **subnet NACLs** (#246): the
+//! resource's subnets come from `Resource::references()` (`Subnet` rows),
+//! their ACLs from the warm VPC cache or one `DescribeNetworkAcls` filtered
+//! by `association.subnet-id`. NACLs are stateless and first-match, so they
+//! keep their rule order (not the SG port sort) and a deny reads in the
+//! warning colour; `⏎` on one jumps to the ACL.
 
 use crate::aws::services::ec2::SecurityGroup;
+use crate::aws::services::vpc::{AclEntry, NetworkAcl};
 use crate::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -127,6 +135,85 @@ impl AccessRow {
     }
 }
 
+/// One subnet-NACL entry. Rows keep the ACL's rule order: NACLs are
+/// evaluated first match wins, so a port sort would misstate them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NaclRow {
+    pub inbound: bool,
+    pub acl_id: String,
+    /// `100`, or `*` for the catch-all deny AWS adds to every ACL.
+    pub rule: String,
+    pub allow: bool,
+    pub protocol: String,
+    pub ports: String,
+    pub cidr: String,
+    /// The resource's subnets this ACL covers.
+    pub subnets: Vec<String>,
+}
+
+/// The rule number AWS gives the implicit catch-all entry.
+const NACL_CATCH_ALL: i32 = 32767;
+
+impl NaclRow {
+    pub fn acl_display(&self) -> String {
+        format!("{} #{} {}", self.acl_id, self.rule, if self.allow { "allow" } else { "deny" })
+    }
+
+    pub fn text(&self) -> String {
+        format!(
+            "{}  {:<5}  {:<11}  {}  ← NACL {}  [{}]",
+            if self.inbound { "IN " } else { "OUT" },
+            self.protocol,
+            self.ports,
+            self.cidr,
+            self.acl_display(),
+            self.subnets.join(", ")
+        )
+    }
+}
+
+/// Every entry of every ACL, inbound first, in rule order per ACL.
+pub fn nacl_rows(nacls: &[NetworkAcl], subnet_ids: &[String]) -> Vec<NaclRow> {
+    let mut rows = Vec::new();
+    for inbound in [true, false] {
+        for acl in nacls {
+            let subnets: Vec<String> = subnet_ids
+                .iter()
+                .filter(|s| acl.associations.iter().any(|a| a.subnet_id == **s))
+                .cloned()
+                .collect();
+            let entries = if inbound { &acl.inbound_entries } else { &acl.outbound_entries };
+            for e in entries {
+                rows.push(NaclRow {
+                    inbound,
+                    acl_id: acl.acl_id.clone(),
+                    rule: if e.rule_number == NACL_CATCH_ALL { "*".to_string() } else { e.rule_number.to_string() },
+                    allow: e.action.eq_ignore_ascii_case("allow"),
+                    protocol: e.protocol.clone(),
+                    ports: e.port_range.clone(),
+                    cidr: e.cidr.clone(),
+                    subnets: subnets.clone(),
+                });
+            }
+        }
+    }
+    rows
+}
+
+/// The default shape: the first rule each way allows everything. Such an
+/// ACL never blocks anything, which is worth saying instead of making the
+/// reader parse two rows to find out.
+pub fn nacl_allows_all(acl: &NetworkAcl) -> bool {
+    let opens = |entries: &[AclEntry]| {
+        entries.first().is_some_and(|e| {
+            e.action.eq_ignore_ascii_case("allow")
+                && e.protocol == "All"
+                && matches!(e.cidr.as_str(), "0.0.0.0/0" | "::/0")
+        })
+    };
+    opens(&acl.inbound_entries) && opens(&acl.outbound_entries)
+}
+
 /// Merge every group's rules into one deduplicated, sorted table.
 pub fn merge_rules(groups: &[SecurityGroup]) -> Vec<AccessRow> {
     let mut rows: Vec<AccessRow> = Vec::new();
@@ -216,16 +303,65 @@ pub struct AccessLensState {
     /// Whether the ELB cache was warm when the lens opened — a cold cache
     /// means an unlabelled `sg-` source may still be a load balancer's.
     pub elb_loaded: bool,
+    /// The resource's subnets, deduped, in reference order.
+    pub subnet_ids: Vec<String>,
+    /// Their resolved ACLs (cache hits + fetched).
+    pub nacls: Vec<NetworkAcl>,
+    pub all_nacl_rows: Vec<NaclRow>,
+    /// `all_nacl_rows` narrowed by `direction`; selectable after `rows`.
+    pub nacl_rows: Vec<NaclRow>,
+    pub nacl_error: Option<String>,
 }
 
 impl AccessLensState {
-    pub fn open(title: String, sg_ids: Vec<String>, direction: AccessDirection) -> Self {
+    pub fn open(
+        title: String,
+        sg_ids: Vec<String>,
+        subnet_ids: Vec<String>,
+        direction: AccessDirection,
+    ) -> Self {
         Self {
             title,
             sg_ids,
+            subnet_ids,
             direction,
             ..Default::default()
         }
+    }
+
+    /// Subnets no resolved ACL covers yet.
+    pub fn missing_subnets(&self) -> Vec<String> {
+        self.subnet_ids
+            .iter()
+            .filter(|s| !self.nacls.iter().any(|n| n.associations.iter().any(|a| a.subnet_id == **s)))
+            .cloned()
+            .collect()
+    }
+
+    /// Add resolved ACLs (once each, ordered by first subnet) and rebuild.
+    pub fn add_nacls(&mut self, incoming: Vec<NetworkAcl>) {
+        for n in incoming {
+            // Only ACLs on this resource's subnets (a cache walk or a
+            // loose response may carry others).
+            let ours = n.associations.iter().any(|a| self.subnet_ids.contains(&a.subnet_id));
+            if ours && !self.nacls.iter().any(|x| x.acl_id == n.acl_id) {
+                self.nacls.push(n);
+            }
+        }
+        let order = self.subnet_ids.clone();
+        self.nacls.sort_by_key(|n| {
+            order
+                .iter()
+                .position(|s| n.associations.iter().any(|a| a.subnet_id == *s))
+                .unwrap_or(usize::MAX)
+        });
+        self.all_nacl_rows = nacl_rows(&self.nacls, &self.subnet_ids);
+        self.rebuild();
+    }
+
+    /// SG rows + NACL rows — the selectable length.
+    pub fn len(&self) -> usize {
+        self.rows.len() + self.nacl_rows.len()
     }
 
     /// Ids not yet resolved to a group.
@@ -273,11 +409,22 @@ impl AccessLensState {
             })
             .cloned()
             .collect();
-        if self.rows.is_empty() {
+        self.nacl_rows = self
+            .all_nacl_rows
+            .iter()
+            .filter(|r| match self.direction {
+                AccessDirection::Inbound => r.inbound,
+                AccessDirection::Outbound => !r.inbound,
+                AccessDirection::Both => true,
+            })
+            .cloned()
+            .collect();
+        let len = self.len();
+        if len == 0 {
             self.selected = 0;
             self.scroll = 0;
-        } else if self.selected >= self.rows.len() {
-            self.selected = self.rows.len() - 1;
+        } else if self.selected >= len {
+            self.selected = len - 1;
         }
     }
 
@@ -288,6 +435,19 @@ impl AccessLensState {
 
     pub fn selected_row(&self) -> Option<&AccessRow> {
         self.rows.get(self.selected)
+    }
+
+    pub fn selected_nacl(&self) -> Option<&NaclRow> {
+        self.selected
+            .checked_sub(self.rows.len())
+            .and_then(|i| self.nacl_rows.get(i))
+    }
+
+    /// The selected row as text, whichever kind it is.
+    pub fn selected_text(&self) -> Option<String> {
+        self.selected_row()
+            .map(|r| r.text())
+            .or_else(|| self.selected_nacl().map(|r| r.text()))
     }
 
     /// Whole table as text (the `e` editor view / bulk copy).
@@ -311,6 +471,18 @@ impl AccessLensState {
             out.push_str(&r.text());
             out.push('\n');
         }
+        if !self.subnet_ids.is_empty() {
+            out.push_str(&format!("\nSubnet NACLs ({})", self.subnet_ids.join(", ")));
+            let missing = self.missing_subnets();
+            if !missing.is_empty() {
+                out.push_str(&format!("  [unresolved: {}]", missing.join(", ")));
+            }
+            out.push_str("\n\n");
+            for r in &self.all_nacl_rows {
+                out.push_str(&r.text());
+                out.push('\n');
+            }
+        }
         out
     }
 
@@ -319,8 +491,8 @@ impl AccessLensState {
     }
 
     pub fn scroll_down(&mut self, n: usize) {
-        if !self.rows.is_empty() {
-            self.selected = (self.selected + n).min(self.rows.len() - 1);
+        if self.len() > 0 {
+            self.selected = (self.selected + n).min(self.len() - 1);
         }
     }
 
@@ -329,7 +501,7 @@ impl AccessLensState {
     }
 
     pub fn goto_bottom(&mut self) {
-        self.selected = self.rows.len().saturating_sub(1);
+        self.selected = self.len().saturating_sub(1);
     }
 }
 
@@ -364,6 +536,7 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
             .add_modifier(Modifier::BOLD),
     );
     let world = st.rows.iter().filter(|r| r.world).count();
+    let denies = st.nacl_rows.iter().filter(|r| !r.allow && r.rule != "*").count();
     let mut header = vec![
         badge,
         Span::raw(" "),
@@ -376,8 +549,8 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
         Span::styled(
             format!(
                 "  {} rule{}",
-                st.rows.len(),
-                if st.rows.len() == 1 { "" } else { "s" }
+                st.len(),
+                if st.len() == 1 { "" } else { "s" }
             ),
             Style::default().fg(theme::text_dim()),
         ),
@@ -389,6 +562,12 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
     if world > 0 {
         header.push(Span::styled(
             format!("  · {} open to world", world),
+            Style::default().fg(theme::warning()),
+        ));
+    }
+    if denies > 0 {
+        header.push(Span::styled(
+            format!("  · {} NACL deny rule{}", denies, if denies == 1 { "" } else { "s" }),
             Style::default().fg(theme::warning()),
         ));
     }
@@ -406,7 +585,7 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
     }
     if st.loading {
         header.push(Span::styled(
-            format!("  {} describing groups…", theme::spinner(app.tick_count)),
+            format!("  {} describing groups + NACLs…", theme::spinner(app.tick_count)),
             Style::default().fg(theme::warning()),
         ));
     }
@@ -419,6 +598,12 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
     if let Some(e) = &st.error {
         header.push(Span::styled(
             format!("   ⚠ {}", e),
+            Style::default().fg(theme::error()),
+        ));
+    }
+    if let Some(e) = &st.nacl_error {
+        header.push(Span::styled(
+            format!("   ⚠ NACLs: {}", e),
             Style::default().fg(theme::error()),
         ));
     }
@@ -461,6 +646,33 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
             }
         }
     }
+    for acl in &st.nacls {
+        let subnets = st
+            .subnet_ids
+            .iter()
+            .filter(|s| acl.associations.iter().any(|a| a.subnet_id == **s))
+            .count();
+        chips.push(Span::styled(acl.acl_id.clone(), Style::default().fg(theme::accent())));
+        chips.push(Span::styled(
+            if nacl_allows_all(acl) {
+                format!(" allow-all · {} subnet{}   ", subnets, if subnets == 1 { "" } else { "s" })
+            } else {
+                format!(
+                    " {}↓ {}↑ · {} subnet{}   ",
+                    acl.inbound_entries.len(),
+                    acl.outbound_entries.len(),
+                    subnets,
+                    if subnets == 1 { "" } else { "s" }
+                )
+            },
+            Style::default().fg(theme::text_dim()),
+        ));
+    }
+    if !st.loading {
+        for s in st.missing_subnets() {
+            chips.push(Span::styled(format!("{} ?   ", s), Style::default().fg(theme::error())));
+        }
+    }
     frame.render_widget(Paragraph::new(Line::from(chips)), chunks[1]);
 
     // ── Body ──
@@ -474,7 +686,7 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
     };
 
     let mut body: Vec<Line> = Vec::with_capacity(viewport);
-    if st.rows.is_empty() {
+    if st.len() == 0 {
         let empty = if st.loading {
             "  Describing security groups…"
         } else if st.groups.is_empty() {
@@ -532,12 +744,17 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
             }
             body.push(Line::from(spans));
         }
+        let skip = top.saturating_sub(st.rows.len());
+        let room = viewport.saturating_sub(body.len());
+        for (i, row) in st.nacl_rows.iter().enumerate().skip(skip).take(room) {
+            body.push(nacl_line(row, st.rows.len() + i == st.selected));
+        }
     }
     frame.render_widget(Paragraph::new(body), chunks[2]);
     {
         let mut hits = app.popup_hits.borrow_mut();
         hits.record_area(area);
-        hits.record_rows(chunks[2], top, st.rows.len());
+        hits.record_rows(chunks[2], top, st.len());
     }
 
     // ── Footer ──
@@ -549,7 +766,7 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
     };
     let mut spans = vec![Span::raw("  ")];
     spans.extend(hint("j/k", " select  "));
-    spans.extend(hint("⏎", " go to group  "));
+    spans.extend(hint("⏎", " go to SG / NACL  "));
     spans.extend(hint("t", " direction  "));
     spans.extend(hint("e", " open all  "));
     spans.extend(hint("y", " copy  "));
@@ -557,6 +774,34 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
     spans.extend(hint("Z", " width  "));
     spans.extend(hint("Esc", " close"));
     frame.render_widget(Paragraph::new(Line::from(spans)), chunks[3]);
+}
+
+/// A NACL row, in the SG rows' columns: the rule number and verdict sit
+/// where a rule's contributing groups do, then the ACL and its subnets.
+fn nacl_line(row: &NaclRow, selected: bool) -> Line<'static> {
+    let base = if selected {
+        Style::default().fg(theme::text_primary()).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::text_primary())
+    };
+    let verdict = if row.allow { base.fg(theme::text_dim()) } else { base.fg(theme::warning()) };
+    Line::from(vec![
+        Span::styled(if selected { "▸ " } else { "  " }, Style::default().fg(theme::accent())),
+        Span::styled(
+            if row.inbound { "↓ " } else { "↑ " },
+            Style::default().fg(if row.inbound { theme::success() } else { theme::text_dim() }),
+        ),
+        Span::styled(format!("{:<5} ", row.protocol), base),
+        Span::styled(format!("{:<11} ", row.ports), base),
+        Span::styled(format!("{:<36} ", trim(&row.cidr, 36)), if row.allow { base } else { verdict }),
+        // Verdict first: it's what a narrow pane must not cut off.
+        Span::styled(
+            format!("← NACL #{:<5} {:<5} ", row.rule, if row.allow { "allow" } else { "deny" }),
+            verdict,
+        ),
+        Span::styled(format!("{} ", row.acl_id), base.fg(theme::text_dim())),
+        Span::styled(trim(&row.subnets.join(", "), 40), base.fg(theme::text_dim()).add_modifier(Modifier::ITALIC)),
+    ])
 }
 
 fn trim(s: &str, width: usize) -> String {
@@ -634,6 +879,7 @@ mod tests {
         let mut st = AccessLensState::open(
             "i-1".to_string(),
             vec!["sg-a".to_string(), "sg-b".to_string()],
+            vec![],
             AccessDirection::Inbound,
         );
         assert_eq!(st.missing(), vec!["sg-a".to_string(), "sg-b".to_string()]);
@@ -671,6 +917,7 @@ mod tests {
         let mut st = AccessLensState::open(
             "i-1".to_string(),
             vec!["sg-a".to_string()],
+            vec![],
             AccessDirection::Inbound,
         );
         st.lb_by_sg
@@ -690,5 +937,101 @@ mod tests {
         let ssh = st.rows.iter().find(|r| r.ports == "22").unwrap();
         assert!(ssh.lb_sources.is_empty());
         assert!(ssh.world);
+    }
+
+    fn entry(n: i32, action: &str, protocol: &str, ports: &str, cidr: &str, egress: bool) -> AclEntry {
+        AclEntry {
+            rule_number: n,
+            protocol: protocol.to_string(),
+            action: action.to_string(),
+            cidr: cidr.to_string(),
+            port_range: ports.to_string(),
+            egress,
+        }
+    }
+
+    fn acl(id: &str, subnets: &[&str], inbound: Vec<AclEntry>, outbound: Vec<AclEntry>) -> NetworkAcl {
+        NetworkAcl {
+            acl_id: id.to_string(),
+            vpc_id: "vpc-1".to_string(),
+            is_default: false,
+            inbound_entries: inbound,
+            outbound_entries: outbound,
+            associations: subnets
+                .iter()
+                .map(|s| crate::aws::services::vpc::AclAssociation {
+                    subnet_id: s.to_string(),
+                    association_id: String::new(),
+                })
+                .collect(),
+            tags: HashMap::new(),
+        }
+    }
+
+    fn allow_all(id: &str, subnets: &[&str]) -> NetworkAcl {
+        acl(
+            id,
+            subnets,
+            vec![entry(100, "allow", "All", "All", "0.0.0.0/0", false), entry(32767, "deny", "All", "All", "0.0.0.0/0", false)],
+            vec![entry(100, "allow", "All", "All", "0.0.0.0/0", true), entry(32767, "deny", "All", "All", "0.0.0.0/0", true)],
+        )
+    }
+
+    #[test]
+    fn nacl_rows_keep_rule_order_and_mark_the_catch_all() {
+        let a = acl(
+            "acl-a",
+            &["subnet-1", "subnet-9"],
+            vec![
+                entry(90, "deny", "TCP", "22", "0.0.0.0/0", false),
+                entry(100, "allow", "TCP", "443", "0.0.0.0/0", false),
+                entry(32767, "deny", "All", "All", "0.0.0.0/0", false),
+            ],
+            vec![entry(100, "allow", "All", "All", "0.0.0.0/0", true)],
+        );
+        let rows = nacl_rows(&[a], &["subnet-1".to_string()]);
+        let summary: Vec<_> = rows.iter().map(|r| (r.inbound, r.rule.as_str(), r.allow)).collect();
+        assert_eq!(summary, [(true, "90", false), (true, "100", true), (true, "*", false), (false, "100", true)]);
+        // Only the resource's own subnets are listed against the ACL.
+        assert_eq!(rows[0].subnets, vec!["subnet-1".to_string()]);
+        assert_eq!(rows[0].acl_display(), "acl-a #90 deny");
+    }
+
+    #[test]
+    fn allow_all_needs_both_directions_open_first() {
+        assert!(nacl_allows_all(&allow_all("acl-d", &[])));
+        let mut tight = allow_all("acl-t", &[]);
+        tight.inbound_entries.insert(0, entry(50, "deny", "TCP", "22", "0.0.0.0/0", false));
+        assert!(!nacl_allows_all(&tight));
+    }
+
+    #[test]
+    fn selection_runs_from_group_rules_into_nacl_rows() {
+        let mut st = AccessLensState::open(
+            "i-1".to_string(),
+            vec!["sg-a".to_string()],
+            vec!["subnet-1".to_string(), "subnet-2".to_string()],
+            AccessDirection::Inbound,
+        );
+        st.add_groups(vec![group("sg-a", "app", vec![rule("TCP", "80", "10.0.0.0/8", None)], vec![])]);
+        // An ACL on neither subnet is dropped; subnet-2 stays unresolved.
+        st.add_nacls(vec![allow_all("acl-1", &["subnet-1"]), allow_all("acl-x", &["subnet-7"])]);
+        assert_eq!(st.nacls.len(), 1);
+        assert_eq!(st.missing_subnets(), vec!["subnet-2".to_string()]);
+        assert_eq!(st.len(), 3); // 1 SG rule + 2 inbound ACL entries
+        st.goto_bottom();
+        assert!(st.selected_row().is_none());
+        assert_eq!(st.selected_nacl().unwrap().rule, "*");
+        assert!(st.selected_text().unwrap().contains("NACL acl-1 #* deny"));
+        st.goto_top();
+        assert!(st.selected_nacl().is_none());
+        assert!(st.selected_text().unwrap().starts_with("IN "));
+        // Outbound: the ACL's egress entries, selection clamped.
+        st.selected = 2;
+        st.cycle_direction();
+        assert_eq!(st.rows.len(), 0);
+        assert_eq!(st.nacl_rows.len(), 2);
+        assert!(st.nacl_rows.iter().all(|r| !r.inbound));
+        assert!(st.as_text().contains("Subnet NACLs (subnet-1, subnet-2)  [unresolved: subnet-2]"));
     }
 }
