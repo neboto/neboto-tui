@@ -24,12 +24,8 @@ impl FuzzyMatcher {
             return (0..resources.len()).map(|i| (i, 0)).collect();
         }
 
-        // Sanitize query: remove trailing backslashes that break fuzzy matching
-        let sanitized_query = query.trim_end_matches('\\');
-
-        // Minimum score scales with query length to cut off scattered character
-        // coincidences (e.g. "1a" matching "us-east-1b ... available" via CIDR + state).
-        let min_score = sanitized_query.len() as i64 * 10;
+        let sanitized_query = Self::sanitize(query);
+        let min_score = Self::min_score(sanitized_query);
 
         let mut matches: Vec<(usize, i64)> = resources
             .iter()
@@ -56,6 +52,48 @@ impl FuzzyMatcher {
         matches.sort_by_key(|x| std::cmp::Reverse(x.1));
 
         matches
+    }
+
+    /// Filter plain strings (picker modals) with the same scoring and
+    /// threshold as `filter_resources`. Returns sorted (index, score) pairs;
+    /// an exact (case-insensitive) match ranks first, ties keep input order.
+    pub fn filter_strings<S: AsRef<str>>(&self, query: &str, items: &[S]) -> Vec<(usize, i64)> {
+        if query.is_empty() {
+            return (0..items.len()).map(|i| (i, 0)).collect();
+        }
+
+        let sanitized_query = Self::sanitize(query);
+        let min_score = Self::min_score(sanitized_query);
+        let q = sanitized_query.trim();
+
+        let mut matches: Vec<(usize, i64)> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| {
+                let text = item.as_ref();
+                if text.eq_ignore_ascii_case(q) {
+                    return Some((idx, i64::MAX));
+                }
+                self.matcher
+                    .fuzzy_match(text, sanitized_query)
+                    .filter(|&score| score >= min_score)
+                    .map(|score| (idx, score))
+            })
+            .collect();
+
+        matches.sort_by_key(|x| std::cmp::Reverse(x.1));
+        matches
+    }
+
+    /// Remove trailing backslashes that break fuzzy matching.
+    fn sanitize(query: &str) -> &str {
+        query.trim_end_matches('\\')
+    }
+
+    /// Minimum score scales with query length to cut off scattered character
+    /// coincidences (e.g. "1a" matching "us-east-1b ... available" via CIDR + state).
+    fn min_score(sanitized_query: &str) -> i64 {
+        sanitized_query.len() as i64 * 10
     }
 }
 
@@ -228,5 +266,29 @@ mod tests {
         assert_eq!(matches_without.len(), matches_with.len());
         assert_eq!(matches_without.len(), 1);
         assert_eq!(matches_without[0].0, matches_with[0].0);
+    }
+
+    #[test]
+    fn filter_strings_ranks_fuzzy_matches_and_floats_exact_first() {
+        let matcher = FuzzyMatcher::new();
+        let items = vec![
+            "prod-admin".to_string(),
+            "staging".to_string(),
+            "prod".to_string(),
+            "dev-sandbox".to_string(),
+        ];
+
+        let all = matcher.filter_strings("", &items);
+        assert_eq!(all.iter().map(|m| m.0).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+
+        // Exact name beats the longer fuzzy hit.
+        let exact = matcher.filter_strings("PROD", &items);
+        assert_eq!(exact.first().map(|m| m.0), Some(2), "{exact:?}");
+
+        // Non-contiguous characters match (a plain substring filter would not).
+        let fuzzy = matcher.filter_strings("pdadm", &items);
+        assert_eq!(fuzzy.iter().map(|m| m.0).collect::<Vec<_>>(), vec![0]);
+
+        assert!(matcher.filter_strings("zzz", &items).is_empty());
     }
 }
