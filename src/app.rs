@@ -897,20 +897,28 @@ impl XRayView {
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ChangesView {
     All,
+    Iam,
     Trail,
     Config,
     Deploys,
     Ops}
 
 impl ChangesView {
-    pub const ALL: [ChangesView; 5] =
-        [ChangesView::All, ChangesView::Trail, ChangesView::Config, ChangesView::Deploys, ChangesView::Ops];
+    pub const ALL: [ChangesView; 6] = [
+        ChangesView::All,
+        ChangesView::Iam,
+        ChangesView::Trail,
+        ChangesView::Config,
+        ChangesView::Deploys,
+        ChangesView::Ops,
+    ];
 
     pub fn resource_type_filter(&self) -> &'static str {
         match self {
             ChangesView::All => {
-                "Trail Change|Config Change|Stack Change|Pipeline Run|Scaling Activity|RDS Event"
+                "IAM Change|Trail Change|Config Change|Stack Change|Pipeline Run|Scaling Activity|RDS Event"
             }
+            ChangesView::Iam => "IAM Change",
             ChangesView::Trail => "Trail Change",
             ChangesView::Config => "Config Change",
             ChangesView::Deploys => "Stack Change|Pipeline Run",
@@ -920,6 +928,7 @@ impl ChangesView {
     pub fn label(&self) -> &'static str {
         match self {
             ChangesView::All => "All",
+            ChangesView::Iam => "IAM & Orgs",
             ChangesView::Trail => "CloudTrail",
             ChangesView::Config => "Config",
             ChangesView::Deploys => "Deploys",
@@ -7036,12 +7045,12 @@ impl App {
             }
         }
 
-        // @changes: 1–5 / Tab pick the source, `[`/`]` the window.
+        // @changes: 1–6 / Tab pick the source, `[`/`]` the window.
         if !self.search_active && self.current_service == Some(ServiceType::Changes) {
             let all = ChangesView::ALL;
             let i = all.iter().position(|v| *v == self.changes_view).unwrap_or(0);
             let view = match key.code {
-                KeyCode::Char(c @ '1'..='5') => Some(all[(c as usize) - ('1' as usize)]),
+                KeyCode::Char(c @ '1'..='6') => Some(all[(c as usize) - ('1' as usize)]),
                 KeyCode::Tab => Some(all[(i + 1) % all.len()]),
                 KeyCode::BackTab => Some(all[(i + all.len() - 1) % all.len()]),
                 _ => None};
@@ -9611,7 +9620,7 @@ impl App {
                 align!(self, rtype, xray_view, XRayView, [ServiceMap, Traces, Config])
             }
             Some(ServiceType::Changes) => {
-                align!(self, rtype, changes_view, ChangesView, [All, Trail, Config, Deploys, Ops])
+                align!(self, rtype, changes_view, ChangesView, [All, Iam, Trail, Config, Deploys, Ops])
             }
             Some(ServiceType::Dms) => {
                 align!(self, rtype, dms_view, DmsView, [Tasks, Instances, Endpoints, Serverless])

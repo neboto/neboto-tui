@@ -280,6 +280,11 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("cloudtrail", "LookupEvents", when ["github-actions-deploy"], "LookupEvents-github-actions-deploy.json"),
     fx!("cloudtrail", "LookupEvents", when ["vol-0orphan00000004"], "LookupEvents-orphan-volume.json"),
     fx!("cloudtrail", "LookupEvents", when ["ResourceName"], "LookupEvents-none.json"),
+    // @changes' us-east-1 lookups by event source: alice widens the deploy
+    // role's access ~45m ago (a read is mixed in — it must not list), and no
+    // Organizations activity (this isn't the management account).
+    fx!("cloudtrail", "LookupEvents", when ["iam.amazonaws.com"], "LookupEvents-iam.json"),
+    fx!("cloudtrail", "LookupEvents", when ["organizations.amazonaws.com"], "LookupEvents-none.json"),
     fx!("cloudtrail", "LookupEvents", "LookupEvents.json"),
     // ── Elastic Beanstalk (awsQuery) ─────────────────────────────────────────
     // One app, two environments: `portal-legacy` (Standard, Red — its ALB is

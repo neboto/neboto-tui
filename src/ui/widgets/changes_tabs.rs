@@ -13,7 +13,7 @@ use ratatui::{
 /// `@changes` tab strip (one tab per source group) + the window chips
 /// (`[`/`]` step them; clicking a chip's side steps too) — the X-Ray shape.
 pub fn render_changes_tabs(app: &App, area: Rect, frame: &mut Frame) {
-    let keys = ['1', '2', '3', '4', '5'];
+    let keys = ['1', '2', '3', '4', '5', '6'];
     let tabs: Vec<(char, &str, bool)> = ChangesView::ALL
         .iter()
         .zip(keys)

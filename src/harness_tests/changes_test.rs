@@ -38,8 +38,18 @@ async fn demo_changes_list_newest_first_by_source_tab() {
     assert!(screen.contains("[ ] Window") && screen.contains(" 1h "), "{screen}");
     assert!(screen.contains("UpdateService  orders-worker"), "{screen}");
 
+    // IAM changes come from us-east-1's trail by event source; the read
+    // mixed into that answer never lists.
+    let tx0 = mpsc::unbounded_channel().0;
+    app.handle_event(Event::Key(crossterm::event::KeyEvent::from(KeyCode::Char('2'))), &tx0).await.unwrap();
+    assert_eq!(app.changes_view, crate::app::ChangesView::Iam);
+    let names: Vec<&str> = app.filtered_resources.iter().map(|&i| app.resources[i].name()).collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(names[0].contains("PutRolePolicy") && names[1].contains("AttachRolePolicy"), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("GetRole")));
+
     // The Deploys tab has no demo stacks/pipelines in the window.
-    app.handle_event(Event::Key(crossterm::event::KeyEvent::from(KeyCode::Char('4'))), &mpsc::unbounded_channel().0)
+    app.handle_event(Event::Key(crossterm::event::KeyEvent::from(KeyCode::Char('5'))), &mpsc::unbounded_channel().0)
         .await
         .unwrap();
     assert_eq!(app.changes_view, crate::app::ChangesView::Deploys);

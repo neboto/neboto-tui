@@ -2391,8 +2391,22 @@ the service you're touching.
   this started?", account-wide (the `W` timeline is per resource). One
   regional list, newest first (the Executions default-sort exception), over
   a `[`/`]` window (15m / 1h / 6h / 24h / 7d, variant-cached like X-Ray).
-  Sub-tabs filter by source via resource types: **All / CloudTrail / Config
-  / Deploys** (CFN + CodePipeline) **/ Scaling & RDS**. All six sources run
+  Sub-tabs filter by source via resource types: **All / IAM & Orgs /
+  CloudTrail / Config / Deploys** (CFN + CodePipeline) **/ Scaling & RDS**.
+  **IAM & Organizations are their own lookups against us-east-1** — global
+  services are recorded only there, so from any other region the regional
+  scan never sees a policy change, and even in us-east-1 a busy hour pushes
+  them past its cap. `LookupEvents EventSource=iam.amazonaws.com` (then
+  `organizations.…`, sequentially — both spend us-east-1's 2 TPS), reads
+  dropped client-side (`ReadOnly` can't combine with `EventSource`, so the
+  `GLOBAL_PAGES` cap counts them, and its warning says "reads included");
+  the regional scan skips those sources so us-east-1 has no duplicates.
+  IAM rows are **never noise** (a permission-set push via
+  `sso.amazonaws.com` still changes access), show the request's scalar
+  parameters (`roleName`, `policyArn`…) and the **policy document** the call
+  wrote (`policyDocument` / `assumeRolePolicyDocument` / SCP `content`,
+  URL-decoded when CloudTrail recorded it encoded), and their console link
+  opens us-east-1's event history. All six sources run
   concurrently and each streams its batch when done; a failing source is a
   `ResourceLoadWarning`, never the load. Rows are flat `details()`; the
   `Resource` row carries an ARN where the source has one, so `⏎` follows

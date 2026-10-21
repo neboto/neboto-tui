@@ -21,6 +21,14 @@ use tokio::sync::mpsc;
 /// - **CloudFormation** stack events, **CodePipeline** runs: the deploys.
 /// - **Auto Scaling** activities and **RDS** events: what AWS itself did,
 ///   which CloudTrail never records.
+/// - **IAM and Organizations** (policies, roles, users, SCPs): global
+///   services, so CloudTrail records them **only in us-east-1** — from any
+///   other region they'd never appear, and even in us-east-1 a busy hour of
+///   other writes would push them past the cap. So they get their own
+///   us-east-1 lookups filtered server-side by `EventSource` (reads dropped
+///   client-side, since `ReadOnly` can't combine with it), their own cap
+///   and tab, and the policy document a change wrote in the detail pane.
+///   Never noise: a policy change made by a service still changes access.
 /// - **CloudTrail** `LookupEvents` with `ReadOnly=false`: *who* did it, and
 ///   console changes nothing else sees. This is the expensive one —
 ///   `LookupEvents` is 2 TPS × 50 events, shared with every other caller —
@@ -35,6 +43,8 @@ use tokio::sync::mpsc;
 /// the deploys. A failing source is a warning, never the whole load.
 pub struct ChangesService {
     cloudtrail: aws_sdk_cloudtrail::Client,
+    /// us-east-1, where IAM / Organizations events are recorded.
+    global_trail: aws_sdk_cloudtrail::Client,
     config: aws_sdk_config::Client,
     cloudformation: aws_sdk_cloudformation::Client,
     codepipeline: aws_sdk_codepipeline::Client,
@@ -48,6 +58,7 @@ impl ChangesService {
     pub fn new(c: &AwsClients, window: ChangesWindow) -> Self {
         Self {
             cloudtrail: c.cloudtrail_client(),
+            global_trail: c.for_region(crate::aws::region::Region::UsEast1).cloudtrail_client(),
             config: c.awsconfig_client(),
             cloudformation: c.cloudformation_client(),
             codepipeline: c.codepipeline_client(),
@@ -61,6 +72,15 @@ impl ChangesService {
 
 /// CloudTrail pages per load (50 events each).
 pub const CT_PAGES: usize = 10;
+/// Pages per global lookup (IAM, then Organizations). Reads count against
+/// it too, since they can only be dropped client-side.
+pub const GLOBAL_PAGES: usize = 10;
+/// The global services with their own lookup, and whose events the
+/// regional scan therefore skips (no duplicates in us-east-1).
+const GLOBAL_SOURCES: [(&str, ChangeSource); 2] = [
+    ("iam.amazonaws.com", ChangeSource::Iam),
+    ("organizations.amazonaws.com", ChangeSource::Org),
+];
 /// Stacks whose events are read (most recently touched first).
 const MAX_STACKS: usize = 15;
 const MAX_PIPELINES: usize = 200;
@@ -118,6 +138,8 @@ impl ChangesWindow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeSource {
+    Iam,
+    Org,
     Trail,
     Config,
     Stack,
@@ -130,6 +152,8 @@ impl ChangeSource {
     /// Fixed-width badge, the `W` timeline's where they overlap.
     pub fn badge(self) -> &'static str {
         match self {
+            ChangeSource::Iam => "IAM",
+            ChangeSource::Org => "ORG",
             ChangeSource::Trail => " CT",
             ChangeSource::Config => "CFG",
             ChangeSource::Stack => "CFN",
@@ -141,6 +165,8 @@ impl ChangeSource {
 
     pub fn label(self) -> &'static str {
         match self {
+            ChangeSource::Iam => "IAM",
+            ChangeSource::Org => "Organizations",
             ChangeSource::Trail => "CloudTrail",
             ChangeSource::Config => "AWS Config",
             ChangeSource::Stack => "CloudFormation",
@@ -153,6 +179,7 @@ impl ChangeSource {
     /// The row's resource type — what the sub-tabs filter on.
     pub fn resource_type(self) -> &'static str {
         match self {
+            ChangeSource::Iam | ChangeSource::Org => "IAM Change",
             ChangeSource::Trail => "Trail Change",
             ChangeSource::Config => "Config Change",
             ChangeSource::Stack => "Stack Change",
@@ -198,6 +225,11 @@ pub struct ChangeEvent {
     pub machine: bool,
     /// CloudTrail's raw event JSON (`e`).
     pub raw: Option<String>,
+    /// IAM / Organizations: the request's scalar parameters
+    /// (`roleName`, `policyArn`, …) — what was attached to what.
+    pub request: Vec<(String, String)>,
+    /// IAM / Organizations: the policy document the change wrote, pretty.
+    pub policy: Option<String>,
     tags: HashMap<String, String>,
 }
 
@@ -236,13 +268,21 @@ impl ChangeEvent {
             failed: false,
             machine: false,
             raw: None,
+            request: Vec::new(),
+            policy: None,
             tags: HashMap::new(),
         }
     }
 
     pub fn from_trail(ev: &CloudTrailEvent) -> Self {
-        let invoked_by = serde_json::from_str::<serde_json::Value>(&ev.cloud_trail_event)
-            .ok()
+        let source = GLOBAL_SOURCES
+            .iter()
+            .find(|(s, _)| *s == ev.event_source)
+            .map(|(_, src)| *src)
+            .unwrap_or(ChangeSource::Trail);
+        let json = serde_json::from_str::<serde_json::Value>(&ev.cloud_trail_event).ok();
+        let invoked_by = json
+            .as_ref()
             .and_then(|v| v.pointer("/userIdentity/invokedBy").and_then(|s| s.as_str()).map(str::to_string))
             .unwrap_or_default();
         // Prefer an ARN for the jump; show its readable tail.
@@ -259,7 +299,7 @@ impl ChangeEvent {
             who = format!("{who} via {invoked_by}");
         }
         let mut c = Self::new(
-            ChangeSource::Trail,
+            source,
             ev.event_id.clone(),
             ev.event_time_secs,
             ev.event_name.clone(),
@@ -281,7 +321,28 @@ impl ChangeEvent {
             (false, false) => format!("{}: {}", ev.error_code, ev.error_message),
         };
         c.failed = !ev.error_code.is_empty();
-        c.machine = trail_is_machine(ev, &invoked_by);
+        c.machine = match source {
+            // A role or policy changed by a service still changes access.
+            ChangeSource::Iam | ChangeSource::Org => SESSION_CHURN.contains(&ev.event_name.as_str()),
+            _ => trail_is_machine(ev, &invoked_by),
+        };
+        if matches!(source, ChangeSource::Iam | ChangeSource::Org) {
+            if let Some(params) = json.as_ref().and_then(|v| v.get("requestParameters")).and_then(|p| p.as_object()) {
+                c.request = params
+                    .iter()
+                    .filter(|(k, _)| !POLICY_KEYS.contains(&k.as_str()))
+                    .filter_map(|(k, v)| match v {
+                        serde_json::Value::String(s) => Some((k.clone(), s.clone())),
+                        serde_json::Value::Number(_) | serde_json::Value::Bool(_) => Some((k.clone(), v.to_string())),
+                        _ => None,
+                    })
+                    .collect();
+                c.policy = POLICY_KEYS
+                    .iter()
+                    .find_map(|k| params.get(*k).and_then(|v| v.as_str()))
+                    .map(pretty_policy);
+            }
+        }
         c.raw = Some(ev.cloud_trail_event.clone());
         c
     }
@@ -337,6 +398,46 @@ fn readable_tail(r: &str) -> String {
         (None, Some((_, rest))) => rest.to_string(),
         (None, None) => resource.to_string(),
     }
+}
+
+/// Request parameters that carry a policy document: IAM's inline and
+/// managed policies + trust policies, Organizations' SCP `content`.
+const POLICY_KEYS: [&str; 3] = ["policyDocument", "assumeRolePolicyDocument", "content"];
+
+/// A policy document as CloudTrail recorded it (a JSON string, sometimes
+/// URL-encoded), pretty-printed; left as is when it isn't JSON.
+fn pretty_policy(doc: &str) -> String {
+    let decoded = if doc.trim_start().starts_with('%') { percent_decode(doc) } else { doc.to_string() };
+    serde_json::from_str::<serde_json::Value>(&decoded)
+        .ok()
+        .and_then(|v| serde_json::to_string_pretty(&v).ok())
+        .unwrap_or(decoded)
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = (bytes[i] == b'%' && i + 2 < bytes.len())
+            .then(|| u8::from_str_radix(&s[i + 1..i + 3], 16).ok())
+            .flatten();
+        match (hex, bytes[i]) {
+            (Some(b), _) => {
+                out.push(b);
+                i += 3;
+            }
+            (None, b'+') => {
+                out.push(b' ');
+                i += 1;
+            }
+            (None, b) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// `AWS::EC2::SecurityGroup` → `SecurityGroup`.
@@ -400,7 +501,8 @@ impl Resource for ChangeEvent {
 
     fn search_text(&self) -> String {
         format!(
-            "{} {} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {}",
+            self.request.iter().map(|(_, v)| v.as_str()).collect::<Vec<_>>().join(" "),
             self.title,
             self.who,
             self.target_type,
@@ -444,7 +546,18 @@ impl Resource for ChangeEvent {
         if !self.error.is_empty() {
             d.push(("Error".to_string(), format!("✗ {}", self.error)));
         }
+        if !self.request.is_empty() {
+            d.push(("".to_string(), "".to_string()));
+            d.push(("Request".to_string(), "".to_string()));
+            d.extend(self.request.iter().cloned());
+        }
+        if let Some(policy) = &self.policy {
+            d.push(("".to_string(), "".to_string()));
+            d.push(("Policy document".to_string(), "".to_string()));
+            d.extend(policy.lines().map(|l| (format!("  {l}"), String::new())));
+        }
         if self.raw.is_some() {
+            d.push(("".to_string(), "".to_string()));
             d.push(("".to_string(), "· e opens the raw CloudTrail event".to_string()));
         }
         d
@@ -461,7 +574,9 @@ impl Resource for ChangeEvent {
     }
 
     fn console_url(&self, region: &str) -> Option<String> {
-        (self.source == ChangeSource::Trail).then(|| {
+        // Global events live in us-east-1's event history.
+        let region = if matches!(self.source, ChangeSource::Iam | ChangeSource::Org) { "us-east-1" } else { region };
+        self.raw.is_some().then(|| {
             format!(
                 "https://{region}.console.aws.amazon.com/cloudtrailv2/home?region={region}#/events/{}",
                 self.id
@@ -524,19 +639,49 @@ impl AwsService for ChangesService {
             });
         };
 
+        let back_to = |t: i64| fmt_epoch_secs(t).get(5..).unwrap_or_default().to_string();
         let trail = async {
-            let client = self.cloudtrail.clone();
-            match trail_changes(client, cutoff, &|rows| send(ChangeSource::Trail, rows)).await {
+            let regional = |ev: &CloudTrailEvent| !GLOBAL_SOURCES.iter().any(|(s, _)| *s == ev.event_source);
+            match trail_changes(self.cloudtrail.clone(), TrailScan::WritesOnly, CT_PAGES, cutoff, &regional, &|rows| {
+                send(ChangeSource::Trail, rows)
+            })
+            .await
+            {
                 Ok(Some(oldest)) => warn(
                     ChangeSource::Trail,
                     format!(
                         "newest {} write events only (back to {} UTC) — [ narrows the window",
                         CT_PAGES * 50,
-                        fmt_epoch_secs(oldest).get(11..).unwrap_or_default()
+                        back_to(oldest)
                     ),
                 ),
                 Ok(None) => {}
                 Err(e) => warn(ChangeSource::Trail, e),
+            }
+        };
+        // IAM, then Organizations, one after the other: both spend
+        // us-east-1's 2 TPS.
+        let global = async {
+            for (event_source, source) in GLOBAL_SOURCES {
+                let scan = TrailScan::Source(event_source);
+                let writes = |ev: &CloudTrailEvent| !ev.read_only && ev.event_source == event_source;
+                match trail_changes(self.global_trail.clone(), scan, GLOBAL_PAGES, cutoff, &writes, &|rows| {
+                    send(source, rows)
+                })
+                .await
+                {
+                    Ok(Some(oldest)) => warn(
+                        source,
+                        format!(
+                            "scanned the newest {} {} events, reads included (back to {} UTC) — [ narrows the window",
+                            GLOBAL_PAGES * 50,
+                            source.label(),
+                            back_to(oldest)
+                        ),
+                    ),
+                    Ok(None) => {}
+                    Err(e) => warn(source, e),
+                }
             }
         };
         let config = async {
@@ -571,7 +716,7 @@ impl AwsService for ChangesService {
                 Err(e) => warn(ChangeSource::Rds, e),
             }
         };
-        tokio::join!(trail, config, stacks, pipelines, scaling, rds);
+        tokio::join!(trail, global, config, stacks, pipelines, scaling, rds);
 
         let _ = event_tx.send(Event::ResourcesFullyLoaded {
             service: service_type,
@@ -585,18 +730,33 @@ impl AwsService for ChangesService {
     }
 }
 
-/// Write events, newest first, streamed a page at a time. `Ok(Some(t))`
-/// means the page cap stopped the scan with events older than `t` still
-/// unread — the caller says so.
+/// The one server-side `LookupEvents` filter a scan spends.
+#[derive(Clone, Copy)]
+enum TrailScan {
+    WritesOnly,
+    Source(&'static str),
+}
+
+/// Events newest first, streamed a page at a time, `keep` deciding which
+/// become rows. `Ok(Some(t))` means the page cap stopped the scan with
+/// events older than `t` (scanned, kept or not) still unread — the caller
+/// says so.
 async fn trail_changes(
     client: aws_sdk_cloudtrail::Client,
+    scan: TrailScan,
+    max_pages: usize,
     cutoff: i64,
+    keep: &(dyn Fn(&CloudTrailEvent) -> bool + Sync),
     send: &(dyn Fn(Vec<ChangeEvent>) + Sync),
 ) -> std::result::Result<Option<i64>, String> {
     use aws_sdk_cloudtrail::types::{LookupAttribute, LookupAttributeKey};
+    let (key, value) = match scan {
+        TrailScan::WritesOnly => (LookupAttributeKey::ReadOnly, "false"),
+        TrailScan::Source(s) => (LookupAttributeKey::EventSource, s),
+    };
     let attr = LookupAttribute::builder()
-        .attribute_key(LookupAttributeKey::ReadOnly)
-        .attribute_value("false")
+        .attribute_key(key)
+        .attribute_value(value)
         .build()
         .map_err(|e| e.to_string())?;
     let mut pages = client
@@ -611,16 +771,16 @@ async fn trail_changes(
     let mut oldest = None;
     while let Some(page) = pages.next().await {
         let page = page.map_err(|e| crate::error::sdk_error_message(&e))?;
-        let rows: Vec<ChangeEvent> = page
+        let events: Vec<CloudTrailEvent> = page
             .events()
             .iter()
-            .map(|e| ChangeEvent::from_trail(&CloudTrailEvent::from_sdk(e)))
-            .filter(|r| r.ts_secs >= cutoff)
+            .map(CloudTrailEvent::from_sdk)
+            .filter(|e| e.event_time_secs >= cutoff)
             .collect();
-        oldest = rows.iter().map(|r| r.ts_secs).min().or(oldest);
-        send(rows);
+        oldest = events.iter().map(|e| e.event_time_secs).min().or(oldest);
+        send(events.iter().filter(|e| keep(e)).map(ChangeEvent::from_trail).collect());
         read += 1;
-        if read >= CT_PAGES {
+        if read >= max_pages {
             return Ok(page.next_token().is_some().then_some(oldest.unwrap_or(cutoff)));
         }
     }
@@ -985,5 +1145,40 @@ mod tests {
         assert_eq!(readable_tail("arn:aws:iam::1:role/github-actions-deploy"), "github-actions-deploy");
         assert_eq!(readable_tail("arn:aws:lambda:us-east-1:1:function:orders-api"), "orders-api");
         assert_eq!(readable_tail("my-bucket"), "my-bucket");
+    }
+
+    #[test]
+    fn iam_events_get_their_own_source_request_and_decoded_policy() {
+        let raw = r#"{"userIdentity":{"type":"AssumedRole","invokedBy":"sso.amazonaws.com"},
+            "requestParameters":{"roleName":"deploy","policyName":"extras",
+            "policyDocument":"%7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%5D%7D"}}"#;
+        let mut ev = trail("PutRolePolicy", "AssumedRole", "", raw);
+        ev.event_source = "iam.amazonaws.com".to_string();
+        let c = ChangeEvent::from_trail(&ev);
+        assert_eq!(c.source, ChangeSource::Iam);
+        assert_eq!(c.resource_type(), "IAM Change");
+        // Made through a service, but it still changes access.
+        assert!(!c.is_noise());
+        assert_eq!(c.request, vec![("roleName".to_string(), "deploy".to_string()), ("policyName".to_string(), "extras".to_string())]);
+        let policy = c.policy.as_deref().unwrap();
+        assert!(policy.contains("\"Version\": \"2012-10-17\""), "{policy}");
+        let rows = c.details();
+        assert!(rows.iter().any(|(k, v)| k == "Policy document" && v.is_empty()));
+        assert!(rows.iter().any(|(k, _)| k == "    \"Statement\": []"));
+        // Global events open in us-east-1's event history, wherever you are.
+        assert!(c.console_url("ap-southeast-2").unwrap().contains("us-east-1.console"));
+
+        let mut org = trail("UpdatePolicy", "AssumedRole", "", r#"{"requestParameters":{"policyId":"p-1","content":"{\"Version\":\"2012-10-17\"}"}}"#);
+        org.event_source = "organizations.amazonaws.com".to_string();
+        let o = ChangeEvent::from_trail(&org);
+        assert_eq!(o.source, ChangeSource::Org);
+        assert!(o.policy.unwrap().contains("2012-10-17"));
+    }
+
+    #[test]
+    fn percent_decoding_leaves_bad_escapes_alone() {
+        assert_eq!(percent_decode("%7B%22a%22%7D"), "{\"a\"}");
+        assert_eq!(percent_decode("a+b%2"), "a b%2");
+        assert_eq!(pretty_policy("not json"), "not json");
     }
 }

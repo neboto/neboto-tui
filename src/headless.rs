@@ -516,6 +516,16 @@ fn filter_unlimited(resources: Vec<Box<dyn Resource>>, args: &LsArgs) -> Vec<Box
         .collect();
 
     if text.trim().is_empty() {
+        let mut kept = kept;
+        // @changes merges sources in completion order; the TUI reads it
+        // newest first, and so should a script.
+        if kept.iter().any(|r| r.as_any().is::<crate::aws::services::changes::ChangeEvent>()) {
+            kept.sort_by_key(|r| {
+                std::cmp::Reverse(
+                    r.as_any().downcast_ref::<crate::aws::services::changes::ChangeEvent>().map_or(i64::MIN, |c| c.ts_secs),
+                )
+            });
+        }
         kept
     } else {
         let order = crate::search::fuzzy::FuzzyMatcher::new().filter_resources(text.trim(), &kept);
