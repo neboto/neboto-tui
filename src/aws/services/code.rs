@@ -2384,13 +2384,23 @@ async fn fetch_repo_pull_requests(
     let mut prs = Vec::new();
     let mut budget_hit = false;
     for id in ids {
-        let allowed = budget
-            .fetch_update(
+        // A hand-rolled decrement-if-positive: rustc 1.99 deprecates
+        // `fetch_update` for `try_update`, which CI's pinned 1.97 lacks.
+        let mut left = budget.load(std::sync::atomic::Ordering::Relaxed);
+        let allowed = loop {
+            if left == 0 {
+                break false;
+            }
+            match budget.compare_exchange_weak(
+                left,
+                left - 1,
                 std::sync::atomic::Ordering::Relaxed,
                 std::sync::atomic::Ordering::Relaxed,
-                |v| v.checked_sub(1),
-            )
-            .is_ok();
+            ) {
+                Ok(_) => break true,
+                Err(now) => left = now,
+            }
+        };
         if !allowed {
             budget_hit = true;
             break;
