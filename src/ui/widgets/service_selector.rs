@@ -1,5 +1,6 @@
 use crate::app::PopupHits;
 use crate::aws::service::ServiceType;
+use crate::search::fuzzy::FuzzyMatcher;
 use crate::ui::theme;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -95,21 +96,21 @@ impl ServiceSelectorState {
                     .extend(members.into_iter().map(SelectorRow::Service));
             }
         } else {
-            let q = self.search.to_lowercase();
-            self.rows = self
-                .all
-                .iter()
-                .filter(|s| {
-                    let name = s.name().to_lowercase();
-                    let short = s.short_name().to_lowercase();
-                    let desc = s.description().to_lowercase();
-                    let cat = s.category().to_lowercase();
-                    name.contains(&q)
-                        || short.contains(&q)
-                        || desc.contains(&q)
-                        || cat.contains(&q)
+            // Fuzzy over every field, best match first; the exact check
+            // covers the short prefix too, so `ec2` / `s3` / `r53` still put
+            // their service on top.
+            self.rows = FuzzyMatcher::new()
+                .filter_fields(&self.search, &self.all, |s| {
+                    vec![
+                        s.name(),
+                        s.short_name(),
+                        s.prefix().trim_start_matches('@'),
+                        s.description(),
+                        s.category(),
+                    ]
                 })
-                .map(|s| SelectorRow::Service(*s))
+                .into_iter()
+                .map(|(idx, _)| SelectorRow::Service(self.all[idx]))
                 .collect();
         }
         self.selected_index = self.first_service_row();
@@ -345,7 +346,7 @@ pub fn render_service_selector(
         .border_style(Style::default().fg(theme::border_dim()))
         .title_bottom(
             theme::hint_line(&[
-                ("type", "filter"),
+                ("type", "fuzzy filter"),
                 ("↑/↓", "move"),
                 ("^d/^u", "page"),
                 ("←/→", "category"),
@@ -499,6 +500,33 @@ mod tests {
             state.pop_char();
         }
         assert!(matches!(state.rows[0], SelectorRow::Header(_)));
+    }
+
+    #[test]
+    fn short_prefixes_rank_their_service_first() {
+        for (query, want) in [
+            ("ec2", ServiceType::EC2),
+            ("s3", ServiceType::S3),
+            ("r53", ServiceType::Route53),
+            ("lambda", ServiceType::Lambda),
+        ] {
+            let mut state = ServiceSelectorState::new();
+            state.show(None);
+            for c in query.chars() {
+                state.push_char(c);
+            }
+            assert_eq!(state.selected_service(), Some(want), "{query}");
+        }
+    }
+
+    #[test]
+    fn filtering_is_fuzzy() {
+        let mut state = ServiceSelectorState::new();
+        state.show(None);
+        for c in "dynmo".chars() {
+            state.push_char(c);
+        }
+        assert_eq!(state.selected_service(), Some(ServiceType::DynamoDb));
     }
 
     #[test]

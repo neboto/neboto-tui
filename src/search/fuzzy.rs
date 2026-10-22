@@ -36,7 +36,7 @@ impl FuzzyMatcher {
                 // query, and `resolve_pending_jump` only looks at what the
                 // filter kept. A type whose `search_text` omits its own id
                 // (IAM's synthetic account row) was otherwise unreachable.
-                let q = sanitized_query.trim();
+                let q = sanitized_query;
                 if resource.id() == q || resource.name() == q {
                     return Some((idx, i64::MAX));
                 }
@@ -54,28 +54,40 @@ impl FuzzyMatcher {
         matches
     }
 
-    /// Filter plain strings (picker modals) with the same scoring and
+    /// Filter plain strings (picker modals) with the same fuzzy scoring and
     /// threshold as `filter_resources`. Returns sorted (index, score) pairs;
-    /// an exact (case-insensitive) match ranks first, ties keep input order.
+    /// ties keep input order. Unlike `filter_resources` (whose exact check
+    /// serves jumps and is case-sensitive), an exact match here ignores case,
+    /// so typing `s3` or `PROD` floats that row first.
     pub fn filter_strings<S: AsRef<str>>(&self, query: &str, items: &[S]) -> Vec<(usize, i64)> {
-        if query.is_empty() {
+        self.filter_fields(query, items, |item| vec![item.as_ref()])
+    }
+
+    /// `filter_strings` over several fields per item (a region's code *and*
+    /// display name): an item scores its best field, and an exact
+    /// (case-insensitive) match on any field ranks first.
+    pub fn filter_fields<'a, T, F>(&self, query: &str, items: &'a [T], fields: F) -> Vec<(usize, i64)>
+    where
+        F: Fn(&'a T) -> Vec<&'a str>,
+    {
+        let q = Self::sanitize(query);
+        if q.is_empty() {
             return (0..items.len()).map(|i| (i, 0)).collect();
         }
-
-        let sanitized_query = Self::sanitize(query);
-        let min_score = Self::min_score(sanitized_query);
-        let q = sanitized_query.trim();
+        let min_score = Self::min_score(q);
 
         let mut matches: Vec<(usize, i64)> = items
             .iter()
             .enumerate()
             .filter_map(|(idx, item)| {
-                let text = item.as_ref();
-                if text.eq_ignore_ascii_case(q) {
+                let fields = fields(item);
+                if fields.iter().any(|f| f.eq_ignore_ascii_case(q)) {
                     return Some((idx, i64::MAX));
                 }
-                self.matcher
-                    .fuzzy_match(text, sanitized_query)
+                fields
+                    .iter()
+                    .filter_map(|f| self.matcher.fuzzy_match(f, q))
+                    .max()
                     .filter(|&score| score >= min_score)
                     .map(|score| (idx, score))
             })
@@ -85,15 +97,19 @@ impl FuzzyMatcher {
         matches
     }
 
-    /// Remove trailing backslashes that break fuzzy matching.
+    /// Remove trailing backslashes that break fuzzy matching, and surrounding
+    /// whitespace (a trailing space would otherwise have to match a literal
+    /// space in the candidate).
     fn sanitize(query: &str) -> &str {
-        query.trim_end_matches('\\')
+        query.trim().trim_end_matches('\\').trim_end()
     }
 
-    /// Minimum score scales with query length to cut off scattered character
-    /// coincidences (e.g. "1a" matching "us-east-1b ... available" via CIDR + state).
+    /// Minimum score scales with query length (in characters, not bytes, so a
+    /// non-ASCII query isn't held to a higher bar) to cut off scattered
+    /// character coincidences (e.g. "1a" matching "us-east-1b ... available"
+    /// via CIDR + state).
     fn min_score(sanitized_query: &str) -> i64 {
-        sanitized_query.len() as i64 * 10
+        sanitized_query.chars().count() as i64 * 10
     }
 }
 
@@ -290,5 +306,36 @@ mod tests {
         assert_eq!(fuzzy.iter().map(|m| m.0).collect::<Vec<_>>(), vec![0]);
 
         assert!(matcher.filter_strings("zzz", &items).is_empty());
+    }
+
+    #[test]
+    fn a_trailing_space_keeps_the_fuzzy_matches() {
+        let matcher = FuzzyMatcher::new();
+        let items = vec!["prod-admin".to_string(), "prod".to_string()];
+        let spaced = matcher.filter_strings("prod ", &items);
+        assert_eq!(spaced.iter().map(|m| m.0).collect::<Vec<_>>(), vec![1, 0]);
+    }
+
+    #[test]
+    fn the_threshold_counts_characters_not_bytes() {
+        // "ō" is two bytes: a byte-length threshold asked a two-character
+        // query for 40 points, and this match scores 26.
+        let matcher = FuzzyMatcher::new();
+        let items = vec!["tōkyō-prod".to_string()];
+        assert_eq!(matcher.filter_strings("ōō", &items).len(), 1);
+    }
+
+    #[test]
+    fn filter_fields_scores_the_best_field_and_exact_on_any() {
+        let matcher = FuzzyMatcher::new();
+        let items = vec![("us-east-1", "N. Virginia"), ("eu-west-1", "Ireland")];
+        let fields = |r: &(&'static str, &'static str)| vec![r.0, r.1];
+
+        let by_name = matcher.filter_fields("irel", &items, fields);
+        assert_eq!(by_name.iter().map(|m| m.0).collect::<Vec<_>>(), vec![1]);
+        let by_code = matcher.filter_fields("use1", &items, fields);
+        assert_eq!(by_code.first().map(|m| m.0), Some(0), "{by_code:?}");
+        let exact = matcher.filter_fields("IRELAND", &items, fields);
+        assert_eq!(exact, vec![(1, i64::MAX)]);
     }
 }

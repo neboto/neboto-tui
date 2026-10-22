@@ -1,3 +1,4 @@
+use crate::search::fuzzy::FuzzyMatcher;
 use crate::ui::theme;
 use crate::ui::widgets::region_selector::render_search_line;
 use ratatui::{
@@ -59,17 +60,18 @@ impl QuotaServiceSelectorState {
         self.loading = false;
     }
 
+    /// Services matching the query — fuzzy over the code and the name, best
+    /// match first.
     pub fn filtered(&self) -> Vec<(String, String)> {
         if self.query.is_empty() {
             return self.services.clone();
         }
-        let q = self.query.to_lowercase();
-        self.services
-            .iter()
-            .filter(|(code, name)| {
-                code.to_lowercase().contains(&q) || name.to_lowercase().contains(&q)
+        FuzzyMatcher::new()
+            .filter_fields(&self.query, &self.services, |(code, name)| {
+                vec![code.as_str(), name.as_str()]
             })
-            .cloned()
+            .into_iter()
+            .map(|(idx, _)| self.services[idx].clone())
             .collect()
     }
 
@@ -168,7 +170,7 @@ pub fn render_quota_service_selector(
     let block = theme::popup_block("Pick service (quotas)")
         .title_bottom(
             theme::hint_line(&[
-                ("type", "filter"),
+                ("type", "fuzzy filter"),
                 ("↑/↓", "move"),
                 ("^d/^u", "page"),
                 ("⏎", "select"),
@@ -253,4 +255,25 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filter_is_fuzzy_over_code_and_name() {
+        let mut s = QuotaServiceSelectorState::new();
+        s.set_services(vec![
+            ("ec2".to_string(), "Amazon Elastic Compute Cloud (Amazon EC2)".to_string()),
+            ("lambda".to_string(), "AWS Lambda".to_string()),
+            ("elasticloadbalancing".to_string(), "Elastic Load Balancing".to_string()),
+        ]);
+        s.query = "elb".to_string();
+        assert_eq!(s.selected_code().as_deref(), Some("elasticloadbalancing"));
+        s.query = "EC2".to_string();
+        assert_eq!(s.selected_code().as_deref(), Some("ec2"), "exact code, any case");
+        s.query = "aws lmbd".to_string();
+        assert_eq!(s.filtered().len(), 1);
+    }
 }
