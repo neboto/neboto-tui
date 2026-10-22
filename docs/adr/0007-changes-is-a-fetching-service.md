@@ -60,5 +60,7 @@ caches. It's an ordinary `ServiceType` with its own clients, registered in
   so it spends the same budget on every interval.
 - **New sources are new fetches in `changes.rs`.** Don't route them through
   another service's cache. A source whose events already appear as
-  CloudTrail writes (ECS `UpdateService`) waits until it adds something the
-  trail doesn't have.
+  CloudTrail writes waits until it adds something the trail doesn't have.
+  ECS is the example: the `UpdateService` call was already there, and the
+  ECS source (#257) earned its fan-out with what the trail can't see, the
+  rollout's progress and circuit-breaker rollbacks.
