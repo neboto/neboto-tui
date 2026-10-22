@@ -54,7 +54,7 @@ use ui::widgets::{
     rds_tabs,
     redshift_tabs,
     batch_tabs,
-    xray_tabs,
+    xray_tabs, changes_tabs,
     dms_tabs,
     beanstalk_tabs,
     region_selector, resolver_tabs, resource_list,
@@ -418,6 +418,9 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
             }
             Some(ServiceType::XRay) => {
                 xray_tabs::render_xray_tabs(app, sub_tabs_area, frame);
+            }
+            Some(ServiceType::Changes) => {
+                changes_tabs::render_changes_tabs(app, sub_tabs_area, frame);
             }
             Some(ServiceType::Dms) => {
                 dms_tabs::render_dms_tabs(app, sub_tabs_area, frame);

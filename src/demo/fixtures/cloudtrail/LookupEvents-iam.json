@@ -1,0 +1,53 @@
+{
+ "Events": [
+  {
+   "EventId": "1a0de001-demo-iam-0000-000000000001",
+   "EventName": "GetRole",
+   "ReadOnly": "true",
+   "EventTime": {{epoch:now-20m}},
+   "EventSource": "iam.amazonaws.com",
+   "Username": "alice",
+   "Resources": [
+    {
+     "ResourceType": "AWS::IAM::Role",
+     "ResourceName": "github-actions-deploy"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"AssumedRole\",\"arn\":\"arn:aws:sts::{{account}}:assumed-role/AWSReservedSSO_Admin/alice\",\"accountId\":\"{{account}}\",\"sessionContext\":{\"sessionIssuer\":{\"type\":\"Role\",\"arn\":\"arn:aws:iam::{{account}}:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin\",\"userName\":\"AWSReservedSSO_Admin\"}}},\"eventTime\":\"{{iso:now-20m}}\",\"eventSource\":\"iam.amazonaws.com\",\"eventName\":\"GetRole\",\"awsRegion\":\"us-east-1\",\"sourceIPAddress\":\"203.0.113.24\",\"userAgent\":\"console.amazonaws.com\",\"requestParameters\":{\"roleName\":\"github-actions-deploy\"},\"readOnly\":true,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "1a0de002-demo-iam-0000-000000000002",
+   "EventName": "PutRolePolicy",
+   "ReadOnly": "false",
+   "EventTime": {{epoch:now-46m}},
+   "EventSource": "iam.amazonaws.com",
+   "Username": "alice",
+   "Resources": [
+    {
+     "ResourceType": "AWS::IAM::Role",
+     "ResourceName": "arn:aws:iam::{{account}}:role/github-actions-deploy"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"AssumedRole\",\"arn\":\"arn:aws:sts::{{account}}:assumed-role/AWSReservedSSO_Admin/alice\",\"accountId\":\"{{account}}\",\"sessionContext\":{\"sessionIssuer\":{\"type\":\"Role\",\"arn\":\"arn:aws:iam::{{account}}:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin\",\"userName\":\"AWSReservedSSO_Admin\"}}},\"eventTime\":\"{{iso:now-46m}}\",\"eventSource\":\"iam.amazonaws.com\",\"eventName\":\"PutRolePolicy\",\"awsRegion\":\"us-east-1\",\"sourceIPAddress\":\"203.0.113.24\",\"userAgent\":\"console.amazonaws.com\",\"requestParameters\":{\"roleName\":\"github-actions-deploy\",\"policyName\":\"deploy-extras\",\"policyDocument\":\"%7B%22Version%22%3A%222012-10-17%22%2C%22Statement%22%3A%5B%7B%22Effect%22%3A%22Allow%22%2C%22Action%22%3A%5B%22iam%3APassRole%22%2C%22ecs%3A%2A%22%5D%2C%22Resource%22%3A%22%2A%22%7D%5D%7D\"},\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  },
+  {
+   "EventId": "1a0de003-demo-iam-0000-000000000003",
+   "EventName": "AttachRolePolicy",
+   "ReadOnly": "false",
+   "EventTime": {{epoch:now-47m}},
+   "EventSource": "iam.amazonaws.com",
+   "Username": "alice",
+   "Resources": [
+    {
+     "ResourceType": "AWS::IAM::Role",
+     "ResourceName": "arn:aws:iam::{{account}}:role/github-actions-deploy"
+    },
+    {
+     "ResourceType": "AWS::IAM::Policy",
+     "ResourceName": "arn:aws:iam::aws:policy/AdministratorAccess"
+    }
+   ],
+   "CloudTrailEvent": "{\"eventVersion\":\"1.10\",\"userIdentity\":{\"type\":\"AssumedRole\",\"arn\":\"arn:aws:sts::{{account}}:assumed-role/AWSReservedSSO_Admin/alice\",\"accountId\":\"{{account}}\",\"sessionContext\":{\"sessionIssuer\":{\"type\":\"Role\",\"arn\":\"arn:aws:iam::{{account}}:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin\",\"userName\":\"AWSReservedSSO_Admin\"}}},\"eventTime\":\"{{iso:now-47m}}\",\"eventSource\":\"iam.amazonaws.com\",\"eventName\":\"AttachRolePolicy\",\"awsRegion\":\"us-east-1\",\"sourceIPAddress\":\"203.0.113.24\",\"userAgent\":\"console.amazonaws.com\",\"requestParameters\":{\"roleName\":\"github-actions-deploy\",\"policyArn\":\"arn:aws:iam::aws:policy/AdministratorAccess\"},\"readOnly\":false,\"eventType\":\"AwsApiCall\",\"managementEvent\":true,\"recipientAccountId\":\"{{account}}\",\"eventCategory\":\"Management\"}"
+  }
+ ]
+}

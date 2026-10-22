@@ -74,6 +74,7 @@ pub enum ServiceType {
     Redshift,
     Batch,
     XRay,
+    Changes,
     Dms,
     Beanstalk,
     AppSync,
@@ -158,6 +159,7 @@ impl ServiceType {
             ServiceType::Redshift,
             ServiceType::Batch,
             ServiceType::XRay,
+            ServiceType::Changes,
             ServiceType::Dms,
             ServiceType::Beanstalk,
             ServiceType::Budgets,
@@ -275,6 +277,7 @@ impl ServiceType {
             ServiceType::CloudFormation
             | ServiceType::CloudWatch
             | ServiceType::XRay
+            | ServiceType::Changes
             | ServiceType::CloudTrail
             | ServiceType::Config
             | ServiceType::Ssm
@@ -307,6 +310,7 @@ impl ServiceType {
             ServiceType::Acm => "ACM",
             ServiceType::CloudWatch => "CloudWatch",
             ServiceType::XRay => "X-Ray",
+            ServiceType::Changes => "Changes",
             ServiceType::IAM => "IAM",
             ServiceType::Organizations => "Organizations",
             ServiceType::Elb => "ELB",
@@ -388,6 +392,7 @@ impl ServiceType {
             ServiceType::Acm => "ACM",
             ServiceType::CloudWatch => "CW",
             ServiceType::XRay => "XRAY",
+            ServiceType::Changes => "CHG",
             ServiceType::IAM => "IAM",
             ServiceType::Organizations => "Org",
             ServiceType::Elb => "ELB",
@@ -468,6 +473,7 @@ impl ServiceType {
             ServiceType::Acm => "ACM Certificates",
             ServiceType::CloudWatch => "CloudWatch Alarms & Logs",
             ServiceType::XRay => "Service Map, Traces, Groups, Sampling Rules",
+            ServiceType::Changes => "Recent changes: CloudTrail writes, Config, deploys, scaling, RDS events",
             ServiceType::IAM => "IAM Roles, Policies, Users & Groups",
             ServiceType::Organizations => "Organizations Accounts, OUs & SCPs",
             ServiceType::Elb => "Load Balancers & Target Groups",
@@ -553,6 +559,7 @@ impl ServiceType {
             "acm" | "certs" | "certificates" | "tls" | "ssl" => Some(ServiceType::Acm),
             "cw" | "cloudwatch" | "alarms" | "logs" => Some(ServiceType::CloudWatch),
             "xray" | "x-ray" | "traces" | "tracing" | "servicemap" => Some(ServiceType::XRay),
+            "changes" | "changed" | "whatchanged" => Some(ServiceType::Changes),
             "iam" | "roles" | "policies" => Some(ServiceType::IAM),
             "orgs" | "organizations" | "org" | "accounts" | "ous" | "scps" => {
                 Some(ServiceType::Organizations)
@@ -668,6 +675,7 @@ impl ServiceType {
             ServiceType::Acm => "@acm",
             ServiceType::CloudWatch => "@cw",
             ServiceType::XRay => "@xray",
+            ServiceType::Changes => "@changes",
             ServiceType::IAM => "@iam",
             ServiceType::Organizations => "@orgs",
             ServiceType::Elb => "@elb",

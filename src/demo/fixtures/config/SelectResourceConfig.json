@@ -1,0 +1,32 @@
+{
+  "Results": [
+    "{\"resourceId\":\"arn:aws:ecs:{{region}}:{{account}}:service/acme-prod/orders-worker\",\"resourceName\":\"orders-worker\",\"resourceType\":\"AWS::ECS::Service\",\"arn\":\"arn:aws:ecs:{{region}}:{{account}}:service/acme-prod/orders-worker\",\"awsRegion\":\"{{region}}\",\"configurationItemCaptureTime\":\"{{iso:now-39m}}\",\"configurationItemStatus\":\"OK\"}",
+    "{\"resourceId\":\"arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:15\",\"resourceName\":\"orders-worker:15\",\"resourceType\":\"AWS::ECS::TaskDefinition\",\"arn\":\"arn:aws:ecs:{{region}}:{{account}}:task-definition/orders-worker:15\",\"awsRegion\":\"{{region}}\",\"configurationItemCaptureTime\":\"{{iso:now-41m}}\",\"configurationItemStatus\":\"ResourceDiscovered\"}",
+    "{\"resourceId\":\"orders-worker-compliance\",\"resourceType\":\"AWS::Config::ResourceCompliance\",\"awsRegion\":\"{{region}}\",\"configurationItemCaptureTime\":\"{{iso:now-38m}}\",\"configurationItemStatus\":\"OK\"}"
+  ],
+  "QueryInfo": {
+    "SelectFields": [
+      {
+        "Name": "resourceId"
+      },
+      {
+        "Name": "resourceName"
+      },
+      {
+        "Name": "resourceType"
+      },
+      {
+        "Name": "arn"
+      },
+      {
+        "Name": "awsRegion"
+      },
+      {
+        "Name": "configurationItemCaptureTime"
+      },
+      {
+        "Name": "configurationItemStatus"
+      }
+    ]
+  }
+}

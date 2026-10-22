@@ -1,0 +1,9 @@
+<DescribeScalingActivitiesResponse xmlns="http://autoscaling.amazonaws.com/doc/2011-01-01/">
+  <DescribeScalingActivitiesResult>
+    <Activities>
+      <member><ActivityId>a7c1e2d3-demo-4b5c-8d9e-000000000002</ActivityId><AutoScalingGroupName>awseb-e-p0rtalstd1-stack-AWSEBAutoScalingGroup-7Q2W3E4R5T6Y</AutoScalingGroupName><AutoScalingGroupARN>arn:aws:autoscaling:{{region}}:{{account}}:autoScalingGroup:3d4e5f6a-demo-4b7c-8d9e-000000000001:autoScalingGroupName/awseb-e-p0rtalstd1-stack-AWSEBAutoScalingGroup-7Q2W3E4R5T6Y</AutoScalingGroupARN><Description>Launching a new EC2 instance: i-0p0rta1std0000c3</Description><Cause>At {{iso:now-2h-3m}} an instance was started in response to a difference between desired and actual capacity, increasing the capacity from 1 to 2.</Cause><StartTime>{{iso:now-2h-3m}}</StartTime><EndTime>{{iso:now-2h-2m}}</EndTime><StatusCode>Successful</StatusCode><Progress>100</Progress></member>
+      <member><ActivityId>a7c1e2d3-demo-4b5c-8d9e-000000000001</ActivityId><AutoScalingGroupName>awseb-e-p0rtalstd1-stack-AWSEBAutoScalingGroup-7Q2W3E4R5T6Y</AutoScalingGroupName><AutoScalingGroupARN>arn:aws:autoscaling:{{region}}:{{account}}:autoScalingGroup:3d4e5f6a-demo-4b7c-8d9e-000000000001:autoScalingGroupName/awseb-e-p0rtalstd1-stack-AWSEBAutoScalingGroup-7Q2W3E4R5T6Y</AutoScalingGroupARN><Description>Terminating EC2 instance: i-0p0rta1std0000b2</Description><Cause>At {{iso:now-2h-4m}} an instance was taken out of service in response to an ELB system health check failure.</Cause><StartTime>{{iso:now-2h-4m}}</StartTime><EndTime>{{iso:now-2h-3m}}</EndTime><StatusCode>Successful</StatusCode><Progress>100</Progress></member>
+    </Activities>
+  </DescribeScalingActivitiesResult>
+  <ResponseMetadata><RequestId>5e6f7a8b-demo-4c9d-0e1f-000000000001</RequestId></ResponseMetadata>
+</DescribeScalingActivitiesResponse>
