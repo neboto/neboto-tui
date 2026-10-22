@@ -2387,8 +2387,9 @@ the service you're touching.
   insights (`GetInsightSummaries`), per-group service maps, and CloudWatch
   Application Signals / Transaction Search (spans sent there instead of
   X-Ray don't appear here).
-- **Changes** (`@changes`, `changes.rs`, #241) — "what changed just before
-  this started?", account-wide (the `W` timeline is per resource). One
+- **Changes** (`@changes`, `changes.rs`, #241, ADR 0007) — "what changed
+  just before this started?", account-wide (the `W` timeline is per
+  resource). A regular fetching service, **not** virtual like `@audit`. One
   regional list, newest first (the Executions default-sort exception), over
   a `[`/`]` window (15m / 1h / 6h / 24h / 7d, variant-cached like X-Ray).
   Sub-tabs filter by source via resource types: **All / IAM & Orgs /

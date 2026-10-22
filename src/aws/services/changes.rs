@@ -11,7 +11,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-/// `@changes` (#241) — "what changed in this account/region just before
+/// `@changes` (#241, ADR 0007) — "what changed in this account/region just before
 /// this started?". The account-wide version of the `W` timeline: one list,
 /// newest first, merged from sources that each answer part of it:
 ///
