@@ -7,6 +7,7 @@
 
 use crate::aws::services::cost::CostGroupBy;
 use crate::lazy::Lazy;
+use crate::search::fuzzy::FuzzyMatcher;
 use crate::ui::theme;
 use crate::ui::widgets::region_selector::render_search_line;
 use ratatui::{
@@ -58,12 +59,12 @@ impl CostKeyPickerState {
         self.visible = false;
     }
 
-    /// The keys matching the filter (case-insensitive substring).
+    /// The keys matching the filter — fuzzy (smart-case), best match first.
     pub fn filtered(&self, keys: &[String]) -> Vec<String> {
-        let q = self.query.to_lowercase();
-        keys.iter()
-            .filter(|k| q.is_empty() || k.to_lowercase().contains(&q))
-            .cloned()
+        FuzzyMatcher::new()
+            .filter_strings(&self.query, keys)
+            .into_iter()
+            .map(|(idx, _)| keys[idx].clone())
             .collect()
     }
 
@@ -155,7 +156,7 @@ pub fn render_cost_key_picker(
 
     let block = theme::popup_block(title(state.kind)).title_bottom(
         theme::hint_line(&[
-            ("type", "filter"),
+            ("type", "fuzzy filter"),
             ("↑/↓", "move"),
             ("⏎", "group by"),
             ("Esc", "close"),
@@ -268,7 +269,7 @@ mod tests {
         assert_eq!(s.choice(&keys()).as_deref(), Some("env"), "cursor starts on the current key");
         s.push_char('c');
         s.push_char('o');
-        assert_eq!(s.choice(&keys()).as_deref(), Some("CostCenter"), "filter is case-insensitive");
+        assert_eq!(s.choice(&keys()).as_deref(), Some("CostCenter"), "lowercase is case-insensitive");
         s.push_char('x');
         assert_eq!(s.choice(&keys()).as_deref(), Some("cox"), "no match → the typed key");
         let mut empty = CostKeyPickerState::new();

@@ -1,4 +1,5 @@
 use crate::aws::region::Region;
+use crate::search::fuzzy::FuzzyMatcher;
 use crate::ui::theme;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -29,15 +30,6 @@ pub struct RegionSelectorState {
     /// List-area height recorded at render time (`Cell`: render only sees
     /// `&self`), so `Ctrl-d`/`Ctrl-u` page jumps scale with the actual popup.
     viewport: std::cell::Cell<u16>,
-}
-
-fn matches(region: &Region, query: &str) -> bool {
-    if query.is_empty() {
-        return true;
-    }
-    let q = query.to_lowercase();
-    region.as_str().to_lowercase().contains(&q)
-        || region.display_name().to_lowercase().contains(&q)
 }
 
 impl RegionSelectorState {
@@ -74,12 +66,18 @@ impl RegionSelectorState {
         self.visible = false;
     }
 
-    /// Regions matching the current search query.
+    /// Regions matching the current search query — fuzzy over the code and
+    /// the display name, best match first (config `regions` order otherwise).
     pub fn filtered(&self) -> Vec<Region> {
-        self.regions
-            .iter()
-            .copied()
-            .filter(|r| matches(r, &self.query))
+        if self.query.is_empty() {
+            return self.regions.clone();
+        }
+        FuzzyMatcher::new()
+            .filter_fields(&self.query, &self.regions, |r| {
+                vec![r.as_str(), r.display_name()]
+            })
+            .into_iter()
+            .map(|(idx, _)| self.regions[idx])
             .collect()
     }
 
@@ -169,7 +167,7 @@ pub fn render_region_selector(
     let block = block
         .title_bottom(
             theme::hint_line(&[
-                ("type", "filter"),
+                ("type", "fuzzy filter"),
                 ("↑/↓", "move"),
                 ("^d/^u", "page"),
                 ("⏎", "select"),
@@ -306,6 +304,15 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_is_fuzzy_over_code_and_name() {
+        let mut s = RegionSelectorState::new();
+        s.query = "frankfrt".to_string();
+        assert_eq!(s.selected_region(), Some(Region::EuCentral1));
+        s.query = "apse2".to_string();
+        assert_eq!(s.selected_region(), Some(Region::ApSoutheast2));
+    }
 
     #[test]
     fn configured_regions_lead_the_list_once() {

@@ -22,11 +22,20 @@ pub const EXIT_ASSUMED_ROLE_ENTRY: &str = "↩ exit assumed role (back to base a
 /// accounts, delegated setups).
 pub const ASSUME_BY_ID_ENTRY: &str = "⇄ assume role by account id…";
 
+fn is_action_row(row: &str) -> bool {
+    row == EXIT_ASSUMED_ROLE_ENTRY || row == ASSUME_BY_ID_ENTRY
+}
+
 pub struct ProfileSelectorState {
     pub visible: bool,
     pub selected_index: usize,
     pub query: String,
     profiles: Vec<String>,
+    /// `filtered()` for the query it was computed for — it's called several
+    /// times per key and frame, and each call would re-score every profile.
+    /// Keyed by the query (not cleared in `push_char`) because `query` is
+    /// public; `show` clears it, since that re-reads `profiles`.
+    filtered_cache: std::cell::RefCell<Option<(String, Vec<String>)>>,
     /// List-area height recorded at render time (`Cell`: render only sees
     /// `&self`), so `Ctrl-d`/`Ctrl-u` page jumps scale with the actual popup.
     viewport: std::cell::Cell<u16>,
@@ -39,6 +48,7 @@ impl ProfileSelectorState {
             selected_index: 0,
             query: String::new(),
             profiles: Vec::new(),
+            filtered_cache: std::cell::RefCell::new(None),
             viewport: std::cell::Cell::new(0),
         }
     }
@@ -53,6 +63,7 @@ impl ProfileSelectorState {
         if role_assumed {
             self.profiles.insert(0, EXIT_ASSUMED_ROLE_ENTRY.to_string());
         }
+        self.filtered_cache.take();
         self.visible = true;
         self.query.clear();
         let target = current_profile.unwrap_or("default");
@@ -68,16 +79,35 @@ impl ProfileSelectorState {
     }
 
     /// Profiles matching the current search query, fuzzy-matched (same
-    /// matcher as the resource list) and best match first.
+    /// matcher as the resource list) and best match first. The action rows
+    /// (assume by id / exit role) match by literal substring only and sort
+    /// after every profile, so a query aimed at a profile (`acc` for
+    /// `sandbox-acct`) can't leave `⏎` on an action instead.
     pub fn filtered(&self) -> Vec<String> {
         if self.query.is_empty() {
             return self.profiles.clone();
         }
-        FuzzyMatcher::new()
-            .filter_strings(&self.query, &self.profiles)
+        if let Some((q, rows)) = self.filtered_cache.borrow().as_ref() {
+            if *q == self.query {
+                return rows.clone();
+            }
+        }
+        let (actions, profiles): (Vec<&String>, Vec<&String>) =
+            self.profiles.iter().partition(|p| is_action_row(p));
+        let needle = self.query.trim().to_lowercase();
+        let mut rows: Vec<String> = FuzzyMatcher::new()
+            .filter_strings(&self.query, &profiles)
             .into_iter()
-            .map(|(idx, _)| self.profiles[idx].clone())
-            .collect()
+            .map(|(idx, _)| profiles[idx].clone())
+            .collect();
+        rows.extend(
+            actions
+                .into_iter()
+                .filter(|a| a.to_lowercase().contains(&needle))
+                .cloned(),
+        );
+        *self.filtered_cache.borrow_mut() = Some((self.query.clone(), rows.clone()));
+        rows
     }
 
     pub fn next(&mut self) {
@@ -207,7 +237,7 @@ pub fn render_profile_selector(
         .iter()
         .map(|profile| {
             let is_current = profile == active;
-            let is_exit = profile == EXIT_ASSUMED_ROLE_ENTRY || profile == ASSUME_BY_ID_ENTRY;
+            let is_exit = is_action_row(profile);
             let marker = if is_current {
                 Span::styled("● ", Style::default().fg(theme::success()))
             } else {
@@ -290,5 +320,19 @@ mod tests {
         s.query = "zzz".to_string();
         assert!(s.filtered().is_empty());
         assert_eq!(s.selected_profile(), None);
+    }
+
+    #[test]
+    fn action_rows_rank_below_profiles_and_match_literally() {
+        let mut s = state_with(&[ASSUME_BY_ID_ENTRY, "default", "sandbox-acct"]);
+        s.query = "acc".to_string();
+        assert_eq!(s.filtered(), vec!["sandbox-acct", ASSUME_BY_ID_ENTRY]);
+
+        // Fuzzy-only hits on an action row's text don't keep it.
+        s.query = "aby".to_string();
+        assert!(s.filtered().is_empty(), "{:?}", s.filtered());
+
+        s.query = "assume".to_string();
+        assert_eq!(s.selected_profile().as_deref(), Some(ASSUME_BY_ID_ENTRY));
     }
 }
