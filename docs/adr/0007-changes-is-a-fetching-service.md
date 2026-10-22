@@ -38,7 +38,8 @@ caches. It's an ordinary `ServiceType` with its own clients, registered in
   with `ReadOnly=false` as its one server-side filter. When the cap is hit,
   the load warns how far back it got, so a truncated feed never looks
   complete. The other sources each have a limit too: the most recently
-  touched stacks, runs per pipeline, and a pipeline count.
+  touched stacks, runs per pipeline, a pipeline count, and pages of
+  CodeBuild builds.
 - **IAM and Organizations are looked up in us-east-1, separately.** Global
   services are recorded only in us-east-1's trail, so from any other region
   the regional scan never sees a policy change, and even in us-east-1 a busy

@@ -44,6 +44,9 @@
 //!   the `orders-api` Lambda, and field logging is off
 //! - a Secrets Manager secret `prod/orders/db` and a SecureString parameter
 //!   `/orders/db/password` — metadata only, for proving no value is fetched
+//! - `@changes` over the last hour reads as the incident's lead-up: the
+//!   image build, the task definition and service update (CloudTrail +
+//!   Config), the IAM widening, and an unrelated orders-db parameter change
 //! - Cost Anomaly Detection (`@cost`, `7`) flagged CloudWatch six days ago
 //!   — DataProcessing-Bytes, i.e. log ingestion, and `nightly-report`'s
 //!   never-expiring group is the story behind it — plus Fargate vCPU from
@@ -286,6 +289,19 @@ pub static FIXTURES: &[Fixture] = &[
     fx!("cloudtrail", "LookupEvents", when ["iam.amazonaws.com"], "LookupEvents-iam.json"),
     fx!("cloudtrail", "LookupEvents", when ["organizations.amazonaws.com"], "LookupEvents-none.json"),
     fx!("cloudtrail", "LookupEvents", "LookupEvents.json"),
+    // ── @changes' other sources ──────────────────────────────────────────────
+    // The last hour around the failed orders-worker deploy: CI builds the
+    // image (CodeBuild #88, started by the deploy role), Config records the
+    // new task definition and the service update (plus a compliance item,
+    // which must not list), and a `max_connections` change on orders-db is
+    // the red herring. Two hours back, portal-legacy's ASG replaced the
+    // instance that failed its ELB health check. Build #87 is a month old,
+    // so the 1h scan stops at it.
+    fx!("config", "SelectResourceConfig", "SelectResourceConfig.json"),
+    fx!("codebuild", "ListBuilds", "ListBuilds.json"),
+    fx!("codebuild", "BatchGetBuilds", when ["orders-worker-image"], "BatchGetBuilds.json"),
+    fx!("autoscaling", "DescribeScalingActivities", "DescribeScalingActivities.xml"),
+    fx!("rds", "DescribeEvents", "DescribeEvents.xml"),
     // ── Elastic Beanstalk (awsQuery) ─────────────────────────────────────────
     // One app, two environments: `portal-legacy` (Standard, Red — its ALB is
     // the target-less `legacy-admin-alb`) and `portal-next` (Cluster Mode, on

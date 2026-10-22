@@ -18,7 +18,8 @@ use tokio::sync::mpsc;
 /// - **Config** (`SelectResourceConfig` on `configurationItemCaptureTime`):
 ///   every *recorded* resource whose configuration changed in the window —
 ///   one query, no sifting, but only where Config recording is on.
-/// - **CloudFormation** stack events, **CodePipeline** runs: the deploys.
+/// - **CloudFormation** stack events, **CodePipeline** runs, **CodeBuild**
+///   builds: the deploys.
 /// - **Auto Scaling** activities and **RDS** events: what AWS itself did,
 ///   which CloudTrail never records.
 /// - **IAM and Organizations** (policies, roles, users, SCPs): global
@@ -48,6 +49,7 @@ pub struct ChangesService {
     config: aws_sdk_config::Client,
     cloudformation: aws_sdk_cloudformation::Client,
     codepipeline: aws_sdk_codepipeline::Client,
+    codebuild: aws_sdk_codebuild::Client,
     autoscaling: aws_sdk_autoscaling::Client,
     rds: aws_sdk_rds::Client,
     region: String,
@@ -62,6 +64,7 @@ impl ChangesService {
             config: c.awsconfig_client(),
             cloudformation: c.cloudformation_client(),
             codepipeline: c.codepipeline_client(),
+            codebuild: c.codebuild_client(),
             autoscaling: c.asg_client(),
             rds: c.rds_client(),
             region: c.current_region().as_str().to_string(),
@@ -84,6 +87,9 @@ const GLOBAL_SOURCES: [(&str, ChangeSource); 2] = [
 /// Stacks whose events are read (most recently touched first).
 const MAX_STACKS: usize = 15;
 const MAX_PIPELINES: usize = 200;
+/// `ListBuilds` pages (100 build ids each, account-wide, newest first) —
+/// each costs a `BatchGetBuilds` too.
+const BUILD_PAGES: usize = 3;
 const MAX_ROWS_PER_SOURCE: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -144,6 +150,7 @@ pub enum ChangeSource {
     Config,
     Stack,
     Pipeline,
+    Build,
     Scaling,
     Rds,
 }
@@ -158,6 +165,7 @@ impl ChangeSource {
             ChangeSource::Config => "CFG",
             ChangeSource::Stack => "CFN",
             ChangeSource::Pipeline => "CP ",
+            ChangeSource::Build => "CB ",
             ChangeSource::Scaling => "ASG",
             ChangeSource::Rds => "RDS",
         }
@@ -171,6 +179,7 @@ impl ChangeSource {
             ChangeSource::Config => "AWS Config",
             ChangeSource::Stack => "CloudFormation",
             ChangeSource::Pipeline => "CodePipeline",
+            ChangeSource::Build => "CodeBuild",
             ChangeSource::Scaling => "Auto Scaling",
             ChangeSource::Rds => "RDS events",
         }
@@ -184,6 +193,7 @@ impl ChangeSource {
             ChangeSource::Config => "Config Change",
             ChangeSource::Stack => "Stack Change",
             ChangeSource::Pipeline => "Pipeline Run",
+            ChangeSource::Build => "Build Run",
             ChangeSource::Scaling => "Scaling Activity",
             ChangeSource::Rds => "RDS Event",
         }
@@ -345,6 +355,47 @@ impl ChangeEvent {
         }
         c.raw = Some(ev.cloud_trail_event.clone());
         c
+    }
+
+    /// One CodeBuild build: `build SUCCEEDED  orders-worker-image #88`,
+    /// jumping to its project.
+    pub fn from_build(b: &aws_sdk_codebuild::types::Build, region: &str) -> Option<Self> {
+        let id = b.id()?.to_string();
+        let project = b.project_name().unwrap_or_default().to_string();
+        let status = b.build_status().map(|s| s.as_str().to_string()).unwrap_or_default();
+        let ts = b.end_time().or(b.start_time()).map(|t| t.secs()).unwrap_or(0);
+        // `arn:…:build/<project>:<uuid>` → `arn:…:project/<project>`, the
+        // id the Build Projects tab keys on.
+        let project_arn = b
+            .arn()
+            .and_then(|a| a.split_once(":build/"))
+            .map(|(head, _)| format!("{head}:project/{project}"))
+            .unwrap_or_else(|| project.clone());
+        let target = match b.build_number() {
+            Some(n) => format!("{project} #{n}"),
+            None => project.clone(),
+        };
+        let mut c = Self::new(
+            ChangeSource::Build,
+            id,
+            ts,
+            format!("build {status}"),
+            b.initiator().unwrap_or_default().to_string(),
+            target,
+            "AWS::CodeBuild::Project".to_string(),
+            project_arn,
+            region.to_string(),
+        );
+        let version = b.resolved_source_version().or(b.source_version()).unwrap_or_default();
+        let short = version.get(..12).unwrap_or(version);
+        c.detail = [b.current_phase().unwrap_or_default(), short]
+            .iter()
+            .filter(|s| !s.is_empty() && **s != "COMPLETED")
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" · ");
+        c.failed = matches!(status.as_str(), "FAILED" | "FAULT" | "TIMED_OUT");
+        Some(c)
     }
 
     /// One `SelectResourceConfig` result row (a JSON object string).
@@ -704,6 +755,24 @@ impl AwsService for ChangesService {
                 Err(e) => warn(ChangeSource::Pipeline, e),
             }
         };
+        let builds = async {
+            match build_changes(self.codebuild.clone(), cutoff, &region).await {
+                Ok((rows, capped)) => {
+                    send(ChangeSource::Build, rows);
+                    if let Some(oldest) = capped {
+                        warn(
+                            ChangeSource::Build,
+                            format!(
+                                "newest {} builds only (back to {} UTC) — [ narrows the window",
+                                BUILD_PAGES * 100,
+                                back_to(oldest)
+                            ),
+                        );
+                    }
+                }
+                Err(e) => warn(ChangeSource::Build, e),
+            }
+        };
         let scaling = async {
             match scaling_changes(self.autoscaling.clone(), cutoff, &region).await {
                 Ok(rows) => send(ChangeSource::Scaling, rows),
@@ -716,7 +785,7 @@ impl AwsService for ChangesService {
                 Err(e) => warn(ChangeSource::Rds, e),
             }
         };
-        tokio::join!(trail, global, config, stacks, pipelines, scaling, rds);
+        tokio::join!(trail, global, config, stacks, pipelines, builds, scaling, rds);
 
         let _ = event_tx.send(Event::ResourcesFullyLoaded {
             service: service_type,
@@ -988,6 +1057,55 @@ async fn pipeline_changes(
     Ok(rows)
 }
 
+/// Builds that started in the window, from every project: `ListBuilds` is
+/// account-wide and newest first, so it's paged until a build starts before
+/// the cutoff. `Some(t)` in the result means the page cap stopped it first,
+/// with builds older than `t` unread.
+async fn build_changes(
+    client: aws_sdk_codebuild::Client,
+    cutoff: i64,
+    region: &str,
+) -> std::result::Result<(Vec<ChangeEvent>, Option<i64>), String> {
+    use aws_sdk_codebuild::types::SortOrderType;
+    let mut rows = Vec::new();
+    let mut token: Option<String> = None;
+    for _ in 0..BUILD_PAGES {
+        let page = client
+            .list_builds()
+            .sort_order(SortOrderType::Descending)
+            .set_next_token(token.clone())
+            .send()
+            .await
+            .map_err(|e| crate::error::sdk_error_message(&e))?;
+        if page.ids().is_empty() {
+            return Ok((rows, None));
+        }
+        let builds = client
+            .batch_get_builds()
+            .set_ids(Some(page.ids().to_vec()))
+            .send()
+            .await
+            .map_err(|e| crate::error::sdk_error_message(&e))?;
+        let mut builds: Vec<_> = builds.builds().iter().collect();
+        builds.sort_by_key(|b| std::cmp::Reverse(b.start_time().map(|t| t.secs()).unwrap_or(0)));
+        for b in builds {
+            let started = b.start_time().map(|t| t.secs()).unwrap_or(0);
+            if started < cutoff {
+                return Ok((rows, None));
+            }
+            if let Some(c) = ChangeEvent::from_build(b, region) {
+                rows.push(c);
+            }
+        }
+        token = crate::aws::pagination::next_page_token(page.next_token(), &token);
+        if token.is_none() {
+            return Ok((rows, None));
+        }
+    }
+    let oldest = rows.iter().map(|r| r.ts_secs).min();
+    Ok((rows, oldest))
+}
+
 /// Every group's activities, newest first (no group filter = account-wide),
 /// paged until older than the window.
 async fn scaling_changes(
@@ -1074,6 +1192,35 @@ async fn rds_changes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_jump_to_their_project_and_fail_on_fault_or_timeout() {
+        use aws_sdk_codebuild::types::{Build, StatusType};
+        let build = |status: StatusType| {
+            Build::builder()
+                .id("img:abc")
+                .arn("arn:aws:codebuild:us-east-1:1:build/img:abc")
+                .project_name("img")
+                .build_number(7)
+                .build_status(status)
+                .initiator("deploy-role/GitHubActions")
+                .resolved_source_version("9f3c2a1b7e4d5c6b8a9f")
+                .current_phase("COMPLETED")
+                .start_time(aws_smithy_types::DateTime::from_secs(1_790_000_000))
+                .build()
+        };
+        let c = ChangeEvent::from_build(&build(StatusType::Succeeded), "us-east-1").unwrap();
+        assert_eq!(c.target_ref, "arn:aws:codebuild:us-east-1:1:project/img");
+        assert_eq!(c.what, "build SUCCEEDED");
+        assert_eq!(c.who, "deploy-role/GitHubActions");
+        assert_eq!(c.detail, "9f3c2a1b7e4d", "short sha; COMPLETED says nothing");
+        assert!(c.title.ends_with("img #7"));
+        assert!(!c.failed);
+        for s in [StatusType::Failed, StatusType::Fault, StatusType::TimedOut] {
+            assert!(ChangeEvent::from_build(&build(s), "us-east-1").unwrap().failed);
+        }
+        assert!(!ChangeEvent::from_build(&build(StatusType::Stopped), "us-east-1").unwrap().failed);
+    }
 
     #[test]
     fn config_rows_parse_and_skip_compliance_bookkeeping() {

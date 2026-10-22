@@ -1,0 +1,8 @@
+<DescribeEventsResponse xmlns="http://rds.amazonaws.com/doc/2014-10-31/">
+  <DescribeEventsResult>
+    <Events>
+      <Event><SourceIdentifier>orders-db</SourceIdentifier><SourceType>db-instance</SourceType><SourceArn>arn:aws:rds:{{region}}:{{account}}:db:orders-db</SourceArn><Message>Updated parameter max_connections to 200 with apply method immediate.</Message><EventCategories><EventCategory>configuration change</EventCategory></EventCategories><Date>{{iso:now-52m}}</Date></Event>
+    </Events>
+  </DescribeEventsResult>
+  <ResponseMetadata><RequestId>6f7a8b9c-demo-4d0e-1f2a-000000000001</RequestId></ResponseMetadata>
+</DescribeEventsResponse>

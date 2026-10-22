@@ -48,15 +48,51 @@ async fn demo_changes_list_newest_first_by_source_tab() {
     assert!(names[0].contains("PutRolePolicy") && names[1].contains("AttachRolePolicy"), "{names:?}");
     assert!(!names.iter().any(|n| n.contains("GetRole")));
 
-    // The Deploys tab has no demo stacks/pipelines in the window.
-    app.handle_event(Event::Key(crossterm::event::KeyEvent::from(KeyCode::Char('5'))), &mpsc::unbounded_channel().0)
-        .await
-        .unwrap();
+    let key = |c: char| Event::Key(crossterm::event::KeyEvent::from(KeyCode::Char(c)));
+    let names_of = |app: &App| -> Vec<String> {
+        app.filtered_resources.iter().map(|&i| app.resources[i].name().to_string()).collect()
+    };
+
+    // Config: the task definition and the service update; Config's own
+    // compliance bookkeeping never lists.
+    app.handle_event(key('4'), &tx0).await.unwrap();
+    assert_eq!(app.changes_view, crate::app::ChangesView::Config);
+    let names = names_of(&app);
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(names[0].contains("Service configuration changed  orders-worker"), "{names:?}");
+
+    // Deploys: the CI image build, started by the deploy role. The
+    // month-old build #87 is outside the window.
+    app.handle_event(key('5'), &tx0).await.unwrap();
     assert_eq!(app.changes_view, crate::app::ChangesView::Deploys);
-    assert!(app.filtered_resources.is_empty());
+    let names = names_of(&app);
+    assert_eq!(names.len(), 1, "{names:?}");
+    assert!(names[0].contains("build SUCCEEDED  orders-worker-image #88"), "{names:?}");
+    let build = &app.resources[app.filtered_resources[0]];
+    assert!(build.details().iter().any(|(k, v)| k == "Resource"
+        && v.ends_with(":project/orders-worker-image")), "jumps to the project");
+
+    // Scaling & RDS: only the orders-db parameter change in the last hour.
+    app.handle_event(key('6'), &tx0).await.unwrap();
+    let names = names_of(&app);
+    assert_eq!(names.len(), 1, "{names:?}");
+    assert!(names[0].contains("max_connections") && names[0].ends_with("orders-db"), "{names:?}");
 
     // `]` widens the window: a new cache variant.
     let (tx, _rx) = mpsc::unbounded_channel();
     app.handle_event(Event::Key(crossterm::event::KeyEvent::from(KeyCode::Char(']'))), &tx).await.unwrap();
     assert_eq!(app.changes_window.label(), "6h");
+}
+
+#[tokio::test]
+async fn demo_changes_six_hour_window_reaches_the_asg_replacement() {
+    use crate::aws::services::changes::{ChangesService, ChangesWindow};
+    let clients = AwsClients::new_demo_for_test().await;
+    let svc: std::sync::Arc<dyn crate::aws::service::AwsService> =
+        std::sync::Arc::new(ChangesService::new(&clients, ChangesWindow::SixHours));
+    let (rows, _) = crate::headless::list_all(svc, ServiceType::Changes).await.ok().unwrap();
+    let scaling: Vec<&str> =
+        rows.iter().filter(|r| r.resource_type() == "Scaling Activity").map(|r| r.name()).collect();
+    assert_eq!(scaling.len(), 2, "{scaling:?}");
+    assert!(scaling.iter().any(|n| n.contains("Terminating EC2 instance: i-0p0rta1std0000b2")), "{scaling:?}");
 }

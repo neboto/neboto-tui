@@ -2393,7 +2393,8 @@ the service you're touching.
   regional list, newest first (the Executions default-sort exception), over
   a `[`/`]` window (15m / 1h / 6h / 24h / 7d, variant-cached like X-Ray).
   Sub-tabs filter by source via resource types: **All / IAM & Orgs /
-  CloudTrail / Config / Deploys** (CFN + CodePipeline) **/ Scaling & RDS**.
+  CloudTrail / Config / Deploys** (CFN + CodePipeline + CodeBuild) **/
+  Scaling & RDS**.
   **IAM & Organizations are their own lookups against us-east-1** — global
   services are recorded only there, so from any other region the regional
   scan never sees a policy change, and even in us-east-1 a busy hour pushes
@@ -2425,7 +2426,14 @@ the service you're touching.
   dropped). **CFN**: `ListStacks` (deleted ones too) → the 15 most
   recently touched → their newest events page, keeping stack-level and
   failed rows only (an update writes one row per resource). **CodePipeline**:
-  5 runs per pipeline (capped 200 pipelines, `buffered(4)`). **ASG**:
+  5 runs per pipeline (capped 200 pipelines, `buffered(4)`). **CodeBuild**:
+  `ListBuilds` is account-wide and newest first, so no per-project fan-out:
+  each page of 100 ids is one `BatchGetBuilds`, paged until a build started
+  before the window, capped at `BUILD_PAGES` (3) with a warning like
+  CloudTrail's. A build's `Resource` is its **project** ARN (rebuilt from
+  the build ARN), since the Build Projects tab keys on that; `initiator` is
+  the actor (`role/session` or `codepipeline/<name>`), STOPPED isn't a
+  failure. **ASG**:
   `DescribeScalingActivities` with no group is account-wide, newest first.
   **RDS**: `DescribeEvents` by duration (14-day retention). Deliberately v2:
   ECS deployments (CloudTrail's `UpdateService` covers the deploy call),

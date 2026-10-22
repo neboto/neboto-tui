@@ -1,0 +1,33 @@
+{
+  "builds": [
+    {
+      "id": "orders-worker-image:5b1d7c2e-demo-4a51-9f00-000000000088",
+      "arn": "arn:aws:codebuild:{{region}}:{{account}}:build/orders-worker-image:5b1d7c2e-demo-4a51-9f00-000000000088",
+      "buildNumber": 88,
+      "startTime": {{epoch:now-48m}},
+      "endTime": {{epoch:now-43m}},
+      "currentPhase": "COMPLETED",
+      "buildStatus": "SUCCEEDED",
+      "projectName": "orders-worker-image",
+      "initiator": "github-actions-deploy/GitHubActions",
+      "sourceVersion": "refs/heads/main",
+      "resolvedSourceVersion": "9f3c2a1b7e4d5c6b8a9f0e1d2c3b4a5f6e7d8c9b",
+      "buildComplete": true
+    },
+    {
+      "id": "orders-worker-image:5b1d7c2e-demo-4a51-9f00-000000000087",
+      "arn": "arn:aws:codebuild:{{region}}:{{account}}:build/orders-worker-image:5b1d7c2e-demo-4a51-9f00-000000000087",
+      "buildNumber": 87,
+      "startTime": {{epoch:now-30d}},
+      "endTime": {{epoch:now-30d+5m}},
+      "currentPhase": "COMPLETED",
+      "buildStatus": "SUCCEEDED",
+      "projectName": "orders-worker-image",
+      "initiator": "github-actions-deploy/GitHubActions",
+      "sourceVersion": "refs/heads/main",
+      "resolvedSourceVersion": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+      "buildComplete": true
+    }
+  ],
+  "buildsNotFound": []
+}
