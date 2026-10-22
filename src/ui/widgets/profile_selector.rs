@@ -1,4 +1,5 @@
 use crate::aws::client::list_profiles;
+use crate::search::fuzzy::FuzzyMatcher;
 use crate::ui::theme;
 use crate::ui::widgets::region_selector::render_search_line;
 use ratatui::{
@@ -66,16 +67,16 @@ impl ProfileSelectorState {
         self.visible = false;
     }
 
-    /// Profiles matching the current search query.
+    /// Profiles matching the current search query, fuzzy-matched (same
+    /// matcher as the resource list) and best match first.
     pub fn filtered(&self) -> Vec<String> {
         if self.query.is_empty() {
             return self.profiles.clone();
         }
-        let q = self.query.to_lowercase();
-        self.profiles
-            .iter()
-            .filter(|p| p.to_lowercase().contains(&q))
-            .cloned()
+        FuzzyMatcher::new()
+            .filter_strings(&self.query, &self.profiles)
+            .into_iter()
+            .map(|(idx, _)| self.profiles[idx].clone())
             .collect()
     }
 
@@ -174,7 +175,7 @@ pub fn render_profile_selector(
     let block = theme::popup_block("Switch AWS Profile")
         .title_bottom(
             theme::hint_line(&[
-                ("type", "filter"),
+                ("type", "fuzzy filter"),
                 ("↑/↓", "move"),
                 ("^d/^u", "page"),
                 ("⏎", "select"),
@@ -261,4 +262,33 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state_with(profiles: &[&str]) -> ProfileSelectorState {
+        let mut s = ProfileSelectorState::new();
+        s.profiles = profiles.iter().map(|p| p.to_string()).collect();
+        s
+    }
+
+    #[test]
+    fn filter_is_fuzzy_and_ranks_best_match_first() {
+        let mut s = state_with(&["default", "acme-prod-admin", "acme-staging", "prod"]);
+        assert_eq!(s.filtered().len(), 4);
+
+        for c in "prod".chars() {
+            s.push_char(c);
+        }
+        assert_eq!(s.selected_profile().as_deref(), Some("prod"));
+
+        s.query = "apadm".to_string();
+        assert_eq!(s.filtered(), vec!["acme-prod-admin"]);
+
+        s.query = "zzz".to_string();
+        assert!(s.filtered().is_empty());
+        assert_eq!(s.selected_profile(), None);
+    }
 }
