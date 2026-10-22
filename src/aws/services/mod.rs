@@ -10,6 +10,7 @@ pub mod bedrock;
 pub mod batch;
 pub mod beanstalk;
 pub mod budgets;
+pub mod changes;
 pub mod invoicing;
 pub mod cloudformation;
 pub mod fms;

@@ -108,6 +108,7 @@ pub fn has_sub_tabs(service: ServiceType) -> bool {
             | ServiceType::Redshift
             | ServiceType::Batch
             | ServiceType::XRay
+            | ServiceType::Changes
             | ServiceType::Dms
             | ServiceType::Beanstalk
             | ServiceType::Athena
@@ -507,6 +508,10 @@ fn execution_start_ms(r: &dyn crate::aws::resource::Resource) -> i64 {
     if let Some(p) = any.downcast_ref::<crate::aws::services::code::CodeCommitPullRequest>() {
         return p.created_ms;
     }
+    // @changes merges six sources that land in completion order.
+    if let Some(c) = any.downcast_ref::<crate::aws::services::changes::ChangeEvent>() {
+        return c.ts_secs.saturating_mul(1000);
+    }
     // The Images tab spans every repo, whose batches land in completion
     // order — newest push first is the only readable default.
     if let Some(i) = any.downcast_ref::<crate::aws::services::ecr::EcrImage>() {
@@ -885,6 +890,49 @@ impl XRayView {
             XRayView::ServiceMap => "X-Ray Service",
             XRayView::Traces => "X-Ray Trace",
             XRayView::Config => "X-Ray Group|X-Ray Sampling Rule"}
+    }
+}
+
+/// Sub-tab view for `@changes` — by source.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ChangesView {
+    All,
+    Iam,
+    Trail,
+    Config,
+    Deploys,
+    Ops}
+
+impl ChangesView {
+    pub const ALL: [ChangesView; 6] = [
+        ChangesView::All,
+        ChangesView::Iam,
+        ChangesView::Trail,
+        ChangesView::Config,
+        ChangesView::Deploys,
+        ChangesView::Ops,
+    ];
+
+    pub fn resource_type_filter(&self) -> &'static str {
+        match self {
+            ChangesView::All => {
+                "IAM Change|Trail Change|Config Change|Stack Change|Pipeline Run|Build Run|Scaling Activity|RDS Event"
+            }
+            ChangesView::Iam => "IAM Change",
+            ChangesView::Trail => "Trail Change",
+            ChangesView::Config => "Config Change",
+            ChangesView::Deploys => "Stack Change|Pipeline Run|Build Run",
+            ChangesView::Ops => "Scaling Activity|RDS Event"}
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            ChangesView::All => "All",
+            ChangesView::Iam => "IAM & Orgs",
+            ChangesView::Trail => "CloudTrail",
+            ChangesView::Config => "Config",
+            ChangesView::Deploys => "Deploys",
+            ChangesView::Ops => "Scaling & RDS"}
     }
 }
 
@@ -2459,6 +2507,8 @@ pub struct App {
     /// Batch Jobs sub-tab status group (`f`).
     pub batch_job_filter: BatchJobStatusFilter,
     pub xray_view: XRayView,
+    pub changes_view: ChangesView,
+    pub changes_window: crate::aws::services::changes::ChangesWindow,
     /// X-Ray list look-back window (`[`/`]` in the list pane); part of the
     /// cache variant, so flipping back is instant.
     pub xray_window: crate::aws::services::xray::XRayWindow,
@@ -3326,6 +3376,8 @@ impl App {
             batch_view: BatchView::Queues,
             batch_job_filter: BatchJobStatusFilter::All,
             xray_view: XRayView::ServiceMap,
+            changes_view: ChangesView::All,
+            changes_window: crate::aws::services::changes::ChangesWindow::default(),
             xray_window: crate::aws::services::xray::XRayWindow::default(),
             beanstalk_view: BeanstalkView::Environments,
             dms_view: DmsView::Tasks,
@@ -6993,6 +7045,33 @@ impl App {
             }
         }
 
+        // @changes: 1–6 / Tab pick the source, `[`/`]` the window.
+        if !self.search_active && self.current_service == Some(ServiceType::Changes) {
+            let all = ChangesView::ALL;
+            let i = all.iter().position(|v| *v == self.changes_view).unwrap_or(0);
+            let view = match key.code {
+                KeyCode::Char(c @ '1'..='6') => Some(all[(c as usize) - ('1' as usize)]),
+                KeyCode::Tab => Some(all[(i + 1) % all.len()]),
+                KeyCode::BackTab => Some(all[(i + all.len() - 1) % all.len()]),
+                _ => None};
+            if let Some(v) = view {
+                self.changes_view = v;
+                self.update_search();
+                return Ok(());
+            }
+            let window = match key.code {
+                KeyCode::Char('[') => Some(self.changes_window.narrower()),
+                KeyCode::Char(']') => Some(self.changes_window.wider()),
+                _ => None};
+            if let Some(w) = window {
+                if w != self.changes_window {
+                    self.changes_window = w;
+                    self.apply_changes_window();
+                }
+                return Ok(());
+            }
+        }
+
         // X-Ray (Service Map / Traces / Groups & Sampling) sub-tab switching,
         // plus `[`/`]` narrowing/widening the look-back window (list pane —
         // the detail pane's `[[`/`]]` chords are handled in its own block).
@@ -9349,6 +9428,7 @@ impl App {
             Some(ServiceType::Redshift) => Some(self.redshift_view.resource_type_filter()),
             Some(ServiceType::Batch) => Some(self.batch_view.resource_type_filter()),
             Some(ServiceType::XRay) => Some(self.xray_view.resource_type_filter()),
+            Some(ServiceType::Changes) => Some(self.changes_view.resource_type_filter()),
             Some(ServiceType::Dms) => Some(self.dms_view.resource_type_filter()),
             Some(ServiceType::Beanstalk) => Some(self.beanstalk_view.resource_type_filter()),
             Some(ServiceType::ControlTower) => {
@@ -9538,6 +9618,9 @@ impl App {
             ),
             Some(ServiceType::XRay) => {
                 align!(self, rtype, xray_view, XRayView, [ServiceMap, Traces, Config])
+            }
+            Some(ServiceType::Changes) => {
+                align!(self, rtype, changes_view, ChangesView, [All, Iam, Trail, Config, Deploys, Ops])
             }
             Some(ServiceType::Dms) => {
                 align!(self, rtype, dms_view, DmsView, [Tasks, Instances, Endpoints, Serverless])
@@ -10407,7 +10490,8 @@ impl App {
                     if matches!(
                         type_filter,
                         Some("Pipeline Execution" | "State Machine Execution" | "Pull Request" | "ECR Image")
-                    ) {
+                    ) || self.current_service == Some(ServiceType::Changes)
+                    {
                         filtered.sort_by_key(|&i| {
                             std::cmp::Reverse(execution_start_ms(self.resources[i].as_ref()))
                         });
@@ -11056,6 +11140,13 @@ impl App {
             Arc::new(xray::XRayService::new(aws_clients, xray::XRayWindow::default())),
         );
         services.insert(
+            ServiceType::Changes,
+            Arc::new(crate::aws::services::changes::ChangesService::new(
+                aws_clients,
+                crate::aws::services::changes::ChangesWindow::default(),
+            )),
+        );
+        services.insert(
             ServiceType::Dms,
             Arc::new(crate::aws::services::dms::DmsService::new(aws_clients)),
         );
@@ -11266,6 +11357,14 @@ impl App {
             Arc::new(crate::aws::services::ram::RamService::new(
                 &self.aws_clients,
                 self.ram_owner.clone(),
+            )),
+        );
+        // Preserve the @changes window (build_services seeds the default).
+        self.services.insert(
+            ServiceType::Changes,
+            Arc::new(crate::aws::services::changes::ChangesService::new(
+                &self.aws_clients,
+                self.changes_window,
             )),
         );
         // Preserve the X-Ray window (build_services seeds the default).
@@ -31015,6 +31114,8 @@ impl App {
             Some(format!("{:?}", self.waf_scope))
         } else if service == ServiceType::XRay {
             Some(self.xray_window.label().to_string())
+        } else if service == ServiceType::Changes {
+            Some(self.changes_window.label().to_string())
         } else if service == ServiceType::ServiceQuotas {
             Some(self.quota_service_code.clone())
         } else if service == ServiceType::GuardDuty {
@@ -31254,6 +31355,20 @@ impl App {
     }
 
     /// Rebuild the WAF service with the current scope and reload.
+    /// Rebuild the @changes service with the current window and reload
+    /// (variant-cached per window, like X-Ray).
+    fn apply_changes_window(&mut self) {
+        self.services.insert(
+            ServiceType::Changes,
+            Arc::new(crate::aws::services::changes::ChangesService::new(
+                &self.aws_clients,
+                self.changes_window,
+            )),
+        );
+        self.load_service_resources();
+        self.update_search();
+    }
+
     /// Rebuild the X-Ray service with the current window and reload.
     /// Variant-cached per window, so stepping back is instant.
     fn apply_xray_window(&mut self) {

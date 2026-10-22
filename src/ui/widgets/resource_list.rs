@@ -298,6 +298,15 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                     .to_string(),
                 )
             }
+            // @changes with nothing in the window: a quiet account, or every
+            // source is off/denied (those say so in the Partial load line).
+            else if app.current_service == Some(crate::aws::service::ServiceType::Changes) {
+                (
+                    format!("No changes found in the last {}", app.changes_window.label()),
+                    "] widen the window · the Config tab needs Config recording · M shows any source that failed"
+                        .to_string(),
+                )
+            }
             // X-Ray with nothing at all in the window: tracing is off, or the
             // window is too short for the sampling rate — not a permission gap.
             else if app.current_service == Some(crate::aws::service::ServiceType::XRay) {
