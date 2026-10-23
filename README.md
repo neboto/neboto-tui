@@ -369,7 +369,7 @@ Each takes over the keymap while open; `Esc` closes, `Z` goes full-width.
 
 | Key | View |
 |---|---|
-| `m` | CloudWatch charts — `[` / `]` change the window, `r` refreshes |
+| `m` | CloudWatch charts — `[` / `]` change the window, `r` refreshes, `c` toggles change markers (the `W` timeline's events as vertical lines) |
 | `t` | Live log tail — `[` / `]` widen the lookback, `s` flips to search |
 | `f` | Log search (server-side filter pattern) · CloudTrail event filter · ECS/execution status filter |
 | `W` | CloudTrail lens — who changed this resource; `[` / `]` widen to 90d, `a` includes reads |

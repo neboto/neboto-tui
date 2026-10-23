@@ -69,7 +69,7 @@ const RIGHT_SECTIONS: &[Section] = &[
             ("y", "copy ARN / id"),
             ("C", "copy a CLI command (read · connect · change)"),
             ("e", "open in $EDITOR"),
-            ("m", "metrics charts"),
+            ("m", "metrics charts (c: change markers from the W timeline)"),
             ("t", "live log tail ([/] window)"),
             ("f", "log search · event filter"),
             ("W", "CloudTrail lens (who did this)"),

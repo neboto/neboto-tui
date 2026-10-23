@@ -351,6 +351,17 @@ in `any_pane_overlay_active` (which gates the mouse).
 
 - **Metrics** (`m`): one `App.metrics_in_pane: Option<MetricsKind>` +
   `open_metrics_in_pane` + `render_metrics_in_pane` (`metrics_overlay.rs`).
+  **Change markers** (#245, `c` toggles, on by default): the `W` timeline's
+  events drawn as vertical lines on every time-series chart, legend on the
+  pane's bottom border. `m` runs the same fan-out as `W` once per open, into
+  `App.chart_timeline` (`TimelineTarget::Markers` — never alive beside
+  `trail_in_pane`, they share `trail_generation`), and the chart builders
+  read a render-scoped context (`marker_lines`): **a chart drawn outside
+  those builders gets no markers**, so a new time-series chart should use
+  one or call `marker_lines` itself. Marker x = event time − (`App.
+  metrics_window_end` − `x_max`); the end is recorded as each fetch starts,
+  not at render. Not on the dashboard or Cost (their x axis isn't the fetch
+  window).
   Opening from the **list** pane sets `details_focused`, so it must also fire
   the default section's on-enter hook (`reset_detail_section_to_default`) —
   focus without the hook leaves the pane behind the overlay focused but

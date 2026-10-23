@@ -1402,6 +1402,21 @@ const MAX_R53_TAB_ZONE_RECORDS: i64 = 3_000;
 /// …and so are zones beyond this many per trigger.
 const MAX_R53_TAB_ZONES: usize = 100;
 
+fn epoch_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Which state a timeline fan-out fills: the `W` lens, or the rows behind
+/// the `m` charts' change markers.
+#[derive(Clone, Copy)]
+enum TimelineTarget {
+    Lens,
+    Markers,
+}
+
 /// Zero-fetch inputs for the change timeline (`W`), computed by
 /// `App::timeline_inputs` from the selected resource before the async
 /// sources are fired.
@@ -2315,6 +2330,19 @@ pub struct App {
     /// `None` when closed; the generation guards against a stale lookup landing.
     pub trail_in_pane: Option<crate::ui::widgets::trail_lens::TrailLensState>,
     trail_generation: u64,
+    /// Change markers on the `m` charts (#245): `c` toggles, session-sticky,
+    /// on by default.
+    pub chart_markers: bool,
+    /// The selected resource's timeline rows behind the markers — the same
+    /// fan-out as `W` (`seed_timeline` into `TimelineTarget::Markers`), run
+    /// once per `m` open. Never set while `trail_in_pane` is: the two share
+    /// `trail_generation` and the `TrailLens*` events.
+    pub chart_timeline: Option<crate::ui::widgets::trail_lens::TrailLensState>,
+    /// When the open chart's fetch window ends (epoch secs), recorded as the
+    /// fetch starts: chart x is seconds from `end − x_max`, so a marker's x
+    /// is its time minus that. Render time would drift as the pane stays
+    /// open.
+    pub metrics_window_end: i64,
     /// "Referenced by" lens (`U`) — what in the warm caches mentions the
     /// selected resource. Zero API; see `references.rs`.
     pub refs_in_pane: Option<crate::ui::widgets::refs_lens::RefsLensState>,
@@ -3275,6 +3303,9 @@ impl App {
             log_tail_region: None,
             trail_in_pane: None,
             trail_generation: 0,
+            chart_markers: true,
+            chart_timeline: None,
+            metrics_window_end: 0,
             refs_in_pane: None,
             access_in_pane: None,
             access_generation: 0,
@@ -3881,7 +3912,7 @@ impl App {
             Event::TrailLensLoaded { generation, events } => {
                 // Ignore a lookup that was superseded (range change) or closed.
                 if generation == self.trail_generation {
-                    if let Some(st) = self.trail_in_pane.as_mut() {
+                    if let Some(st) = self.timeline_sink() {
                         st.set_rows(
                             crate::timeline::TimelineSource::Trail,
                             events
@@ -3894,14 +3925,14 @@ impl App {
             }
             Event::TrailLensError { generation, error } => {
                 if generation == self.trail_generation {
-                    if let Some(st) = self.trail_in_pane.as_mut() {
+                    if let Some(st) = self.timeline_sink() {
                         st.set_source_error(crate::timeline::TimelineSource::Trail, error);
                     }
                 }
             }
             Event::TrailLensAux { generation, source, rows } => {
                 if generation == self.trail_generation {
-                    if let Some(st) = self.trail_in_pane.as_mut() {
+                    if let Some(st) = self.timeline_sink() {
                         match rows {
                             Ok(rows) => st.set_rows(source, rows),
                             Err(e) => st.set_source_error(source, e),
@@ -4900,7 +4931,20 @@ impl App {
                 }
                 KeyCode::Esc | KeyCode::Char('m') | KeyCode::Char('q') => {
                     self.metrics_in_pane = None;
+                    self.chart_timeline = None;
                     return Ok(());
+                }
+                // Change markers: toggle; the first show fetches the timeline.
+                KeyCode::Char('c') if self.metrics_supports_markers() => {
+                    self.chart_markers = !self.chart_markers;
+                    if self.chart_markers && self.chart_timeline.is_none() {
+                        self.seed_chart_markers(event_tx);
+                    }
+                    return Ok(());
+                }
+                // Every kind's refresh / range keys refetch from now.
+                KeyCode::Char('r') | KeyCode::Char('[') | KeyCode::Char(']') => {
+                    self.metrics_window_end = epoch_now();
                 }
                 KeyCode::Char('Z') => {
                     self.layout_mode = match self.layout_mode {
@@ -19158,6 +19202,7 @@ impl App {
             .unwrap_or_default();
 
         self.details_focused = true;
+        self.chart_timeline = None;
         self.trail_in_pane = Some(crate::ui::widgets::trail_lens::TrailLensState::open(
             title,
             range,
@@ -19276,10 +19321,64 @@ impl App {
     /// Used by open, `[`/`]`, `a` and `r` — sources are cheap enough that a
     /// range/read toggle just re-runs the lot.
     fn seed_trail_lens(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        self.seed_timeline(event_tx, TimelineTarget::Lens);
+    }
+
+    /// Where the `TrailLens*` events land: the `W` lens, else the chart
+    /// markers' timeline (never both — see `chart_timeline`).
+    fn timeline_sink(&mut self) -> Option<&mut crate::ui::widgets::trail_lens::TrailLensState> {
+        match self.trail_in_pane.as_mut() {
+            Some(st) => Some(st),
+            None => self.chart_timeline.as_mut(),
+        }
+    }
+
+    fn timeline_state_mut(
+        &mut self,
+        target: TimelineTarget,
+    ) -> Option<&mut crate::ui::widgets::trail_lens::TrailLensState> {
+        match target {
+            TimelineTarget::Lens => self.trail_in_pane.as_mut(),
+            TimelineTarget::Markers => self.chart_timeline.as_mut(),
+        }
+    }
+
+    /// Start the timeline fan-out behind the `m` chart markers for the
+    /// selected resource: the same sources as `W`, over 7 days (30 for S3,
+    /// whose storage charts span 30) — the chart filters to its own window
+    /// at render time, so `[`/`]` never refetch the markers.
+    fn seed_chart_markers(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::cloudtrail::TrailRange;
+        if !self.chart_markers || self.trail_in_pane.is_some() || !self.metrics_supports_markers() {
+            return;
+        }
+        let Some(r) = self.get_selected_resource() else { return };
+        if r.trail_lookup_keys().iter().all(|k| k.trim().is_empty()) {
+            return;
+        }
+        let title = r.name().to_string();
+        let range = if self.metrics_in_pane == Some(MetricsKind::S3) { TrailRange::D30 } else { TrailRange::D7 };
+        self.chart_timeline =
+            Some(crate::ui::widgets::trail_lens::TrailLensState::open(title, range, false));
+        self.seed_timeline(event_tx, TimelineTarget::Markers);
+    }
+
+    /// Charts whose x axis is time over the fetch window. The dashboard
+    /// lays out its own widgets over their own ranges, and Cost charts days
+    /// by index.
+    pub fn metrics_supports_markers(&self) -> bool {
+        !matches!(self.metrics_in_pane, None | Some(MetricsKind::CwDashboard) | Some(MetricsKind::Cost))
+    }
+
+    fn seed_timeline(&mut self, event_tx: &mpsc::UnboundedSender<Event>, target: TimelineTarget) {
         use crate::timeline::TimelineSource;
+        let state = match target {
+            TimelineTarget::Lens => self.trail_in_pane.as_ref(),
+            TimelineTarget::Markers => self.chart_timeline.as_ref(),
+        };
         let (keys, range, include_reads) = match (
             self.get_selected_resource(),
-            self.trail_in_pane.as_ref(),
+            state,
         ) {
             (Some(r), Some(st)) => (r.trail_lookup_keys(), st.range, st.include_reads),
             _ => return};
@@ -19289,7 +19388,7 @@ impl App {
         let logical_id = inputs.logical_id;
         let asg = inputs.asg;
         let rds = inputs.rds;
-        if let Some(st) = self.trail_in_pane.as_mut() {
+        if let Some(st) = self.timeline_state_mut(target) {
             st.ownership = inputs.ownership_line;
             let mut pending = vec![TimelineSource::Trail];
             if !alarm_names.is_empty() {
@@ -33612,6 +33711,7 @@ impl App {
     /// (kicks off the relevant fetch and focuses the pane). No-op if the
     /// selection has no metrics.
     fn open_metrics_in_pane(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        self.metrics_window_end = epoch_now();
         let kind = if self.is_selected_ec2_instance() {
             self.trigger_ec2_metrics_load(event_tx);
             Some(MetricsKind::Ec2)
@@ -33814,6 +33914,8 @@ impl App {
                 self.reset_detail_section_to_default(event_tx);
             }
             self.details_focused = true;
+            self.chart_timeline = None;
+            self.seed_chart_markers(event_tx);
         }
     }
 

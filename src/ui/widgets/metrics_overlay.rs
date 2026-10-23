@@ -60,9 +60,176 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph};
 use ratatui::Frame;
 
+// ── Change markers (#245) ────────────────────────────────────────────────────
+//
+// The `W` timeline's events, drawn as vertical lines on every time-series
+// chart: "latency jumped right after this UpdateService" without comparing
+// two panes by eye. The per-kind renderers don't know about them. The
+// markers ride a render-scoped context that `render_metrics_in_pane` sets
+// and every time-series chart builder reads (`marker_lines`), so a new
+// metrics kind gets them for free if it draws through those builders.
+
+struct MarkerCtx {
+    /// When the chart's fetch window ends: x is seconds from `end − x_max`.
+    window_end: i64,
+    /// (epoch secs, failed) per timeline row, newest first.
+    events: Vec<(i64, bool)>,
+    /// Indices into `events` some chart actually drew, for the legend.
+    drawn: std::collections::BTreeSet<usize>,
+}
+
+thread_local! {
+    static MARKERS: std::cell::RefCell<Option<MarkerCtx>> = const { std::cell::RefCell::new(None) };
+}
+
+/// One marker: a vertical segment at the event's x, and whether it failed.
+type MarkerLine = ([(f64, f64); 2], bool);
+
+/// The markers that fall inside a chart spanning `x_max` seconds, as
+/// vertical segments from `y_lo` to `y_hi`. Empty outside a marker context.
+fn marker_lines(x_max: f64, y_lo: f64, y_hi: f64) -> Vec<MarkerLine> {
+    MARKERS.with(|m| {
+        let mut m = m.borrow_mut();
+        let Some(ctx) = m.as_mut() else { return Vec::new() };
+        let start = ctx.window_end as f64 - x_max;
+        let mut lines = Vec::new();
+        for (i, &(ts, failed)) in ctx.events.iter().enumerate() {
+            let x = ts as f64 - start;
+            if (0.0..=x_max).contains(&x) {
+                ctx.drawn.insert(i);
+                lines.push(([(x, y_lo), (x, y_hi)], failed));
+            }
+        }
+        lines
+    })
+}
+
+/// Unnamed datasets (so the legend box ignores them), meant to go
+/// **before** the series so the data draws on top.
+fn marker_datasets(lines: &[MarkerLine]) -> Vec<Dataset<'_>> {
+    lines
+        .iter()
+        .map(|(pts, failed)| {
+            let color = if *failed { theme::error() } else { theme::text_dim() };
+            Dataset::default()
+                .data(pts)
+                .marker(symbols::Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(color))
+        })
+        .collect()
+}
+
+/// Clears the context even if a renderer panics, so a later frame can't
+/// inherit another resource's markers.
+struct MarkerScope;
+
+impl Drop for MarkerScope {
+    fn drop(&mut self) {
+        MARKERS.with(|m| m.borrow_mut().take());
+    }
+}
+
 /// Render the metric charts for `kind` into `area` (the detail pane). The pane
 /// frame is already drawn by the caller, so these no longer `Clear` full-screen.
+/// With change markers on, the charts draw inside a marker context and the
+/// legend goes on the bottom border.
 pub fn render_metrics_in_pane(app: &App, kind: MetricsKind, area: Rect, frame: &mut Frame) {
+    let timeline = app
+        .chart_timeline
+        .as_ref()
+        .filter(|_| app.chart_markers && app.metrics_supports_markers());
+    // A timeline that loaded empty leaves the charts exactly as they were.
+    let Some(tl) = timeline.filter(|t| t.is_loading() || !t.rows.is_empty()) else {
+        render_metrics_kind(app, kind, area, frame);
+        return;
+    };
+    let _scope = MarkerScope;
+    MARKERS.with(|m| {
+        *m.borrow_mut() = Some(MarkerCtx {
+            window_end: app.metrics_window_end,
+            events: tl.rows.iter().map(|r| (r.ts_secs, r.failed)).collect(),
+            drawn: Default::default(),
+        })
+    });
+    render_metrics_kind(app, kind, area, frame);
+    let drawn = MARKERS.with(|m| m.borrow_mut().take().map(|c| c.drawn).unwrap_or_default());
+    // On the pane's bottom border, like the ownership ribbon (which the
+    // metrics view hides), so the charts keep every row.
+    if area.width > 8 && area.height > 2 {
+        let row = Rect { x: area.x + 2, y: area.bottom() - 1, width: area.width - 4, height: 1 };
+        let legend = marker_legend(tl, &drawn, app.metrics_window_end, row.width);
+        let width = legend.width().min(row.width as usize) as u16;
+        frame.render_widget(Paragraph::new(legend), Rect { width, ..row });
+    }
+}
+
+/// The legend: the drawn events newest first, as many as fit, then how
+/// many didn't and where to read them all.
+fn marker_legend(
+    tl: &crate::ui::widgets::trail_lens::TrailLensState,
+    drawn: &std::collections::BTreeSet<usize>,
+    window_end: i64,
+    width: u16,
+) -> Line<'static> {
+    let dim = Style::default().fg(theme::text_dim());
+    let key = Style::default().fg(theme::warning());
+    let mut spans = vec![Span::styled(" ┊ ", dim)];
+    let tail: Vec<Span<'static>> = vec![
+        Span::styled("   c", key),
+        Span::styled(" hide · ", dim),
+        Span::styled("W", key),
+        Span::styled(" timeline", dim),
+    ];
+    let tail_w: usize = tail.iter().map(|s| s.width()).sum();
+    if drawn.is_empty() {
+        let msg = if tl.is_loading() {
+            "loading changes…".to_string()
+        } else {
+            format!("no changes in this window ({} in the last {})", tl.rows.len(), tl.range.label())
+        };
+        spans.push(Span::styled(msg, dim));
+        spans.extend(tail);
+        return Line::from(spans);
+    }
+    let budget = (width as usize).saturating_sub(4 + tail_w + 10);
+    let tail: Vec<Span<'static>> = tail.into_iter().chain([Span::styled(" ", dim)]).collect();
+    let mut used = 0;
+    let mut shown = 0;
+    for &i in drawn {
+        let row = &tl.rows[i];
+        let stamp = crate::aws::services::cloudwatch::fmt_epoch_secs(row.ts_secs);
+        // Time of day within the last day, else the date too (`10-21 14:02`).
+        let from = if window_end - row.ts_secs > 86_400 { 5 } else { 11 };
+        let what: String = if row.what.chars().count() > 40 {
+            row.what.chars().take(39).chain(['…']).collect()
+        } else {
+            row.what.clone()
+        };
+        let text = format!("{} {what}", stamp.get(from..).unwrap_or(&stamp));
+        let w = text.chars().count() + 3;
+        if shown > 0 && used + w > budget {
+            break;
+        }
+        if shown > 0 {
+            spans.push(Span::styled(" · ", dim));
+        }
+        let style = if row.failed { Style::default().fg(theme::error()) } else { Style::default().fg(theme::text_primary()) };
+        spans.push(Span::styled(text, style));
+        used += w;
+        shown += 1;
+    }
+    if shown < drawn.len() {
+        spans.push(Span::styled(format!("  +{} more", drawn.len() - shown), dim));
+    }
+    if tl.is_loading() {
+        spans.push(Span::styled("  loading…", dim));
+    }
+    spans.extend(tail);
+    Line::from(spans)
+}
+
+fn render_metrics_kind(app: &App, kind: MetricsKind, area: Rect, frame: &mut Frame) {
     match kind {
         MetricsKind::Ec2 => render_metrics_overlay(app, area, frame),
         MetricsKind::Ebs => render_ebs_metrics_overlay(app, area, frame),
@@ -257,7 +424,10 @@ fn render_cpu_chart(data: &Ec2MetricsData, area: Rect, frame: &mut Frame) {
         .graph_type(GraphType::Line)
         .style(Style::default().fg(crate::ui::theme::success()));
 
-    let chart = Chart::new(vec![dataset])
+    let marks = marker_lines(x_max, 0.0, y_max);
+    let mut datasets = marker_datasets(&marks);
+    datasets.push(dataset);
+    let chart = Chart::new(datasets)
         .block(
             Block::default()
                 .title(Span::styled(
@@ -327,7 +497,10 @@ fn render_net_chart(
         .graph_type(GraphType::Line)
         .style(Style::default().fg(color));
 
-    let chart = Chart::new(vec![dataset])
+    let marks = marker_lines(x_max, 0.0, y_max);
+    let mut datasets = marker_datasets(&marks);
+    datasets.push(dataset);
+    let chart = Chart::new(datasets)
         .block(
             Block::default()
                 .title(Span::styled(
@@ -524,7 +697,10 @@ fn render_lambda_chart(
         .graph_type(GraphType::Line)
         .style(Style::default().fg(color));
 
-    let chart = Chart::new(vec![dataset])
+    let marks = marker_lines(x_max, 0.0, y_max);
+    let mut datasets = marker_datasets(&marks);
+    datasets.push(dataset);
+    let chart = Chart::new(datasets)
         .block(
             Block::default()
                 .title(Span::styled(
@@ -734,7 +910,10 @@ fn render_percent_chart(
         .graph_type(GraphType::Line)
         .style(Style::default().fg(color));
 
-    let chart = Chart::new(vec![dataset])
+    let marks = marker_lines(x_max, 0.0, y_max);
+    let mut datasets = marker_datasets(&marks);
+    datasets.push(dataset);
+    let chart = Chart::new(datasets)
         .block(
             Block::default()
                 .title(Span::styled(
@@ -792,7 +971,10 @@ fn render_count_chart(
         .graph_type(GraphType::Line)
         .style(Style::default().fg(color));
 
-    let chart = Chart::new(vec![dataset])
+    let marks = marker_lines(x_max, 0.0, y_max);
+    let mut datasets = marker_datasets(&marks);
+    datasets.push(dataset);
+    let chart = Chart::new(datasets)
         .block(
             Block::default()
                 .title(Span::styled(
@@ -1039,6 +1221,8 @@ fn render_multi_chart(
         })
         .collect();
 
+    let marks = marker_lines(x_max, 0.0, y_max);
+    let datasets: Vec<Dataset> = marker_datasets(&marks).into_iter().chain(datasets).collect();
     let chart = Chart::new(datasets)
         .block(
             Block::default()
@@ -3606,7 +3790,10 @@ fn render_gb_chart(
         .graph_type(GraphType::Line)
         .style(Style::default().fg(color));
 
-    let chart = Chart::new(vec![dataset])
+    let marks = marker_lines(x_max, 0.0, y_max);
+    let mut datasets = marker_datasets(&marks);
+    datasets.push(dataset);
+    let chart = Chart::new(datasets)
         .block(
             Block::default()
                 .title(Span::styled(
@@ -3912,6 +4099,8 @@ fn render_threshold_chart(
         );
     }
 
+    let marks = marker_lines(x_max, y_min, y_max);
+    let datasets: Vec<Dataset> = marker_datasets(&marks).into_iter().chain(datasets).collect();
     let chart = Chart::new(datasets)
         .block(
             Block::default()
@@ -5404,7 +5593,10 @@ fn render_value_chart(
         .graph_type(GraphType::Line)
         .style(Style::default().fg(color));
 
-    let chart = Chart::new(vec![dataset])
+    let marks = marker_lines(x_max, 0.0, y_max);
+    let mut datasets = marker_datasets(&marks);
+    datasets.push(dataset);
+    let chart = Chart::new(datasets)
         .block(
             Block::default()
                 .title(Span::styled(
@@ -6839,6 +7031,81 @@ mod tests {
 
     fn widgets(body: &str) -> Vec<CwDashboardWidget> {
         parse_dashboard_body(body).1
+    }
+
+    /// Draw one value chart over a 1h window ending at `END`, with `events`
+    /// as the marker context (None = no context at all).
+    fn chart_buffer(events: Option<Vec<(i64, bool)>>) -> (ratatui::buffer::Buffer, Vec<usize>) {
+        const END: i64 = 1_800_000_000;
+        let data: Vec<(f64, f64)> = (0..=60).map(|m| ((m * 60) as f64, 10.0)).collect();
+        let _scope = MarkerScope;
+        if let Some(events) = events {
+            MARKERS.with(|m| {
+                *m.borrow_mut() = Some(MarkerCtx { window_end: END, events, drawn: Default::default() })
+            });
+        }
+        let backend = ratatui::backend::TestBackend::new(80, 16);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render_value_chart("Requests", &data, 3600.0, "1h ago", Color::Green, f.area(), f))
+            .unwrap();
+        let drawn = MARKERS.with(|m| m.borrow().as_ref().map(|c| c.drawn.iter().copied().collect()).unwrap_or_default());
+        (terminal.backend().buffer().clone(), drawn)
+    }
+
+    #[test]
+    fn markers_draw_inside_the_window_and_leave_charts_alone_outside_it() {
+        const END: i64 = 1_800_000_000;
+        let (plain, _) = chart_buffer(None);
+        // 25 minutes ago, a failed one 10 minutes ago, and one from yesterday.
+        let (marked, drawn) = chart_buffer(Some(vec![(END - 600, true), (END - 1500, false), (END - 86_400, false)]));
+        assert_eq!(drawn, vec![0, 1], "yesterday's event is outside a 1h chart");
+        assert_ne!(plain, marked, "in-window markers draw");
+        let error = theme::error();
+        assert!(marked.content().iter().any(|c| c.fg == error), "a failed change is error-coloured");
+
+        let (outside, drawn) = chart_buffer(Some(vec![(END - 86_400, false)]));
+        assert!(drawn.is_empty());
+        assert_eq!(plain, outside, "no events in the window: the chart is unchanged");
+    }
+
+    #[test]
+    fn the_legend_names_drawn_changes_newest_first_and_counts_the_rest() {
+        use crate::timeline::{TimelineRow, TimelineSource};
+        let row = |ts: i64, what: &str, failed: bool| TimelineRow {
+            ts_secs: ts,
+            time: String::new(),
+            source: TimelineSource::Trail,
+            what: what.to_string(),
+            who: String::new(),
+            detail: String::new(),
+            error: String::new(),
+            failed,
+            json: String::new(),
+        };
+        let end = 1_800_000_000;
+        let tl = crate::ui::widgets::trail_lens::TrailLensState {
+            rows: vec![
+                row(end - 600, "UpdateService", false),
+                row(end - 2 * 86_400, "AttachRolePolicy", true),
+                row(end - 3 * 86_400, "PutRolePolicy", false),
+            ],
+            ..Default::default()
+        };
+        let text = |l: Line| l.spans.iter().map(|s| s.content.to_string()).collect::<String>();
+
+        let wide = text(marker_legend(&tl, &[0, 1].into(), end, 200));
+        assert!(wide.contains(" UpdateService · "), "{wide}");
+        assert!(wide.contains("AttachRolePolicy"), "{wide}");
+        let dated = crate::aws::services::cloudwatch::fmt_epoch_secs(end - 2 * 86_400);
+        assert!(wide.contains(&format!("{} AttachRolePolicy", &dated[5..])), "an older change shows its date: {wide}");
+        assert!(!wide.contains("PutRolePolicy"), "undrawn changes stay out: {wide}");
+
+        let narrow = text(marker_legend(&tl, &[0, 1].into(), end, 60));
+        assert!(narrow.contains("UpdateService") && narrow.contains("+1 more"), "{narrow}");
+
+        let none = text(marker_legend(&tl, &Default::default(), end, 120));
+        assert!(none.contains("no changes in this window (3 in the last 7d)"), "{none}");
     }
 
     /// Side-by-side widgets must share a column edge. Computing each rect from
