@@ -61,14 +61,23 @@ async fn demo_changes_list_newest_first_by_source_tab() {
     assert_eq!(names.len(), 2, "{names:?}");
     assert!(names[0].contains("Service configuration changed  orders-worker"), "{names:?}");
 
-    // Deploys: the CI image build, started by the deploy role. The
-    // month-old build #87 is outside the window.
+    // Deploys: the CI image build, started by the deploy role (the
+    // month-old build #87 is outside the window), then what ECS did with
+    // the deploy: the failed rollout and the circuit-breaker rollback.
     app.handle_event(key('5'), &tx0).await.unwrap();
     assert_eq!(app.changes_view, crate::app::ChangesView::Deploys);
     let names = names_of(&app);
-    assert_eq!(names.len(), 1, "{names:?}");
-    assert!(names[0].contains("build SUCCEEDED  orders-worker-image #88"), "{names:?}");
-    let build = &app.resources[app.filtered_resources[0]];
+    let builds: Vec<&String> = names.iter().filter(|n| n.contains("build ")).collect();
+    assert_eq!(builds.len(), 1, "{names:?}");
+    assert!(builds[0].contains("build SUCCEEDED  orders-worker-image #88"), "{names:?}");
+    assert!(names.iter().any(|n| n.contains("ACTIVE deployment FAILED  orders-worker")), "{names:?}");
+    assert!(names.iter().any(|n| n.contains("rolling back to deployment")), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("(service orders-worker)")), "prefix dropped: {names:?}");
+    let failed = names.iter().position(|n| n.contains("ACTIVE deployment FAILED")).unwrap();
+    let started = names.iter().position(|n| n.contains("has started 2 tasks")).unwrap();
+    assert!(failed < started, "newest first: {names:?}");
+    let build = names.iter().position(|n| n.contains("build SUCCEEDED")).unwrap();
+    let build = &app.resources[app.filtered_resources[build]];
     assert!(build.details().iter().any(|(k, v)| k == "Resource"
         && v.ends_with(":project/orders-worker-image")), "jumps to the project");
 

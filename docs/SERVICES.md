@@ -2435,9 +2435,17 @@ the service you're touching.
   the actor (`role/session` or `codepipeline/<name>`), STOPPED isn't a
   failure. **ASG**:
   `DescribeScalingActivities` with no group is account-wide, newest first.
-  **RDS**: `DescribeEvents` by duration (14-day retention). Deliberately v2:
-  ECS deployments (CloudTrail's `UpdateService` covers the deploy call),
-  scanning further back past the CloudTrail cap, a people-only default.
+  **RDS**: `DescribeEvents` by duration (14-day retention). **ECS** (#257):
+  no account-wide event feed, so `ListClusters` → `ListServices` → one
+  `DescribeServices` per 10 (`buffered(4)`, capped at `MAX_ECS_SERVICES`
+  200 with a warning), then each service's deployments (by `updatedAt`, the
+  `W` lens's DEP row) and service events (prefix `(service NAME) ` dropped,
+  since the row names the service) inside the window. They sit beside the
+  trail's `UpdateService`: the call is CloudTrail's, what the rollout did
+  next (failed to start, circuit-breaker rollback) is ECS's. The periodic
+  "has reached a steady state" event is noise: it repeats every few hours
+  with nothing changing. Still v2: scanning past the CloudTrail cap (#254),
+  a people-only default (#255).
 - **CloudTrail** (`@cloudtrail`) — sub-tabs **Events / Trails / Insights**.
   Events: JSON parsed **eagerly** (no extra API calls); `is_noise()` returns
   `read_only` so `a` hides reads (noise is **shown by default** app-wide). `f`

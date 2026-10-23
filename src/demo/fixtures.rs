@@ -46,7 +46,9 @@
 //!   `/orders/db/password` — metadata only, for proving no value is fetched
 //! - `@changes` over the last hour reads as the incident's lead-up: the
 //!   image build, the task definition and service update (CloudTrail +
-//!   Config), the IAM widening, and an unrelated orders-db parameter change
+//!   Config), ECS's failed rollout and circuit-breaker rollback (the same
+//!   `DescribeServices` fixture), the IAM widening, and an unrelated
+//!   orders-db parameter change
 //! - Cost Anomaly Detection (`@cost`, `7`) flagged CloudWatch six days ago
 //!   — DataProcessing-Bytes, i.e. log ingestion, and `nightly-report`'s
 //!   never-expiring group is the story behind it — plus Fargate vCPU from

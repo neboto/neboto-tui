@@ -916,12 +916,12 @@ impl ChangesView {
     pub fn resource_type_filter(&self) -> &'static str {
         match self {
             ChangesView::All => {
-                "IAM Change|Trail Change|Config Change|Stack Change|Pipeline Run|Build Run|Scaling Activity|RDS Event"
+                "IAM Change|Trail Change|Config Change|Stack Change|Pipeline Run|Build Run|ECS Deployment|Scaling Activity|RDS Event"
             }
             ChangesView::Iam => "IAM Change",
             ChangesView::Trail => "Trail Change",
             ChangesView::Config => "Config Change",
-            ChangesView::Deploys => "Stack Change|Pipeline Run|Build Run",
+            ChangesView::Deploys => "Stack Change|Pipeline Run|Build Run|ECS Deployment",
             ChangesView::Ops => "Scaling Activity|RDS Event"}
     }
 

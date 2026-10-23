@@ -19,7 +19,8 @@ use tokio::sync::mpsc;
 ///   every *recorded* resource whose configuration changed in the window —
 ///   one query, no sifting, but only where Config recording is on.
 /// - **CloudFormation** stack events, **CodePipeline** runs, **CodeBuild**
-///   builds: the deploys.
+///   builds: the deploys. **ECS** deployments and service events: what the
+///   rollout did after the `UpdateService` call the trail records (#257).
 /// - **Auto Scaling** activities and **RDS** events: what AWS itself did,
 ///   which CloudTrail never records.
 /// - **IAM and Organizations** (policies, roles, users, SCPs): global
@@ -50,6 +51,7 @@ pub struct ChangesService {
     cloudformation: aws_sdk_cloudformation::Client,
     codepipeline: aws_sdk_codepipeline::Client,
     codebuild: aws_sdk_codebuild::Client,
+    ecs: aws_sdk_ecs::Client,
     autoscaling: aws_sdk_autoscaling::Client,
     rds: aws_sdk_rds::Client,
     region: String,
@@ -65,6 +67,7 @@ impl ChangesService {
             cloudformation: c.cloudformation_client(),
             codepipeline: c.codepipeline_client(),
             codebuild: c.codebuild_client(),
+            ecs: c.ecs_client(),
             autoscaling: c.asg_client(),
             rds: c.rds_client(),
             region: c.current_region().as_str().to_string(),
@@ -90,6 +93,8 @@ const MAX_PIPELINES: usize = 200;
 /// `ListBuilds` pages (100 build ids each, account-wide, newest first) —
 /// each costs a `BatchGetBuilds` too.
 const BUILD_PAGES: usize = 3;
+/// ECS services described per load (10 per `DescribeServices`).
+const MAX_ECS_SERVICES: usize = 200;
 const MAX_ROWS_PER_SOURCE: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -151,6 +156,7 @@ pub enum ChangeSource {
     Stack,
     Pipeline,
     Build,
+    Ecs,
     Scaling,
     Rds,
 }
@@ -166,6 +172,7 @@ impl ChangeSource {
             ChangeSource::Stack => "CFN",
             ChangeSource::Pipeline => "CP ",
             ChangeSource::Build => "CB ",
+            ChangeSource::Ecs => "ECS",
             ChangeSource::Scaling => "ASG",
             ChangeSource::Rds => "RDS",
         }
@@ -180,6 +187,7 @@ impl ChangeSource {
             ChangeSource::Stack => "CloudFormation",
             ChangeSource::Pipeline => "CodePipeline",
             ChangeSource::Build => "CodeBuild",
+            ChangeSource::Ecs => "ECS",
             ChangeSource::Scaling => "Auto Scaling",
             ChangeSource::Rds => "RDS events",
         }
@@ -194,6 +202,7 @@ impl ChangeSource {
             ChangeSource::Stack => "Stack Change",
             ChangeSource::Pipeline => "Pipeline Run",
             ChangeSource::Build => "Build Run",
+            ChangeSource::Ecs => "ECS Deployment",
             ChangeSource::Scaling => "Scaling Activity",
             ChangeSource::Rds => "RDS Event",
         }
@@ -396,6 +405,60 @@ impl ChangeEvent {
             .join(" · ");
         c.failed = matches!(status.as_str(), "FAILED" | "FAULT" | "TIMED_OUT");
         Some(c)
+    }
+
+    /// An ECS service's deployments and events inside the window, each a
+    /// row on the service. A deployment row carries its rollout state (the
+    /// `W` lens's DEP row); an event is the service's own message with the
+    /// redundant `(service NAME) ` prefix dropped. The periodic "has reached
+    /// a steady state" event repeats every few hours with nothing changing,
+    /// so it's noise.
+    pub fn from_ecs_service(
+        svc: &crate::aws::services::ecs::EcsServiceInfo,
+        cutoff: i64,
+        region: &str,
+    ) -> Vec<Self> {
+        let row = |id: String, ts: i64, what: String, who: String| {
+            Self::new(
+                ChangeSource::Ecs,
+                id,
+                ts,
+                what,
+                who,
+                svc.service_name.clone(),
+                "AWS::ECS::Service".to_string(),
+                svc.service_arn.clone(),
+                region.to_string(),
+            )
+        };
+        let mut rows = Vec::new();
+        for d in svc.deployments.iter().filter(|d| d.updated_at_secs >= cutoff) {
+            let tl = crate::timeline::TimelineRow::from_deploy(d);
+            let mut c = row(
+                format!("ecs:{}:deploy:{}:{}", svc.service_arn, d.task_definition, d.updated_at_secs),
+                d.updated_at_secs,
+                tl.what,
+                d.task_definition.clone(),
+            );
+            c.detail = tl.detail;
+            c.failed = tl.failed;
+            rows.push(c);
+        }
+        let prefix = format!("(service {}) ", svc.service_name);
+        for (i, e) in svc.events.iter().enumerate().filter(|(_, e)| e.created_at_secs >= cutoff) {
+            let tl = crate::timeline::TimelineRow::from_ecs_event(e);
+            let message = e.message.strip_prefix(&prefix).unwrap_or(&e.message).to_string();
+            let mut c = row(
+                format!("ecs:{}:event:{}:{i}", svc.service_arn, e.created_at_secs),
+                e.created_at_secs,
+                message,
+                String::new(),
+            );
+            c.failed = tl.failed;
+            c.machine = e.message.contains("has reached a steady state");
+            rows.push(c);
+        }
+        rows
     }
 
     /// One `SelectResourceConfig` result row (a JSON object string).
@@ -773,6 +836,20 @@ impl AwsService for ChangesService {
                 Err(e) => warn(ChangeSource::Build, e),
             }
         };
+        let ecs = async {
+            match ecs_changes(self.ecs.clone(), cutoff, &region).await {
+                Ok((rows, capped)) => {
+                    send(ChangeSource::Ecs, rows);
+                    if capped {
+                        warn(
+                            ChangeSource::Ecs,
+                            format!("first {MAX_ECS_SERVICES} services only — the rest weren't read"),
+                        );
+                    }
+                }
+                Err(e) => warn(ChangeSource::Ecs, e),
+            }
+        };
         let scaling = async {
             match scaling_changes(self.autoscaling.clone(), cutoff, &region).await {
                 Ok(rows) => send(ChangeSource::Scaling, rows),
@@ -785,7 +862,7 @@ impl AwsService for ChangesService {
                 Err(e) => warn(ChangeSource::Rds, e),
             }
         };
-        tokio::join!(trail, global, config, stacks, pipelines, builds, scaling, rds);
+        tokio::join!(trail, global, config, stacks, pipelines, builds, ecs, scaling, rds);
 
         let _ = event_tx.send(Event::ResourcesFullyLoaded {
             service: service_type,
@@ -1106,6 +1183,62 @@ async fn build_changes(
     Ok((rows, oldest))
 }
 
+/// Every service's deployments and service events in the window. ECS has
+/// no account-wide event feed, so it's clusters → services → one
+/// `DescribeServices` per 10, capped at [`MAX_ECS_SERVICES`]; `true` in the
+/// result means the cap cut it short.
+async fn ecs_changes(
+    client: aws_sdk_ecs::Client,
+    cutoff: i64,
+    region: &str,
+) -> std::result::Result<(Vec<ChangeEvent>, bool), String> {
+    use crate::aws::services::ecs::EcsServiceInfo;
+    let mut clusters = Vec::new();
+    let mut pages = client.list_clusters().into_paginator().items().send();
+    while let Some(arn) = pages.next().await {
+        clusters.push(arn.map_err(|e| crate::error::sdk_error_message(&e))?);
+    }
+
+    let mut batches: Vec<(String, Vec<String>)> = Vec::new();
+    let mut listed = 0;
+    let mut capped = false;
+    'clusters: for cluster in clusters {
+        let mut arns = Vec::new();
+        let mut pages = client.list_services().cluster(&cluster).into_paginator().items().send();
+        while let Some(arn) = pages.next().await {
+            let Ok(arn) = arn else { break };
+            if listed == MAX_ECS_SERVICES {
+                capped = true;
+                break;
+            }
+            arns.push(arn);
+            listed += 1;
+        }
+        batches.extend(arns.chunks(10).map(|c| (cluster.clone(), c.to_vec())));
+        if capped {
+            break 'clusters;
+        }
+    }
+
+    let described: Vec<_> = futures::stream::iter(batches)
+        .map(|(cluster, arns)| {
+            let client = client.clone();
+            async move { client.describe_services().cluster(cluster).set_services(Some(arns)).send().await }
+        })
+        .buffered(4)
+        .collect()
+        .await;
+
+    let mut rows = Vec::new();
+    for resp in described.into_iter().flatten() {
+        for svc in resp.services() {
+            let info = EcsServiceInfo::from_sdk(svc);
+            rows.extend(ChangeEvent::from_ecs_service(&info, cutoff, region));
+        }
+    }
+    Ok((rows, capped))
+}
+
 /// Every group's activities, newest first (no group filter = account-wide),
 /// paged until older than the window.
 async fn scaling_changes(
@@ -1192,6 +1325,48 @@ async fn rds_changes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ecs_rows_keep_the_window_and_drop_the_service_prefix() {
+        use aws_sdk_ecs::types::{Deployment, DeploymentRolloutState, Service, ServiceEvent};
+        use aws_smithy_types::DateTime;
+        let at = |s: i64| DateTime::from_secs(s);
+        let event = |id: &str, secs: i64, msg: &str| {
+            ServiceEvent::builder().id(id).created_at(at(secs)).message(msg).build()
+        };
+        let svc = Service::builder()
+            .service_name("orders-worker")
+            .service_arn("arn:aws:ecs:us-east-1:1:service/prod/orders-worker")
+            .deployments(
+                Deployment::builder()
+                    .status("ACTIVE")
+                    .task_definition("arn:aws:ecs:us-east-1:1:task-definition/orders-worker:15")
+                    .rollout_state(DeploymentRolloutState::Failed)
+                    .rollout_state_reason("ECS deployment circuit breaker: tasks failed to start.")
+                    .updated_at(at(2_000))
+                    .build(),
+            )
+            .deployments(Deployment::builder().status("PRIMARY").updated_at(at(500)).build())
+            .events(event("3", 2_000, "(service orders-worker) rolling back to deployment ecs-svc/3."))
+            .events(event("2", 1_500, "(service orders-worker) has reached a steady state."))
+            .events(event("1", 500, "(service orders-worker) has started 2 tasks."))
+            .build();
+        let info = crate::aws::services::ecs::EcsServiceInfo::from_sdk(&svc);
+        let rows = ChangeEvent::from_ecs_service(&info, 1_000, "us-east-1");
+
+        let whats: Vec<&str> = rows.iter().map(|r| r.what.as_str()).collect();
+        assert_eq!(
+            whats,
+            vec!["ACTIVE deployment FAILED", "rolling back to deployment ecs-svc/3.", "has reached a steady state."],
+            "rows before the cutoff are dropped"
+        );
+        assert!(rows[0].failed && rows[0].detail.contains("circuit breaker"));
+        assert_eq!(rows[0].who, "orders-worker:15");
+        assert!(rows.iter().all(|r| r.target_ref.ends_with("service/prod/orders-worker")));
+        assert!(!rows[1].is_noise() && rows[2].is_noise(), "steady state is noise");
+        let ids: std::collections::HashSet<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids.len(), rows.len(), "ids are unique");
+    }
 
     #[test]
     fn builds_jump_to_their_project_and_fail_on_fault_or_timeout() {
