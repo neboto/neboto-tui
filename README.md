@@ -306,7 +306,7 @@ full-width; `\` flattens all sections into one scroll.
 
 ## Keybindings
 
-`?` opens the in-app help, which is the authoritative list. The essentials:
+`?` opens the in-app help, which is the authoritative list; type to filter it (`log`, `copy`, `mouse`). The essentials:
 
 ### Context
 
