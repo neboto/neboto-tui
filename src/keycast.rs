@@ -211,9 +211,11 @@ fn fallback(key: KeyEvent, after: &View) -> Option<&'static str> {
     }
     let in_tail = matches!(after.overlay, Some("live tail" | "log search"));
     let in_lens = matches!(after.overlay, Some("change timeline" | "network access" | "referenced by"));
+    let in_metrics = after.overlay == Some("metrics");
     match key.code {
         KeyCode::Char('t') if after.overlay == Some("network access") => Some("direction"),
-        KeyCode::Char('[') | KeyCode::Char(']') if in_tail || in_lens => Some("time window"),
+        KeyCode::Char('[') | KeyCode::Char(']') if in_tail || in_lens || in_metrics => Some("time window"),
+        KeyCode::Char('c') if in_metrics => Some("change markers"),
         KeyCode::Char('f') if in_lens => Some("source filter"),
         KeyCode::Char('w') if in_tail => Some("wrap lines"),
         KeyCode::Char('f') if in_tail => Some("follow"),
