@@ -55,3 +55,60 @@ async fn help_filters_as_you_type() {
     press(&mut app, &tx, KeyCode::Char('?')).await;
     assert!(!app.help_visible);
 }
+
+/// The lines of help's "Here" section: the rows between its title and the
+/// next blank line, left column only.
+fn here_rows(app: &App) -> Vec<String> {
+    let screen = screen_of(app);
+    let lines: Vec<&str> = screen.lines().collect();
+    let Some(start) = lines.iter().position(|l| l.contains("  Here ")) else {
+        return Vec::new();
+    };
+    let byte = lines[start].find("Here").unwrap();
+    let col = lines[start][..byte].chars().count();
+    lines[start + 1..]
+        .iter()
+        .map(|l| l.chars().skip(col).take(38).collect::<String>().trim().to_string())
+        .take_while(|l| !l.is_empty())
+        .collect()
+}
+
+#[tokio::test]
+async fn help_leads_with_what_works_on_the_selection() {
+    use crate::aws::services::{config::SecretEntry, ec2::Ec2Instance};
+    let (mut app, tx, _rx) = test_app().await;
+
+    let instance = Ec2Instance::from_sdk(
+        &aws_sdk_ec2::types::Instance::builder()
+            .instance_id("i-0abc")
+            .security_groups(aws_sdk_ec2::types::GroupIdentifier::builder().group_id("sg-0abc").build())
+            .build(),
+    );
+    select_mock(&mut app, ServiceType::EC2, Box::new(instance));
+    press(&mut app, &tx, KeyCode::Char('?')).await;
+    let here = here_rows(&app);
+    for key in ["m ", "W ", "N ", "s "] {
+        assert!(here.iter().any(|r| r.starts_with(key)), "{key:?} missing from {here:?}");
+    }
+    assert!(!here.iter().any(|r| r.starts_with("x ")), "{here:?}");
+
+    // Filtering drops "Here": its rows are listed in their own sections.
+    for c in "session".chars() {
+        press(&mut app, &tx, KeyCode::Char(c)).await;
+    }
+    assert!(here_rows(&app).is_empty());
+    press(&mut app, &tx, KeyCode::Esc).await;
+    press(&mut app, &tx, KeyCode::Esc).await;
+
+    let secret = SecretEntry::from_sdk(
+        &aws_sdk_secretsmanager::types::SecretListEntry::builder()
+            .name("db-password")
+            .arn("arn:aws:secretsmanager:us-east-1:123456789012:secret:db-password-abc123")
+            .build(),
+    );
+    select_mock(&mut app, ServiceType::Secrets, Box::new(secret));
+    press(&mut app, &tx, KeyCode::Char('?')).await;
+    let here = here_rows(&app);
+    assert!(here.iter().any(|r| r.starts_with("x / Y")), "{here:?}");
+    assert!(!here.iter().any(|r| r.starts_with("s ") || r.starts_with("N ")), "{here:?}");
+}

@@ -3,6 +3,7 @@ mod audit;
 mod aws;
 mod bookmarks;
 mod cli;
+mod commands;
 mod config;
 mod demo;
 mod editor;
@@ -751,18 +752,7 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
             // pane-specific hints, `?` has the full reference.
             let mut hints: Vec<(&str, &str)> =
                 vec![("j/k", "scroll"), ("y", "copy"), ("e", "editor")];
-            if app.supports_metrics_overlay() {
-                hints.push(("m", "metrics"));
-            }
-            if app.supports_log_tail() {
-                hints.push(("t", "tail"));
-            }
-            if app.supports_session() {
-                hints.push(("s", "session"));
-            }
-            if app.supports_org_assume() {
-                hints.push(("s", "assume role"));
-            }
+            hints.extend(commands::status_hints(app, true));
             hints.push(("r", "refresh"));
             hints.extend_from_slice(&[("Esc", "back"), ("?", "help")]);
             hints
@@ -779,39 +769,7 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
                     ("y", "copy id"),
                 ]
             };
-            if app.supports_metrics_overlay() {
-                hints.push(("m", "metrics"));
-            }
-            if app.supports_log_tail() {
-                hints.push(("t", "tail"));
-            }
-            if app.supports_object_browser() {
-                hints.push(("o", "objects"));
-            }
-            if app.supports_item_browser() {
-                hints.push(("i", "items"));
-            }
-            if app.supports_session() {
-                hints.push(("s", "session"));
-            }
-            if app.supports_org_assume() {
-                hints.push(("s", "assume role"));
-            }
-            if app.supports_value_reveal() {
-                hints.push(("x", "reveal"));
-            }
-            if app.supports_dns_test() {
-                hints.push(("x", "test answer"));
-            }
-            if app.supports_trail_lens() {
-                hints.push(("W", "trail"));
-            }
-            if app.supports_refs_lens() {
-                hints.push(("U", "refs"));
-            }
-            if app.supports_access_lens() {
-                hints.push(("N", "access"));
-            }
+            hints.extend(commands::status_hints(app, false));
             if app.noise_in_view {
                 hints.push(("a", if app.hide_noise { "show all" } else { "hide noise" }));
             }
