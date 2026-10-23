@@ -1,4 +1,5 @@
 use crate::app::App;
+use crate::search::fuzzy::FuzzyMatcher;
 use crate::ui::theme;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -83,7 +84,7 @@ const RIGHT_SECTIONS: &[Section] = &[
             ("M", "message history"),
             (",", "macros (⏎ run · n record)"),
             ("b", "toggle banner"),
-            ("? / q", "help / quit"),
+            ("? / q", "help (type to filter) / quit"),
         ],
     },
     Section {
@@ -129,8 +130,51 @@ const RIGHT_SECTIONS: &[Section] = &[
     },
 ];
 
-/// Render the help overlay: two aligned key/description columns, sized to the
-/// content (capped at 80% of the terminal), scrollable when it doesn't fit.
+/// One section as drawn: the full table, or the entries left by a filter.
+struct Group<'a> {
+    title: &'a str,
+    entries: Vec<(&'a str, &'a str)>,
+}
+
+fn groups(sections: &'static [Section]) -> Vec<Group<'static>> {
+    sections
+        .iter()
+        .map(|s| Group { title: s.title, entries: s.entries.to_vec() })
+        .collect()
+}
+
+/// The entries `query` matches, both columns in reading order (left, then
+/// right), each kept under its section title. An entry matches on its key,
+/// its description or its section's title, so `mouse` lists the whole Mouse
+/// section. Order is the table's, not the score's: the result still reads
+/// as the help, just shorter.
+fn filter_groups(query: &str) -> Vec<Group<'static>> {
+    let all: Vec<(&'static str, &'static str, &'static str)> = LEFT_SECTIONS
+        .iter()
+        .chain(RIGHT_SECTIONS)
+        .flat_map(|s| s.entries.iter().map(move |(k, d)| (s.title, *k, *d)))
+        .collect();
+    let mut hits: Vec<usize> = FuzzyMatcher::new()
+        .filter_fields(query, &all, |(title, key, desc)| vec![*key, *desc, *title])
+        .into_iter()
+        .map(|(i, _)| i)
+        .collect();
+    hits.sort_unstable();
+    let mut out: Vec<Group<'static>> = Vec::new();
+    for i in hits {
+        let (title, key, desc) = all[i];
+        match out.last_mut() {
+            Some(g) if g.title == title => g.entries.push((key, desc)),
+            _ => out.push(Group { title, entries: vec![(key, desc)] }),
+        }
+    }
+    out
+}
+
+/// Render the help overlay: a filter row over two aligned key/description
+/// columns, sized to the content (capped at 80% of the terminal), scrollable
+/// when it doesn't fit. Typing filters it to one full-width column, so a
+/// matched entry has room for its whole description.
 pub fn render_help_overlay(app: &App, frame: &mut Frame) {
     let size = frame.area();
 
@@ -139,15 +183,33 @@ pub fn render_help_overlay(app: &App, frame: &mut Frame) {
     let width = (size.width * 76 / 100).clamp(40, 110);
     let col_width = (width.saturating_sub(2 + 4) / 2) as usize; // borders + margins
 
-    let left_lines = section_lines(LEFT_SECTIONS, col_width);
-    let right_lines = section_lines(RIGHT_SECTIONS, col_width);
-    let content_h = left_lines.len().max(right_lines.len()) as u16;
+    let left_lines = section_lines(&groups(LEFT_SECTIONS), col_width);
+    let right_lines = section_lines(&groups(RIGHT_SECTIONS), col_width);
+    let full_h = left_lines.len().max(right_lines.len()) as u16;
 
-    // Height: fit the content; cap at 80% of the terminal and scroll the rest.
+    let query = app.help_query.as_str();
+    let filtered = (!query.trim().is_empty()).then(|| {
+        let matches = filter_groups(query);
+        if matches.is_empty() {
+            vec![
+                Line::raw(""),
+                Line::from(Span::styled(
+                    format!("  No keys match \"{}\"", query.trim()),
+                    Style::default().fg(theme::text_dim()),
+                )),
+            ]
+        } else {
+            section_lines(&matches, width.saturating_sub(2 + 4) as usize)
+        }
+    });
+    let content_h = filtered.as_ref().map_or(full_h, |l| l.len() as u16);
+
+    // Height: fit the unfiltered content plus the filter row, so the popup
+    // holds still while you type; cap at 80% of the terminal and scroll.
     let max_h = (size.height * 80 / 100).max(10);
-    let height = (content_h + 2).min(max_h);
+    let height = (full_h + 1 + 2).min(max_h);
     let area = centered_rect(width, height, size);
-    let viewport = height.saturating_sub(2);
+    let viewport = height.saturating_sub(2 + 1);
     let max_scroll = content_h.saturating_sub(viewport);
     app.help_max_scroll.set(max_scroll);
     app.popup_hits.borrow_mut().record_area(area);
@@ -158,9 +220,9 @@ pub fn render_help_overlay(app: &App, frame: &mut Frame) {
     let mut block = theme::popup_block("Help").title_bottom(
         Line::from(Span::styled(
             if max_scroll > 0 {
-                " j/k scroll · ? / Esc close "
+                " type to filter · ↑/↓ scroll · Esc close "
             } else {
-                " ? / Esc close "
+                " type to filter · Esc close "
             },
             Style::default().fg(theme::text_dim()),
         ))
@@ -179,11 +241,26 @@ pub fn render_help_overlay(app: &App, frame: &mut Frame) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+    frame.render_widget(Paragraph::new(filter_line(query)), rows[0]);
+
+    if let Some(lines) = filtered {
+        let body = Layout::default()
+            .horizontal_margin(2)
+            .constraints([Constraint::Min(0)])
+            .split(rows[1]);
+        frame.render_widget(Paragraph::new(lines).scroll((offset, 0)), body[0]);
+        return;
+    }
+
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .horizontal_margin(2)
-        .split(inner);
+        .split(rows[1]);
 
     frame.render_widget(
         Paragraph::new(left_lines).scroll((offset, 0)),
@@ -195,10 +272,27 @@ pub fn render_help_overlay(app: &App, frame: &mut Frame) {
     );
 }
 
+/// The filter row: the query with a cursor, or a dim placeholder.
+fn filter_line(query: &str) -> Line<'static> {
+    let prompt = Span::styled("  / ", Style::default().fg(theme::accent()));
+    if query.is_empty() {
+        Line::from(vec![
+            prompt,
+            Span::styled("type to filter keys", Style::default().fg(theme::text_dim())),
+        ])
+    } else {
+        Line::from(vec![
+            prompt,
+            Span::styled(query.to_string(), Style::default().fg(theme::text_primary())),
+            Span::styled("▏", Style::default().fg(theme::accent())),
+        ])
+    }
+}
+
 /// Build one column's lines: section titles + `key  description` rows with
 /// the keys right-padded to a shared column. No wrapping — a description
 /// that can't fit is truncated with `…`.
-fn section_lines(sections: &[Section], col_width: usize) -> Vec<Line<'static>> {
+fn section_lines(sections: &[Group<'static>], col_width: usize) -> Vec<Line<'static>> {
     let key_width = sections
         .iter()
         .flat_map(|s| s.entries.iter())
@@ -215,7 +309,7 @@ fn section_lines(sections: &[Section], col_width: usize) -> Vec<Line<'static>> {
                 .fg(theme::warning())
                 .add_modifier(Modifier::BOLD),
         )));
-        for (key, desc) in section.entries {
+        for (key, desc) in &section.entries {
             let pad = " ".repeat(key_width.saturating_sub(key.chars().count()) + 2);
             lines.push(Line::from(vec![
                 Span::raw("  "),
@@ -272,7 +366,7 @@ mod tests {
         // must fit the column it was built for, at a typical column width.
         for col_width in [30usize, 40, 52] {
             for sections in [LEFT_SECTIONS, RIGHT_SECTIONS] {
-                for line in section_lines(sections, col_width) {
+                for line in section_lines(&groups(sections), col_width) {
                     assert!(
                         line.width() <= col_width,
                         "line {:?} is {} wide, budget {}",
@@ -283,6 +377,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn keys<'a>(groups: &[Group<'a>]) -> Vec<&'a str> {
+        groups.iter().flat_map(|g| g.entries.iter().map(|(k, _)| *k)).collect()
+    }
+
+    #[test]
+    fn filter_matches_descriptions_and_keeps_section_titles() {
+        let hits = filter_groups("log tail");
+        assert_eq!(keys(&hits), vec!["t"], "{:?}", keys(&hits));
+        assert_eq!(hits[0].title, "Actions");
+    }
+
+    #[test]
+    fn filter_on_a_section_title_lists_the_section() {
+        let hits = filter_groups("mouse");
+        let mouse = RIGHT_SECTIONS.iter().find(|s| s.title == "Mouse").unwrap();
+        let section = hits.iter().find(|g| g.title == "Mouse").unwrap();
+        assert_eq!(section.entries.len(), mouse.entries.len());
+    }
+
+    #[test]
+    fn filter_keeps_table_order_across_both_columns() {
+        // `refresh` hits both left-column sections and at least one on the
+        // right; the sections come out in table order whatever their scores.
+        let order: Vec<&str> = LEFT_SECTIONS.iter().chain(RIGHT_SECTIONS).map(|s| s.title).collect();
+        let hits = filter_groups("refresh");
+        let pos: Vec<usize> =
+            hits.iter().map(|g| order.iter().position(|t| *t == g.title).unwrap()).collect();
+        assert!(pos.len() >= 2 && pos.windows(2).all(|w| w[0] < w[1]), "{pos:?}");
+        assert_eq!(&order[pos[0]], &"List pane");
+        assert!(filter_groups("zzqqxx").is_empty());
     }
 
     #[test]

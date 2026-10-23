@@ -2091,6 +2091,8 @@ pub struct App {
     /// clamp without knowing the popup height.
     pub help_scroll: u16,
     pub help_max_scroll: Cell<u16>,
+    /// Type-to-filter text in the help overlay (empty = the full table).
+    pub help_query: String,
     pub tick_count: u64,    // Advances every tick; drives spinner animation
     pub region_selector: RegionSelectorState,
     pub profile_selector: ProfileSelectorState,
@@ -3193,6 +3195,7 @@ impl App {
             help_visible: false,
             help_scroll: 0,
             help_max_scroll: Cell::new(0),
+            help_query: String::new(),
             tick_count: 0,
             region_selector: RegionSelectorState::with_first(&config.configured_regions().0.unwrap_or_default()),
             profile_selector: ProfileSelectorState::new(),
@@ -4365,6 +4368,14 @@ impl App {
             self.layout_mode = layout;
         }
         Ok(())
+    }
+
+    /// `?`: open or close the help overlay, always from the top with no
+    /// filter.
+    fn toggle_help(&mut self) {
+        self.help_visible = !self.help_visible;
+        self.help_scroll = 0;
+        self.help_query.clear();
     }
 
     /// Back from the detail pane to the list (`h` / `←` / `Esc`).
@@ -5776,32 +5787,50 @@ impl App {
         }
 
         // The help overlay renders on top of everything, so while it's open
-        // it gets keys first (before the detail-pane block): Esc closes,
-        // j/k + page keys scroll (the render pass records the max in
+        // it gets keys first (before the detail-pane block). It filters as
+        // you type, like the pickers, so letters are text — `j`/`k` included;
+        // the arrows and page keys scroll (the render pass records the max in
         // `help_max_scroll` so the handler can clamp without the popup height).
-        // Unhandled keys still fall through — `?` toggles, `q` quits, etc.
+        // `Esc` clears a filter, then closes; `?` closes only while the filter
+        // is empty. Other keys still fall through.
         if self.help_visible {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
             let max = self.help_max_scroll.get();
             match key.code {
                 KeyCode::Esc => {
-                    self.help_visible = false;
+                    if self.help_query.is_empty() {
+                        self.help_visible = false;
+                    } else {
+                        self.help_query.clear();
+                        self.help_scroll = 0;
+                    }
                     return Ok(());
                 }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    self.help_scroll = (self.help_scroll + 1).min(max);
-                    return Ok(());
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    self.help_scroll = self.help_scroll.saturating_sub(1);
-                    return Ok(());
-                }
+                KeyCode::Char('?') if self.help_query.is_empty() => {}
                 KeyCode::Char('d') if ctrl => {
                     self.help_scroll = (self.help_scroll + 10).min(max);
                     return Ok(());
                 }
                 KeyCode::Char('u') if ctrl => {
                     self.help_scroll = self.help_scroll.saturating_sub(10);
+                    return Ok(());
+                }
+                KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
+                    self.help_query.push(c);
+                    self.help_scroll = 0;
+                    return Ok(());
+                }
+                KeyCode::Backspace => {
+                    self.help_query.pop();
+                    self.help_scroll = 0;
+                    return Ok(());
+                }
+                KeyCode::Down => {
+                    self.help_scroll = (self.help_scroll + 1).min(max);
+                    return Ok(());
+                }
+                KeyCode::Up => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1);
                     return Ok(());
                 }
                 KeyCode::PageDown => {
@@ -5812,7 +5841,7 @@ impl App {
                     self.help_scroll = self.help_scroll.saturating_sub(10);
                     return Ok(());
                 }
-                KeyCode::Char('G') | KeyCode::End => {
+                KeyCode::End => {
                     self.help_scroll = max;
                     return Ok(());
                 }
@@ -6285,10 +6314,7 @@ impl App {
                 }
                 // Help overlay works from the detail pane too (the global `?`
                 // arm is unreachable here — this block returns first).
-                KeyCode::Char('?') => {
-                    self.help_visible = !self.help_visible;
-                    self.help_scroll = 0;
-                }
+                KeyCode::Char('?') => self.toggle_help(),
                 KeyCode::Char('q') => {
                     self.running = false;
                 }
@@ -9062,10 +9088,7 @@ impl App {
             }
 
             // Toggle help overlay
-            (KeyCode::Char('?'), KeyModifiers::NONE) => {
-                self.help_visible = !self.help_visible;
-                self.help_scroll = 0;
-            }
+            (KeyCode::Char('?'), KeyModifiers::NONE) => self.toggle_help(),
 
             // Toggle the active pane to full-width and back
             (KeyCode::Char('Z'), KeyModifiers::SHIFT) => {
@@ -23045,6 +23068,7 @@ impl App {
             || self.org_role_selector.visible
             || self.quota_service_selector.visible
             || self.cost_key_picker.visible
+            || self.help_visible
         {
             Some(Input::Picker)
         } else {
