@@ -252,7 +252,7 @@ impl EfsFileSystem {
 crate::sections! {
     pub enum EfsFileSystemDetailSection,
     pub static EFS_FS_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         MountTargets "Mount Targets" => crate::app::App::trigger_efs_mount_targets_load,
         AccessPoints "Access Points" => crate::app::App::trigger_efs_access_points_load,
         Tags "Tags",

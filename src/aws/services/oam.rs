@@ -36,7 +36,7 @@ impl OamSink {
 crate::sections! {
     pub enum OamSinkDetailSection,
     pub static OAM_SINK_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Policy "Policy" => crate::app::App::trigger_oam_sink_policy_load,
         AttachedLinks "Attached Links" => crate::app::App::trigger_oam_attached_links_load,
     ]
@@ -130,7 +130,7 @@ impl OamLink {
 crate::sections! {
     pub enum OamLinkDetailSection,
     pub static OAM_LINK_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Configuration "Configuration" => crate::app::App::trigger_oam_link_detail_load,
     ]
 }

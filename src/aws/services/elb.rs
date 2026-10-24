@@ -264,7 +264,7 @@ impl LoadBalancer {
 crate::sections! {
     pub enum LoadBalancerDetailSection,
     pub static LOAD_BALANCER_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_lb_web_acl_load,
+        Overview "Overview" => crate::app::App::trigger_lb_web_acl_load,
         Listeners "Listeners" => crate::app::App::trigger_load_balancer_details_load,
         Attributes "Attributes" => crate::app::App::trigger_load_balancer_details_load,
         Tags "Tags",

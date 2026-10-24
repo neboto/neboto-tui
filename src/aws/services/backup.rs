@@ -425,7 +425,7 @@ impl BackupVault {
 crate::sections! {
     pub enum BackupVaultDetailSection,
     pub static BACKUP_VAULT_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         RecoveryPoints "Recovery Points" => crate::app::App::trigger_backup_recovery_points_load,
         Tags "Tags",
     ]

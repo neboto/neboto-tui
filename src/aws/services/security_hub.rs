@@ -1850,7 +1850,7 @@ fn build_search_blob(f: &ShFinding) -> String {
 crate::sections! {
     pub enum ShFindingDetailSection,
     pub static SH_FINDING_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Resources "Resources",
         Compliance "Compliance",
         Vulnerabilities "Vulns",

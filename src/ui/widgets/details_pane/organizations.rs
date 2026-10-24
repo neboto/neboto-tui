@@ -97,7 +97,7 @@ pub fn org_account_section_lines(
     assume_hint: Option<&str>,
 ) -> Vec<(String, String)> {
     match section {
-        OrgAccountDetailSection::Details => org_account_details_lines(account, assume_hint),
+        OrgAccountDetailSection::Overview => org_account_details_lines(account, assume_hint),
         OrgAccountDetailSection::OuPath => org_account_ou_path_lines(details_state),
         OrgAccountDetailSection::Policies => org_account_policies_lines(details_state),
     }

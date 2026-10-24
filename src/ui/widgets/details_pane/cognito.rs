@@ -77,7 +77,7 @@ pub fn cognito_user_pool_section_lines(
     groups: Option<&crate::lazy::Lazy<crate::aws::services::cognito::CognitoGroups>>,
 ) -> Vec<(String, String)> {
     match section {
-        CognitoUserPoolDetailSection::Details => {
+        CognitoUserPoolDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), pool.name.clone()),
                 ("Pool ID".to_string(), pool.id.clone()),

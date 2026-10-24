@@ -164,7 +164,7 @@ pub fn sc_portfolio_section_lines(
     extras: Option<&crate::lazy::Lazy<crate::aws::services::servicecatalog::ScPortfolioExtras>>,
 ) -> Vec<(String, String)> {
     match section {
-        ScPortfolioDetailSection::Details => {
+        ScPortfolioDetailSection::Overview => {
             let mut rows = vec![
                 ("Portfolio".to_string(), portfolio.name.clone()),
                 ("ID".to_string(), portfolio.id.clone()),
@@ -321,7 +321,7 @@ pub fn sc_product_section_lines(
     details: Option<&crate::lazy::Lazy<Box<crate::aws::services::servicecatalog::ScProductAdminDetails>>>,
 ) -> Vec<(String, String)> {
     match section {
-        ScProductDetailSection::Details => {
+        ScProductDetailSection::Overview => {
             let mut rows = vec![
                 ("Product".to_string(), product.name.clone()),
                 ("ID".to_string(), product.id.clone()),
@@ -487,7 +487,7 @@ pub fn sc_pp_section_lines(
     records: Option<&crate::lazy::Lazy<Vec<crate::aws::services::servicecatalog::ScRecord>>>,
 ) -> Vec<(String, String)> {
     match section {
-        ScProvisionedProductDetailSection::Details => {
+        ScProvisionedProductDetailSection::Overview => {
             let mut rows = vec![
                 ("Provisioned Product".to_string(), pp.name.clone()),
                 ("ID".to_string(), pp.id.clone()),

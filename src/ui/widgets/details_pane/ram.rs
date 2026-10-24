@@ -101,7 +101,7 @@ pub fn ram_share_section_lines(
     principals: Option<&Lazy<Vec<crate::aws::services::ram::RamPrincipal>>>,
 ) -> Vec<(String, String)> {
     match section {
-        RamResourceShareDetailSection::Details => ram_details_lines(share),
+        RamResourceShareDetailSection::Overview => ram_details_lines(share),
         RamResourceShareDetailSection::Resources => ram_resources_lines(resources),
         RamResourceShareDetailSection::Principals => ram_principals_lines(principals),
         RamResourceShareDetailSection::Tags => ram_tags_lines(share),

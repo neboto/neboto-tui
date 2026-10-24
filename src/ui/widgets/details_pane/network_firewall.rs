@@ -66,7 +66,7 @@ pub fn nfw_firewall_section_lines(
     logging: Option<&crate::lazy::Lazy<Vec<crate::aws::services::network_firewall::NfwLogDestination>>>,
 ) -> Vec<(String, String)> {
     match section {
-        NfwFirewallDetailSection::Details => {
+        NfwFirewallDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), fw.name.clone()),
                 ("Status".to_string(), fw.status.clone()),

@@ -268,7 +268,7 @@ impl KinesisStream {
 crate::sections! {
     pub enum KinesisDetailSection,
     pub static KINESIS_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Consumers "Consumers" => crate::app::App::trigger_kinesis_consumers_load,
         Tags "Tags" => crate::app::App::trigger_kinesis_tags_load,
     ]

@@ -124,7 +124,7 @@ pub fn tgw_section_lines(
     route_tables: &[(String, String)],                 // id, state
 ) -> Vec<(String, String)> {
     match section {
-        TgwDetailSection::Details => {
+        TgwDetailSection::Overview => {
             let mut rows = vec![
                 ("ID".to_string(), tgw.id.clone()),
                 ("ARN".to_string(), tgw.arn.clone()),

@@ -358,7 +358,7 @@ impl NfwFirewall {
 crate::sections! {
     pub enum NfwFirewallDetailSection,
     pub static NFW_FIREWALL_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_nfw_logging_load,
+        Overview "Overview" => crate::app::App::trigger_nfw_logging_load,
         Subnets "Subnets" => crate::app::App::trigger_nfw_logging_load,
         Policy "Policy" => crate::app::App::trigger_nfw_logging_load,
         Logging "Logging" => crate::app::App::trigger_nfw_logging_load,

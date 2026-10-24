@@ -1061,7 +1061,7 @@ pub fn cfn_export_section_lines(
     imports: Option<&Lazy<Vec<String>>>,
 ) -> Vec<(String, String)> {
     match section {
-        CfnExportDetailSection::Details => {
+        CfnExportDetailSection::Overview => {
             vec![
                 ("Name".to_string(), export.name.clone()),
                 ("".to_string(), "".to_string()),

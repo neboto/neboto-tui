@@ -412,7 +412,7 @@ impl ElastiCacheCluster {
 crate::sections! {
     pub enum ElastiCacheDetailSection,
     pub static ELASTICACHE_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Nodes "Nodes",
         Network "Network",
         Tags "Tags" => crate::app::App::trigger_elasticache_tags_load,

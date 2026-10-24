@@ -80,7 +80,7 @@ pub fn permission_set_section_lines(
     account_names: &std::collections::HashMap<String, String>,
 ) -> Vec<(String, String)> {
     match section {
-        PermissionSetDetailSection::Details => {
+        PermissionSetDetailSection::Overview => {
             let mut rows = vec![("Name".to_string(), ps.name.clone())];
             if !ps.description.is_empty() {
                 rows.push(("Description".to_string(), ps.description.clone()));
@@ -428,7 +428,7 @@ pub fn ic_group_section_lines(
     account_names: &std::collections::HashMap<String, String>,
 ) -> Vec<(String, String)> {
     match section {
-        IcGroupDetailSection::Details => {
+        IcGroupDetailSection::Overview => {
             let mut rows = vec![("Display Name".to_string(), g.display_name.clone())];
             if !g.description.is_empty() {
                 rows.push(("Description".to_string(), g.description.clone()));
@@ -478,7 +478,7 @@ pub fn ic_user_section_lines(
     account_names: &std::collections::HashMap<String, String>,
 ) -> Vec<(String, String)> {
     match section {
-        IcUserDetailSection::Details => {
+        IcUserDetailSection::Overview => {
             let mut rows = vec![("Username".to_string(), u.username.clone())];
             if !u.display_name.is_empty() {
                 rows.push(("Display Name".to_string(), u.display_name.clone()));

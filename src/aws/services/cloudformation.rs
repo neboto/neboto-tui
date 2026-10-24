@@ -274,7 +274,7 @@ impl CfnExport {
 crate::sections! {
     pub enum CfnExportDetailSection,
     pub static CFN_EXPORT_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Imports "Imports" => crate::app::App::trigger_cfn_imports_load,
     ]
 }

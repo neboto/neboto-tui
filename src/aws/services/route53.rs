@@ -794,9 +794,7 @@ pub enum DnsTarget {
 crate::sections! {
     pub enum R53RecordDetailSection,
     pub static R53_RECORD_SECTIONS = [
-        // "Details", not "Overview": it's what the flat pane's one section
-        // was called, and `neboto get` scripts key on section names.
-        Details "Details",
+        Overview "Overview",
         // No on-enter hook: `x` runs the test, so a Tab press or the flat
         // view's trigger sweep never fires one (the AgentCore Agent Card
         // precedent), and each `x` is a fresh sample of a weighted set.

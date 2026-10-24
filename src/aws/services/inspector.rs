@@ -468,7 +468,7 @@ fn short_digest(id: &str) -> String {
 crate::sections! {
     pub enum InspFindingDetailSection,
     pub static INSP_FINDING_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Vulnerability "Vulnerability",
         Resource "Resource",
         Remediation "Remediation",

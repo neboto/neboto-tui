@@ -686,7 +686,7 @@ impl ApiCustomDomain {
 crate::sections! {
     pub enum ApiDomainDetailSection,
     pub static API_DOMAIN_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Mappings "Mappings" => crate::app::App::trigger_api_domain_details_load,
         Tags "Tags",
     ]

@@ -76,7 +76,7 @@ pub fn load_balancer_section_lines(
     web_acl: Option<&crate::lazy::Lazy<crate::aws::services::elb::LbWebAcl>>,
 ) -> Vec<(String, String)> {
     match section {
-        LoadBalancerDetailSection::Details => lb_details_lines(lb, web_acl),
+        LoadBalancerDetailSection::Overview => lb_details_lines(lb, web_acl),
         LoadBalancerDetailSection::Listeners => lb_listeners_lines(details_state),
         LoadBalancerDetailSection::Attributes => lb_attributes_lines(details_state),
         LoadBalancerDetailSection::Tags => lb_tags_lines(lb),

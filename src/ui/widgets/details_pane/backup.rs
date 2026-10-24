@@ -94,7 +94,7 @@ pub fn backup_vault_section_lines(
     points: Option<&crate::lazy::Lazy<Vec<crate::aws::services::backup::RecoveryPoint>>>,
 ) -> Vec<(String, String)> {
     match section {
-        BackupVaultDetailSection::Details => {
+        BackupVaultDetailSection::Overview => {
             let mut rows = vec![
                 ("Vault".to_string(), vault.name.clone()),
                 ("Recovery Points".to_string(), vault.recovery_points.to_string()),

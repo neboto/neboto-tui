@@ -2217,7 +2217,7 @@ impl AccessAnalyzerFinding {
 crate::sections! {
     pub enum AccessAnalyzerDetailSection,
     pub static ACCESS_ANALYZER_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Access "Access",
     ]
 }

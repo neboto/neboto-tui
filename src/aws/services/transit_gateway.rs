@@ -309,7 +309,7 @@ impl TransitGateway {
 crate::sections! {
     pub enum TgwDetailSection,
     pub static TGW_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Attachments "Attachments",
         RouteTables "Route Tables",
         Tags "Tags",

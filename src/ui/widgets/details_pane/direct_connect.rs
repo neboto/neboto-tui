@@ -145,7 +145,7 @@ pub fn dx_connection_section_lines(
     vifs: &[(String, String, String, String)], // id, type, state, bgp
 ) -> Vec<(String, String)> {
     match section {
-        DxConnectionDetailSection::Details => {
+        DxConnectionDetailSection::Overview => {
             let mut rows = vec![
                 ("ID".to_string(), conn.id.clone()),
                 ("Name".to_string(), conn.name.clone()),
@@ -210,7 +210,7 @@ pub fn dx_vif_section_lines(
     section: DxVifDetailSection,
 ) -> Vec<(String, String)> {
     match section {
-        DxVifDetailSection::Details => {
+        DxVifDetailSection::Overview => {
             let mut rows = vec![
                 ("ID".to_string(), vif.id.clone()),
                 ("Name".to_string(), vif.name.clone()),

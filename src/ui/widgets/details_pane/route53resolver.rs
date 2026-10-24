@@ -54,7 +54,7 @@ pub fn resolver_endpoint_section_lines(
         None => "—",
     };
     match section {
-        S::Details => {
+        S::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), e.name.clone()),
                 ("ID".to_string(), e.id.clone()),
@@ -196,7 +196,7 @@ pub fn resolver_rule_section_lines(
 ) -> Vec<(String, String)> {
     use crate::aws::services::route53resolver::ResolverRuleDetailSection as S;
     match section {
-        S::Details => {
+        S::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), r.name.clone()),
                 ("ID".to_string(), r.id.clone()),

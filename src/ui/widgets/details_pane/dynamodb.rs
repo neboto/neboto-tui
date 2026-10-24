@@ -69,7 +69,7 @@ pub fn ddb_table_section_lines(
     tags: Option<&crate::lazy::Lazy<std::collections::HashMap<String, String>>>,
 ) -> Vec<(String, String)> {
     match section {
-        DdbTableDetailSection::Details => {
+        DdbTableDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), table.name.clone()),
                 ("Status".to_string(), table.status.clone()),

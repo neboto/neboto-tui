@@ -203,7 +203,7 @@ pub struct WafWebAcl {
 crate::sections! {
     pub enum WafWebAclDetailSection,
     pub static WAF_WEB_ACL_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_waf_web_acl_detail_load,
+        Overview "Overview" => crate::app::App::trigger_waf_web_acl_detail_load,
         Rules "Rules" => crate::app::App::trigger_waf_web_acl_detail_load,
         Associated "Associated" => crate::app::App::trigger_waf_web_acl_detail_load,
         Logging "Logging" => crate::app::App::trigger_waf_web_acl_detail_load,
@@ -261,7 +261,7 @@ pub struct WafIpSet {
 crate::sections! {
     pub enum WafIpSetDetailSection,
     pub static WAF_IP_SET_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_waf_ip_set_load,
+        Overview "Overview" => crate::app::App::trigger_waf_ip_set_load,
         Addresses "Addresses" => crate::app::App::trigger_waf_ip_set_load,
         Tags "Tags" => crate::app::App::trigger_waf_ip_set_load,
     ]
@@ -315,7 +315,7 @@ pub struct WafRuleGroup {
 crate::sections! {
     pub enum WafRuleGroupDetailSection,
     pub static WAF_RULE_GROUP_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_waf_rule_group_load,
+        Overview "Overview" => crate::app::App::trigger_waf_rule_group_load,
         Rules "Rules" => crate::app::App::trigger_waf_rule_group_load,
         Tags "Tags" => crate::app::App::trigger_waf_rule_group_load,
     ]

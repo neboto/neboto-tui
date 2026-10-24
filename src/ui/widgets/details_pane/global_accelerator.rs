@@ -78,7 +78,7 @@ pub fn ga_accelerator_section_lines(
     tags: Option<&Lazy<std::collections::HashMap<String, String>>>,
 ) -> Vec<(String, String)> {
     match section {
-        GaAcceleratorDetailSection::Details => {
+        GaAcceleratorDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), acc.name.clone()),
                 ("Status".to_string(), acc.status.clone()),

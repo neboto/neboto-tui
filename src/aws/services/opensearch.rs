@@ -320,7 +320,7 @@ impl OpenSearchDomain {
 crate::sections! {
     pub enum OpenSearchDetailSection,
     pub static OPENSEARCH_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Cluster "Cluster",
         Network "Network",
         Security "Security",

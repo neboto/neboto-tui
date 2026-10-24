@@ -182,7 +182,7 @@ pub fn ec2_section_lines(
     enrollment: Option<&crate::aws::services::computeoptimizer::CoEnrollment>,
 ) -> Vec<(String, String)> {
     match section {
-        Ec2InstanceDetailSection::Details => ec2_details_lines(instance, ssm_status, credit_spec),
+        Ec2InstanceDetailSection::Overview => ec2_details_lines(instance, ssm_status, credit_spec),
         Ec2InstanceDetailSection::Security => ec2_security_lines(instance, profile_roles),
         Ec2InstanceDetailSection::Networking => ec2_networking_lines(instance),
         Ec2InstanceDetailSection::LoadBalancing => ec2_load_balancing_lines(lb),
@@ -1032,7 +1032,7 @@ pub fn ebs_volume_section_lines(
     enrollment: Option<&crate::aws::services::computeoptimizer::CoEnrollment>,
 ) -> Vec<(String, String)> {
     match section {
-        EbsVolumeDetailSection::Details => {
+        EbsVolumeDetailSection::Overview => {
             let mut rows = vec![
                 ("Volume ID".to_string(), vol.volume_id.clone()),
                 ("Type".to_string(), vol.volume_type.clone()),
@@ -1196,7 +1196,7 @@ pub fn ami_section_lines(
     permissions: Option<&crate::lazy::Lazy<Vec<String>>>,
 ) -> Vec<(String, String)> {
     match section {
-        AmiDetailSection::Details => {
+        AmiDetailSection::Overview => {
             let mut rows = vec![
                 ("Image ID".to_string(), ami.image_id.clone()),
                 ("Name".to_string(), ami.name.clone()),
@@ -1366,7 +1366,7 @@ pub fn snapshot_section_lines(
     section: SnapshotDetailSection,
 ) -> Vec<(String, String)> {
     match section {
-        SnapshotDetailSection::Details => {
+        SnapshotDetailSection::Overview => {
             let mut rows = vec![
                 ("Snapshot ID".to_string(), snap.snapshot_id.clone()),
                 ("State".to_string(), snap.state.clone()),
@@ -1502,7 +1502,7 @@ pub fn launch_template_section_lines(
     versions: Option<&crate::lazy::Lazy<Vec<crate::aws::services::ec2::LaunchTemplateVersion>>>,
 ) -> Vec<(String, String)> {
     match section {
-        LaunchTemplateDetailSection::Details => {
+        LaunchTemplateDetailSection::Overview => {
             let mut rows = vec![
                 ("Template ID".to_string(), lt.id.clone()),
                 ("Name".to_string(), lt.name.clone()),

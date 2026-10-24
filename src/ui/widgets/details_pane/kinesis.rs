@@ -70,7 +70,7 @@ pub fn kinesis_section_lines(
     tags: Option<&Lazy<Vec<(String, String)>>>,
 ) -> Vec<(String, String)> {
     match section {
-        KinesisDetailSection::Details => {
+        KinesisDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), st.name.clone()),
                 ("Status".to_string(), st.status.clone()),

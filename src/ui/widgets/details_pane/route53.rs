@@ -490,7 +490,7 @@ pub fn r53_record_section_lines(
     match section {
         // The rows the flat pane always showed — `r53_row_jump_target` keys
         // on their labels (Zone ID, Health Check, Alias Target, Target).
-        S::Details => {
+        S::Overview => {
             let mut rows = vec![("".to_string(), "".to_string())];
             rows.extend(rec.details());
             rows

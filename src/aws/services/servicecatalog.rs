@@ -252,7 +252,7 @@ impl ScPortfolio {
 crate::sections! {
     pub enum ScPortfolioDetailSection,
     pub static SC_PORTFOLIO_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Products "Products" => crate::app::App::trigger_sc_portfolio_products_load,
         Principals "Principals" => crate::app::App::trigger_sc_portfolio_access_load,
         Constraints "Constraints" => crate::app::App::trigger_sc_portfolio_access_load,
@@ -353,7 +353,7 @@ impl ScProduct {
 crate::sections! {
     pub enum ScProductDetailSection,
     pub static SC_PRODUCT_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Versions "Versions" => crate::app::App::trigger_sc_product_details_load,
         Portfolios "Portfolios" => crate::app::App::trigger_sc_product_details_load,
         Tags "Tags" => crate::app::App::trigger_sc_product_details_load,
@@ -469,7 +469,7 @@ impl ScProvisionedProduct {
 crate::sections! {
     pub enum ScProvisionedProductDetailSection,
     pub static SC_PP_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Outputs "Outputs" => crate::app::App::trigger_sc_pp_outputs_load,
         History "History" => crate::app::App::trigger_sc_pp_records_load,
         Tags "Tags",

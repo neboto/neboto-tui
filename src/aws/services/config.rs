@@ -221,7 +221,7 @@ impl SecretEntry {
 crate::sections! {
     pub enum SecretDetailSection,
     pub static SECRET_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Rotation "Rotation",
         Replication "Replication" => crate::app::App::trigger_secret_replication_load,
         Tags "Tags",

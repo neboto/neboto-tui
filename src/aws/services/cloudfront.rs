@@ -758,7 +758,7 @@ impl CfDistribution {
 crate::sections! {
     pub enum CfDistributionDetailSection,
     pub static CF_DISTRIBUTION_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Origins "Origins",
         Behaviors "Behaviors",
         Errors "Errors",

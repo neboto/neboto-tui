@@ -150,7 +150,7 @@ impl AcmCertificate {
 crate::sections! {
     pub enum AcmCertDetailSection,
     pub static ACM_CERT_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_acm_details_load,
+        Overview "Overview" => crate::app::App::trigger_acm_details_load,
         Domains "Domains" => crate::app::App::trigger_acm_details_load,
         Validation "Validation" => crate::app::App::trigger_acm_details_load,
         Tags "Tags" => crate::app::App::trigger_acm_details_load,

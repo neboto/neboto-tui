@@ -446,12 +446,12 @@ fn headless_code_cannot_reach_the_reveal_keys() {
 #[test]
 fn get_parses_ids_and_repeatable_sections() {
     let cli = Cli::try_parse_from([
-        "neboto", "get", "@ec2", "i-1", "i-2", "--section", "details", "--section", "tags", "-t", "instance", "--wait", "5",
+        "neboto", "get", "@ec2", "i-1", "i-2", "--section", "overview", "--section", "tags", "-t", "instance", "--wait", "5",
     ])
     .unwrap();
     let Some(Command::Get(a)) = cli.command else { panic!("not get") };
     assert_eq!(a.ids, ["i-1", "i-2"]);
-    assert_eq!(a.sections, ["details", "tags"]);
+    assert_eq!(a.sections, ["overview", "tags"]);
     assert_eq!(a.resource_type.as_deref(), Some("instance"));
     assert_eq!(a.wait, 5);
     assert!(Cli::try_parse_from(["neboto", "get", "@ec2"]).is_err(), "an id is required");
@@ -615,12 +615,12 @@ async fn get_bodies_have_stable_keys() {
 async fn get_surfaces_fields_the_responses_already_carry() {
     // EC2: CPU options, lifecycle and tenancy in Details; IMDS in Security.
     let v = demo_get_json(GetArgs {
-        sections: vec!["details".into(), "security".into()],
+        sections: vec!["overview".into(), "security".into()],
         ..get_args("ec2", &["i-0a1b2c3d4e5f60001", "i-0a1b2c3d4e5f60002"])
     })
     .await;
     let web1 = &v["resources"][0]["sections"];
-    let launch = &web1["Details"]["Launch Config"];
+    let launch = &web1["Overview"]["Launch Config"];
     assert_eq!(launch["CPU"], "1 cores × 2 threads = 2 vCPUs", "{launch}");
     assert_eq!(launch["Lifecycle"], "On-Demand");
     assert_eq!(launch["Tenancy"], "default");
@@ -659,12 +659,12 @@ async fn get_surfaces_fields_the_responses_already_carry() {
 async fn get_alb_names_its_web_acl() {
     let get = |name: &'static str| async move {
         let v = demo_get_json(GetArgs {
-            sections: vec!["details".into()],
+            sections: vec!["overview".into()],
             resource_type: Some("Load Balancer".into()),
             ..get_args("elb", &[name])
         })
         .await;
-        v["sections"]["Details"].clone()
+        v["sections"]["Overview"].clone()
     };
     let d = get("storefront-alb").await;
     assert_eq!(d["WAF Web ACL"]["summary"], "storefront-waf", "{d}");

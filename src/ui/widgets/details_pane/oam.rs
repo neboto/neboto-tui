@@ -126,7 +126,7 @@ pub fn oam_sink_section_lines(
 ) -> Vec<(String, String)> {
     use crate::aws::services::oam::OamSinkDetailSection as S;
     match section {
-        S::Details => {
+        S::Overview => {
             let mut rows: Vec<(String, String)> = Vec::new();
             rows.push(("Sink".to_string(), "".to_string()));
             rows.push(("".to_string(), "".to_string()));
@@ -246,7 +246,7 @@ pub fn oam_link_section_lines(
 ) -> Vec<(String, String)> {
     use crate::aws::services::oam::OamLinkDetailSection as S;
     match section {
-        S::Details => {
+        S::Overview => {
             let mut rows: Vec<(String, String)> = Vec::new();
             rows.push(("Link".to_string(), "".to_string()));
             rows.push(("".to_string(), "".to_string()));

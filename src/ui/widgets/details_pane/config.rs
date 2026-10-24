@@ -81,7 +81,7 @@ pub fn secret_section_lines(
     replication: Option<&Lazy<Vec<crate::aws::services::config::SecretReplica>>>,
 ) -> Vec<(String, String)> {
     match section {
-        SecretDetailSection::Details => secret_details_lines(secret),
+        SecretDetailSection::Overview => secret_details_lines(secret),
         SecretDetailSection::Rotation => secret_rotation_lines(secret),
         SecretDetailSection::Replication => secret_replication_lines(secret, replication),
         SecretDetailSection::Tags => secret_tags_lines(secret),

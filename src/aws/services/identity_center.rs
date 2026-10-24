@@ -351,7 +351,7 @@ impl PermissionSet {
 crate::sections! {
     pub enum PermissionSetDetailSection,
     pub static PERMISSION_SET_SECTIONS = [
-        Details "Details" => crate::app::App::hook_permission_set_section,
+        Overview "Overview" => crate::app::App::hook_permission_set_section,
         Policies "Policies" => crate::app::App::hook_permission_set_section,
         Assignments "Assignments" => crate::app::App::hook_permission_set_section,
         Tags "Tags" => crate::app::App::hook_permission_set_section,
@@ -498,7 +498,7 @@ fn external_id_pairs(ids: &[aws_sdk_identitystore::types::ExternalId]) -> Vec<(S
 crate::sections! {
     pub enum IcUserDetailSection,
     pub static IC_USER_SECTIONS = [
-        Details "Details" => crate::app::App::hook_ic_user_section,
+        Overview "Overview" => crate::app::App::hook_ic_user_section,
         Groups "Groups" => crate::app::App::hook_ic_user_section,
         Access "Access" => crate::app::App::hook_ic_user_section,
     ]
@@ -627,7 +627,7 @@ impl IcGroup {
 crate::sections! {
     pub enum IcGroupDetailSection,
     pub static IC_GROUP_SECTIONS = [
-        Details "Details" => crate::app::App::hook_ic_group_section,
+        Overview "Overview" => crate::app::App::hook_ic_group_section,
         Members "Members" => crate::app::App::hook_ic_group_section,
         Access "Access" => crate::app::App::hook_ic_group_section,
     ]
