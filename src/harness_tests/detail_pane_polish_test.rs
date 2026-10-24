@@ -282,7 +282,7 @@ async fn a_security_group_opens_on_an_overview() {
     // The header repeats these, but only body rows can be copied with `y`.
     assert_eq!(body[0], ("Group ID".to_string(), "sg-0a1b2c3d4e5f60718".to_string()));
     assert!(has("Group Name", "web-sg"), "{body:#?}");
-    assert!(has("  ⚠ TCP port 443 open to 0.0.0.0/0", ""), "{body:#?}");
+    assert!(has("  ⚠ TCP 443 open to 0.0.0.0/0", ""), "{body:#?}");
     assert!(!body.iter().any(|(k, _)| k.contains("port 22")), "only world-open rules are flagged");
     // The rules themselves, in the Inbound tab's table form.
     assert!(has("Inbound (2 rules)", ""), "{body:#?}");
@@ -333,4 +333,44 @@ async fn the_overview_caps_a_long_rule_list() {
     let body = app.get_detail_lines();
     assert_eq!(body.iter().filter(|(k, _)| k.contains("→  10.0.0.0/8")).count(), 8, "{body:#?}");
     assert!(body.iter().any(|(k, v)| k.is_empty() && v == "· 3 more — 2 Inbound"), "{body:#?}");
+}
+
+/// A hundred world-open rules: Exposure folds them by protocol and
+/// source, names the first ports, and counts the rest.
+#[tokio::test]
+async fn exposure_folds_a_hundred_open_rules() {
+    use aws_sdk_ec2::types::{IpPermission, IpRange, Ipv6Range};
+    let (mut app, tx, _rx) = test_app().await;
+    let mut b = aws_sdk_ec2::types::SecurityGroup::builder().group_id("sg-0open").group_name("open");
+    for port in 8000..8100 {
+        b = b.ip_permissions(
+            IpPermission::builder()
+                .ip_protocol("tcp")
+                .from_port(port)
+                .to_port(port)
+                .ip_ranges(IpRange::builder().cidr_ip("0.0.0.0/0").build())
+                .build(),
+        );
+    }
+    b = b.ip_permissions(
+        IpPermission::builder()
+            .ip_protocol("udp")
+            .from_port(53)
+            .to_port(53)
+            .ipv6_ranges(Ipv6Range::builder().cidr_ipv6("::/0").build())
+            .build(),
+    );
+    select_mock(&mut app, ServiceType::EC2, Box::new(crate::aws::services::ec2::SecurityGroup::from_sdk(&b.build())));
+    app.details_focused = true;
+    app.reset_detail_section_to_default(&tx);
+    let body = app.get_detail_lines();
+    let warnings: Vec<&str> = body.iter().filter(|(k, _)| k.starts_with("  ⚠")).map(|(k, _)| k.as_str()).collect();
+    assert_eq!(
+        warnings,
+        [
+            "  ⚠ TCP 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007 +92 more open to 0.0.0.0/0",
+            "  ⚠ UDP 53 open to ::/0",
+        ]
+    );
+    assert!(body.iter().any(|(k, v)| k.is_empty() && v == "· 101 rules open to the internet — 2 Inbound has them all"), "{body:#?}");
 }

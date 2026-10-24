@@ -850,6 +850,53 @@ pub fn security_group_section_lines(
 }
 
 const SG_OVERVIEW_RULES: usize = 8;
+/// Exposure lines, and ports named per line, before the block summarises.
+const SG_EXPOSURE_LINES: usize = 5;
+const SG_EXPOSURE_PORTS: usize = 8;
+
+/// The inbound rules open to the internet, one `⚠` line per protocol and
+/// source (`⚠ TCP 22, 443, 8000-8100 open to 0.0.0.0/0`) — a group that
+/// opened a port range one rule at a time stays one line, not dozens.
+fn sg_exposure_rows(inbound: &[crate::aws::services::ec2::SgRule]) -> Vec<(String, String)> {
+    let open: Vec<_> = inbound.iter().filter(|r| r.is_world()).collect();
+    if open.is_empty() {
+        return vec![(String::new(), "✓ No inbound rule is open to the internet".to_string())];
+    }
+    // (protocol, source) → ports, in rule order.
+    let mut groups: Vec<(&str, &str, Vec<&str>)> = Vec::new();
+    for r in &open {
+        match groups.iter_mut().find(|(p, s, _)| *p == r.protocol && *s == r.source) {
+            Some((_, _, ports)) if !ports.contains(&r.ports.as_str()) => ports.push(&r.ports),
+            Some(_) => {}
+            None => groups.push((&r.protocol, &r.source, vec![&r.ports])),
+        }
+    }
+    let mut cut = groups.len() > SG_EXPOSURE_LINES;
+    let mut rows = Vec::new();
+    for (protocol, source, ports) in groups.iter().take(SG_EXPOSURE_LINES) {
+        let what = if *protocol == "All" {
+            "all traffic".to_string()
+        } else if ports.iter().any(|p| *p == "All" || *p == "-1") {
+            format!("{protocol} all ports")
+        } else {
+            let mut named = ports.iter().take(SG_EXPOSURE_PORTS).copied().collect::<Vec<_>>().join(", ");
+            if ports.len() > SG_EXPOSURE_PORTS {
+                named.push_str(&format!(" +{} more", ports.len() - SG_EXPOSURE_PORTS));
+                cut = true;
+            }
+            format!("{protocol} {named}")
+        };
+        rows.push((format!("  ⚠ {what} open to {source}"), String::new()));
+    }
+    if cut {
+        let n = open.len();
+        rows.push((
+            String::new(),
+            format!("· {n} rule{} open to the internet — 2 Inbound has them all", if n == 1 { "" } else { "s" }),
+        ));
+    }
+    rows
+}
 
 /// The Overview body: what the group is, which rules open it to the
 /// internet, its rules (the first
@@ -875,14 +922,7 @@ fn sg_overview_rows(
 
     rows.push((String::new(), String::new()));
     rows.push(("Exposure".to_string(), String::new()));
-    let open: Vec<_> = sg.inbound.iter().filter(|r| r.is_world()).collect();
-    if open.is_empty() {
-        rows.push((String::new(), "✓ No inbound rule is open to the internet".to_string()));
-    }
-    for r in open {
-        let ports = if r.ports == "All" { "all ports".to_string() } else { format!("port {}", r.ports) };
-        rows.push((format!("  ⚠ {} {} open to {}", r.protocol, ports, r.source), String::new()));
-    }
+    rows.extend(sg_exposure_rows(sg.inbound));
 
     for (label, rules, key) in [("Inbound", sg.inbound, '2'), ("Outbound", sg.outbound, '3')] {
         rows.push((String::new(), String::new()));
