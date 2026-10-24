@@ -208,5 +208,34 @@ async fn every_split_pane_has_a_one_row_header() {
         let rule = (top + 1..body.y).find(|&y| row(y).starts_with("──")).expect("rule under the header");
         assert_eq!(rule - top - 1, 1, "{label}: header is {} rows:\n{}", rule - top - 1,
             (top..rule).map(row).collect::<Vec<_>>().join("\n"));
+        // The border title names the resource, cut with `…` if it must be.
+        let title: String = (body.x - 1..body.x + body.width + 1).map(|x| buf[(x, top)].symbol().to_string()).collect();
+        let name = app.get_selected_resource().unwrap().name().to_string();
+        let stem: String = name.chars().take(6).collect();
+        assert!(title.contains(&name) || (title.contains(&stem) && title.contains('…')), "{label}: title {title:?} doesn't name {name:?}");
     }
+}
+
+/// A fact drawn in its own colour (a severity, an AZ) keeps it in the one
+/// row; facts in the body's neutral colours go dim like the rest.
+#[tokio::test]
+async fn a_coloured_fact_keeps_its_colour_in_the_one_row_header() {
+    use ratatui::style::{Color, Style};
+    use ratatui::text::{Line, Span};
+    let (mut app, tx, _rx) = test_app().await;
+    let (service, _, mock) = all_mocks().into_iter().find(|(_, l, _)| *l == "Vpc").unwrap();
+    select_mock(&mut app, service, mock);
+    app.reset_detail_section_to_default(&tx);
+    let lines = vec![
+        Line::from(Span::raw("web")),
+        Line::from(vec![
+            Span::styled("HIGH (7.5)", Style::default().fg(Color::Red)),
+            Span::styled("  ·  ", Style::default().fg(crate::ui::theme::text_dim())),
+            Span::styled("us-east-1a", Style::default().fg(crate::ui::theme::text_primary())),
+        ]),
+    ];
+    let row = crate::ui::widgets::details_pane::one_row_header(&app, lines, 120).remove(0);
+    let fg = |t: &str| row.spans.iter().find(|s| s.content.as_ref() == t).and_then(|s| s.style.fg);
+    assert_eq!(fg("HIGH (7.5)"), Some(Color::Red));
+    assert_eq!(fg("us-east-1a"), Some(crate::ui::theme::text_dim()));
 }
