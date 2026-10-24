@@ -55,12 +55,25 @@ pub fn subtab_bar_spans(
     area: Rect,
     tabs: &[(char, &str, bool)],
 ) -> Vec<Span<'static>> {
+    chip_spans(app, area, tabs, LEADING, ClickAction::Key)
+}
+
+/// The chip strip behind both the sub-tab bar and the detail pane's section
+/// bar: `leading` columns of indent, chips that scroll around the active one,
+/// and a click region per drawn chip (and marker) mapped through `action`.
+pub fn chip_spans(
+    app: &App,
+    area: Rect,
+    tabs: &[(char, &str, bool)],
+    leading: u16,
+    action: fn(char) -> ClickAction,
+) -> Vec<Span<'static>> {
     if tabs.is_empty() || area.width == 0 {
         return Vec::new();
     }
 
     // Total width if everything is shown.
-    let full_width: u16 = LEADING
+    let full_width: u16 = leading
         + tabs
             .iter()
             .enumerate()
@@ -70,14 +83,15 @@ pub fn subtab_bar_spans(
     let (lo, hi) = if full_width <= area.width {
         (0usize, tabs.len() - 1)
     } else {
-        visible_window(tabs, area.width)
+        // `visible_window` reserves `LEADING`; take any extra indent off first.
+        visible_window(tabs, area.width.saturating_sub(leading.saturating_sub(LEADING)))
     };
 
     let left_marker = lo > 0;
     let right_marker = hi + 1 < tabs.len();
 
-    let mut spans: Vec<Span> = vec![Span::raw(" ".repeat(LEADING as usize))];
-    let mut x = area.x + LEADING;
+    let mut spans: Vec<Span> = vec![Span::raw(" ".repeat(leading as usize))];
+    let mut x = area.x + leading;
 
     // A marker steps one chip past the window's edge on its side, which
     // scrolls the window there (the active chip is always kept in view).
@@ -85,7 +99,7 @@ pub fn subtab_bar_spans(
         spans.push(Span::styled("‹ ", Style::default().fg(theme::text_dim())));
         app.push_click_region(
             Rect { x, y: area.y, width: MARKER_W, height: 1 },
-            ClickAction::Key(tabs[lo - 1].0),
+            action(tabs[lo - 1].0),
         );
         x += MARKER_W;
     }
@@ -101,7 +115,7 @@ pub fn subtab_bar_spans(
         let w = chip_width(label);
         app.push_click_region(
             Rect { x, y: area.y, width: w, height: 1 },
-            ClickAction::Key(key),
+            action(key),
         );
         x += w;
 
@@ -127,7 +141,7 @@ pub fn subtab_bar_spans(
         spans.push(Span::styled(" ›", Style::default().fg(theme::text_dim())));
         app.push_click_region(
             Rect { x, y: area.y, width: MARKER_W, height: 1 },
-            ClickAction::Key(tabs[hi + 1].0),
+            action(tabs[hi + 1].0),
         );
     }
 

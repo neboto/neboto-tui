@@ -888,7 +888,7 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
 /// The key a click on a status-bar hint presses, or `None` for hints that
 /// aren't one key: `j/k` and `H/L` name pairs, and `@service` is something
 /// you type. `q` is left out on purpose: a stray click shouldn't quit.
-fn hint_click_key(key: &str) -> Option<KeyCode> {
+pub(crate) fn hint_click_key(key: &str) -> Option<KeyCode> {
     match key {
         "⏎" => Some(KeyCode::Enter),
         "Esc" => Some(KeyCode::Esc),

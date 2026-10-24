@@ -126,7 +126,6 @@ pub(super) fn render_ec2_section_body(app: &App, area: Rect, frame: &mut Frame) 
 
     let all_rows = app.get_detail_lines_filtered();
     let cursor = app.details_selected_index.unwrap_or(0);
-    let q_lower = app.detail_search_query.to_lowercase();
 
     let lines = layout_detail_body(app, &all_rows, content_area, cursor, |idx, key, value, key_w| {
         let jump = jump_indicator(app, key, value);
@@ -145,27 +144,6 @@ pub(super) fn render_ec2_section_body(app: &App, area: Rect, frame: &mut Frame) 
                 spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
             }
             Line::from(spans).style(sel)
-        } else if !q_lower.is_empty() {
-            let combined = format!("{}{}", key, value);
-            if combined.to_lowercase().contains(&q_lower) {
-                let mut spans: Vec<Span> = line
-                    .spans
-                    .into_iter()
-                    .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
-                    .collect();
-                if jump.is_some() {
-                    spans.push(Span::styled("  →", Style::default().fg(theme::text_dim())));
-                }
-                Line::from(spans)
-            } else {
-                if jump.is_some() {
-                    line.spans.push(Span::styled(
-                        "  →",
-                        Style::default().fg(theme::text_dim()),
-                    ));
-                }
-                line
-            }
         } else {
             if jump.is_some() {
                 line.spans.push(Span::styled(
@@ -180,39 +158,7 @@ pub(super) fn render_ec2_section_body(app: &App, area: Rect, frame: &mut Frame) 
     frame.render_widget(Paragraph::new(lines), content_area);
 
     if let Some(sb_area) = search_area {
-        let match_count = all_rows.len();
-        let match_info = if app.detail_search_query.is_empty() {
-            String::new()
-        } else {
-            format!(
-                " ({} match{})",
-                match_count,
-                if match_count == 1 { "" } else { "es" }
-            )
-        };
-        let search_line = Line::from(vec![
-            Span::styled(
-                " / ",
-                Style::default()
-                    .fg(theme::aws_orange())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                app.detail_search_query.clone(),
-                Style::default().fg(crate::ui::theme::text_primary()),
-            ),
-            if app.detail_search_active {
-                Span::styled("█", Style::default().fg(theme::aws_orange()))
-            } else {
-                Span::raw("")
-            },
-            Span::styled(match_info, Style::default().fg(theme::text_dim())),
-            Span::styled(
-                "  ⏎ confirm · Esc clear",
-                Style::default().fg(theme::text_dim()),
-            ),
-        ]);
-        frame.render_widget(Paragraph::new(search_line), sb_area);
+        frame.render_widget(Paragraph::new(detail_filter_bar(app)), sb_area);
     }
 }
 

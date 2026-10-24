@@ -124,38 +124,7 @@ pub(super) fn render_health_split(
     render_hr(chunks[1], frame);
 
     let sections = descriptor_tabs(app, &crate::aws::services::health::HEALTH_EVENT_SECTIONS);
-    let mut spans: Vec<Span> = vec![Span::raw("  ")];
-    for (i, (key, label, section)) in sections.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled("   │   ", Style::default().fg(theme::text_dim())));
-        }
-        let active = *section;
-        if active {
-            spans.push(Span::styled(
-                key.to_string(),
-                Style::default()
-                    .fg(theme::aws_orange())
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::styled(
-                format!(" {} ", label),
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(theme::aws_orange())
-                    .add_modifier(Modifier::BOLD),
-            ));
-        } else {
-            spans.push(Span::styled(
-                key.to_string(),
-                Style::default().fg(theme::text_dim()),
-            ));
-            spans.push(Span::styled(
-                format!(" {} ", label),
-                Style::default().fg(crate::ui::theme::text_muted()),
-            ));
-        }
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), chunks[2]);
+    render_section_tab_bar(app, chunks[2], frame, &sections);
     render_hr(chunks[3], frame);
     render_split_section_body(app, chunks[4], frame);
 }

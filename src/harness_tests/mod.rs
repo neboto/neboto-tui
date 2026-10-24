@@ -44,6 +44,7 @@ mod cost_tag_grouping_test;
 mod r53_records_test;
 mod r53_zone_tags_test;
 mod detail_wrap_test;
+mod detail_pane_polish_test;
 mod tags_error_test;
 mod r53_test_answer_test;
 mod state_filter_test;

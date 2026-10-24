@@ -217,7 +217,7 @@ selection. The essentials:
 | `h` `←` `Esc` | Back to the list |
 | `⌫` `Ctrl-O` | Back through history (the footer names where: `⌫ back to EC2 i-0abc`, plus the region when going back switches it) |
 | `Ctrl-F` | Forward again, after going back (`⌃F forward to …`) |
-| `/` | Filter the body text |
+| `/` | Filter the body text; `n` / `N` step through the matches |
 | `Ctrl-W` | Wrap long values onto continuation rows (toggle) |
 | `y` / `c` | Copy the row, or the visual selection |
 | `e` | Open in `$EDITOR` |

@@ -330,10 +330,10 @@ pub use workspaces::*;
 pub use xray::*;
 
 pub fn render_details_pane(app: &App, area: Rect, frame: &mut Frame) {
-    app.detail_footer_nav.replace(None);
+    app.detail_footer_text.replace(None);
     render_details_pane_inner(app, area, frame);
-    render_ownership_ribbon(app, area, frame);
-    record_nav_hint_regions(app, area);
+    let ribbon_w = render_ownership_ribbon(app, area, frame);
+    render_detail_footer(app, area, frame, ribbon_w);
     // The pane's top border (its title bar) toggles full width, as `Z` does:
     // the mouse route to the one layout key with no visible control.
     if area.height > 0 {
@@ -344,43 +344,79 @@ pub fn render_details_pane(app: &App, area: Rect, frame: &mut Frame) {
     }
 }
 
-/// The footer's `⌫ back to …` / `⌃F forward to …` hints are click targets
-/// (as `⌫` / `Ctrl-F`). The footer is right-aligned inside the bottom
-/// border's corners, so each hint's columns follow from the text
-/// `detail_footer` recorded; a footer too wide for the pane is truncated by
-/// the block, so it gets no regions rather than wrong ones.
-fn record_nav_hint_regions(app: &App, area: Rect) {
+/// Footer hints dropped first when the footer is wider than the pane, by
+/// key: the flat toggle, search, the trail and the section range. What's
+/// left after these goes from the front, so `⌫ back to …` and `h` stay.
+const FOOTER_DROP_ORDER: [&str; 4] = ["\\", "/", "W", "1–"];
+
+/// Repaint the footer `detail_footer` built this frame on the pane's bottom
+/// border: each key in the accent colour, as the status bar's hints are,
+/// fitted to the room the ownership ribbon (`reserve` columns) leaves, and
+/// every hint a click target (a one-key hint presses its key; `⌫ back to …`
+/// and `⌃F forward to …` walk history). One hook, so ~130 renderers keep
+/// passing a plain string and none draws its own.
+fn render_detail_footer(app: &App, area: Rect, frame: &mut Frame, reserve: usize) {
     use crate::app::ClickAction;
+    use crossterm::event::KeyCode;
     use unicode_width::UnicodeWidthStr;
-    let Some(footer) = app.detail_footer_nav.take() else {
+    let Some(footer) = app.detail_footer_text.take() else {
         return;
     };
-    let inner_w = area.width.saturating_sub(2) as usize;
-    let footer_w = footer.width();
-    if area.height < 2 || footer_w > inner_w {
+    if area.height < 2 || area.width < 4 {
         return;
     }
-    let start = area.x + 1 + (inner_w - footer_w) as u16;
-    let hints = [
-        (
-            app.nav_back_hint().map(|to| format!("⌫ back to {to}")),
-            ClickAction::Press(crossterm::event::KeyCode::Backspace),
-        ),
-        (app.nav_forward_hint().map(|to| format!("⌃F forward to {to}")), ClickAction::NavForward),
-    ];
-    for (hint, action) in hints {
-        let Some(hint) = hint else { continue };
-        let Some(at) = footer.find(&hint) else { continue };
-        app.push_click_region(
-            Rect {
-                x: start + footer[..at].width() as u16,
-                y: area.y + area.height - 1,
-                width: hint.width() as u16,
-                height: 1,
-            },
-            action,
-        );
+    let inner_w = area.width as usize - 2;
+    let budget = inner_w.saturating_sub(reserve);
+    let mut parts: Vec<&str> = footer.split(" · ").map(str::trim).filter(|p| !p.is_empty()).collect();
+    let key_of = |p: &str| p.split(' ').next().unwrap_or("").to_string();
+    let width = |parts: &[&str]| parts.iter().map(|p| p.width()).sum::<usize>() + 3 * parts.len().saturating_sub(1) + 2;
+    for drop in FOOTER_DROP_ORDER {
+        if width(&parts) <= budget {
+            break;
+        }
+        parts.retain(|p| !key_of(p).starts_with(drop));
     }
+    while width(&parts) > budget && parts.len() > 1 {
+        parts.remove(0);
+    }
+    let w = width(&parts);
+    if w > inner_w {
+        return;
+    }
+
+    let y = area.y + area.height - 1;
+    let buf = frame.buffer_mut();
+    // Back to a bare border first (right of the ribbon): the block drew the
+    // unfitted footer.
+    let border = buf[(area.x, y)].style();
+    for x in area.x + 1 + reserve.min(inner_w) as u16..area.x + area.width - 1 {
+        buf[(x, y)].set_symbol("─").set_style(border);
+    }
+    let mut spans = vec![Span::raw(" ")];
+    let mut x = area.x + 1 + (inner_w - w) as u16 + 1;
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", Style::default().fg(theme::text_dim())));
+            x += 3;
+        }
+        let (key, label) = part.split_once(' ').unwrap_or((part, ""));
+        spans.extend(theme::hint(key, label));
+        let action = if part.starts_with("⌫ ") {
+            Some(ClickAction::Press(KeyCode::Backspace))
+        } else if part.starts_with("⌃F ") {
+            Some(ClickAction::NavForward)
+        } else {
+            crate::hint_click_key(key).map(ClickAction::Press)
+        };
+        let pw = part.width() as u16;
+        if let Some(action) = action {
+            app.push_click_region(Rect { x, y, width: pw, height: 1 }, action);
+        }
+        x += pw;
+    }
+    spans.push(Span::raw(" "));
+    let x0 = area.x + 1 + (inner_w - w) as u16;
+    frame.buffer_mut().set_line(x0, y, &Line::from(spans), w as u16);
 }
 
 /// Ownership ribbon: a dim one-liner on the pane's bottom border, left side
@@ -389,10 +425,11 @@ fn record_nav_hint_regions(app: &App, area: Rect) {
 /// (`crate::ownership`). One central hook so every detail renderer gets it
 /// with no per-pane wiring. Suppressed while any overlay owns the pane —
 /// the guard list mirrors the early returns at the top of
-/// `render_details_pane_inner`; keep them in step.
-fn render_ownership_ribbon(app: &App, area: Rect, frame: &mut Frame) {
+/// `render_details_pane_inner`; keep them in step. Returns the columns it
+/// took, so the footer fits beside it.
+fn render_ownership_ribbon(app: &App, area: Rect, frame: &mut Frame) -> usize {
     if !app.ownership_ribbon {
-        return;
+        return 0;
     }
     if app.metrics_in_pane.is_some()
         || app.s3_object_browser.visible
@@ -404,10 +441,10 @@ fn render_ownership_ribbon(app: &App, area: Rect, frame: &mut Frame) {
         || app.access_in_pane.is_some()
         || app.terraform_state.is_some()
     {
-        return;
+        return 0;
     }
     let Some(resource) = app.get_selected_resource() else {
-        return;
+        return 0;
     };
     // Most types carry tags eagerly; Lambda only gets them from the lazy
     // `GetFunction` code info (fired on drill-in by the Config hook), so
@@ -425,12 +462,12 @@ fn render_ownership_ribbon(app: &App, area: Rect, frame: &mut Frame) {
     let ownership =
         crate::ownership::resource_ownership(tags, &app.owner_tags, &app.managed_by_tags);
     if ownership.is_empty() {
-        return;
+        return 0;
     }
     // Cap at half the pane so the bottom-right footer hints stay readable.
     let budget = (area.width as usize / 2).saturating_sub(4);
     if budget < 8 || area.height < 2 {
-        return;
+        return 0;
     }
     let mut text = format!("⛓ {}", ownership.summary());
     if text.chars().count() > budget {
@@ -452,6 +489,8 @@ fn render_ownership_ribbon(app: &App, area: Rect, frame: &mut Frame) {
         )),
         rect,
     );
+    // The border columns it covers, plus a gap before the footer.
+    rect.width as usize + 2
 }
 
 fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
@@ -1775,7 +1814,6 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
     let state = resource.map(|r| r.state());
 
     let cursor = selected.unwrap_or(0);
-    let q_lower = app.detail_search_query.to_lowercase();
 
     let lines = layout_detail_body(app, &rows, content_area, cursor, |idx, key, value, key_w| {
         let line = style_detail_row(key, value, state.as_ref(), key_w);
@@ -1795,18 +1833,6 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
                 spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
             }
             Line::from(spans).style(sel)
-        } else if !q_lower.is_empty() {
-            let combined = format!("{}{}", key, value);
-            if combined.to_lowercase().contains(&q_lower) {
-                let spans: Vec<Span> = line
-                    .spans
-                    .into_iter()
-                    .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
-                    .collect();
-                Line::from(spans)
-            } else {
-                line
-            }
         } else if jump.is_some() {
             let mut spans = line.spans;
             spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
@@ -1820,39 +1846,7 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
 
     // Search bar
     if let Some(sb_area) = search_area {
-        let match_count = rows.len();
-        let match_info = if app.detail_search_query.is_empty() {
-            String::new()
-        } else {
-            format!(
-                " ({} match{})",
-                match_count,
-                if match_count == 1 { "" } else { "es" }
-            )
-        };
-        let search_line = Line::from(vec![
-            Span::styled(
-                " / ",
-                Style::default()
-                    .fg(theme::aws_orange())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                app.detail_search_query.clone(),
-                Style::default().fg(crate::ui::theme::text_primary()),
-            ),
-            if app.detail_search_active {
-                Span::styled("█", Style::default().fg(theme::aws_orange()))
-            } else {
-                Span::raw("")
-            },
-            Span::styled(match_info, Style::default().fg(theme::text_dim())),
-            Span::styled(
-                "  ⏎ confirm · Esc clear",
-                Style::default().fg(theme::text_dim()),
-            ),
-        ]);
-        frame.render_widget(Paragraph::new(search_line), sb_area);
+        frame.render_widget(Paragraph::new(detail_filter_bar(app)), sb_area);
     }
 }
 
@@ -1900,7 +1894,9 @@ fn spin_loading_row(key: &str, value: &str, tick: u64, focused: bool) -> Option<
 /// Style one key/value row from `App::get_detail_lines`.
 /// Narrowest key column a detail body ever uses — short-key sections
 /// (Overview-style panes) all line up at the same place across services.
-pub(crate) const KEY_COL_MIN: usize = 24;
+/// Keys carry their two-space indent, so this is 16 columns of key text: a
+/// section of short keys doesn't leave a gulf before its values.
+pub(crate) const KEY_COL_MIN: usize = 18;
 /// Widest the key column may grow, however long the section's keys are.
 pub(crate) const KEY_COL_MAX: usize = 48;
 /// Columns kept for the value when the pane is narrow: the cap is
@@ -2092,7 +2088,9 @@ fn style_detail_row(
     // (`key_col_widths`) by display width so the ":" lands in one place.
     let padded_key = pad_key_to_width(key, key_w);
     Line::from(vec![
-        Span::styled(format!("{}: ", padded_key), Style::default().fg(theme::accent())),
+        Span::styled(padded_key, Style::default().fg(theme::accent())),
+        // The colon dim, so the eye goes from key to value.
+        Span::styled(": ", Style::default().fg(theme::text_dim())),
         Span::styled(value.to_string(), value_style),
     ])
 }
@@ -4190,13 +4188,27 @@ where
     let visible_height = area.height as usize;
     let width = area.width as usize;
     let key_widths = key_col_widths(rows, area.width);
+    // Each `/` match is marked where it is, on every renderer's rows.
+    let query = if focused { app.detail_search_query.to_lowercase() } else { String::new() };
+    let style_row = |idx: usize, k: &str, v: &str, w: usize| -> Line<'static> {
+        let line = style_row(idx, k, v, w);
+        if query.is_empty() {
+            line
+        } else {
+            highlight_matches(line, &query)
+        }
+    };
     let spun = |idx: usize| -> (String, String) {
         let (k, v) = &rows[idx];
         spin_loading_row(k, v, app.tick_count, focused).unwrap_or_else(|| (k.clone(), v.clone()))
     };
 
+    // Last frame's first row. The view keeps it while the cursor stays on
+    // screen, so `k` moves the cursor rather than the whole body.
+    let top = app.detail_body_rows.borrow().first().copied().unwrap_or(0);
+
     if !app.detail_wrap {
-        let scroll_offset = cursor.saturating_sub(visible_height.saturating_sub(1));
+        let scroll_offset = stable_offset(cursor, top, visible_height, rows.len());
         let end = rows.len().min(scroll_offset + visible_height);
         let row_map: Vec<usize> = (scroll_offset..end).collect();
         let lines: Vec<Line<'static>> = row_map
@@ -4247,7 +4259,11 @@ where
     };
 
     let cursor = cursor.min(rows.len().saturating_sub(1));
-    let first = first_visible_row(cursor, visible_height, height);
+    // Keep `top` while every row from it through the cursor still fits.
+    let fits_from_top = cursor >= top
+        && top < rows.len()
+        && (top..=cursor).map(&height).sum::<usize>() <= visible_height;
+    let first = if fits_from_top { top } else { first_visible_row(cursor, visible_height, height) };
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(visible_height);
     let mut row_map: Vec<usize> = Vec::with_capacity(visible_height);
     for idx in first..rows.len() {
@@ -4265,6 +4281,75 @@ where
     record_jump_arrows(app, area, &row_map, &lines);
     app.record_detail_body_geometry(area, row_map);
     lines
+}
+
+/// The `/` filter bar under a detail body: the query (with a caret while
+/// typing), how many rows match it, and the keys that leave it.
+pub(super) fn detail_filter_bar(app: &App) -> Line<'static> {
+    let n = app.detail_match_rows().len();
+    let info = if app.detail_search_query.is_empty() {
+        String::new()
+    } else {
+        format!(" ({} match{})", n, if n == 1 { "" } else { "es" })
+    };
+    let keys = if app.detail_search_active { "  ⏎ keep · Esc clear" } else { "  n/N next · / new · Esc clear" };
+    let mut spans = vec![
+        Span::styled(" / ", Style::default().fg(theme::aws_orange()).add_modifier(Modifier::BOLD)),
+        Span::styled(app.detail_search_query.clone(), Style::default().fg(theme::text_primary())),
+    ];
+    if app.detail_search_active {
+        spans.push(Span::styled("█", Style::default().fg(theme::aws_orange())));
+    }
+    spans.push(Span::styled(info, Style::default().fg(theme::text_dim())));
+    spans.push(Span::styled(keys, Style::default().fg(theme::text_dim())));
+    Line::from(spans)
+}
+
+/// Reverse-video every case-insensitive occurrence of `query` (already
+/// lowercased) inside each span, keeping the span's own style. A span whose
+/// lowercase form changes byte length is left as is rather than sliced at a
+/// wrong boundary.
+fn highlight_matches(line: Line<'static>, query: &str) -> Line<'static> {
+    let style = line.style;
+    let mut out: Vec<Span<'static>> = Vec::new();
+    for span in line.spans {
+        let text = span.content.to_string();
+        let lower = text.to_lowercase();
+        if lower.len() != text.len() || !lower.contains(query) {
+            out.push(Span::styled(text, span.style));
+            continue;
+        }
+        let mut pos = 0;
+        while let Some(found) = lower[pos..].find(query) {
+            let start = pos + found;
+            let end = start + query.len();
+            if start > pos {
+                out.push(Span::styled(text[pos..start].to_string(), span.style));
+            }
+            out.push(Span::styled(text[start..end].to_string(), span.style.add_modifier(Modifier::REVERSED)));
+            pos = end;
+        }
+        if pos < text.len() {
+            out.push(Span::styled(text[pos..].to_string(), span.style));
+        }
+    }
+    Line::from(out).style(style)
+}
+
+/// First row of an unwrapped body: last frame's `top` while the cursor is
+/// still on screen, else just enough scroll to bring it back, and never a
+/// blank tail while there are rows above to show.
+fn stable_offset(cursor: usize, top: usize, height: usize, count: usize) -> usize {
+    if height == 0 {
+        return cursor;
+    }
+    if cursor < top {
+        cursor
+    } else if cursor >= top + height {
+        cursor + 1 - height
+    } else {
+        top.min(count.saturating_sub(height))
+    }
 }
 
 /// First logical row to draw so the cursor row ends up fully visible:
@@ -4360,6 +4445,9 @@ fn detail_footer(app: &App, focused: bool, sections: usize, extras: &str) -> Str
     if !focused {
         return " ⏎ focus ".to_string();
     }
+    // The descriptor's own count wherever there is one: a renderer's literal
+    // goes stale when a section is added (EC2 said `1–5` with seven).
+    let sections = app.selected_descriptor().map_or(sections, |d| d.len());
     let jumpable = app
         .details_selected_index
         .and_then(|i| app.get_detail_lines_filtered().get(i).cloned())
@@ -4393,9 +4481,7 @@ fn detail_footer(app: &App, focused: bool, sections: usize, extras: &str) -> Str
     parts.extend(forward.as_deref());
     parts.push(if back.is_some() || forward.is_some() { "h list" } else { "h back" });
     let footer = format!(" {} ", parts.join(" · "));
-    if back.is_some() || forward.is_some() {
-        app.detail_footer_nav.replace(Some(footer.clone()));
-    }
+    app.detail_footer_text.replace(Some(footer.clone()));
     footer
 }
 
@@ -4428,43 +4514,9 @@ fn render_hr(area: Rect, frame: &mut Frame) {
 /// tab is orange-on-black, inactive dimmed. Used by panes that don't need a
 /// bespoke (adaptive) tab renderer.
 fn render_section_tab_bar(app: &App, area: Rect, frame: &mut Frame, tabs: &[(char, &str, bool)]) {
-    // Clickable regions: leading "  " (2), separator "   │   " (7).
-    app.record_detail_section_regions(
-        area,
-        2,
-        7,
-        tabs.iter().map(|(k, l, _)| (*k, l.chars().count())),
-    );
-    let mut spans: Vec<Span> = vec![Span::raw("  ")];
-    for (i, (key, label, active)) in tabs.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled("   │   ", Style::default().fg(theme::text_dim())));
-        }
-        if *active {
-            spans.push(Span::styled(
-                key.to_string(),
-                Style::default()
-                    .fg(theme::aws_orange())
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::styled(
-                format!(" {} ", label),
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(theme::aws_orange())
-                    .add_modifier(Modifier::BOLD),
-            ));
-        } else {
-            spans.push(Span::styled(
-                key.to_string(),
-                Style::default().fg(theme::text_dim()),
-            ));
-            spans.push(Span::styled(
-                format!(" {} ", label),
-                Style::default().fg(theme::text_dim()),
-            ));
-        }
-    }
+    // The sub-tab bar's chips, indented to the body: it scrolls around the
+    // active section with `‹`/`›` when the pane is too narrow for them all.
+    let spans = crate::ui::widgets::subtab_bar::chip_spans(app, area, tabs, 2, crate::app::ClickAction::DetailSection);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -4489,7 +4541,6 @@ fn render_split_section_body(app: &App, area: Rect, frame: &mut Frame) {
     let all_rows = app.get_detail_lines_filtered();
     let cursor = app.details_selected_index.unwrap_or(0);
 
-    let q_lower = app.detail_search_query.to_lowercase();
 
     let lines = layout_detail_body(app, &all_rows, content_area, cursor, |idx, key, value, key_w| {
         let line = style_detail_row(key, value, None, key_w);
@@ -4506,18 +4557,6 @@ fn render_split_section_body(app: &App, area: Rect, frame: &mut Frame) {
                 spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
             }
             Line::from(spans).style(sel)
-        } else if !q_lower.is_empty() {
-            let combined = format!("{}{}", key, value);
-            if combined.to_lowercase().contains(&q_lower) {
-                let spans: Vec<Span> = line
-                    .spans
-                    .into_iter()
-                    .map(|s| Span::styled(s.content, s.style.fg(crate::ui::theme::text_primary())))
-                    .collect();
-                Line::from(spans)
-            } else {
-                line
-            }
         } else if jump.is_some() && focused {
             let mut spans = line.spans;
             spans.push(Span::styled("  →", Style::default().fg(theme::aws_orange())));
@@ -4531,31 +4570,7 @@ fn render_split_section_body(app: &App, area: Rect, frame: &mut Frame) {
 
     // Render inline search bar
     if let Some(sb_area) = search_area {
-        let match_count = all_rows.len();
-        let match_info = if app.detail_search_query.is_empty() {
-            String::new()
-        } else {
-            format!(" ({} match{})", match_count, if match_count == 1 { "" } else { "es" })
-        };
-
-        let search_line = Line::from(vec![
-            Span::styled(
-                " / ",
-                Style::default().fg(theme::aws_orange()).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                app.detail_search_query.clone(),
-                Style::default().fg(crate::ui::theme::text_primary()),
-            ),
-            if app.detail_search_active {
-                Span::styled("█", Style::default().fg(theme::aws_orange()))
-            } else {
-                Span::raw("")
-            },
-            Span::styled(match_info, Style::default().fg(theme::text_dim())),
-            Span::styled("  ⏎ confirm · Esc clear", Style::default().fg(theme::text_dim())),
-        ]);
-        frame.render_widget(Paragraph::new(search_line), sb_area);
+        frame.render_widget(Paragraph::new(detail_filter_bar(app)), sb_area);
     }
 }
 
