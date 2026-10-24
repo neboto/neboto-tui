@@ -21,6 +21,7 @@ pub(super) fn render_ram_share_split(
     frame.render_widget(block, area);
 
     let header_lines = build_ram_share_header_lines(share);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

@@ -29,6 +29,7 @@ pub(super) fn render_ecr_repo_split(app: &App, repo: &EcrRepository, area: Rect,
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

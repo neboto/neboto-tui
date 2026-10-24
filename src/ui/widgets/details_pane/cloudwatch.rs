@@ -17,6 +17,7 @@ pub(super) fn render_cw_alarm_split(app: &App, alarm: &CwAlarm, area: Rect, fram
     frame.render_widget(block, area);
 
     let header_lines = build_cw_alarm_header_lines(alarm);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -229,6 +230,7 @@ pub(super) fn render_cw_dashboard_split(app: &App, dash: &CwDashboard, area: Rec
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -350,6 +352,7 @@ pub(super) fn render_cw_composite_alarm_split(
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -513,6 +516,7 @@ pub(super) fn render_cw_log_group_split(app: &App, lg: &CwLogGroup, area: Rect, 
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -709,6 +713,7 @@ pub(super) fn render_cw_metric_stream_split(
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -770,6 +775,7 @@ pub(super) fn render_cw_insight_rule_split(
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -825,6 +831,7 @@ pub(super) fn render_cw_account_policy_split(
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

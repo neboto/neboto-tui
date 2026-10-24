@@ -16,6 +16,7 @@ pub(super) fn render_sfn_split(app: &App, sm: &SfnStateMachine, area: Rect, fram
     frame.render_widget(block, area);
 
     let header_lines = build_sfn_header_lines(sm);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -272,6 +273,7 @@ pub(super) fn render_sfn_exec_split(app: &App, exec: &SfnExecution, area: Rect, 
     frame.render_widget(block, area);
 
     let header_lines = build_sfn_exec_header_lines(exec);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

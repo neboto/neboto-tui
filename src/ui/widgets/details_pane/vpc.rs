@@ -16,6 +16,7 @@ pub(super) fn render_subnet_split(app: &App, subnet: &Subnet, area: Rect, frame:
     frame.render_widget(block, area);
 
     let header_lines = build_subnet_header_lines(subnet);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -244,6 +245,7 @@ pub(super) fn render_route_table_split(app: &App, rt: &RouteTable, area: Rect, f
     frame.render_widget(block, area);
 
     let header_lines = build_route_table_header_lines(rt);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -405,6 +407,7 @@ pub(super) fn render_network_acl_split(app: &App, acl: &NetworkAcl, area: Rect, 
     frame.render_widget(block, area);
 
     let header_lines = build_network_acl_header_lines(acl);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -576,6 +579,7 @@ pub(super) fn render_vpc_endpoint_split(app: &App, ep: &VpcEndpoint, area: Rect,
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -699,6 +703,7 @@ pub(super) fn render_vpn_connection_split(app: &App, vpn: &VpnConnection, area: 
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

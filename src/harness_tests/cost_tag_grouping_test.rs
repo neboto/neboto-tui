@@ -187,7 +187,7 @@ async fn the_row_is_numbered_in_order_and_periods_ride_the_detail_border() {
         "{screen}"
     );
     // The periods sit on the Cost pane's top border, every one of them.
-    let y = screen.lines().position(|l| l.contains("╭ Cost ─")).expect("cost pane border");
+    let y = screen.lines().position(|l| l.contains("╭ Cost ")).expect("cost pane border");
     let border: Vec<char> = screen.lines().nth(y).unwrap().chars().collect();
     let text: String = border.iter().collect();
     assert!(text.contains("[ MTD │ Last Mo │ 3 Mo ]"), "{text}");

@@ -37,6 +37,7 @@ pub(super) fn render_org_account_split(app: &App, account: &OrgAccount, area: Re
     frame.render_widget(block, area);
 
     let header_lines = build_org_account_header_lines(account);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -391,6 +392,7 @@ pub(super) fn render_org_scp_split(app: &App, scp: &OrgScp, area: Rect, frame: &
     frame.render_widget(block, area);
 
     let header_lines = build_org_scp_header_lines(scp);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

@@ -14,6 +14,7 @@ pub(super) fn render_dx_connection_split(app: &App, conn: &DxConnection, area: R
     frame.render_widget(block, area);
 
     let header = dx_header_lines(&conn.name, &conn.id, &conn.state, dx_state_color(&conn.state));
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -81,6 +82,7 @@ pub(super) fn render_dx_vif_split(app: &App, vif: &DxVirtualInterface, area: Rec
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -299,6 +301,7 @@ pub(super) fn render_dx_gateway_split(app: &App, gw: &DxGateway, area: Rect, fra
     frame.render_widget(block, area);
 
     let header = dx_header_lines(&gw.name, &gw.id, &gw.state, dx_state_color(&gw.state));
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

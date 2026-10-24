@@ -332,6 +332,7 @@ pub use xray::*;
 pub fn render_details_pane(app: &App, area: Rect, frame: &mut Frame) {
     app.detail_footer_text.replace(None);
     render_details_pane_inner(app, area, frame);
+    stamp_title_name(app, area, frame);
     let ribbon_w = render_ownership_ribbon(app, area, frame);
     render_detail_footer(app, area, frame, ribbon_w);
     // The pane's top border (its title bar) toggles full width, as `Z` does:
@@ -427,11 +428,12 @@ fn render_detail_footer(app: &App, area: Rect, frame: &mut Frame, reserve: usize
 /// the guard list mirrors the early returns at the top of
 /// `render_details_pane_inner`; keep them in step. Returns the columns it
 /// took, so the footer fits beside it.
-fn render_ownership_ribbon(app: &App, area: Rect, frame: &mut Frame) -> usize {
-    if !app.ownership_ribbon {
-        return 0;
-    }
-    if app.metrics_in_pane.is_some()
+/// Whether an in-pane view (metrics, a browser, a tail, a lens, the
+/// Terraform state) owns the pane rather than the resource's own renderer —
+/// the early returns at the top of `render_details_pane_inner`; keep them in
+/// step. The ribbon and the title's name only decorate the resource's pane.
+fn pane_view_open(app: &App) -> bool {
+    app.metrics_in_pane.is_some()
         || app.s3_object_browser.visible
         || app.memory_browser.visible
         || app.ddb_browser.visible
@@ -440,7 +442,50 @@ fn render_ownership_ribbon(app: &App, area: Rect, frame: &mut Frame) -> usize {
         || app.refs_in_pane.is_some()
         || app.access_in_pane.is_some()
         || app.terraform_state.is_some()
-    {
+}
+
+/// Append the selected resource's name to the pane's border title
+/// (`╭ EC2 Instance · web-1 ──`), so a pane says what it shows even when the
+/// header has scrolled out of mind or the pane is full-width. Done here
+/// rather than in ~170 `pane_block` calls. A title that already names it is
+/// left alone, and it only writes over bare border, so anything else drawn
+/// on the top border (Cost's period chips) is never covered.
+fn stamp_title_name(app: &App, area: Rect, frame: &mut Frame) {
+    use unicode_width::UnicodeWidthStr;
+    if pane_view_open(app) || area.width < 12 || area.height < 2 {
+        return;
+    }
+    let Some(resource) = app.get_selected_resource() else {
+        return;
+    };
+    let name = resource.name();
+    if name.is_empty() {
+        return;
+    }
+    let buf = frame.buffer_mut();
+    let (y, right) = (area.y, area.x + area.width - 1);
+    let title: String = (area.x + 1..right).map(|x| buf[(x, y)].symbol().to_string()).collect();
+    if title.contains(name) {
+        return;
+    }
+    // The title is ` Type ` from the corner; the name goes after it.
+    let Some(end) = (area.x + 2..right).find(|&x| buf[(x, y)].symbol() == "─") else {
+        return;
+    };
+    let room = (end..right).take_while(|&x| buf[(x, y)].symbol() == "─").count().saturating_sub(2);
+    let mut text = format!("· {name} ");
+    if text.width() > room {
+        if room < 8 {
+            return;
+        }
+        text = format!("· {}… ", name.chars().take(room - 4).collect::<String>());
+    }
+    let style = buf[(end - 2, y)].style();
+    buf.set_string(end, y, text, style);
+}
+
+fn render_ownership_ribbon(app: &App, area: Rect, frame: &mut Frame) -> usize {
+    if !app.ownership_ribbon || pane_view_open(app) {
         return 0;
     }
     let Some(resource) = app.get_selected_resource() else {
@@ -2155,6 +2200,7 @@ fn render_s3_bucket_split(app: &App, bucket: &S3Bucket, area: Rect, frame: &mut 
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
 
     let chunks = Layout::default()
@@ -4828,6 +4874,50 @@ fn descriptor_tabs(
         .collect()
 }
 
+/// A pane's hand-built header, condensed to the one row `header_line`
+/// draws: its first non-blank line is the name, and every later line breaks
+/// into facts at its `·` separators (a `header_kv` row becomes `Label value`).
+/// State dots are dropped, so `● running` matches the state and isn't shown
+/// twice. Lets each renderer keep building its header as it did, one call
+/// away from the shared look.
+pub(crate) fn one_row_header(app: &App, lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
+    const DOTS: &[char] = &['●', '○', '◌', '◐', '✓', '✗', '⚠', '▲', '▼', '⛔'];
+    // A fact keeps the colour its own text was drawn in (a red `HIGH`, an
+    // orange AZ), unless that's one of the body's neutral colours.
+    let neutral = [theme::text_primary(), theme::text_dim(), theme::text_muted(), theme::accent()];
+    let mut parts: Vec<(String, Option<Color>)> = Vec::new();
+    let mut push = |text: &str, color: Option<Color>| {
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let text = text.trim_start_matches(DOTS).trim().to_string();
+        if !text.is_empty() {
+            parts.push((text, color.filter(|c| !neutral.contains(c))));
+        }
+    };
+    // Every line splits at `·`, the name's too (`ami-… · ● available`).
+    for line in &lines {
+        let (mut text, mut color) = (String::new(), None);
+        for span in &line.spans {
+            let mut pieces = span.content.split('·').peekable();
+            while let Some(piece) = pieces.next() {
+                if !piece.trim().is_empty() {
+                    color = span.style.fg;
+                }
+                text.push_str(piece);
+                if pieces.peek().is_some() {
+                    push(&text, color.take());
+                    text.clear();
+                }
+            }
+        }
+        push(&text, color);
+    }
+    let Some(((name, _), facts)) = parts.split_first() else {
+        return lines;
+    };
+    let facts: Vec<(&str, Option<Color>)> = facts.iter().map(|(t, c)| (t.as_str(), *c)).collect();
+    vec![header_line_colored(app, name, &facts, width)]
+}
+
 /// The pane's border title: its type, then the resource's name, so a
 /// full-width pane still says what it shows.
 fn pane_title_with_name(pane_title: &str, name: &str) -> String {
@@ -4841,8 +4931,16 @@ fn pane_title_with_name(pane_title: &str, name: &str) -> String {
 /// The one-row pane header: the state dot, the name in bold, the state in
 /// its colour, then `facts` dimmed, as many as fit in `width` (the first is
 /// cut with `…` rather than dropped). A fact that repeats the name, the
-/// state or an earlier fact, or says nothing (`—`, empty), is skipped.
+/// state (`Status ACTIVE` too) or an earlier fact, or says nothing (`—`,
+/// empty), is skipped.
 pub(crate) fn header_line(app: &App, name: &str, facts: &[&str], width: usize) -> Line<'static> {
+    let facts: Vec<(&str, Option<Color>)> = facts.iter().map(|f| (*f, None)).collect();
+    header_line_colored(app, name, &facts, width)
+}
+
+/// [`header_line`] with a colour per fact (`None` = the dim default), for a
+/// fact whose colour means something (a finding's severity, an AZ).
+fn header_line_colored(app: &App, name: &str, facts: &[(&str, Option<Color>)], width: usize) -> Line<'static> {
     use unicode_width::UnicodeWidthStr;
     let resource = app.get_selected_resource();
     let state = resource.map(|r| r.state());
@@ -4870,20 +4968,27 @@ pub(crate) fn header_line(app: &App, name: &str, facts: &[&str], width: usize) -
     let mut used: usize = spans.iter().map(|s| s.content.width()).sum();
     let mut first = true;
     let mut shown: Vec<&str> = Vec::new();
-    for fact in facts.iter().map(|f| f.trim()) {
-        if fact.is_empty() || fact == "—" || fact == name || fact.eq_ignore_ascii_case(&label) || shown.contains(&fact) {
+    for (fact, fact_color) in facts.iter().map(|(f, c)| (f.trim(), *c)) {
+        let restates_state = !label.is_empty()
+            && [String::new(), "status ".into(), "state ".into()]
+                .iter()
+                .any(|p| fact.eq_ignore_ascii_case(&format!("{p}{label}")));
+        if fact.is_empty() || fact == "—" || fact == name || restates_state || shown.contains(&fact) {
             continue;
         }
         shown.push(fact);
         let sep = if first && label.is_empty() { "  " } else { "  ·  " };
         let room = width.saturating_sub(used + sep.width() + 1);
+        let style = fact_color.map_or(dim, |c| Style::default().fg(c));
         if fact.width() <= room {
-            spans.push(Span::styled(format!("{sep}{fact}"), dim));
+            spans.push(Span::styled(sep, dim));
+            spans.push(Span::styled(fact.to_string(), style));
             used += sep.width() + fact.width();
         } else {
             if first && room > 8 {
                 let cut: String = fact.chars().take(room - 1).collect();
-                spans.push(Span::styled(format!("{sep}{cut}…"), dim));
+                spans.push(Span::styled(sep, dim));
+                spans.push(Span::styled(format!("{cut}…"), style));
             }
             break;
         }
@@ -4996,6 +5101,7 @@ fn render_tf_state_pane(app: &App, area: Rect, frame: &mut Frame) {
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

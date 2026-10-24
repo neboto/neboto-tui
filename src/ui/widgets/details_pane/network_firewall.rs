@@ -37,6 +37,7 @@ pub(super) fn render_nfw_firewall_split(app: &App, fw: &NfwFirewall, area: Rect,
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -222,6 +223,7 @@ pub(super) fn render_nfw_policy_split(app: &App, policy: &NfwPolicy, area: Rect,
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -351,6 +353,7 @@ pub(super) fn render_nfw_rule_group_split(app: &App, rg: &NfwRuleGroup, area: Re
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

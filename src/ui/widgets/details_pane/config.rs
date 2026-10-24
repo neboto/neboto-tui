@@ -16,6 +16,7 @@ pub(super) fn render_secret_split(app: &App, secret: &SecretEntry, area: Rect, f
     frame.render_widget(block, area);
 
     let header_lines = build_secret_header_lines(secret);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

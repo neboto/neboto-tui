@@ -107,6 +107,7 @@ pub(super) fn render_health_split(
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

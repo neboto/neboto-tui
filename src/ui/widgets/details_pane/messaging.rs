@@ -16,6 +16,7 @@ pub(super) fn render_sqs_queue_split(app: &App, queue: &SqsQueue, area: Rect, fr
     frame.render_widget(block, area);
 
     let header_lines = build_sqs_header_lines(queue);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -271,6 +272,7 @@ pub(super) fn render_sns_topic_split(app: &App, topic: &SnsTopic, area: Rect, fr
     frame.render_widget(block, area);
 
     let header_lines = build_sns_header_lines(topic);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

@@ -16,6 +16,7 @@ pub(super) fn render_waf_web_acl_split(app: &App, acl: &WafWebAcl, area: Rect, f
     frame.render_widget(block, area);
 
     let header_lines = build_waf_web_acl_header_lines(acl);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -199,6 +200,7 @@ pub(super) fn render_waf_simple_split(
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

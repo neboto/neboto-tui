@@ -63,6 +63,7 @@ pub(super) fn render_sh_overview_split(app: &App, overview: &ShOverview, area: R
     }
 
     let header = vec![Line::raw(""), Line::from(second), Line::raw("")];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -530,6 +531,7 @@ pub(super) fn render_sh_finding_split(app: &App, finding: &ShFinding, area: Rect
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -941,6 +943,7 @@ pub(super) fn render_sh_control_split(app: &App, control: &ShControl, area: Rect
         Line::from(second),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -1205,6 +1208,7 @@ pub(super) fn render_sh_automation_rule_split(
         Line::from(second),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

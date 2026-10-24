@@ -44,6 +44,7 @@ pub(super) fn render_insp_finding_split(app: &App, finding: &InspFinding, area: 
         Line::from(sev_line),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

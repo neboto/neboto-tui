@@ -17,6 +17,7 @@ pub(super) fn render_r53_zone_split(app: &App, zone: &R53HostedZone, area: Rect,
     frame.render_widget(block, area);
 
     let header_lines = build_r53_zone_header_lines(zone);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -411,6 +412,7 @@ pub(super) fn render_r53_health_check_split(
     frame.render_widget(block, area);
 
     let header_lines = build_r53_health_check_header_lines(hc);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
