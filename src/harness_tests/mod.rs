@@ -47,6 +47,7 @@ mod detail_wrap_test;
 mod detail_pane_polish_test;
 mod tags_error_test;
 mod r53_test_answer_test;
+mod route_table_overview_test;
 mod state_filter_test;
 mod subtab_keys_test;
 mod all_search_nav_test;
