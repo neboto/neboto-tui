@@ -34,14 +34,19 @@ async fn help_and_commands_survive_a_narrow_bar() {
         assert!(line.contains("/ search  ·  ⏎ open"), "{width}: {line}");
         assert!(!line.contains("j/k") && !line.contains("H/L") && !line.contains("bookmarks"), "{line}");
     }
+    // The selection's own keys come before the every-row ones: at 100
+    // columns `m metrics` shows and `y copy id` gives way.
+    let narrow = bar(&app, 100);
+    assert!(narrow.contains("⏎ open  ·  m metrics") && !narrow.contains("copy id"), "{narrow}");
     let wide = bar(&app, 220);
-    assert!(wide.contains("m metrics") && wide.contains("N access"), "{wide}");
+    assert!(wide.contains("N access") && wide.contains("y copy id"), "{wide}");
 
     app.details_focused = true;
     for width in [100, 140] {
         let line = bar(&app, width);
         println!("detail {width}: {line}");
         assert!(line.contains(": commands  ·  ? help"), "{width}: {line}");
+        assert!(line.trim_start().starts_with("m metrics"), "{width}: {line}");
         assert!(!line.contains("q quit") && !line.contains("j/k"), "{line}");
     }
 }
