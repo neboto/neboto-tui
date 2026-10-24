@@ -4817,6 +4817,70 @@ fn descriptor_tabs(
         .collect()
 }
 
+/// The pane's border title: its type, then the resource's name, so a
+/// full-width pane still says what it shows.
+fn pane_title_with_name(pane_title: &str, name: &str) -> String {
+    if name.is_empty() || name == pane_title {
+        pane_title.to_string()
+    } else {
+        format!("{pane_title} · {name}")
+    }
+}
+
+/// The one-row pane header: the state dot, the name in bold, the state in
+/// its colour, then `facts` dimmed, as many as fit in `width` (the first is
+/// cut with `…` rather than dropped). A fact that repeats the name, the
+/// state or an earlier fact, or says nothing (`—`, empty), is skipped.
+pub(crate) fn header_line(app: &App, name: &str, facts: &[&str], width: usize) -> Line<'static> {
+    use unicode_width::UnicodeWidthStr;
+    let resource = app.get_selected_resource();
+    let state = resource.map(|r| r.state());
+    let label = resource.map(|r| r.state_label()).unwrap_or_default();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let color = match &state {
+        Some(st) => {
+            let (dot, color) = theme::state_indicator(st);
+            spans.push(Span::styled(format!(" {dot} "), Style::default().fg(color)));
+            color
+        }
+        None => {
+            spans.push(Span::raw(" "));
+            theme::text_dim()
+        }
+    };
+    spans.push(Span::styled(
+        name.to_string(),
+        Style::default().fg(theme::text_primary()).add_modifier(Modifier::BOLD),
+    ));
+    if !label.is_empty() {
+        spans.push(Span::styled(format!("  {label}"), Style::default().fg(color)));
+    }
+    let dim = Style::default().fg(theme::text_dim());
+    let mut used: usize = spans.iter().map(|s| s.content.width()).sum();
+    let mut first = true;
+    let mut shown: Vec<&str> = Vec::new();
+    for fact in facts.iter().map(|f| f.trim()) {
+        if fact.is_empty() || fact == "—" || fact == name || fact.eq_ignore_ascii_case(&label) || shown.contains(&fact) {
+            continue;
+        }
+        shown.push(fact);
+        let sep = if first && label.is_empty() { "  " } else { "  ·  " };
+        let room = width.saturating_sub(used + sep.width() + 1);
+        if fact.width() <= room {
+            spans.push(Span::styled(format!("{sep}{fact}"), dim));
+            used += sep.width() + fact.width();
+        } else {
+            if first && room > 8 {
+                let cut: String = fact.chars().take(room - 1).collect();
+                spans.push(Span::styled(format!("{sep}{cut}…"), dim));
+            }
+            break;
+        }
+        first = false;
+    }
+    Line::from(spans)
+}
+
 fn render_simple_split(
     app: &App,
     area: Rect,
@@ -4828,7 +4892,7 @@ fn render_simple_split(
 ) {
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, tabs.len(), "");
-    let mut block = theme::pane_block(pane_title, focused);
+    let mut block = theme::pane_block(&pane_title_with_name(pane_title, name), focused);
     block = block.title_bottom(
         Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
             .right_aligned(),
@@ -4836,23 +4900,8 @@ fn render_simple_split(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let header = vec![
-        Line::raw(""),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                name.to_string(),
-                Style::default()
-                    .fg(crate::ui::theme::text_primary())
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(subtitle.to_string(), Style::default().fg(theme::text_dim())),
-        ]),
-        Line::raw(""),
-    ];
+    let facts: Vec<&str> = subtitle.split(" · ").collect();
+    let header = vec![header_line(app, name, &facts, inner.width as usize)];
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

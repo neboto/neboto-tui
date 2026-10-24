@@ -152,3 +152,27 @@ async fn footer_keys_are_click_targets_on_the_bottom_border() {
         .expect("the footer's `/ search` hint should be clickable");
     assert_eq!(search.rect.width, "/ search".len() as u16);
 }
+
+/// The one-row header (`header_line`, via `render_simple_split`): dot, name,
+/// state, then the facts that fit — nothing repeated, the name in the title.
+#[tokio::test]
+async fn simple_split_panes_have_a_one_row_header() {
+    let (mut app, tx, _rx) = test_app().await;
+    let (service, _, mock) = all_mocks().into_iter().find(|(_, l, _)| *l == "Vpc").unwrap();
+    let name = mock.name().to_string();
+    select_mock(&mut app, service, mock);
+    app.details_focused = true;
+    app.reset_detail_section_to_default(&tx);
+    let t = draw(&app, 130, 24);
+    let screen: Vec<String> = (0..24).map(|y| row_text(&t, y)).collect();
+    let title = screen.iter().position(|r| r.contains(&format!("VPC · {name}"))).expect("name in the title");
+    assert!(screen[title + 1].contains(&name) && screen[title + 1].contains("10.0.0.0/16"), "{}", screen[title + 1]);
+    assert!(screen[title + 2].contains("────"), "the header should be one row:\n{}", screen.join("\n"));
+
+    let line = crate::ui::widgets::details_pane::header_line(&app, &name, &["x", "x", "", "—", &name], 120);
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(text.matches(" x").count(), 1, "repeats and blanks are skipped: {text}");
+    let narrow = crate::ui::widgets::details_pane::header_line(&app, "web", &["a long fact that cannot fit in forty columns"], 40);
+    let text: String = narrow.spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(text.ends_with('…') && unicode_width::UnicodeWidthStr::width(text.as_str()) <= 40, "{text}");
+}
