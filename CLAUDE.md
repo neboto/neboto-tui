@@ -278,7 +278,10 @@ deletes a word.
   past the cap are ellipsised, never left to push the `:` out — the flat
   view's `━━` headers split the body so sections align independently); key
   `ACCENT` orange, value conditional colour (state / ✓ / ✗ / ⚠ / white).
-  Never pad keys yourself in a `*_section_lines` fn.
+  Never pad keys yourself in a `*_section_lines` fn. A flush key is drawn
+  two columns in, under its group header (`display_key`); a key you indent
+  yourself keeps your indent, so indent only to nest. An **empty value**
+  makes the row a group header — write `—` for a missing value instead.
 - **Empty-key note**: empty key, non-empty value (`("", "No tags")`) →
   rendered exactly like a plain content line (`"  No tags"`, no colon); the
   two shapes are interchangeable.
@@ -287,7 +290,10 @@ deletes a word.
 - **Plain content line**: leading-space key, empty value → `Line::raw`, no
   colon. For fixed-width tables, CIDR lists, template previews. Exception:
   `⚠`/`✗`-prefixed content lines render WARNING/ERROR-coloured.
-- **Blank spacer**: both empty → blank line.
+- **Blank spacer**: both empty → blank line. Spacing is evened out
+  centrally (`tidy_section_rows`): none at either end of a section, none
+  under a group header, never two in a row — so emit them freely between
+  groups and don't hand-tune them.
 - **Lazy-fetch error**: always via the `error_rows(&err)` helper (blank spacer
   + `  ⚠ {msg}`) — never hand-rolled `("Error", e)` rows. (An `Error` *group
   header* is still fine for a resource's own failure data, e.g. a FAILED

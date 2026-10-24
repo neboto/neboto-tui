@@ -1910,6 +1910,17 @@ fn is_key_value_row(key: &str, value: &str) -> bool {
     !key.is_empty() && !value.is_empty() && !key.starts_with("━━ ")
 }
 
+/// A key-value row's key as drawn: indented two columns under the group
+/// headers, which sit at the margin. Keys a renderer already indented keep
+/// their own (a deeper indent is nesting), so only flush keys move.
+fn display_key(key: &str) -> std::borrow::Cow<'_, str> {
+    if key.starts_with(' ') {
+        std::borrow::Cow::Borrowed(key)
+    } else {
+        std::borrow::Cow::Owned(format!("  {key}"))
+    }
+}
+
 /// Key-column width for every row of a detail body, one entry per row.
 ///
 /// The column is **adaptive per section**: the widest key in the section
@@ -1930,7 +1941,7 @@ fn key_col_widths(rows: &[(String, String)], content_width: u16) -> Vec<usize> {
         let w = rows[start..end]
             .iter()
             .filter(|(k, v)| is_key_value_row(k, v))
-            .map(|(k, _)| k.width())
+            .map(|(k, _)| display_key(k).width())
             .max()
             .unwrap_or(0)
             .clamp(KEY_COL_MIN, cap);
@@ -2086,7 +2097,7 @@ fn style_detail_row(
 
     // Align the value column: pad the key to the body's key-column width
     // (`key_col_widths`) by display width so the ":" lands in one place.
-    let padded_key = pad_key_to_width(key, key_w);
+    let padded_key = pad_key_to_width(&display_key(key), key_w);
     Line::from(vec![
         Span::styled(padded_key, Style::default().fg(theme::accent())),
         // The colon dim, so the eye goes from key to value.
@@ -5293,6 +5304,22 @@ mod key_col_tests {
     }
 
     #[test]
+    fn flush_keys_indent_under_their_headers_and_indented_ones_keep_theirs() {
+        let text = |l: &Line| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        let w = KEY_COL_MIN;
+        assert!(text(&style_detail_row("Name", "web-1", None, w)).starts_with("  Name "));
+        assert!(text(&style_detail_row("  Name", "web-1", None, w)).starts_with("  Name "));
+        assert!(text(&style_detail_row("    Port", "443", None, w)).starts_with("    Port "));
+        // The column is measured on the drawn key, so both line up.
+        let r = rows(&[("Name", "a"), ("  Name", "b")]);
+        let widths = key_col_widths(&r, 120);
+        assert_eq!(
+            colon_col(&style_detail_row("Name", "a", None, widths[0])),
+            colon_col(&style_detail_row("  Name", "b", None, widths[1]))
+        );
+    }
+
+    #[test]
     fn short_keys_pad_to_the_floor() {
         let r = rows(&[("Name", "a"), ("State", "b")]);
         assert_eq!(key_col_widths(&r, 120), vec![KEY_COL_MIN, KEY_COL_MIN]);
@@ -5303,7 +5330,8 @@ mod key_col_tests {
         // A tag key past 24 chars used to push only its own colon out.
         let r = rows(&[("Name", "web"), ("aws:cloudformation:logical-id", "AppServer")]);
         let w = key_col_widths(&r, 120);
-        assert_eq!(w, vec![29, 29]);
+        // 29 columns of key, drawn under the two-column indent.
+        assert_eq!(w, vec![31, 31]);
         let l1 = style_detail_row("Name", "web", None, w[0]);
         let l2 = style_detail_row("aws:cloudformation:logical-id", "AppServer", None, w[1]);
         assert_eq!(colon_col(&l1), colon_col(&l2));
@@ -5350,7 +5378,7 @@ mod key_col_tests {
         ]);
         let w = key_col_widths(&r, 120);
         assert_eq!(w[1], KEY_COL_MIN);
-        assert_eq!(w[3], 29);
+        assert_eq!(w[3], 31);
     }
 
     #[test]
