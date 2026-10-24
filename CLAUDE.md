@@ -1176,6 +1176,9 @@ and the approaches you rejected are the part nobody can recover from your code.
   status-bar hint it shows, so the help's "Here" section and the bar's
   conditional hints come from one place. A new `supports_*` gate needs a
   row (a test greps for it); a new key needs a row or it isn't in `?`.
+  The `:` picker (`command_picker.rs`) lists the rows that can run in the
+  focused pane: a gated row runs its hint key, others need `.runs(…)`.
+  `⏎` replays the key through the event channel, never a direct call.
 - **`src/lazy.rs`**: `Lazy<T>`/`LazyMap<T>`/`LazyStore` — the deep module
   behind migrated lazy sections (see the canonical-pattern paragraph above).
 - **`src/macros.rs`**: `MacroStep`/`Macro`/`MacroRecorder`/`MacroPlayer` +

@@ -197,6 +197,7 @@ enum Modal {
     Bookmarks,
     Macros,
     Help,
+    Commands,
 }
 
 /// Where the open popup picker (`C` commands, `M` messages) drew itself this
@@ -2768,6 +2769,8 @@ pub struct App {
     pub cost_category: Option<String>,
     /// The `5` / `6` picker over tag keys / cost category names.
     pub cost_key_picker: crate::ui::widgets::cost_key_picker::CostKeyPickerState,
+    /// The `:` command picker (rows from `src/commands.rs`).
+    pub command_picker: crate::ui::widgets::command_picker::CommandPickerState,
     // Cache
     pub cache: ResourceCache,
     // Resolved TTL settings (config `cache_ttl`/`cache_ttls`), retained so the
@@ -3523,6 +3526,7 @@ impl App {
             cost_tag_key: None,
             cost_category: None,
             cost_key_picker: crate::ui::widgets::cost_key_picker::CostKeyPickerState::new(),
+            command_picker: Default::default(),
             cache: ResourceCache::new(cache_base_ttl, cache_ttl_overrides.clone()),
             cache_base_ttl,
             cache_ttl_overrides,
@@ -4370,6 +4374,38 @@ impl App {
         Ok(())
     }
 
+    /// Keys while the `:` picker is open: type to filter, arrows move, `⏎`
+    /// closes it and replays the row's key through the event channel, so
+    /// the key lands exactly as if pressed (keycast and macros included).
+    fn handle_command_picker_key(&mut self, key: KeyEvent, event_tx: &mpsc::UnboundedSender<Event>) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let rows = crate::commands::picker_rows(self, &self.command_picker.query);
+        let len = rows.len();
+        let picker = &mut self.command_picker;
+        match key.code {
+            KeyCode::Down => picker.next(len),
+            KeyCode::Up => picker.previous(),
+            KeyCode::Char('n') if ctrl => picker.next(len),
+            KeyCode::Char('p') if ctrl => picker.previous(),
+            KeyCode::Char('d') if ctrl => picker.page_down(len),
+            KeyCode::Char('u') if ctrl => picker.page_up(),
+            KeyCode::PageDown => picker.page_down(len),
+            KeyCode::PageUp => picker.page_up(),
+            KeyCode::Enter => {
+                let run = rows.get(picker.selected_index.min(len.saturating_sub(1))).and_then(|c| c.run());
+                if let Some(run) = run {
+                    picker.hide();
+                    let _ = event_tx.send(Event::Key(run.key_event()));
+                }
+            }
+            KeyCode::Esc => picker.hide(),
+            KeyCode::Backspace => picker.pop_char(),
+            KeyCode::Char(c) if !ctrl && !alt => picker.push_char(c),
+            _ => {}
+        }
+    }
+
     /// `?`: open or close the help overlay, always from the top with no
     /// filter.
     fn toggle_help(&mut self) {
@@ -4406,6 +4442,25 @@ impl App {
         // picker's filter, the CloudTrail filter modal, the S3 browser's
         // filter, or the macro name prompt stays a literal comma — inside an
         // overlay, `Esc` out first.
+        if self.command_picker.visible {
+            self.handle_command_picker_key(key, event_tx);
+            return Ok(());
+        }
+
+        // `:` (command picker) is intercepted here for the same reasons as
+        // `,` below, with the same gates: both panes, and a literal `:` in
+        // any text input. Some terminals report it with SHIFT.
+        if key.code == KeyCode::Char(':')
+            && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
+            && !self.search_active
+            && !self.detail_search_active
+            && self.macro_name_input.is_none()
+            && !self.any_pane_overlay_active()
+        {
+            self.command_picker.show();
+            return Ok(());
+        }
+
         if key.code == KeyCode::Char(',')
             && key.modifiers == KeyModifiers::NONE
             && !self.search_active
@@ -22805,6 +22860,7 @@ impl App {
             || self.macro_picker_visible
             || self.cli_picker.is_some()
             || self.help_visible
+            || self.command_picker.visible
     }
 
     /// Label of the split-pane section in focus. Deliberately the cheap
@@ -23008,6 +23064,8 @@ impl App {
         use crate::keycast::Input;
         let overlay = if self.help_visible {
             Some("help")
+        } else if self.command_picker.visible {
+            Some("commands")
         } else if self.service_selector.visible {
             Some("services")
         } else if self.region_selector.visible {
@@ -23069,6 +23127,7 @@ impl App {
             || self.quota_service_selector.visible
             || self.cost_key_picker.visible
             || self.help_visible
+            || self.command_picker.visible
         {
             Some(Input::Picker)
         } else {
@@ -25708,6 +25767,7 @@ impl App {
     /// not "pass through" to the list/detail underneath.
     fn any_pane_overlay_active(&self) -> bool {
         self.help_visible
+            || self.command_picker.visible
             || self.service_selector.visible
             || self.region_selector.visible
             || self.profile_selector.visible
@@ -34249,6 +34309,8 @@ impl App {
             }
         } else if self.help_visible {
             Modal::Help
+        } else if self.command_picker.visible {
+            Modal::Commands
         } else {
             return None;
         })
@@ -34272,6 +34334,7 @@ impl App {
             Modal::JumpList => &mut self.jump_list_selected,
             Modal::Bookmarks => &mut self.bookmarks_selected,
             Modal::Macros => &mut self.macro_picker_selected,
+            Modal::Commands => &mut self.command_picker.selected_index,
             Modal::CtFilter | Modal::SsmInput | Modal::Help => return None,
         };
         let already = *slot == idx;

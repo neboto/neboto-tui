@@ -57,6 +57,7 @@ pub mod changes_tabs;
 pub mod beanstalk_tabs;
 pub mod dms_tabs;
 pub mod quota_service_selector;
+pub mod command_picker;
 pub mod cost_key_picker;
 pub mod region_selector;
 pub mod resource_list;
