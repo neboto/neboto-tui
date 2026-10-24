@@ -1,5 +1,5 @@
-//! Detail pane fit and finish, after nebaz's pane: sections don't open or
-//! end on a blank row (so `G` lands on content), the view holds still while
+//! Detail pane fit and finish, after nebaz's pane: sections are evenly
+//! spaced (none opens or ends on a blank row, so `G` lands on content), the view holds still while
 //! the cursor moves inside it, the section bar scrolls to the active section,
 //! the `/` filter marks and counts its matches with `n`/`N` between them, and
 //! the footer's keys are coloured click targets.
@@ -53,9 +53,10 @@ fn top_row(app: &App) -> usize {
 }
 
 #[tokio::test]
-async fn no_section_opens_or_ends_on_a_blank_row() {
+async fn every_section_is_evenly_spaced_with_no_placeholder_keys() {
     let (mut app, tx, _rx) = test_app().await;
     let blank = |r: &(String, String)| r.0.is_empty() && r.1.is_empty();
+    let header = |r: &(String, String)| !r.0.is_empty() && r.1.is_empty() && !r.0.starts_with(' ');
     for (service, label, mock) in all_mocks() {
         let Some(desc) = mock.detail_sections() else { continue };
         let n = desc.sections.len();
@@ -67,6 +68,15 @@ async fn no_section_opens_or_ends_on_a_blank_row() {
             let lines = app.get_detail_lines();
             assert!(!lines.first().is_some_and(blank), "{label} §{i} opens on a blank row");
             assert!(!lines.last().is_some_and(blank), "{label} §{i} ends on a blank row (G lands on it)");
+            for w in lines.windows(2) {
+                assert!(!(blank(&w[0]) && blank(&w[1])), "{label} §{i}: two blank rows in a row");
+                assert!(!(header(&w[0]) && blank(&w[1])), "{label} §{i}: a blank row under {:?}", w[0].0);
+            }
+            // "Nothing here" is a note (`("", "No tags")`), not a key named
+            // `(none)` with a colon after it.
+            for (k, v) in &lines {
+                assert!(!(k.trim() == "(none)" && !v.is_empty()), "{label} §{i}: `(none): {v}` should be a note");
+            }
         }
     }
 }

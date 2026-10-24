@@ -214,7 +214,7 @@ pub fn subnet_section_lines(
         SubnetDetailSection::Tags => {
             let mut rows = vec![];
             if subnet.tags.is_empty() {
-                rows.push(("  (none)".to_string(), "No tags".to_string()));
+                rows.push((String::new(), "No tags".to_string()));
             } else {
                 let mut sorted: Vec<_> = subnet.tags.iter().collect();
                 sorted.sort_by_key(|(k, _)| k.as_str());
@@ -375,7 +375,7 @@ pub fn route_table_section_lines(
         RouteTableDetailSection::Tags => {
             let mut rows = vec![];
             if rt.tags.is_empty() {
-                rows.push(("  (none)".to_string(), "No tags".to_string()));
+                rows.push((String::new(), "No tags".to_string()));
             } else {
                 let mut sorted: Vec<_> = rt.tags.iter().collect();
                 sorted.sort_by_key(|(k, _)| k.as_str());
@@ -525,7 +525,7 @@ pub fn network_acl_section_lines(
         NetworkAclDetailSection::Tags => {
             let mut rows = vec![];
             if acl.tags.is_empty() {
-                rows.push(("  (none)".to_string(), "No tags".to_string()));
+                rows.push((String::new(), "No tags".to_string()));
             } else {
                 let mut sorted: Vec<_> = acl.tags.iter().collect();
                 sorted.sort_by_key(|(k, _)| k.as_str());
