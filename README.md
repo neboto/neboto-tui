@@ -1,6 +1,6 @@
 # neboto
 
-A fast, keyboard-driven terminal UI for browsing AWS. **65 services**, rich
+A fast, keyboard-driven terminal UI for browsing AWS. **70+ services**, rich
 console-style detail panes, live log tailing, CloudWatch charts, and
 cross-service link-following — all without leaving the terminal.
 
@@ -27,18 +27,28 @@ auditably read-only. See [Why read-only](#why-read-only).
 
 ## Highlights
 
-- **65 AWS services** behind an `@prefix` fuzzy search — `@ec2 web`, `@sh`,
-  `@orgs`. Multi-resource services get numbered sub-tabs.
-- **Console-style split detail panes** on ~160 resource types: fixed header,
+- **70+ AWS services** behind an `@prefix` fuzzy search — `@ec2 web`, `@sh`,
+  `@orgs`. Multi-resource services get numbered sub-tabs. `@all` searches
+  everything already loaded.
+- **Console-style split detail panes** on 200+ resource types: fixed header,
   section tabs, scrollable body. Expensive sections load lazily on first view.
 - **Follow the links** — press `Enter` on any ARN, id or reference to jump to
   that resource, across services and even across regions. Tracing a dependency
   chain is faster here than in the Console.
 - **Live log tail** (`t`) and server-side **log search** (`f`) on log groups,
   Lambda, RDS, ECS tasks, WAF, CloudTrail, Step Functions, CodeBuild and more.
-- **CloudWatch charts in the pane** (`m`) for 53 resource kinds, each with the
-  right namespace and dimension set.
-- **"Who changed this?"** (`W`) — a CloudTrail lens on *any* resource.
+- **CloudWatch charts in the pane** (`m`) for 50+ resource kinds, each with the
+  right namespace and dimension set, and recent changes marked on the chart.
+- **"What changed around this?"** (`W`) — a timeline on *any* resource that
+  merges CloudTrail, alarm history, CloudFormation events, ECS deployments,
+  Auto Scaling activities and RDS events.
+- **Who uses this?** (`U`) lists the loaded resources that reference it, and
+  **what can reach it?** (`N`) shows the effective security group and NACL
+  rules in one table.
+- **A security pass** (`@audit`) over what's loaded: open security groups,
+  public buckets, unencrypted volumes, root MFA and more.
+- **Find any key** — `?` help filters as you type, and `:` runs any key by
+  name.
 - **Multi-account** — switch profiles (`P`), or assume a role into an
   Organizations member account (`s`) scoped by a `ReadOnlyAccess` session
   policy so an assumed session provably cannot mutate.
@@ -139,6 +149,7 @@ Every flag overrides the config file for that run only.
 | `-m`, `--macro <NAME>` | Run a saved macro on startup |
 | `--theme <THEME>` | Color preset (see [Themes](#themes)) |
 | `--show-keys` | Show each key and what it did in a corner box, for recordings and screen shares |
+| `--session-launch <MODE>` | Where SSM / ECS Exec sessions open: `auto`, `window` or `inline` (see [Why read-only](#why-read-only)) |
 | `--endpoint-url <URL>` | Point at a local emulator |
 | `--demo` | Browse a made-up account offline — no credentials, no network |
 | `--no-update-check` | Skip the daily check for a newer release (see [Update check](#update-check)) |
@@ -147,166 +158,15 @@ Every flag overrides the config file for that run only.
 With no arguments and no `default_service` configured, neboto shows a welcome
 splash and loads nothing until you pick a service — so startup is instant.
 
-### Scripts and agents
-
-Subcommands run once and print instead of opening the TUI. They make the same
-read-only calls, so they're safe to hand to a script or an AI agent: nothing
-neboto can call changes an account.
-
-```sh
-neboto services                                   # every @prefix it knows
-neboto ls @ec2                                    # all EC2 resources
-neboto ls @ec2 -t volume --state available        # unattached EBS volumes
-neboto ls @iam -t role -f 'deploy'                # IAM roles, fuzzy-matched
-neboto ls @ecs -f 'tag:team=storefront' -o md     # a Markdown table
-neboto ls @lambda --demo -o json | jq '.resources[].name'
-neboto ls @ec2 -t instance --regions               # across config `regions`
-neboto ls @rds --regions=us-east-1,eu-west-1      # across these, for one run
-neboto get @lambda orders-api                     # every detail-pane section
-neboto get @iam deploy-role --section permissions -o json
-neboto get @ec2 web-1 web-2 sg-0123abcd -o md     # several, one document
-neboto audit                                      # security findings; exit 3 if any
-neboto audit --fail-on high -o json               # gate CI on high severity only
-```
-
-`ls` flags:
-
-| Flag | Effect |
-|---|---|
-| `-t`, `--type <TYPE>` | Only this resource type — the type column's text or its last word(s): `"Security Group"`, `role`, `role\|policy` |
-| `-f`, `--filter <QUERY>` | The TUI's search: fuzzy text plus exact `tag:key[=value]` terms |
-| `--state <STATE>` | Only rows in this state (`running`, `available`, …) |
-| `--hide-noise` | Drop AWS-managed defaults and other noise rows (the TUI's `a`) |
-| `--limit <N>` | At most N rows |
-| `--regions[=LIST]` | List across several regions, with a region column: bare, config `regions` plus the current region; `=a,b` names them. Regional services only. A region an SCP denies is reported (`denied`) and skipped; the command fails only when no region could be listed |
-| `-o`, `--output <FORMAT>` | `table` (default on a terminal), `json` (default when piped), `md`, `csv` |
-
-`get <@svc> <ID|NAME>...` prints what the detail pane shows — every section,
-the lazily-fetched ones included — for up to 50 resources. A resource is
-matched by exact id (or ARN, where that's its id), then exact name.
-
-| Flag | Effect |
-|---|---|
-| `-t`, `--type <TYPE>` | Pick between resources that share a name (an ECS service and its task definition), as in `ls` |
-| `--section <NAME>` | Only this section, any case; repeatable. The other sections' data isn't fetched |
-| `--wait <SECS>` | How long to wait for slow sections (default 60); anything still loading prints as not loaded, with a note on stderr |
-
-`audit` loads EC2, RDS, S3, EKS, IAM and KMS, reads the account facts and
-per-resource settings the lists don't carry, runs the same checks as the TUI's
-`@audit`, and prints the findings plus any checks that couldn't run (`-o json`
-puts those under `not_checked`, so a denied call never reads as a clean
-account).
-
-**To compare two resources**, diff two `get`s. Both come out with the same
-sections in the same order, so the diff lines up:
-
-```sh
-diff <(neboto get @lambda orders-api-prod -o md) <(neboto get @lambda orders-api-staging -o md)
-```
-
-`--section` narrows it to what you care about, and any diff tool works
-(`delta`, `vimdiff`, `git diff --no-index`).
-
-Across accounts or regions, give each side its own `-p` / `-r`. Rows that
-carry the account id or region would differ on every line, so swap those out
-first:
-
-```sh
-norm() { sed -e "s/$1/ACCOUNT/g" -e "s/$2/REGION/g"; }
-neboto get @lambda orders-api -p prod    -o md | norm 111111111111 ap-southeast-2 > prod.md
-neboto get @lambda orders-api -p staging -o md | norm 222222222222 ap-southeast-2 > staging.md
-diff prod.md staging.md
-```
-
-The two runs here go one after the other. With `<(…)` they run at once,
-which means two credential prompts at the same time if both profiles use a
-prompting `credential_process`. Each side matches the id or name in its own
-account. For an Organizations member account, use a profile that assumes into
-it (`role_arn` + `source_profile`); the CLI doesn't assume org roles itself.
-
-**For AI agents:** [`skills/neboto/SKILL.md`](skills/neboto/SKILL.md) teaches
-an agent the commands, output shapes and exit codes. For Claude Code, copy it
-to `~/.claude/skills/neboto/SKILL.md`:
-
-```sh
-mkdir -p ~/.claude/skills/neboto
-curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/skills/neboto/SKILL.md \
-  -o ~/.claude/skills/neboto/SKILL.md
-```
-
-`-r`, `-p`, `--endpoint-url`, `--demo` and `-o` work on every subcommand.
-JSON is one document carrying `"schema": "neboto/v1"`: `ls` prints `{schema,
-service, region, count, resources: [...]}`; `get` prints `{schema, service,
-region, resource, sections, tags}` for one resource, and `{…, count,
-resources: [...]}` for several. Section rows are the pane's `key: value`
-rows — readable labels and formatted values, not raw API fields — and a
-section that never loaded is `null`. `get -o csv` is one `ID,Section,Key,Value`
-row per detail row. Secret values are never fetched: the `x`/`Y` reveal has no
-CLI equivalent. Warnings go to stderr. Exit codes: `0` success (including an
-empty list), `1` an AWS error, `2` a bad service, region or section, or a
-resource that isn't there or is ambiguous, and `3` from `audit` when it
-found something at or above `--fail-on` (`high`, `medium`, `low` (the
-default) or `never`). Unlike the TUI, an unknown region
-or profile is an error rather than a fallback, so a script never gets another
-account's answer.
-
-#### Output contract
-
-What a script can rely on, and what it can't:
-
-- **Stable:** the flags; the JSON envelopes above; each `ls` row's `type`,
-  `id`, `name`, `state` and `tags`; `get`'s `resource` object and `tags`; the
-  section *names* (`.sections.Permissions`); the resource type names; the
-  service prefixes; the first four CSV columns; the exit codes. Removing or
-  renaming any of these is a breaking change: the schema moves to
-  `neboto/v2` and the release notes say so. Additions (a new section, type,
-  service or flag) can come in any release.
-- **Descriptive:** everything *inside* a section, and the extra per-type
-  columns an `ls` row carries (`"Runtime"`, `"Memory"`, …). These are the
-  pane, serialized: labels, units and grouping follow the TUI and can change
-  in any release. Read them, don't hard-code paths into them. For
-  field-level stability, the AWS API itself (`aws …` / an SDK) is the
-  contract.
-- **For people only:** `-o table` and `-o md`. Don't parse them.
-
-The stable half is pinned by a test over [`src/headless/contract.json`](src/headless/contract.json),
-so it can't change by accident.
-
----
-
-## Layout
-
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│  neboto │ EC2 │ VPC │ S3 │ IAM        ⇄ prod (123456789012)  ⦿ default  ‹› │
-├─── Sub-tabs ───────────────────────────────────────────────────────────────┤
-│  1 Instances  2 Security Groups  3 EBS  4 ENIs  5 AMIs  6 Snapshots  ›     │
-├─── Search ─────────────────────────────────────────────────────────────────┤
-│  ❯ @ec2 web                                                                │
-├──────────────────────────┬─────────────────────────────────────────────────┤
-│  Resource list (40%)     │  Split detail pane (60%)                        │
-│                          │                                                 │
-│  ● i-0abc123  web-srv    │  web-server-prod                                │
-│    i-0def456  api-srv    │  i-0abc123def456  ·  ● running  ·  t3.medium    │
-│                          ├─────────────────────────────────────────────────┤
-│                          │  1 Details 2 Security 3 Networking 4 Storage …  │
-│                          ├─────────────────────────────────────────────────┤
-│                          │  Security Groups                                │
-│                          │    Group              sg-0abc123  web-servers → │
-│                          │    IAM Role           app-server-role         → │
-├──────────────────────────┴─────────────────────────────────────────────────┤
-│ / search  ⏎ open  m metrics  W trail  N access  : commands  ? help  q quit │
-└────────────────────────────────────────────────────────────────────────────┘
-```
-
-A `→` marks a row you can press `Enter` on to follow. `Z` makes the detail pane
-full-width; `\` flattens all sections into one scroll.
-
 ---
 
 ## Keybindings
 
-`?` opens the in-app help, which is the authoritative list; type to filter it (`log`, `copy`, `mouse`). Its **Here** section lists the keys that work on the selected resource. `:` runs any of them by name: type `metrics` or `network` and press `⏎`. The essentials:
+`?` opens the in-app help, which is the authoritative list; type to filter it
+(`log`, `copy`, `mouse`). Its **Here** section lists the keys that work on the
+selected resource. `:` runs any of them by name: type `metrics` or `network`
+and press `⏎`. The status bar shows the keys that matter for the current
+selection. The essentials:
 
 ### Context
 
@@ -353,7 +213,7 @@ full-width; `\` flattens all sections into one scroll.
 | `Tab` / `Shift-Tab`, `1`–`9` | Switch section |
 | `H` / `L` | Previous / next sub-tab, staying in the detail pane |
 | `[[` / `]]` | Previous / next group header |
-| `l` `→` `⏎` | Follow the link under the cursor |
+| `l` `→` `⏎` | Follow the link under the cursor (rows marked `→`) |
 | `h` `←` `Esc` | Back to the list |
 | `⌫` `Ctrl-O` | Back through history (the footer names where: `⌫ back to EC2 i-0abc`, plus the region when going back switches it) |
 | `Ctrl-F` | Forward again, after going back (`⌃F forward to …`) |
@@ -373,7 +233,9 @@ Each takes over the keymap while open; `Esc` closes, `Z` goes full-width.
 | `m` | CloudWatch charts — `[` / `]` change the window, `r` refreshes, `c` toggles change markers (the `W` timeline's events as vertical lines) |
 | `t` | Live log tail — `[` / `]` widen the lookback, `s` flips to search |
 | `f` | Log search (server-side filter pattern) · CloudTrail event filter · ECS/execution status filter |
-| `W` | CloudTrail lens — who changed this resource; `[` / `]` widen to 90d, `a` includes reads |
+| `W` | Change timeline — CloudTrail, alarms, CloudFormation, deployments, Auto Scaling and RDS events around this resource; `f` filters by source, `[` / `]` widen to 90d, `a` includes reads |
+| `U` | Referenced by — the loaded resources that mention this one; `⏎` jumps to one |
+| `N` | Network access — the effective security group rules across every attached group, then the subnet NACLs; `t` cycles inbound / outbound |
 | `o` | S3 object browser — folders, `/` filter, `V` version history incl. delete markers, `i` metadata, `v`/`e` preview, `d` download, `p` presigned URL; `t` on a `.tfstate` opens the Terraform state viewer (one row per instance, `Enter` jumps to the live resource) |
 | `i` | DynamoDB item browser (Scan / Query, filters, GSI/LSI) · AgentCore memory session browser |
 | `s` | SSM Session Manager · ECS Exec · assume an org member-account role |
@@ -458,23 +320,23 @@ mappings, rule packs).
 
 ## Services
 
-65 services, grouped as the Console groups them. `S` opens a picker with the
-same grouping.
+Grouped as the Console groups them. `S` opens a picker with the same grouping,
+and `neboto services` prints every prefix.
 
 | Category | Services (`@prefix`) |
 |---|---|
 | **Compute** | EC2 `@ec2` · Lambda `@lambda` · Auto Scaling `@asg` · Batch `@batch` · Elastic Beanstalk `@eb` · WorkSpaces `@workspaces` |
 | **Containers** | ECS `@ecs` · EKS `@eks` · ECR `@ecr` |
-| **Storage** | S3 `@s3` · EFS `@efs` · FSx `@fsx` · Backup `@backup` · Transfer Family `@transfer` |
+| **Storage** | S3 `@s3` · S3 Files `@s3files` · S3 Tables `@s3tables` · EFS `@efs` · FSx `@fsx` · Backup `@backup` · Transfer Family `@transfer` |
 | **Database** | RDS `@rds` · DynamoDB `@ddb` · ElastiCache `@elasticache` · DMS `@dms` |
-| **Networking** | VPC `@vpc` · ELB `@elb` · Route 53 `@r53` · Route 53 Resolver `@resolver` · Route 53 Profiles `@profiles` · CloudFront `@cloudfront` · Transit Gateway `@tgw` · Direct Connect `@dx` · Global Accelerator `@ga` · API Gateway `@apigw` |
+| **Networking & Content Delivery** | VPC `@vpc` · ELB `@elb` · Route 53 `@r53` · Route 53 Resolver `@resolver` · Route 53 Profiles `@profiles` · CloudFront `@cloudfront` · Transit Gateway `@tgw` · Direct Connect `@dx` · Global Accelerator `@ga` · API Gateway `@apigw` |
 | **Security & Identity** | IAM `@iam` · Identity Center `@idc` · Cognito `@cognito` · KMS `@kms` · Secrets Manager `@secrets` · ACM `@acm` · WAF `@waf` · Network Firewall `@anfw` · GuardDuty `@gd` · Security Hub `@sh` · Inspector `@inspector` · Firewall Manager `@fms` · Audit `@audit` (findings from loaded data) |
 | **Analytics** | Athena `@athena` · Glue `@glue` · Kinesis `@kinesis` · MSK `@msk` · Redshift `@redshift` · OpenSearch `@opensearch` |
-| **ML & AI** | Bedrock `@bedrock` |
+| **ML & AI** | Bedrock `@bedrock` · Bedrock AgentCore `@agentcore` |
 | **App Integration** | SQS/SNS `@sqs` · EventBridge `@events` · Step Functions `@sfn` · SES `@ses` · AppSync `@appsync` |
-| **Management** | CloudFormation `@cfn` · CloudWatch `@cw` · X-Ray `@xray` · Changes `@changes` (what changed recently, account-wide) · CloudTrail `@cloudtrail` · AWS Config `@config` · Systems Manager `@ssm` · Organizations `@orgs` · Trusted Advisor `@ta` · Health `@health` · Service Quotas `@quotas` · Resource Explorer `@explorer` · Resource Groups `@resourcegroups` · RAM `@ram` · Control Tower `@controltower` |
-| **Developer Tools** | CodeSuite `@code` |
-| **Cost** | Cost Explorer `@cost` · Budgets `@budgets` · Invoices `@invoices` |
+| **Management & Governance** | CloudFormation `@cfn` · CloudWatch `@cw` · X-Ray `@xray` · Changes `@changes` (what changed recently, account-wide) · CloudTrail `@cloudtrail` · AWS Config `@config` · Systems Manager `@ssm` · Organizations `@orgs` · Trusted Advisor `@ta` · Health `@health` · Service Quotas `@quotas` · Resource Explorer `@explorer` · Resource Groups `@resourcegroups` · RAM `@ram` · Control Tower `@controltower` · Service Catalog `@sc` |
+| **Developer Tools** | CodeSuite `@code` (CodeCommit, CodeBuild, CodePipeline) |
+| **Cost Management** | Cost Explorer `@cost` · Budgets `@budgets` · Invoices `@invoices` |
 
 Per-service depth — which sub-tabs exist, which detail sections are lazy, which
 metrics namespace `m` uses — lives in `src/aws/services/<service>.rs`, with the
@@ -666,6 +528,133 @@ either, add an explicit deny on `ssm:StartSession` and `ecs:ExecuteCommand`.
 
 ---
 
+## Scripts and agents
+
+An experimental side of neboto: subcommands that run once and print instead of
+opening the TUI. They make the same read-only calls, so they're safe to hand to
+a script or an AI agent: nothing neboto can call changes an account.
+
+```sh
+neboto services                                   # every @prefix it knows
+neboto ls @ec2                                    # all EC2 resources
+neboto ls @ec2 -t volume --state available        # unattached EBS volumes
+neboto ls @iam -t role -f 'deploy'                # IAM roles, fuzzy-matched
+neboto ls @ecs -f 'tag:team=storefront' -o md     # a Markdown table
+neboto ls @lambda --demo -o json | jq '.resources[].name'
+neboto ls @ec2 -t instance --regions               # across config `regions`
+neboto ls @rds --regions=us-east-1,eu-west-1      # across these, for one run
+neboto get @lambda orders-api                     # every detail-pane section
+neboto get @iam deploy-role --section permissions -o json
+neboto get @ec2 web-1 web-2 sg-0123abcd -o md     # several, one document
+neboto audit                                      # security findings; exit 3 if any
+neboto audit --fail-on high -o json               # gate CI on high severity only
+```
+
+`ls` flags:
+
+| Flag | Effect |
+|---|---|
+| `-t`, `--type <TYPE>` | Only this resource type — the type column's text or its last word(s): `"Security Group"`, `role`, `role\|policy` |
+| `-f`, `--filter <QUERY>` | The TUI's search: fuzzy text plus exact `tag:key[=value]` terms |
+| `--state <STATE>` | Only rows in this state (`running`, `available`, …) |
+| `--hide-noise` | Drop AWS-managed defaults and other noise rows (the TUI's `a`) |
+| `--limit <N>` | At most N rows |
+| `--regions[=LIST]` | List across several regions, with a region column: bare, config `regions` plus the current region; `=a,b` names them. Regional services only. A region an SCP denies is reported (`denied`) and skipped; the command fails only when no region could be listed |
+| `-o`, `--output <FORMAT>` | `table` (default on a terminal), `json` (default when piped), `md`, `csv` |
+
+`get <@svc> <ID|NAME>...` prints what the detail pane shows — every section,
+the lazily-fetched ones included — for up to 50 resources. A resource is
+matched by exact id (or ARN, where that's its id), then exact name.
+
+| Flag | Effect |
+|---|---|
+| `-t`, `--type <TYPE>` | Pick between resources that share a name (an ECS service and its task definition), as in `ls` |
+| `--section <NAME>` | Only this section, any case; repeatable. The other sections' data isn't fetched |
+| `--wait <SECS>` | How long to wait for slow sections (default 60); anything still loading prints as not loaded, with a note on stderr |
+
+`audit` loads EC2, RDS, S3, EKS, IAM and KMS, reads the account facts and
+per-resource settings the lists don't carry, runs the same checks as the TUI's
+`@audit`, and prints the findings plus any checks that couldn't run (`-o json`
+puts those under `not_checked`, so a denied call never reads as a clean
+account).
+
+**To compare two resources**, diff two `get`s. Both come out with the same
+sections in the same order, so the diff lines up:
+
+```sh
+diff <(neboto get @lambda orders-api-prod -o md) <(neboto get @lambda orders-api-staging -o md)
+```
+
+`--section` narrows it to what you care about, and any diff tool works
+(`delta`, `vimdiff`, `git diff --no-index`).
+
+Across accounts or regions, give each side its own `-p` / `-r`. Rows that
+carry the account id or region would differ on every line, so swap those out
+first:
+
+```sh
+norm() { sed -e "s/$1/ACCOUNT/g" -e "s/$2/REGION/g"; }
+neboto get @lambda orders-api -p prod    -o md | norm 111111111111 ap-southeast-2 > prod.md
+neboto get @lambda orders-api -p staging -o md | norm 222222222222 ap-southeast-2 > staging.md
+diff prod.md staging.md
+```
+
+The two runs here go one after the other. With `<(…)` they run at once,
+which means two credential prompts at the same time if both profiles use a
+prompting `credential_process`. Each side matches the id or name in its own
+account. For an Organizations member account, use a profile that assumes into
+it (`role_arn` + `source_profile`); the CLI doesn't assume org roles itself.
+
+**For AI agents:** [`skills/neboto/SKILL.md`](skills/neboto/SKILL.md) teaches
+an agent the commands, output shapes and exit codes. For Claude Code, copy it
+to `~/.claude/skills/neboto/SKILL.md`:
+
+```sh
+mkdir -p ~/.claude/skills/neboto
+curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/skills/neboto/SKILL.md \
+  -o ~/.claude/skills/neboto/SKILL.md
+```
+
+`-r`, `-p`, `--endpoint-url`, `--demo` and `-o` work on every subcommand.
+JSON is one document carrying `"schema": "neboto/v1"`: `ls` prints `{schema,
+service, region, count, resources: [...]}`; `get` prints `{schema, service,
+region, resource, sections, tags}` for one resource, and `{…, count,
+resources: [...]}` for several. Section rows are the pane's `key: value`
+rows — readable labels and formatted values, not raw API fields — and a
+section that never loaded is `null`. `get -o csv` is one `ID,Section,Key,Value`
+row per detail row. Secret values are never fetched: the `x`/`Y` reveal has no
+CLI equivalent. Warnings go to stderr. Exit codes: `0` success (including an
+empty list), `1` an AWS error, `2` a bad service, region or section, or a
+resource that isn't there or is ambiguous, and `3` from `audit` when it
+found something at or above `--fail-on` (`high`, `medium`, `low` (the
+default) or `never`). Unlike the TUI, an unknown region
+or profile is an error rather than a fallback, so a script never gets another
+account's answer.
+
+### Output contract
+
+What a script can rely on, and what it can't:
+
+- **Stable:** the flags; the JSON envelopes above; each `ls` row's `type`,
+  `id`, `name`, `state` and `tags`; `get`'s `resource` object and `tags`; the
+  section *names* (`.sections.Permissions`); the resource type names; the
+  service prefixes; the first four CSV columns; the exit codes. Removing or
+  renaming any of these is a breaking change: the schema moves to
+  `neboto/v2` and the release notes say so. Additions (a new section, type,
+  service or flag) can come in any release.
+- **Descriptive:** everything *inside* a section, and the extra per-type
+  columns an `ls` row carries (`"Runtime"`, `"Memory"`, …). These are the
+  pane, serialized: labels, units and grouping follow the TUI and can change
+  in any release. Read them, don't hard-code paths into them. For
+  field-level stability, the AWS API itself (`aws …` / an SDK) is the
+  contract.
+- **For people only:** `-o table` and `-o md`. Don't parse them.
+
+The stable half is pinned by a test over [`src/headless/contract.json`](src/headless/contract.json),
+so it can't change by accident.
+
+---
+
 ## Architecture
 
 A tour for contributors lives in [`CLAUDE.md`](./CLAUDE.md); the project's own
@@ -700,6 +689,7 @@ src/
   event.rs         # the Event enum
   lazy.rs          # Lazy / LazyMap / LazyStore — the lazy-section machinery
   macros.rs        # record and replay navigation sequences
+  commands.rs      # the key table behind ? help, the : picker and the status bar
   config.rs cli.rs export.rs editor.rs error.rs
   aws/
     service.rs resource.rs client.rs cache.rs region.rs pagination.rs
@@ -720,7 +710,7 @@ src/
 ```bash
 cargo build          # debug
 cargo test           # unit tests + the offline wiring harness
-cargo clippy         # lint
+cargo clippy --all-targets -- -D warnings   # lint, as CI runs it
 cargo check          # fast type-check
 python3 scripts/check-readonly.py   # the read-only guard CI runs
 ```
