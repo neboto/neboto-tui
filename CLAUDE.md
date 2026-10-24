@@ -1171,6 +1171,11 @@ and the approaches you rejected are the part nobody can recover from your code.
 - **`src/main.rs`**: entry, main loop, tab-widget routing, tear-down for
   `$EDITOR`/SSM, overlay render dispatch.
 - **`src/event.rs`**: the `Event` enum.
+- **`src/commands.rs`**: `COMMANDS`, the key table the `?` help draws
+  from. A row's optional `Gate` is an `App::supports_*` check plus the
+  status-bar hint it shows, so the help's "Here" section and the bar's
+  conditional hints come from one place. A new `supports_*` gate needs a
+  row (a test greps for it); a new key needs a row or it isn't in `?`.
 - **`src/lazy.rs`**: `Lazy<T>`/`LazyMap<T>`/`LazyStore` — the deep module
   behind migrated lazy sections (see the canonical-pattern paragraph above).
 - **`src/macros.rs`**: `MacroStep`/`Macro`/`MacroRecorder`/`MacroPlayer` +
