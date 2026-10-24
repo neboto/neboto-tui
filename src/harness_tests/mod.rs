@@ -53,6 +53,7 @@ mod audit_test;
 mod ct_cap_test;
 mod session_role_test;
 mod mouse_hints_test;
+mod status_bar_hints_test;
 mod mouse_first_run_test;
 mod mouse_modals_test;
 mod mouse_misc_test;

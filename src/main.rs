@@ -668,6 +668,8 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
     let mut left_is_hints = false;
     // The hints on screen, in order, so each chip can be made clickable.
     let mut hints: Vec<(&str, &str)> = Vec::new();
+    let mut main_hints: Vec<(&str, &str)> = Vec::new();
+    let mut pinned_hints: Vec<(&str, &str)> = Vec::new();
     let left: Line = if let Some(note) = crate::tui::handoff_note() {
         // A credential_process has (or is about to have) the terminal. Drawing
         // pauses for it, so this line stays as drawn: no spinner.
@@ -747,41 +749,34 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
         ))
     } else {
         left_is_hints = true;
-        hints = if app.search_active {
-            vec![("⏎", "confirm"), ("Esc", "cancel"), ("@service", "switch")]
+        // Hints come in two parts. `pinned` (the way into everything else:
+        // `:`, `?`, quit) is never trimmed; `main` yields from its end when
+        // the bar is narrow. The selection's own keys (`m`, `W`, `N`…) sit
+        // in `main` after the few general ones, and every key dropped from
+        // here is still in `?` and `:`.
+        if app.search_active {
+            main_hints = vec![("⏎", "confirm"), ("Esc", "cancel"), ("@service", "switch")];
         } else if app.details_focused {
             // Kept short and stable — the detail-pane footer carries the
-            // pane-specific hints, `?` has the full reference.
-            let mut hints: Vec<(&str, &str)> =
-                vec![("j/k", "scroll"), ("y", "copy"), ("e", "editor")];
-            hints.extend(commands::status_hints(app, true));
-            hints.push(("r", "refresh"));
-            hints.extend_from_slice(&[("Esc", "back"), ("?", "help")]);
-            hints
+            // pane-specific hints.
+            main_hints = vec![("y", "copy"), ("e", "editor")];
+            main_hints.extend(commands::status_hints(app, true));
+            main_hints.extend_from_slice(&[("r", "refresh"), ("Esc", "back")]);
+            pinned_hints = vec![(":", "commands"), ("?", "help")];
         } else {
-            // @all results: no sub-tabs, and ⏎ / l part ways (jump vs peek).
-            let mut hints: Vec<(&str, &str)> = if app.all_search_mode {
-                vec![("j/k", "move"), ("⇥", "service"), ("⏎", "open"), ("l", "peek"), ("/", "search"), ("y", "copy id")]
+            // @all results: ⏎ / l part ways (jump vs peek), ⇥ steps services.
+            main_hints = if app.all_search_mode {
+                vec![("⇥", "service"), ("⏎", "open"), ("l", "peek"), ("/", "search"), ("y", "copy id")]
             } else {
-                vec![
-                    ("j/k", "move"),
-                    ("H/L", "sub-tab"),
-                    ("/", "search"),
-                    ("⏎", "details"),
-                    ("y", "copy id"),
-                ]
+                vec![("/", "search"), ("⏎", "open"), ("y", "copy id")]
             };
-            hints.extend(commands::status_hints(app, false));
+            main_hints.extend(commands::status_hints(app, false));
             if app.noise_in_view {
-                hints.push(("a", if app.hide_noise { "show all" } else { "hide noise" }));
+                main_hints.push(("a", if app.hide_noise { "show all" } else { "hide noise" }));
             }
-            hints.push(("'", "bookmarks"));
-            hints.extend_from_slice(&[("?", "help"), ("q", "quit")]);
-            hints
-        };
-        let mut line = theme::hint_line(&hints);
-        line.spans.insert(0, Span::raw(" "));
-        line
+            pinned_hints = vec![(":", "commands"), ("?", "help"), ("q", "quit")];
+        }
+        Line::default()
     };
 
     // Right segment: watch chip (when active), data age (when stale enough to
@@ -854,7 +849,21 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
     // Hints yield to the always-visible right segment, one column of air
     // between them; messages keep clipping (they are `y`-copyable in full).
     let left = if left_is_hints {
-        fit_hint_line(left, chunks[0].width.saturating_sub(1) as usize)
+        let budget = chunks[0].width.saturating_sub(1) as usize;
+        let build = |hints: &[(&str, &str)]| {
+            let mut line = theme::hint_line(hints);
+            line.spans.insert(0, Span::raw(" "));
+            line
+        };
+        loop {
+            hints = main_hints.iter().chain(&pinned_hints).copied().collect();
+            if main_hints.is_empty() || build(&hints).width() <= budget {
+                break;
+            }
+            main_hints.pop();
+        }
+        // Even the pinned hints don't fit: trim those too, from the end.
+        fit_hint_line(build(&hints), budget)
     } else {
         left
     };
