@@ -26239,7 +26239,7 @@ impl App {
             }
             offsets.push((name.clone(), lines.len()));
             lines.push(Self::flat_section_header(name));
-            lines.extend(trim_blank_edges(rows.clone()));
+            lines.extend(tidy_section_rows(rows.clone()));
         }
         (lines, offsets)
     }
@@ -26836,7 +26836,7 @@ impl App {
     /// call this directly (never `get_detail_lines`, which would recurse into
     /// the flat cache).
     fn section_detail_lines(&self) -> Vec<(String, String)> {
-        trim_blank_edges(self.section_detail_lines_padded())
+        tidy_section_rows(self.section_detail_lines_padded())
     }
 
     /// The renderer's rows as it returns them, edge spacers included.
@@ -35699,15 +35699,23 @@ mod ecr_row_jump_tests {
     }
 }
 
-/// A section's rows without its leading and trailing blank spacers, which
-/// many renderers emit. A cursor never starts on, or `G` lands on, an empty
-/// line, and the flat view spaces sections evenly however each pads itself.
-fn trim_blank_edges(mut rows: Vec<(String, String)>) -> Vec<(String, String)> {
+/// A section's rows with its spacing made even, whatever each renderer
+/// emits: no blank spacer at either end (so a cursor never starts on, or `G`
+/// lands on, an empty line, and the flat view spaces sections evenly), none
+/// straight after a group header (a heading sits on its rows), and never two
+/// in a row.
+fn tidy_section_rows(rows: Vec<(String, String)>) -> Vec<(String, String)> {
     let blank = |(k, v): &(String, String)| k.is_empty() && v.is_empty();
-    while rows.last().is_some_and(blank) {
-        rows.pop();
+    let header = |(k, v): &(String, String)| !k.is_empty() && v.is_empty() && !k.starts_with(' ');
+    let mut out: Vec<(String, String)> = Vec::with_capacity(rows.len());
+    for row in rows {
+        if blank(&row) && out.last().is_none_or(|prev| blank(prev) || header(prev)) {
+            continue;
+        }
+        out.push(row);
     }
-    let lead = rows.iter().take_while(|r| blank(r)).count();
-    rows.drain(..lead);
-    rows
+    while out.last().is_some_and(blank) {
+        out.pop();
+    }
+    out
 }

@@ -579,7 +579,7 @@ pub(super) fn ec2_security_lines(
             }
         }
     } else {
-        rows.push(("  (none)".to_string(), "No IAM instance profile attached".to_string()));
+        rows.push((String::new(), "No IAM instance profile attached".to_string()));
     }
     if let Some(mon) = &instance.monitoring_state {
         rows.push(("".to_string(), "".to_string()));
@@ -594,7 +594,7 @@ pub(super) fn ec2_security_lines(
     rows.push(("Security Groups".to_string(), "".to_string()));
     rows.push(("".to_string(), "".to_string()));
     if instance.security_groups.is_empty() {
-        rows.push(("  (none)".to_string(), "No security groups attached".to_string()));
+        rows.push((String::new(), "No security groups attached".to_string()));
     } else {
         for (id, name) in &instance.security_groups {
             rows.push((format!("  {}", id), name.clone()));
@@ -612,7 +612,7 @@ pub(super) fn ec2_networking_lines(instance: &Ec2Instance) -> Vec<(String, Strin
 
     if instance.network_interfaces.is_empty() {
         rows.push(("".to_string(), "".to_string()));
-        rows.push(("  (none)".to_string(), "No network interfaces found".to_string()));
+        rows.push((String::new(), "No network interfaces found".to_string()));
     } else {
         for (i, nic) in instance.network_interfaces.iter().enumerate() {
             rows.push(("".to_string(), "".to_string()));
@@ -663,7 +663,7 @@ pub(super) fn ec2_storage_lines(instance: &Ec2Instance) -> Vec<(String, String)>
 
     if instance.block_devices.is_empty() {
         rows.push(("".to_string(), "".to_string()));
-        rows.push(("  (none)".to_string(), "No block device mappings".to_string()));
+        rows.push((String::new(), "No block device mappings".to_string()));
     } else {
         for vol in &instance.block_devices {
             rows.push(("".to_string(), "".to_string()));
@@ -703,7 +703,7 @@ pub(super) fn ec2_tags_lines(instance: &Ec2Instance) -> Vec<(String, String)> {
     let mut rows: Vec<(String, String)> = Vec::new();
 
     if instance.tags.is_empty() {
-        rows.push(("  (none)".to_string(), "No tags".to_string()));
+        rows.push((String::new(), "No tags".to_string()));
     } else {
         let mut sorted: Vec<_> = instance.tags.iter().collect();
         sorted.sort_by_key(|(k, _)| k.as_str());
