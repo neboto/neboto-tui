@@ -239,3 +239,50 @@ async fn a_coloured_fact_keeps_its_colour_in_the_one_row_header() {
     assert_eq!(fg("HIGH (7.5)"), Some(Color::Red));
     assert_eq!(fg("us-east-1a"), Some(crate::ui::theme::text_dim()));
 }
+
+/// A security group opens on an Overview that keeps what the one-row
+/// header drops (the description, the owner), names the rules that open
+/// it to the internet, and starts the interface count's fetch on focus.
+#[tokio::test]
+async fn a_security_group_opens_on_an_overview() {
+    use aws_sdk_ec2::types::{IpPermission, IpRange};
+    let (mut app, tx, _rx) = test_app().await;
+    let rule = |port: i32, cidr: &str| {
+        IpPermission::builder()
+            .ip_protocol("tcp")
+            .from_port(port)
+            .to_port(port)
+            .ip_ranges(IpRange::builder().cidr_ip(cidr).build())
+            .build()
+    };
+    let sg = crate::aws::services::ec2::SecurityGroup::from_sdk(
+        &aws_sdk_ec2::types::SecurityGroup::builder()
+            .group_id("sg-0a1b2c3d4e5f60718")
+            .group_name("web-sg")
+            .vpc_id("vpc-0123456789abcdef0")
+            .owner_id("123456789012")
+            .description("Web tier: HTTPS from the internet")
+            .ip_permissions(rule(443, "0.0.0.0/0"))
+            .ip_permissions(rule(22, "203.0.113.0/24"))
+            .build(),
+    );
+    select_mock(&mut app, ServiceType::EC2, Box::new(sg));
+    app.details_focused = true;
+    app.reset_detail_section_to_default(&tx);
+
+    assert_eq!(app.selected_descriptor().unwrap().sections[0].label, "Overview");
+    assert!(matches!(
+        app.lazy.sg_network_interfaces.get("sg-0a1b2c3d4e5f60718"),
+        Some(crate::lazy::Lazy::Loading)
+    ));
+    let body = app.get_detail_lines();
+    let has = |k: &str, v: &str| body.iter().any(|(bk, bv)| bk == k && bv == v);
+    assert!(has("Description", "Web tier: HTTPS from the internet"), "{body:#?}");
+    assert!(has("Owner", "123456789012"), "{body:#?}");
+    assert!(has("Inbound", "2 rules"), "{body:#?}");
+    assert!(has("  ⚠ TCP port 443 open to 0.0.0.0/0", ""), "{body:#?}");
+    assert!(!body.iter().any(|(k, _)| k.contains("port 22")), "only world-open rules are listed");
+
+    app.lazy.sg_network_interfaces.apply("sg-0a1b2c3d4e5f60718".into(), Ok(Vec::new()));
+    assert!(app.get_detail_lines().iter().any(|(k, v)| k == "Network Interfaces" && v == "none — unused"));
+}

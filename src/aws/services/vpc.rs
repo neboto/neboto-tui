@@ -1534,6 +1534,22 @@ impl VpcSecurityGroup {
     }
 }
 
+impl VpcSecurityGroup {
+    pub fn view(&self) -> crate::aws::services::ec2::SgView<'_> {
+        crate::aws::services::ec2::SgView {
+            name: self.name(),
+            group_id: &self.group_id,
+            group_name: &self.group_name,
+            description: &self.description,
+            vpc_id: self.vpc_id.as_deref(),
+            owner_id: self.owner_id.as_deref(),
+            inbound: &self.inbound_rules,
+            outbound: &self.outbound_rules,
+            tags: &self.tags,
+        }
+    }
+}
+
 impl Resource for VpcSecurityGroup {
     fn security_group_ids(&self) -> Vec<String> {
         vec![self.group_id.clone()]

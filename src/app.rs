@@ -17132,7 +17132,10 @@ impl App {
     }
 
     pub(crate) fn trigger_sg_enis_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if crate::aws::services::ec2::SecurityGroupDetailSection::from_index(self.detail_section_idx) != SecurityGroupDetailSection::UsedBy {
+        if !matches!(
+            crate::aws::services::ec2::SecurityGroupDetailSection::from_index(self.detail_section_idx),
+            SecurityGroupDetailSection::Overview | SecurityGroupDetailSection::UsedBy
+        ) {
             return;
         }
         if let Some(group_id) = self.selected_security_group_id() {
@@ -28258,9 +28261,7 @@ impl App {
             {
                 return crate::ui::widgets::details_pane::security_group_section_lines(
                     crate::aws::services::ec2::SecurityGroupDetailSection::from_index(self.detail_section_idx),
-                    &sg.inbound_rules,
-                    &sg.outbound_rules,
-                    &sg.tags,
+                    &sg.view(),
                     self.lazy.sg_network_interfaces.get(&sg.group_id),
                     &self.lazy.pl_entries,
                 );
@@ -28271,9 +28272,7 @@ impl App {
             {
                 return crate::ui::widgets::details_pane::security_group_section_lines(
                     crate::aws::services::ec2::SecurityGroupDetailSection::from_index(self.detail_section_idx),
-                    &sg.inbound_rules,
-                    &sg.outbound_rules,
-                    &sg.tags,
+                    &sg.view(),
                     self.lazy.sg_network_interfaces.get(&sg.group_id),
                     &self.lazy.pl_entries,
                 );

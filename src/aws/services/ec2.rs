@@ -1627,9 +1627,42 @@ impl SecurityGroup {
     }
 }
 
+/// What the security group pane reads, borrowed from either group type
+/// (`ec2::SecurityGroup` on the EC2 tab, `vpc::VpcSecurityGroup` on the
+/// VPC tab) so both render through one header and one set of sections.
+pub struct SgView<'a> {
+    pub name: &'a str,
+    pub group_id: &'a str,
+    pub group_name: &'a str,
+    pub description: &'a str,
+    pub vpc_id: Option<&'a str>,
+    pub owner_id: Option<&'a str>,
+    pub inbound: &'a [SgRule],
+    pub outbound: &'a [SgRule],
+    pub tags: &'a HashMap<String, String>,
+}
+
+impl SecurityGroup {
+    pub fn view(&self) -> SgView<'_> {
+        SgView {
+            name: self.name(),
+            group_id: &self.group_id,
+            group_name: &self.group_name,
+            description: &self.description,
+            vpc_id: self.vpc_id.as_deref(),
+            owner_id: self.owner_id.as_deref(),
+            inbound: &self.inbound_rules,
+            outbound: &self.outbound_rules,
+            tags: &self.tags,
+        }
+    }
+}
+
 crate::sections! {
     pub enum SecurityGroupDetailSection,
     pub static SECURITY_GROUP_SECTIONS = [
+        // The ENI count is the one fact here that needs a fetch.
+        Overview "Overview" => crate::app::App::trigger_sg_enis_load,
         Inbound "Inbound" => crate::app::App::trigger_sg_prefix_lists_load,
         Outbound "Outbound" => crate::app::App::trigger_sg_prefix_lists_load,
         UsedBy "Used By" => crate::app::App::trigger_sg_enis_load,

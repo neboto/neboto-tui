@@ -721,16 +721,13 @@ pub(super) fn ec2_tags_lines(instance: &Ec2Instance) -> Vec<(String, String)> {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_security_group_split(
     app: &App,
-    name: &str,
-    group_id: &str,
-    vpc_id: Option<&str>,
-    owner_id: Option<&str>,
-    description: &str,
+    sg: &crate::aws::services::ec2::SgView,
     area: Rect,
     frame: &mut Frame,
 ) {
+    let (name, group_id, vpc_id, owner_id, description) = (sg.name, sg.group_id, sg.vpc_id, sg.owner_id, sg.description);
     let focused = app.details_focused;
-    let footer = detail_footer(app, focused, 4, "");
+    let footer = detail_footer(app, focused, 5, "");
     let mut block = theme::pane_block("Security Group", focused);
     block = block.title_bottom(
         Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
@@ -788,14 +785,14 @@ pub(super) fn render_security_group_split(
 
 pub fn security_group_section_lines(
     section: SecurityGroupDetailSection,
-    inbound: &[crate::aws::services::ec2::SgRule],
-    outbound: &[crate::aws::services::ec2::SgRule],
-    tags: &std::collections::HashMap<String, String>,
+    sg: &crate::aws::services::ec2::SgView,
     used_by: Option<&crate::lazy::Lazy<Vec<crate::aws::services::ec2::SgEni>>>,
     pl_entries: &crate::aws::services::ec2::PlEntries,
 ) -> Vec<(String, String)> {
     use crate::aws::services::ec2::sg_rule_rows_expanded;
+    let (inbound, outbound, tags) = (sg.inbound, sg.outbound, sg.tags);
     match section {
+        SecurityGroupDetailSection::Overview => sg_overview_rows(sg, used_by),
         // Rule rows already carry the sg-/pl-/CIDR token, so referenced security
         // groups are Enter-jumpable via the generic resource_jump_target.
         // Prefix-list rules gain their CIDRs underneath.
@@ -850,6 +847,58 @@ pub fn security_group_section_lines(
         }
         SecurityGroupDetailSection::Tags => tag_rows(tags),
     }
+}
+
+/// The Overview body: what the group is, how many rules it has, which of
+/// them open it to the internet, and how many interfaces carry it.
+fn sg_overview_rows(
+    sg: &crate::aws::services::ec2::SgView,
+    used_by: Option<&crate::lazy::Lazy<Vec<crate::aws::services::ec2::SgEni>>>,
+) -> Vec<(String, String)> {
+    let or_dash = |s: &str| if s.is_empty() { "—".to_string() } else { s.to_string() };
+    let rules = |n: usize| format!("{n} rule{}", if n == 1 { "" } else { "s" });
+    // vpc-/sg- values are Enter-jumpable via the generic resource_jump_target.
+    let mut rows = vec![
+        ("Group ID".to_string(), sg.group_id.to_string()),
+        ("Group Name".to_string(), or_dash(sg.group_name)),
+        ("Description".to_string(), or_dash(sg.description)),
+        ("VPC".to_string(), or_dash(sg.vpc_id.unwrap_or(""))),
+    ];
+    if let Some(owner) = sg.owner_id.filter(|o| !o.is_empty()) {
+        rows.push(("Owner".to_string(), owner.to_string()));
+    }
+
+    rows.push((String::new(), String::new()));
+    rows.push(("Rules".to_string(), String::new()));
+    rows.push(("Inbound".to_string(), rules(sg.inbound.len())));
+    rows.push(("Outbound".to_string(), rules(sg.outbound.len())));
+
+    rows.push((String::new(), String::new()));
+    rows.push(("Exposure".to_string(), String::new()));
+    let open: Vec<_> = sg.inbound.iter().filter(|r| r.is_world()).collect();
+    if open.is_empty() {
+        rows.push((String::new(), "✓ No inbound rule is open to the internet".to_string()));
+    }
+    for r in open {
+        let ports = if r.ports == "All" { "all ports".to_string() } else { format!("port {}", r.ports) };
+        rows.push((format!("  ⚠ {} {} open to {}", r.protocol, ports, r.source), String::new()));
+    }
+
+    rows.push((String::new(), String::new()));
+    rows.push(("Used By".to_string(), String::new()));
+    match used_by {
+        None | Some(crate::lazy::Lazy::Loading) => {
+            rows.push(("Network Interfaces".to_string(), "Loading…".to_string()));
+        }
+        Some(crate::lazy::Lazy::Error(e)) => rows.extend(error_rows(e)),
+        Some(crate::lazy::Lazy::Loaded(list)) if list.is_empty() => {
+            rows.push(("Network Interfaces".to_string(), "none — unused".to_string()));
+        }
+        Some(crate::lazy::Lazy::Loaded(list)) => {
+            rows.push(("Network Interfaces".to_string(), list.len().to_string()));
+        }
+    }
+    rows
 }
 
 // ── EBS volume split pane ────────────────────────────────────────────────────
