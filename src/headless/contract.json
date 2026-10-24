@@ -1343,6 +1343,7 @@
       "Failing"
     ],
     "Security Group": [
+      "Overview",
       "Inbound",
       "Outbound",
       "Used By",
@@ -1392,6 +1393,7 @@
       "Filters"
     ],
     "SecurityGroup": [
+      "Overview",
       "Inbound",
       "Outbound",
       "Used By",

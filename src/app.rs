@@ -17132,7 +17132,10 @@ impl App {
     }
 
     pub(crate) fn trigger_sg_enis_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if crate::aws::services::ec2::SecurityGroupDetailSection::from_index(self.detail_section_idx) != SecurityGroupDetailSection::UsedBy {
+        if !matches!(
+            crate::aws::services::ec2::SecurityGroupDetailSection::from_index(self.detail_section_idx),
+            SecurityGroupDetailSection::Overview | SecurityGroupDetailSection::UsedBy
+        ) {
             return;
         }
         if let Some(group_id) = self.selected_security_group_id() {
@@ -23902,6 +23905,13 @@ impl App {
         })
     }
 
+    /// A row naming the resource on screen (a pane's own `Group ID` /
+    /// `Volume ID` row): `⏎` would only re-land on it, so the generic id
+    /// classifier offers no jump there.
+    pub(crate) fn names_selected_resource(&self, id: &str) -> bool {
+        self.get_selected_resource().is_some_and(|r| r.id() == id)
+    }
+
     fn trigger_jump(
         &mut self,
         allow_cross_service: bool,
@@ -23960,6 +23970,7 @@ impl App {
                     .or_else(|| self.appsync_row_jump_target(k, v))
                     .or_else(|| {
                         crate::ui::widgets::details_pane::resource_jump_target(k, v, current)
+                            .filter(|t| !self.names_selected_resource(&t.id))
                     })
             });
         let target = match target {
@@ -28258,9 +28269,7 @@ impl App {
             {
                 return crate::ui::widgets::details_pane::security_group_section_lines(
                     crate::aws::services::ec2::SecurityGroupDetailSection::from_index(self.detail_section_idx),
-                    &sg.inbound_rules,
-                    &sg.outbound_rules,
-                    &sg.tags,
+                    &sg.view(),
                     self.lazy.sg_network_interfaces.get(&sg.group_id),
                     &self.lazy.pl_entries,
                 );
@@ -28271,9 +28280,7 @@ impl App {
             {
                 return crate::ui::widgets::details_pane::security_group_section_lines(
                     crate::aws::services::ec2::SecurityGroupDetailSection::from_index(self.detail_section_idx),
-                    &sg.inbound_rules,
-                    &sg.outbound_rules,
-                    &sg.tags,
+                    &sg.view(),
                     self.lazy.sg_network_interfaces.get(&sg.group_id),
                     &self.lazy.pl_entries,
                 );

@@ -239,3 +239,138 @@ async fn a_coloured_fact_keeps_its_colour_in_the_one_row_header() {
     assert_eq!(fg("HIGH (7.5)"), Some(Color::Red));
     assert_eq!(fg("us-east-1a"), Some(crate::ui::theme::text_dim()));
 }
+
+/// A security group opens on an Overview that keeps what the one-row
+/// header drops (the description, the owner), names the rules that open
+/// it to the internet, and starts the interface count's fetch on focus.
+#[tokio::test]
+async fn a_security_group_opens_on_an_overview() {
+    use aws_sdk_ec2::types::{IpPermission, IpRange};
+    let (mut app, tx, _rx) = test_app().await;
+    let rule = |port: i32, cidr: &str| {
+        IpPermission::builder()
+            .ip_protocol("tcp")
+            .from_port(port)
+            .to_port(port)
+            .ip_ranges(IpRange::builder().cidr_ip(cidr).build())
+            .build()
+    };
+    let sg = crate::aws::services::ec2::SecurityGroup::from_sdk(
+        &aws_sdk_ec2::types::SecurityGroup::builder()
+            .group_id("sg-0a1b2c3d4e5f60718")
+            .group_name("web-sg")
+            .vpc_id("vpc-0123456789abcdef0")
+            .owner_id("123456789012")
+            .description("Web tier: HTTPS from the internet")
+            .ip_permissions(rule(443, "0.0.0.0/0"))
+            .ip_permissions(rule(22, "203.0.113.0/24"))
+            .build(),
+    );
+    select_mock(&mut app, ServiceType::EC2, Box::new(sg));
+    app.details_focused = true;
+    app.reset_detail_section_to_default(&tx);
+
+    assert_eq!(app.selected_descriptor().unwrap().sections[0].label, "Overview");
+    assert!(matches!(
+        app.lazy.sg_network_interfaces.get("sg-0a1b2c3d4e5f60718"),
+        Some(crate::lazy::Lazy::Loading)
+    ));
+    let body = app.get_detail_lines();
+    let has = |k: &str, v: &str| body.iter().any(|(bk, bv)| bk == k && bv == v);
+    assert!(has("Description", "Web tier: HTTPS from the internet"), "{body:#?}");
+    assert!(has("Owner", "123456789012"), "{body:#?}");
+    // The header repeats these, but only body rows can be copied with `y`.
+    assert_eq!(body[0], ("Group ID".to_string(), "sg-0a1b2c3d4e5f60718".to_string()));
+    assert!(has("Group Name", "web-sg"), "{body:#?}");
+    assert!(has("  ⚠ TCP 443 open to 0.0.0.0/0", ""), "{body:#?}");
+    assert!(!body.iter().any(|(k, _)| k.contains("port 22")), "only world-open rules are flagged");
+    // The rules themselves, in the Inbound tab's table form.
+    assert!(has("Inbound (2 rules)", ""), "{body:#?}");
+    assert!(body.iter().any(|(k, _)| k.contains("22") && k.contains("→  203.0.113.0/24")), "{body:#?}");
+    assert!(has("Outbound (0 rules)", "") && has("", "No outbound rules"), "{body:#?}");
+
+    // The group's own id is no jump: ⏎ would only re-land here.
+    app.details_selected_index = Some(0);
+    let history = app.nav_history.len();
+    app.handle_key(key(KeyCode::Enter), &tx).await.unwrap();
+    assert_eq!(app.nav_history.len(), history, "Enter on the own-id row records no jump");
+    assert_eq!(app.details_selected_index, Some(0), "and leaves the cursor where it was");
+    let vpc_row = body.iter().position(|(k, _)| k == "VPC").unwrap();
+    app.details_selected_index = Some(vpc_row);
+    app.handle_key(key(KeyCode::Enter), &tx).await.unwrap();
+    assert_eq!(app.pending_jump.as_deref(), Some("vpc-0123456789abcdef0"), "the VPC row still jumps");
+
+    let (mut app, tx, _rx) = test_app().await;
+    select_mock(&mut app, ServiceType::EC2, Box::new(crate::aws::services::ec2::SecurityGroup::from_sdk(
+        &aws_sdk_ec2::types::SecurityGroup::builder().group_id("sg-0a1b2c3d4e5f60718").group_name("web-sg").build(),
+    )));
+    app.details_focused = true;
+    app.reset_detail_section_to_default(&tx);
+    app.lazy.sg_network_interfaces.apply("sg-0a1b2c3d4e5f60718".into(), Ok(Vec::new()));
+    assert!(app.get_detail_lines().iter().any(|(k, v)| k == "Network Interfaces" && v == "none — unused"));
+}
+
+/// A long rule list shows its first eight on the Overview and points at
+/// the tab that has the rest.
+#[tokio::test]
+async fn the_overview_caps_a_long_rule_list() {
+    use aws_sdk_ec2::types::{IpPermission, IpRange};
+    let (mut app, tx, _rx) = test_app().await;
+    let mut b = aws_sdk_ec2::types::SecurityGroup::builder().group_id("sg-0big").group_name("big");
+    for port in 8000..8011 {
+        b = b.ip_permissions(
+            IpPermission::builder()
+                .ip_protocol("tcp")
+                .from_port(port)
+                .to_port(port)
+                .ip_ranges(IpRange::builder().cidr_ip("10.0.0.0/8").build())
+                .build(),
+        );
+    }
+    select_mock(&mut app, ServiceType::EC2, Box::new(crate::aws::services::ec2::SecurityGroup::from_sdk(&b.build())));
+    app.details_focused = true;
+    app.reset_detail_section_to_default(&tx);
+    let body = app.get_detail_lines();
+    assert_eq!(body.iter().filter(|(k, _)| k.contains("→  10.0.0.0/8")).count(), 8, "{body:#?}");
+    assert!(body.iter().any(|(k, v)| k.is_empty() && v == "· 3 more — 2 Inbound"), "{body:#?}");
+}
+
+/// A hundred world-open rules: Exposure folds them by protocol and
+/// source, names the first ports, and counts the rest.
+#[tokio::test]
+async fn exposure_folds_a_hundred_open_rules() {
+    use aws_sdk_ec2::types::{IpPermission, IpRange, Ipv6Range};
+    let (mut app, tx, _rx) = test_app().await;
+    let mut b = aws_sdk_ec2::types::SecurityGroup::builder().group_id("sg-0open").group_name("open");
+    for port in 8000..8100 {
+        b = b.ip_permissions(
+            IpPermission::builder()
+                .ip_protocol("tcp")
+                .from_port(port)
+                .to_port(port)
+                .ip_ranges(IpRange::builder().cidr_ip("0.0.0.0/0").build())
+                .build(),
+        );
+    }
+    b = b.ip_permissions(
+        IpPermission::builder()
+            .ip_protocol("udp")
+            .from_port(53)
+            .to_port(53)
+            .ipv6_ranges(Ipv6Range::builder().cidr_ipv6("::/0").build())
+            .build(),
+    );
+    select_mock(&mut app, ServiceType::EC2, Box::new(crate::aws::services::ec2::SecurityGroup::from_sdk(&b.build())));
+    app.details_focused = true;
+    app.reset_detail_section_to_default(&tx);
+    let body = app.get_detail_lines();
+    let warnings: Vec<&str> = body.iter().filter(|(k, _)| k.starts_with("  ⚠")).map(|(k, _)| k.as_str()).collect();
+    assert_eq!(
+        warnings,
+        [
+            "  ⚠ TCP 8000, 8001, 8002, 8003, 8004, 8005, 8006, 8007 +92 more open to 0.0.0.0/0",
+            "  ⚠ UDP 53 open to ::/0",
+        ]
+    );
+    assert!(body.iter().any(|(k, v)| k.is_empty() && v == "· 101 rules open to the internet — 2 Inbound has them all"), "{body:#?}");
+}

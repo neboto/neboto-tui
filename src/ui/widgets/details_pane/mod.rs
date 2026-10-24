@@ -1150,32 +1150,14 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         r.as_any()
             .downcast_ref::<crate::aws::services::ec2::SecurityGroup>()
     }) {
-        render_security_group_split(
-            app,
-            sg.name(),
-            &sg.group_id,
-            sg.vpc_id.as_deref(),
-            sg.owner_id.as_deref(),
-            &sg.description,
-            area,
-            frame,
-        );
+        render_security_group_split(app, &sg.view(), area, frame);
         return;
     }
     if let Some(sg) = resource.and_then(|r| {
         r.as_any()
             .downcast_ref::<crate::aws::services::vpc::VpcSecurityGroup>()
     }) {
-        render_security_group_split(
-            app,
-            sg.name(),
-            &sg.group_id,
-            sg.vpc_id.as_deref(),
-            sg.owner_id.as_deref(),
-            &sg.description,
-            area,
-            frame,
-        );
+        render_security_group_split(app, &sg.view(), area, frame);
         return;
     }
     if let Some(vol) = resource.and_then(|r| {
@@ -4479,7 +4461,7 @@ fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
         .or_else(|| app.sh_row_jump_target(key, value))
         .or_else(|| app.eb_row_jump_target(key, value))
         .or_else(|| app.appsync_row_jump_target(key, value))
-        .or_else(|| resource_jump_target(key, value, current))?;
+        .or_else(|| resource_jump_target(key, value, current).filter(|t| !app.names_selected_resource(&t.id)))?;
     Some(target.service != current)
 }
 

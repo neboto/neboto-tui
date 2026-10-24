@@ -1498,6 +1498,30 @@ pub fn sg_rule_rows(label: &str, rules: &[SgRule]) -> Vec<(String, String)> {
     sg_rule_rows_expanded(label, rules, None)
 }
 
+/// `Inbound (3 rules)`: the group header over a rule table.
+pub fn sg_rules_header(label: &str, n: usize) -> String {
+    format!("{label} ({n} rule{})", if n == 1 { "" } else { "s" })
+}
+
+/// One rule as a fixed-width table line.
+pub fn sg_rule_line(r: &SgRule) -> String {
+    // A plain content line (key starts with a space, empty value) so it
+    // renders as a fixed-width table rather than a key/value pair. Source
+    // goes last so a long IPv6 CIDR or sg-id+name can't break the columns.
+    let source = match &r.source_label {
+        Some(name) if !name.is_empty() => format!("{} ({})", r.source, name),
+        _ => r.source.clone(),
+    };
+    let rule = format!("  {:<5}  {:<11}  →  {}", r.protocol, r.ports, source);
+    // Attach the per-rule description (e.g. "my home ip") to the same line
+    // after a tab; `style_detail_row` renders the trailing part as a muted
+    // note so it reads as an annotation on the rule, not another data column.
+    match &r.description {
+        Some(desc) => format!("{rule}\t{desc}"),
+        None => rule,
+    }
+}
+
 /// [`sg_rule_rows`], with each prefix-list rule followed by the CIDRs it
 /// stands for — a `pl-` id alone doesn't say what the rule allows. The
 /// first [`PL_PREVIEW_ENTRIES`] are listed; past that, a count.
@@ -1506,18 +1530,7 @@ pub fn sg_rule_rows_expanded(
     rules: &[SgRule],
     pl_entries: Option<&PlEntries>,
 ) -> Vec<(String, String)> {
-    let mut rows = vec![
-        (
-            format!(
-                "{} ({} rule{})",
-                label,
-                rules.len(),
-                if rules.len() == 1 { "" } else { "s" }
-            ),
-            String::new(),
-        ),
-        (String::new(), String::new()),
-    ];
+    let mut rows = vec![(sg_rules_header(label, rules.len()), String::new()), (String::new(), String::new())];
 
     if rules.is_empty() {
         rows.push((format!("  No {} rules", label.to_lowercase()), String::new()));
@@ -1528,19 +1541,7 @@ pub fn sg_rule_rows_expanded(
     // as a fixed-width table rather than key/value pairs. Source goes last so a
     // long IPv6 CIDR or sg-id+name can't break column alignment.
     for r in rules {
-        let source = match &r.source_label {
-            Some(name) if !name.is_empty() => format!("{} ({})", r.source, name),
-            _ => r.source.clone(),
-        };
-        let rule = format!("  {:<5}  {:<11}  →  {}", r.protocol, r.ports, source);
-        // Attach the per-rule description (e.g. "my home ip") to the same line
-        // after a tab; `style_detail_row` renders the trailing part as a muted
-        // note so it reads as an annotation on the rule, not another data column.
-        let line = match &r.description {
-            Some(desc) => format!("{rule}\t{desc}"),
-            None => rule,
-        };
-        rows.push((line, String::new()));
+        rows.push((sg_rule_line(r), String::new()));
         if let (Some(map), true) = (pl_entries, r.source.starts_with("pl-")) {
             rows.extend(pl_entry_rows(map.get(&r.source)));
         }
@@ -1627,9 +1628,42 @@ impl SecurityGroup {
     }
 }
 
+/// What the security group pane reads, borrowed from either group type
+/// (`ec2::SecurityGroup` on the EC2 tab, `vpc::VpcSecurityGroup` on the
+/// VPC tab) so both render through one header and one set of sections.
+pub struct SgView<'a> {
+    pub name: &'a str,
+    pub group_id: &'a str,
+    pub group_name: &'a str,
+    pub description: &'a str,
+    pub vpc_id: Option<&'a str>,
+    pub owner_id: Option<&'a str>,
+    pub inbound: &'a [SgRule],
+    pub outbound: &'a [SgRule],
+    pub tags: &'a HashMap<String, String>,
+}
+
+impl SecurityGroup {
+    pub fn view(&self) -> SgView<'_> {
+        SgView {
+            name: self.name(),
+            group_id: &self.group_id,
+            group_name: &self.group_name,
+            description: &self.description,
+            vpc_id: self.vpc_id.as_deref(),
+            owner_id: self.owner_id.as_deref(),
+            inbound: &self.inbound_rules,
+            outbound: &self.outbound_rules,
+            tags: &self.tags,
+        }
+    }
+}
+
 crate::sections! {
     pub enum SecurityGroupDetailSection,
     pub static SECURITY_GROUP_SECTIONS = [
+        // The ENI count is the one fact here that needs a fetch.
+        Overview "Overview" => crate::app::App::trigger_sg_enis_load,
         Inbound "Inbound" => crate::app::App::trigger_sg_prefix_lists_load,
         Outbound "Outbound" => crate::app::App::trigger_sg_prefix_lists_load,
         UsedBy "Used By" => crate::app::App::trigger_sg_enis_load,
