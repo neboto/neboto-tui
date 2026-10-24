@@ -208,7 +208,9 @@ Rich resources render a console-style split pane —
 flat `details()`. Most rich resource types use it — grep `sections! {` for the
 current set rather than trusting a count here. Simple eager panes (the U13
 batch: Vpc, NatGateway, TgwAttachment, DxLag, RdsSnapshot, FsxVolume,
-GdDetector) share the `render_simple_split` skeleton in `details_pane/mod.rs`; the
+GdDetector) share the `render_simple_split` skeleton in `details_pane/mod.rs`
+(its header is the one-row `header_line`: dot, name, state, then the
+subtitle's ` · ` facts that fit — use it for a new pane's header too); the
 Vpc and DxLag panes fill their Subnets/Gateways/Connections sections by
 **filtering sibling resources** already in `self.resources` (no extra
 fetches). Deliberately still flat: `ElasticIp` (the flat view is complete),
