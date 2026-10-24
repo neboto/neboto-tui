@@ -11,6 +11,12 @@
 //! A new `supports_*` gate goes here, on its command's row; the
 //! `every_supports_gate_is_in_the_table` test fails until it does.
 //!
+//! The `:` command picker lists the rows it can run: a gated row runs its
+//! hint key, any other row only with an explicit [`Command::runs`]. Running
+//! a row replays its key, so the picker can't do anything the keyboard
+//! can't. Rows that aren't one key (`j / k`, `Tab · 1–9`, mouse gestures)
+//! stay help-only.
+//!
 //! Labels are one line each, short labels, never sentences: help has no
 //! word wrap and truncates with `…`.
 
@@ -58,15 +64,68 @@ pub struct Gate {
     pub in_detail: bool,
 }
 
+/// The key the `:` picker presses for a row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Run {
+    Key(char),
+    Ctrl(char),
+}
+
+impl Run {
+    pub fn key_event(self) -> crossterm::event::KeyEvent {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        match self {
+            // Terminals report an uppercase letter with SHIFT, and the
+            // list-pane arms match on it (`(Char('W'), SHIFT)`).
+            Run::Key(c) if c.is_ascii_uppercase() => KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT),
+            Run::Key(c) => KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+            Run::Ctrl(c) => KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL),
+        }
+    }
+}
+
 pub struct Command {
     pub section: Section,
     pub key: &'static str,
     pub label: &'static str,
     pub gate: Option<Gate>,
+    run: Option<Run>,
+}
+
+impl Command {
+    /// Make a row runnable from the `:` picker.
+    const fn runs(mut self, run: Run) -> Self {
+        self.run = Some(run);
+        self
+    }
+
+    /// The key the picker presses: the explicit one, else a gated row's
+    /// hint key.
+    pub fn run(&self) -> Option<Run> {
+        self.run.or_else(|| {
+            let mut chars = self.gate.as_ref()?.hint.0.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => Some(Run::Key(c)),
+                _ => None,
+            }
+        })
+    }
+
+    /// Whether the picker offers this row now: it runs a key, the key means
+    /// this in the focused pane, and its gate (if any) passes.
+    pub fn runnable_in(&self, app: &App) -> bool {
+        self.run().is_some()
+            && match self.section {
+                Section::ListPane => !app.details_focused,
+                Section::DetailPane => app.details_focused,
+                _ => true,
+            }
+            && self.gate.as_ref().is_none_or(|g| (g.check)(app))
+    }
 }
 
 const fn cmd(section: Section, key: &'static str, label: &'static str) -> Command {
-    Command { section, key, label, gate: None }
+    Command { section, key, label, gate: None, run: None }
 }
 
 const fn gated(
@@ -77,9 +136,10 @@ const fn gated(
     hint: (&'static str, &'static str),
     in_detail: bool,
 ) -> Command {
-    Command { section, key, label, gate: Some(Gate { check, hint, in_detail }) }
+    Command { section, key, label, gate: Some(Gate { check, hint, in_detail }), run: None }
 }
 
+use Run::{Ctrl, Key};
 use Section::*;
 
 pub static COMMANDS: &[Command] = &[
@@ -87,20 +147,21 @@ pub static COMMANDS: &[Command] = &[
     cmd(ListPane, "gg / G", "top / bottom"),
     cmd(ListPane, "^d / ^u", "half page"),
     cmd(ListPane, "l / → / ⏎", "open details · follow →"),
-    cmd(ListPane, "⌫ / Ctrl-O", "history back"),
-    cmd(ListPane, "Ctrl-F", "history forward"),
-    cmd(ListPane, "`", "jump list (history)"),
-    cmd(ListPane, "B / '", "bookmark / bookmarks"),
+    cmd(ListPane, "⌫ / Ctrl-O", "history back").runs(Ctrl('o')),
+    cmd(ListPane, "Ctrl-F", "history forward").runs(Ctrl('f')),
+    cmd(ListPane, "`", "jump list (history)").runs(Key('`')),
+    cmd(ListPane, "B", "bookmark this").runs(Key('B')),
+    cmd(ListPane, "'", "bookmarks").runs(Key('\'')),
     cmd(ListPane, "Tab · 1–9", "sub-tabs"),
     cmd(ListPane, "H / L", "prev / next sub-tab"),
     cmd(ListPane, "V · J / K", "visual select · extend"),
     cmd(ListPane, "Ctrl-A", "select all rows"),
     cmd(ListPane, "y · X · ^X", "copy · export selection"),
-    cmd(ListPane, "a", "hide noisy rows"),
-    cmd(ListPane, "z", "cycle sort"),
-    cmd(ListPane, "F", "cycle state filter"),
-    cmd(ListPane, "w", "watch mode (+/- interval)"),
-    cmd(ListPane, "r / F5", "refresh service"),
+    cmd(ListPane, "a", "hide noisy rows").runs(Key('a')),
+    cmd(ListPane, "z", "cycle sort").runs(Key('z')),
+    cmd(ListPane, "F", "cycle state filter").runs(Key('F')),
+    cmd(ListPane, "w", "watch mode (+/- interval)").runs(Key('w')),
+    cmd(ListPane, "r / F5", "refresh service").runs(Key('r')),
     cmd(DetailPane, "Tab · 1–9", "sections"),
     cmd(DetailPane, "H / L", "prev / next sub-tab"),
     cmd(DetailPane, "h / ← / Esc", "back to list"),
@@ -109,14 +170,14 @@ pub static COMMANDS: &[Command] = &[
     cmd(DetailPane, "V · J / K", "visual select · extend"),
     cmd(DetailPane, "Ctrl-A", "select all"),
     cmd(DetailPane, "y / c", "copy selection or row"),
-    cmd(DetailPane, "\\", "flat view (all sections)"),
-    cmd(DetailPane, "Ctrl-W", "wrap long values"),
-    cmd(DetailPane, "Z", "full-width pane"),
-    cmd(DetailPane, "r", "refresh this resource"),
-    cmd(Actions, "O", "open in AWS Console"),
-    cmd(Actions, "y", "copy ARN / id"),
-    cmd(Actions, "C", "copy a CLI command (read · connect · change)"),
-    cmd(Actions, "e", "open in $EDITOR"),
+    cmd(DetailPane, "\\", "flat view (all sections)").runs(Key('\\')),
+    cmd(DetailPane, "Ctrl-W", "wrap long values").runs(Ctrl('w')),
+    cmd(DetailPane, "Z", "full-width pane").runs(Key('Z')),
+    cmd(DetailPane, "r", "refresh this resource").runs(Key('r')),
+    cmd(Actions, "O", "open in AWS Console").runs(Key('O')),
+    cmd(Actions, "y", "copy ARN / id").runs(Key('y')),
+    cmd(Actions, "C", "copy a CLI command (read · connect · change)").runs(Key('C')),
+    cmd(Actions, "e", "open in $EDITOR").runs(Key('e')),
     gated(
         Actions,
         "m",
@@ -126,7 +187,7 @@ pub static COMMANDS: &[Command] = &[
         true,
     ),
     gated(Actions, "t", "live log tail ([/] window)", App::supports_log_tail, ("t", "tail"), true),
-    cmd(Actions, "f", "log search · event filter"),
+    cmd(Actions, "f", "log search · event filter").runs(Key('f')),
     gated(
         Actions,
         "W",
@@ -177,19 +238,23 @@ pub static COMMANDS: &[Command] = &[
         ("x", "test answer"),
         false,
     ),
-    cmd(Actions, "d", "download Lambda package"),
-    cmd(Actions, "X / ^X", "export detail / list"),
-    cmd(Actions, "M", "message history"),
-    cmd(Actions, ",", "macros (⏎ run · n record)"),
-    cmd(Actions, "b", "toggle banner"),
+    cmd(Actions, "d", "download Lambda package").runs(Key('d')),
+    cmd(Actions, "X", "export (detail · selected rows)").runs(Key('X')),
+    cmd(Actions, "^X", "export the list").runs(Ctrl('x')),
+    cmd(Actions, "M", "message history").runs(Key('M')),
+    cmd(Actions, ",", "macros (⏎ run · n record)").runs(Key(',')),
+    cmd(Actions, "b", "toggle banner").runs(Key('b')),
+    cmd(Actions, ":", "command picker (run a key by name)"),
     cmd(Actions, "? / q", "help (type to filter) / quit"),
-    cmd(Search, "/", "fuzzy search"),
-    cmd(Search, "@svc text", "switch service + search"),
+    cmd(Search, "/", "fuzzy search").runs(Key('/')),
+    cmd(Search, "@svc text", "switch service + search").runs(Key('@')),
     cmd(Search, "@all text", "search all cached services (⇥ steps through them)"),
     cmd(Search, "tag:k=v", "exact tag filter"),
     cmd(Search, "Tab", "complete @prefix"),
     cmd(Search, "↑ / ↓", "earlier searches (this session)"),
-    cmd(Context, "S / R / P", "service / region / profile"),
+    cmd(Context, "S", "switch service").runs(Key('S')),
+    cmd(Context, "R", "switch region").runs(Key('R')),
+    cmd(Context, "P", "switch profile").runs(Key('P')),
     cmd(Context, "@ec2 …", "switch via prefix"),
     gated(
         Context,
@@ -222,6 +287,23 @@ pub fn in_section(section: Section) -> impl Iterator<Item = &'static Command> {
 /// the help's "Here" section.
 pub fn available(app: &App) -> impl Iterator<Item = &'static Command> + '_ {
     COMMANDS.iter().filter(|c| c.gate.as_ref().is_some_and(|g| (g.check)(app)))
+}
+
+/// What the `:` picker lists for `query`: with no query, the rows that work
+/// on the selection ("Here") first, then the rest in table order; with one,
+/// best match first over key, label and section title (an exact key match
+/// wins, so `:m` puts metrics on top).
+pub fn picker_rows(app: &App, query: &str) -> Vec<&'static Command> {
+    let rows: Vec<&'static Command> = COMMANDS.iter().filter(|c| c.runnable_in(app)).collect();
+    if query.trim().is_empty() {
+        let (here, rest): (Vec<_>, Vec<_>) = rows.into_iter().partition(|c| c.gate.is_some());
+        return here.into_iter().chain(rest).collect();
+    }
+    crate::search::fuzzy::FuzzyMatcher::new()
+        .filter_fields(query, &rows, |c| vec![c.key, c.label, c.section.title()])
+        .into_iter()
+        .map(|(i, _)| rows[i])
+        .collect()
 }
 
 /// The status bar's conditional hints for the focused pane.
@@ -263,6 +345,33 @@ mod tests {
                     g.hint.0
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_gated_row_runs_its_hint_key() {
+        let m = COMMANDS.iter().find(|c| c.key == "m").unwrap();
+        assert_eq!(m.run(), Some(Run::Key('m')));
+        let reveal = COMMANDS.iter().find(|c| c.key == "x / Y").unwrap();
+        assert_eq!(reveal.run(), Some(Run::Key('x')));
+        let moves = COMMANDS.iter().find(|c| c.key == "j / k ↑ / ↓").unwrap();
+        assert_eq!(moves.run(), None, "not one key: help only");
+    }
+
+    #[test]
+    fn an_explicit_run_is_one_of_the_rows_keys() {
+        // `⌫ / Ctrl-O` runs Ctrl-O; `r / F5` runs r; `@svc text` runs @.
+        for c in COMMANDS.iter().filter(|c| c.run.is_some()) {
+            let shown = match c.run.unwrap() {
+                Run::Key(k) => k.to_string(),
+                Run::Ctrl(k) => format!("Ctrl-{}", k.to_ascii_uppercase()),
+            };
+            let alt = shown.replace("Ctrl-", "^");
+            assert!(
+                c.key.split([' ', '/']).any(|k| k == shown || k == alt) || c.key.starts_with(&shown),
+                "row {:?} runs {shown:?}",
+                c.key
+            );
         }
     }
 

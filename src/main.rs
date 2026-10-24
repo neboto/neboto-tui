@@ -531,6 +531,8 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
         help_overlay::render_help_overlay(app, frame);
     }
 
+    crate::ui::widgets::command_picker::render_command_picker(app, frame);
+
     // Render region selector if visible
     if app.region_selector.visible {
         // Add this block

@@ -306,7 +306,7 @@ full-width; `\` flattens all sections into one scroll.
 
 ## Keybindings
 
-`?` opens the in-app help, which is the authoritative list; type to filter it (`log`, `copy`, `mouse`). The essentials:
+`?` opens the in-app help, which is the authoritative list; type to filter it (`log`, `copy`, `mouse`). Its **Here** section lists the keys that work on the selected resource. `:` runs any of them by name: type `metrics` or `network` and press `⏎`. The essentials:
 
 ### Context
 
@@ -322,6 +322,7 @@ full-width; `\` flattens all sections into one scroll.
 | `B` / `'` | Bookmark this location / open bookmarks |
 | `M` | Message history (past errors and toasts, `y`-copyable) |
 | `\` | Toggle flat detail view (all sections in one scroll) |
+| `:` | Command picker: run a key by name (only what works here) |
 | `b` / `?` / `q` | Banner / help / quit |
 
 ### List pane

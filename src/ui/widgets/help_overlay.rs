@@ -4,7 +4,7 @@ use crate::search::fuzzy::FuzzyMatcher;
 use crate::ui::theme;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
         Clear, Paragraph,
@@ -120,9 +120,9 @@ pub fn render_help_overlay(app: &App, frame: &mut Frame) {
     let mut block = theme::popup_block("Help").title_bottom(
         Line::from(Span::styled(
             if max_scroll > 0 {
-                " type to filter · ↑/↓ scroll · Esc close "
+                " type to filter · : run a command · ↑/↓ scroll · Esc close "
             } else {
-                " type to filter · Esc close "
+                " type to filter · : run a command · Esc close "
             },
             Style::default().fg(theme::text_dim()),
         ))
@@ -145,7 +145,7 @@ pub fn render_help_overlay(app: &App, frame: &mut Frame) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(inner);
-    frame.render_widget(Paragraph::new(filter_line(query)), rows[0]);
+    frame.render_widget(Paragraph::new(filter_line(query, rows[0].width as usize)), rows[0]);
 
     if let Some(lines) = filtered {
         let body = Layout::default()
@@ -172,21 +172,38 @@ pub fn render_help_overlay(app: &App, frame: &mut Frame) {
     );
 }
 
-/// The filter row: the query with a cursor, or a dim placeholder.
-fn filter_line(query: &str) -> Line<'static> {
-    let prompt = Span::styled("  / ", Style::default().fg(theme::accent()));
+/// The filter row: the query with a cursor (or a dim placeholder) on the
+/// left, and the `:` command picker called out on the right, set apart so
+/// it's the first thing a reader of the help notices. It gives way to the
+/// query when the row is too narrow for both.
+fn filter_line(query: &str, width: usize) -> Line<'static> {
+    let mut spans = vec![Span::styled("  / ", Style::default().fg(theme::accent()))];
     if query.is_empty() {
-        Line::from(vec![
-            prompt,
-            Span::styled("type to filter keys", Style::default().fg(theme::text_dim())),
-        ])
+        spans.push(Span::styled("type to filter keys", Style::default().fg(theme::text_dim())));
     } else {
-        Line::from(vec![
-            prompt,
-            Span::styled(query.to_string(), Style::default().fg(theme::text_primary())),
-            Span::styled("▏", Style::default().fg(theme::accent())),
-        ])
+        spans.push(Span::styled(query.to_string(), Style::default().fg(theme::text_primary())));
+        spans.push(Span::styled("▏", Style::default().fg(theme::accent())));
     }
+    let tip = [
+        Span::styled(
+            " : ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(theme::accent())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " run any key by name ",
+            Style::default().fg(theme::accent()).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    let used: usize = spans.iter().map(|s| s.width()).sum();
+    let tip_w: usize = tip.iter().map(|s| s.width()).sum();
+    if used + 2 + tip_w < width {
+        spans.push(Span::raw(" ".repeat(width - used - tip_w - 1)));
+        spans.extend(tip);
+    }
+    Line::from(spans)
 }
 
 /// Build one column's lines: section titles + `key  description` rows with

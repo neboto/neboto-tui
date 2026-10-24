@@ -112,3 +112,20 @@ async fn help_leads_with_what_works_on_the_selection() {
     assert!(here.iter().any(|r| r.starts_with("x / Y")), "{here:?}");
     assert!(!here.iter().any(|r| r.starts_with("s ") || r.starts_with("N ")), "{here:?}");
 }
+
+#[tokio::test]
+async fn help_calls_out_the_command_picker_and_colon_opens_it() {
+    let (mut app, tx, _rx) = test_app().await;
+    press(&mut app, &tx, KeyCode::Char('?')).await;
+    let screen = screen_of(&app);
+    assert!(screen.contains(" :  run any key by name "), "{screen}");
+    assert!(screen.contains(": run a command"), "footer: {screen}");
+
+    // Mid-filter `:` is text; on an empty filter it opens the picker.
+    press(&mut app, &tx, KeyCode::Char('a')).await;
+    press(&mut app, &tx, KeyCode::Char(':')).await;
+    assert_eq!(app.help_query, "a:");
+    press(&mut app, &tx, KeyCode::Esc).await;
+    press(&mut app, &tx, KeyCode::Char(':')).await;
+    assert!(!app.help_visible && app.command_picker.visible);
+}
