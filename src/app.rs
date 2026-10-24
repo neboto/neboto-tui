@@ -5846,8 +5846,9 @@ impl App {
         // you type, like the pickers, so letters are text — `j`/`k` included;
         // the arrows and page keys scroll (the render pass records the max in
         // `help_max_scroll` so the handler can clamp without the popup height).
-        // `Esc` clears a filter, then closes; `?` closes only while the filter
-        // is empty. Other keys still fall through.
+        // `Esc` clears a filter, then closes; `?` closes and `:` opens the
+        // command picker, both only while the filter is empty. Other keys
+        // still fall through.
         if self.help_visible {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
             let max = self.help_max_scroll.get();
@@ -5862,6 +5863,12 @@ impl App {
                     return Ok(());
                 }
                 KeyCode::Char('?') if self.help_query.is_empty() => {}
+                // The help's call-out: `:` hands over to the command picker.
+                KeyCode::Char(':') if self.help_query.is_empty() => {
+                    self.help_visible = false;
+                    self.command_picker.show();
+                    return Ok(());
+                }
                 KeyCode::Char('d') if ctrl => {
                     self.help_scroll = (self.help_scroll + 10).min(max);
                     return Ok(());
