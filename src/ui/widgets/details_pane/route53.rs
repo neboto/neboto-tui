@@ -5,7 +5,7 @@ use super::*;
 pub(super) fn render_r53_zone_split(app: &App, zone: &R53HostedZone, area: Rect, frame: &mut Frame) {
     let focused = app.details_focused;
 
-    let footer = detail_footer(app, focused, 3, "");
+    let footer = detail_footer(app, focused, 5, "");
 
     let mut block = theme::pane_block("R53 Hosted Zone", focused);
     block = block.title_bottom(
@@ -38,7 +38,7 @@ pub(super) fn render_r53_zone_split(app: &App, zone: &R53HostedZone, area: Rect,
     render_split_section_body(app, chunks[4], frame);
 }
 
-pub(super) fn build_r53_zone_header_lines(zone: &R53HostedZone) -> Vec<Line<'static>> {
+pub(crate) fn build_r53_zone_header_lines(zone: &R53HostedZone) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     // Zone name — bold primary identifier
@@ -70,17 +70,8 @@ pub(super) fn build_r53_zone_header_lines(zone: &R53HostedZone) -> Vec<Line<'sta
         ),
     ]));
 
-    // Zone ID
-    lines.push(header_kv("Zone ID", zone.bare_id()));
-
-    // Comment if present
-    if !zone.comment.is_empty() {
-        lines.push(Line::from(vec![
-            Span::raw(" "),
-            Span::styled(zone.comment.clone(), Style::default().fg(theme::text_dim())),
-        ]));
-    }
-
+    // Zone ID and comment are Overview rows (the one-row header had no
+    // room for them anyway).
     lines
 }
 
@@ -100,13 +91,193 @@ pub fn r53_zone_section_lines(
     sharing_state: Option<
         &crate::lazy::Lazy<Box<crate::aws::services::route53::R53ZoneDetail>>,
     >,
+    region: &str,
 ) -> Vec<(String, String)> {
     match section {
+        R53ZoneDetailSection::Overview => {
+            r53_zone_overview_lines(zone, records_state, sharing_state, region)
+        }
         R53ZoneDetailSection::Records => r53_records_lines(records_state),
         R53ZoneDetailSection::Sharing => r53_sharing_lines(zone, sharing_state),
         R53ZoneDetailSection::Info => r53_info_lines(zone, sharing_state),
         R53ZoneDetailSection::Tags => r53_tags_lines(sharing_state),
     }
+}
+
+/// Records shown in the zone Overview's preview; the rest are a count
+/// pointing at the Records tab.
+const R53_OVERVIEW_RECORDS: usize = 8;
+/// Name servers / VPC associations shown before a `· N more` pointer. A
+/// delegation set has four name servers, so that cap is only a backstop.
+const R53_OVERVIEW_NAME_SERVERS: usize = 4;
+const R53_OVERVIEW_VPCS: usize = 5;
+
+/// `n / limit (x%)` once the zone's limit is known (`⚠` from 90%), the bare
+/// count before. Shared by Overview and Info.
+fn r53_record_count_value(zone: &R53HostedZone, limit: Option<i64>) -> String {
+    match limit {
+        Some(limit) if limit > 0 => {
+            let pct = zone.record_count as f64 * 100.0 / limit as f64;
+            let flag = if pct >= 90.0 { " ⚠" } else { "" };
+            format!("{} / {} ({:.0}%){}", zone.record_count, limit, pct, flag)
+        }
+        _ => zone.record_count.to_string(),
+    }
+}
+
+/// The zone pane's first section: the zone's identity, a summary of the
+/// detail bundle (record count against the limit, DNSSEC, query logging,
+/// VPC associations), its name servers, then the first records in the
+/// Records tab's own row format.
+pub(super) fn r53_zone_overview_lines(
+    zone: &R53HostedZone,
+    records_state: Option<&crate::lazy::Lazy<Vec<crate::aws::services::route53::R53Record>>>,
+    detail_state: Option<&crate::lazy::Lazy<Box<crate::aws::services::route53::R53ZoneDetail>>>,
+    region: &str,
+) -> Vec<(String, String)> {
+    use crate::lazy::Lazy;
+    let or_dash = |s: &str| if s.is_empty() { "—".to_string() } else { s.to_string() };
+    // The header repeats some of these, but in the detail pane `y` copies
+    // the cursor row, so only a body row can be copied.
+    let mut rows = vec![
+        ("Zone ID".to_string(), zone.bare_id().to_string()),
+        ("Zone Name".to_string(), zone.name.clone()),
+        ("Type".to_string(), zone.zone_type().to_string()),
+        ("Comment".to_string(), or_dash(&zone.comment)),
+    ];
+
+    let detail = match detail_state {
+        Some(Lazy::Loaded(d)) => Some(d),
+        _ => None,
+    };
+
+    rows.push((String::new(), String::new()));
+    rows.push(("Summary".to_string(), String::new()));
+    let limit = detail.and_then(|d| d.record_limit);
+    rows.push(("Records".to_string(), r53_record_count_value(zone, limit)));
+    if let Some(limit) = limit.filter(|&l| l > 0 && zone.record_count * 10 >= l * 9) {
+        rows.push((
+            format!("  ⚠ {} of {} records used — near the zone's limit", zone.record_count, limit),
+            String::new(),
+        ));
+    }
+    match detail_state {
+        None | Some(Lazy::Loading) => {
+            rows.push(("Query Logging".to_string(), "Loading…".to_string()));
+        }
+        Some(Lazy::Error(e)) => rows.extend(error_rows(e)),
+        Some(Lazy::Loaded(d)) => {
+            if !zone.private_zone {
+                match &d.dnssec {
+                    Some(ds) => {
+                        let v = match ds.status.as_str() {
+                            "SIGNING" => "✓ signing".to_string(),
+                            "NOT_SIGNING" => "not signing".to_string(),
+                            other => format!("⚠ {other}"),
+                        };
+                        rows.push(("DNSSEC".to_string(), v));
+                        if !matches!(ds.status.as_str(), "SIGNING" | "NOT_SIGNING") {
+                            let why = ds
+                                .status_message
+                                .as_deref()
+                                .filter(|m| !m.is_empty())
+                                .unwrap_or("signing needs attention — 4 Info");
+                            rows.push((format!("  ⚠ DNSSEC: {why}"), String::new()));
+                        }
+                    }
+                    None => rows.push(("DNSSEC".to_string(), "· status unavailable".to_string())),
+                }
+            }
+            // The group's name, so ⏎ jumps to it in CloudWatch
+            // (`r53_row_jump_target`) — only when it lives in this region;
+            // Route 53 writes query logs to us-east-1, and `t` tails them
+            // from anywhere.
+            rows.push((
+                "Query Logging".to_string(),
+                match &d.query_log_group {
+                    Some((group, r)) if r == region => group.clone(),
+                    Some((group, r)) => format!("{group} ({r})"),
+                    None => "off".to_string(),
+                },
+            ));
+            if zone.private_zone {
+                rows.push((String::new(), String::new()));
+                rows.push((format!("VPC Associations ({})", d.associated.len()), String::new()));
+                if d.associated.is_empty() {
+                    rows.push((String::new(), "No associated VPCs".to_string()));
+                }
+                // vpc- values are ⏎-jumpable (same-region ones resolve).
+                for v in d.associated.iter().take(R53_OVERVIEW_VPCS) {
+                    rows.push(("VPC".to_string(), v.vpc_id.clone()));
+                }
+                if d.associated.len() > R53_OVERVIEW_VPCS {
+                    rows.push((
+                        String::new(),
+                        format!("· {} more — 3 Sharing", d.associated.len() - R53_OVERVIEW_VPCS),
+                    ));
+                }
+                // Cross-account VPCs cleared to associate but not associated
+                // (an authorization can outlive its association; those aren't
+                // pending).
+                let pending = d
+                    .authorized
+                    .iter()
+                    .filter(|a| !d.associated.iter().any(|v| v.vpc_id == a.vpc_id))
+                    .count();
+                if pending > 0 {
+                    rows.push((
+                        String::new(),
+                        format!("· {pending} authorized, not yet associated — 3 Sharing"),
+                    ));
+                }
+            } else {
+                rows.push((String::new(), String::new()));
+                rows.push((format!("Name Servers ({})", d.name_servers.len()), String::new()));
+                if d.name_servers.is_empty() {
+                    rows.push((String::new(), "No name servers reported".to_string()));
+                }
+                for ns in d.name_servers.iter().take(R53_OVERVIEW_NAME_SERVERS) {
+                    rows.push((format!("  {ns}"), String::new()));
+                }
+                if d.name_servers.len() > R53_OVERVIEW_NAME_SERVERS {
+                    rows.push((
+                        String::new(),
+                        format!(
+                            "· {} more — 4 Info",
+                            d.name_servers.len() - R53_OVERVIEW_NAME_SERVERS
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    rows.push((String::new(), String::new()));
+    rows.push((format!("Records ({})", zone.record_count), String::new()));
+    match records_state {
+        Some(Lazy::Loaded(records)) if records.is_empty() => {
+            rows.push((String::new(), "No records".to_string()));
+        }
+        Some(Lazy::Loaded(records)) => {
+            rows.push(r53_records_header_row());
+            for record in records.iter().take(R53_OVERVIEW_RECORDS) {
+                rows.extend(r53_record_rows(record));
+            }
+            if records.len() > R53_OVERVIEW_RECORDS {
+                rows.push((
+                    String::new(),
+                    format!("· {} more — 2 Records", records.len() - R53_OVERVIEW_RECORDS),
+                ));
+            }
+        }
+        Some(Lazy::Error(e)) => rows.extend(error_rows(e)),
+        // Too many to page on a drill-in: the Overview's hook skips them.
+        _ if zone.record_count > crate::app::MAX_R53_TAB_ZONE_RECORDS => {
+            rows.push((String::new(), "· not previewed for a zone this size — 2 Records".to_string()));
+        }
+        _ => rows.push(("  Loading…".to_string(), String::new())),
+    }
+    rows
 }
 
 pub(super) fn r53_sharing_lines(
@@ -200,67 +371,78 @@ pub(super) fn r53_records_lines(records_state: Option<&crate::lazy::Lazy<Vec<cra
                 // value slot so an S3-website alias remains ⏎-jumpable, and
                 // ⏎ on any row opens the record's own pane on the Records
                 // tab (`r53_row_jump_target`), where nothing is truncated.
-                rows.push((
-                    format!("  {:<6} {}", "TYPE", "NAME"),
-                    "VALUE · TTL".to_string(),
-                ));
-
+                rows.push(r53_records_header_row());
                 for record in records {
-                    let ttl = record.ttl
-                        .map(|t| t.to_string())
-                        .unwrap_or_else(|| "alias".to_string());
-
-                    // Collect all values (alias counts as one value)
-                    let all_values: Vec<&str> = if let Some(alias) = &record.alias_target {
-                        vec![alias.as_str()]
-                    } else {
-                        record.values.iter().map(|s| s.as_str()).collect()
-                    };
-
-                    // Char-based truncation: a byte slice panics on a
-                    // multi-byte character at the boundary (TXT records).
-                    let first = cost_trunc(all_values.first().copied().unwrap_or("—"), 40);
-                    rows.push((
-                        format!("  {:<6} {}", record.record_type, record.relative_name()),
-                        format!("{first} · {ttl}"),
-                    ));
-
-                    // Continuation rows for multi-value records (NS, MX, TXT, …):
-                    // a blank (non-empty) key keeps the key-value shape so the
-                    // value aligns under the first row's.
-                    for val in all_values.iter().skip(1) {
-                        rows.push(("        ".to_string(), cost_trunc(val, 40)));
-                    }
-
-                    // Without these, every record in a weighted/latency/failover
-                    // set renders as an identical row — the set identifier is the
-                    // only thing that tells them apart.
-                    if let Some(summary) = record.routing_summary() {
-                        rows.push((format!("      ↳ {summary}"), String::new()));
-                    }
-                    if record.alias_target.is_some() && record.evaluate_target_health {
-                        rows.push((
-                            "      ↳ evaluates target health".to_string(),
-                            String::new(),
-                        ));
-                    }
-                    if let Some(tp) = &record.traffic_policy_instance_id {
-                        rows.push((
-                            format!("      ↳ managed by traffic policy {tp}"),
-                            String::new(),
-                        ));
-                    }
-                    // A labelled key-value row, not a `↳` annotation, so
-                    // `r53_row_jump_target` can route ⏎ to the Health Checks tab.
-                    if let Some(hc) = &record.health_check_id {
-                        rows.push(("      Health Check".to_string(), hc.clone()));
-                    }
+                    rows.extend(r53_record_rows(record));
                 }
             }
         }
     }
 
     rows.push(("".to_string(), "".to_string()));
+    rows
+}
+
+/// The Records table's column header (`TYPE NAME : VALUE · TTL`).
+fn r53_records_header_row() -> (String, String) {
+    (format!("  {:<6} {}", "TYPE", "NAME"), "VALUE · TTL".to_string())
+}
+
+/// One record's rows in the Records table: the `  TYPE relname : first ·
+/// ttl` row (`r53_zone_record_row_target` keys ⏎ on that shape), value
+/// continuations and `↳` routing annotations. Shared by the Records
+/// section and the Overview's preview.
+fn r53_record_rows(record: &crate::aws::services::route53::R53Record) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    let ttl = record.ttl
+        .map(|t| t.to_string())
+        .unwrap_or_else(|| "alias".to_string());
+
+    // Collect all values (alias counts as one value)
+    let all_values: Vec<&str> = if let Some(alias) = &record.alias_target {
+        vec![alias.as_str()]
+    } else {
+        record.values.iter().map(|s| s.as_str()).collect()
+    };
+
+    // Char-based truncation: a byte slice panics on a
+    // multi-byte character at the boundary (TXT records).
+    let first = cost_trunc(all_values.first().copied().unwrap_or("—"), 40);
+    rows.push((
+        format!("  {:<6} {}", record.record_type, record.relative_name()),
+        format!("{first} · {ttl}"),
+    ));
+
+    // Continuation rows for multi-value records (NS, MX, TXT, …):
+    // a blank (non-empty) key keeps the key-value shape so the
+    // value aligns under the first row's.
+    for val in all_values.iter().skip(1) {
+        rows.push(("        ".to_string(), cost_trunc(val, 40)));
+    }
+
+    // Without these, every record in a weighted/latency/failover
+    // set renders as an identical row — the set identifier is the
+    // only thing that tells them apart.
+    if let Some(summary) = record.routing_summary() {
+        rows.push((format!("      ↳ {summary}"), String::new()));
+    }
+    if record.alias_target.is_some() && record.evaluate_target_health {
+        rows.push((
+            "      ↳ evaluates target health".to_string(),
+            String::new(),
+        ));
+    }
+    if let Some(tp) = &record.traffic_policy_instance_id {
+        rows.push((
+            format!("      ↳ managed by traffic policy {tp}"),
+            String::new(),
+        ));
+    }
+    // A labelled key-value row, not a `↳` annotation, so
+    // `r53_row_jump_target` can route ⏎ to the Health Checks tab.
+    if let Some(hc) = &record.health_check_id {
+        rows.push(("      Health Check".to_string(), hc.clone()));
+    }
     rows
 }
 
@@ -280,17 +462,10 @@ pub(super) fn r53_info_lines(
     };
 
     // Record count against the zone's ceiling once the limit is known.
-    match detail.and_then(|d| d.record_limit) {
-        Some(limit) if limit > 0 => {
-            let pct = zone.record_count as f64 * 100.0 / limit as f64;
-            let flag = if pct >= 90.0 { " ⚠" } else { "" };
-            rows.push((
-                "Records".to_string(),
-                format!("{} / {} ({:.0}%){}", zone.record_count, limit, pct, flag),
-            ));
-        }
-        _ => rows.push(("Records".to_string(), zone.record_count.to_string())),
-    }
+    rows.push((
+        "Records".to_string(),
+        r53_record_count_value(zone, detail.and_then(|d| d.record_limit)),
+    ));
 
     if !zone.comment.is_empty() {
         rows.push(("Comment".to_string(), zone.comment.clone()));
