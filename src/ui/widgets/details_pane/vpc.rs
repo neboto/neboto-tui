@@ -395,7 +395,7 @@ pub fn route_table_section_lines(
 
 pub(super) fn render_network_acl_split(app: &App, acl: &NetworkAcl, area: Rect, frame: &mut Frame) {
     let focused = app.details_focused;
-    let footer = detail_footer(app, focused, 4, "");
+    let footer = detail_footer(app, focused, 5, "");
 
     let mut block = theme::pane_block("Network ACL", focused);
     block = block.title_bottom(
@@ -456,9 +456,6 @@ pub(super) fn build_network_acl_header_lines(acl: &NetworkAcl) -> Vec<Line<'stat
 
     lines.push(Line::raw(""));
     lines.push(header_kv("VPC", &acl.vpc_id));
-    lines.push(header_kv("Inbound Rules", &acl.inbound_entries.len().to_string()));
-    lines.push(header_kv("Outbound Rules", &acl.outbound_entries.len().to_string()));
-    lines.push(header_kv("Associations", &acl.associations.len().to_string()));
     lines.push(Line::raw(""));
     lines
 }
@@ -467,45 +464,116 @@ pub(super) fn render_network_acl_section_tabs(app: &App, area: Rect, frame: &mut
     render_section_tab_bar(app, area, frame, &descriptor_tabs(app, &crate::aws::services::vpc::NETWORK_ACL_SECTIONS));
 }
 
+/// The ACL's rule number AWS gives the implicit catch-all entry, drawn
+/// `*` as the console (and the `N` lens) do.
+const NACL_CATCH_ALL: i32 = 32767;
+/// Rules each way, and subnets, the Overview lists before pointing at
+/// the tab that has them all.
+const NACL_OVERVIEW_ROWS: usize = 8;
+
+fn acl_table_header() -> (String, String) {
+    (format!("  {:>5}  {:<9}  {:<10}  {:<22}  {}", "Rule", "Action", "Protocol", "CIDR", "Ports"), String::new())
+}
+
+/// One entry as a fixed-width table line (a plain content line).
+fn acl_entry_line(e: &crate::aws::services::vpc::AclEntry) -> (String, String) {
+    let action = if e.action == "allow" { "✓ ALLOW" } else { "✗ DENY" };
+    let rule = if e.rule_number == NACL_CATCH_ALL { "*".to_string() } else { e.rule_number.to_string() };
+    (format!("  {:>5}  {:<9}  {:<10}  {:<22}  {}", rule, action, e.protocol, e.cidr, e.port_range), String::new())
+}
+
+/// What one direction does, in a line: rules are evaluated lowest number
+/// first and the first match wins, so a first rule covering all traffic
+/// from everywhere decides everything.
+fn acl_effect(entries: &[crate::aws::services::vpc::AclEntry]) -> String {
+    let everywhere = |e: &&crate::aws::services::vpc::AclEntry| {
+        e.protocol == "All" && matches!(e.cidr.as_str(), "0.0.0.0/0" | "::/0")
+    };
+    match entries.first().filter(everywhere) {
+        Some(e) if e.rule_number != NACL_CATCH_ALL && e.action == "allow" => {
+            format!("allows all traffic (rule {})", e.rule_number)
+        }
+        Some(_) if entries.iter().all(|e| e.rule_number == NACL_CATCH_ALL) => "denies all traffic (no rules)".to_string(),
+        Some(e) if e.action != "allow" => format!("denies all traffic (rule {})", e.rule_number),
+        _ => {
+            let custom: Vec<_> = entries.iter().filter(|e| e.rule_number != NACL_CATCH_ALL).collect();
+            let allow = custom.iter().filter(|e| e.action == "allow").count();
+            format!("{allow} allow · {} deny, then deny the rest — first match wins", custom.len() - allow)
+        }
+    }
+}
+
+fn network_acl_overview_rows(acl: &NetworkAcl) -> Vec<(String, String)> {
+    let mut rows = vec![
+        ("ACL ID".to_string(), acl.acl_id.clone()),
+        ("VPC".to_string(), if acl.vpc_id.is_empty() { "—".to_string() } else { acl.vpc_id.clone() }),
+        (
+            "Default".to_string(),
+            if acl.is_default {
+                "✓ yes — subnets with no ACL of their own use it".to_string()
+            } else {
+                "no".to_string()
+            },
+        ),
+    ];
+
+    rows.push((String::new(), String::new()));
+    rows.push(("Effect".to_string(), String::new()));
+    rows.push(("Inbound".to_string(), acl_effect(&acl.inbound_entries)));
+    rows.push(("Outbound".to_string(), acl_effect(&acl.outbound_entries)));
+
+    for (label, entries, key) in [("Inbound", &acl.inbound_entries, '2'), ("Outbound", &acl.outbound_entries, '3')] {
+        rows.push((String::new(), String::new()));
+        rows.push((format!("{label} ({} rule{})", entries.len(), if entries.len() == 1 { "" } else { "s" }), String::new()));
+        if entries.is_empty() {
+            rows.push((String::new(), format!("No {} rules", label.to_lowercase())));
+            continue;
+        }
+        rows.push(acl_table_header());
+        rows.extend(entries.iter().take(NACL_OVERVIEW_ROWS).map(acl_entry_line));
+        if entries.len() > NACL_OVERVIEW_ROWS {
+            rows.push((String::new(), format!("· {} more — {key} {label}", entries.len() - NACL_OVERVIEW_ROWS)));
+        }
+    }
+
+    // subnet- ids are Enter-jumpable via the generic resource_jump_target.
+    rows.push((String::new(), String::new()));
+    rows.push((format!("Subnets ({})", acl.associations.len()), String::new()));
+    if acl.associations.is_empty() {
+        rows.push((String::new(), "Not associated with any subnet".to_string()));
+    }
+    rows.extend(acl.associations.iter().take(NACL_OVERVIEW_ROWS).map(|a| (format!("  {}", a.subnet_id), String::new())));
+    if acl.associations.len() > NACL_OVERVIEW_ROWS {
+        rows.push((String::new(), format!("· {} more — 4 Associations", acl.associations.len() - NACL_OVERVIEW_ROWS)));
+    }
+    rows
+}
+
 pub fn network_acl_section_lines(
     acl: &NetworkAcl,
     section: NetworkAclDetailSection,
 ) -> Vec<(String, String)> {
     let render_entries = |entries: &[crate::aws::services::vpc::AclEntry]| {
-        let mut rows: Vec<(String, String)> = Vec::new();
-        rows.push(("".to_string(), "".to_string()));
-        // Column header — plain content line (starts with space, empty value)
-        rows.push((
-            format!("  {:>5}  {:<9}  {:<10}  {:<22}  {}", "Rule", "Action", "Protocol", "CIDR", "Ports"),
-            "".to_string(),
-        ));
+        let mut rows: Vec<(String, String)> = vec![acl_table_header()];
         rows.push((
             format!("  {:>5}  {:<9}  {:<10}  {:<22}  {}", "─────", "─────────", "──────────", "──────────────────────", "─────────────"),
             "".to_string(),
         ));
         if entries.is_empty() {
-            rows.push(("  (none)".to_string(), "".to_string()));
-        } else {
-            for entry in entries {
-                let action = if entry.action == "allow" { "✓ ALLOW" } else { "✗ DENY" };
-                rows.push((
-                    format!("  {:>5}  {:<9}  {:<10}  {:<22}  {}",
-                        entry.rule_number, action, entry.protocol, entry.cidr, entry.port_range),
-                    "".to_string(),
-                ));
-            }
+            rows.push((String::new(), "No rules".to_string()));
         }
-        rows.push(("".to_string(), "".to_string()));
+        rows.extend(entries.iter().map(acl_entry_line));
         rows
     };
 
     match section {
+        NetworkAclDetailSection::Overview => network_acl_overview_rows(acl),
         NetworkAclDetailSection::Inbound => render_entries(&acl.inbound_entries),
         NetworkAclDetailSection::Outbound => render_entries(&acl.outbound_entries),
         NetworkAclDetailSection::Associations => {
             let mut rows = vec![];
             if acl.associations.is_empty() {
-                rows.push(("  (none)".to_string(), "".to_string()));
+                rows.push((String::new(), "Not associated with any subnet".to_string()));
             } else {
                 rows.push((
                     format!("  {:<24}  {}", "Subnet ID", "Association ID"),
