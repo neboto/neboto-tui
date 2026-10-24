@@ -4461,7 +4461,7 @@ fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
         .or_else(|| app.sh_row_jump_target(key, value))
         .or_else(|| app.eb_row_jump_target(key, value))
         .or_else(|| app.appsync_row_jump_target(key, value))
-        .or_else(|| resource_jump_target(key, value, current))?;
+        .or_else(|| resource_jump_target(key, value, current).filter(|t| !app.names_selected_resource(&t.id)))?;
     Some(target.service != current)
 }
 

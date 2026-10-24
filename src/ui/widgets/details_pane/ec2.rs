@@ -861,12 +861,12 @@ fn sg_overview_rows(
 ) -> Vec<(String, String)> {
     use crate::aws::services::ec2::{sg_rule_line, sg_rules_header};
     let or_dash = |s: &str| if s.is_empty() { "—".to_string() } else { s.to_string() };
-    // The header already names the group and its id; the API name is news
-    // only when a Name tag replaced it there. vpc- values are Enter-jumpable.
-    let mut rows = Vec::new();
-    if sg.name != sg.group_name {
-        rows.push(("Group Name".to_string(), or_dash(sg.group_name)));
-    }
+    // The header repeats the id and name, but only a body row can be
+    // copied with `y` from here. vpc- values are Enter-jumpable.
+    let mut rows = vec![
+        ("Group ID".to_string(), sg.group_id.to_string()),
+        ("Group Name".to_string(), or_dash(sg.group_name)),
+    ];
     rows.push(("Description".to_string(), or_dash(sg.description)));
     rows.push(("VPC".to_string(), or_dash(sg.vpc_id.unwrap_or(""))));
     if let Some(owner) = sg.owner_id.filter(|o| !o.is_empty()) {

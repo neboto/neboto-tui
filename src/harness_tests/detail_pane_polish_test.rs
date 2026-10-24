@@ -279,7 +279,9 @@ async fn a_security_group_opens_on_an_overview() {
     let has = |k: &str, v: &str| body.iter().any(|(bk, bv)| bk == k && bv == v);
     assert!(has("Description", "Web tier: HTTPS from the internet"), "{body:#?}");
     assert!(has("Owner", "123456789012"), "{body:#?}");
-    assert!(!body.iter().any(|(k, _)| k == "Group Name"), "no Name tag, so the header already says it");
+    // The header repeats these, but only body rows can be copied with `y`.
+    assert_eq!(body[0], ("Group ID".to_string(), "sg-0a1b2c3d4e5f60718".to_string()));
+    assert!(has("Group Name", "web-sg"), "{body:#?}");
     assert!(has("  ⚠ TCP port 443 open to 0.0.0.0/0", ""), "{body:#?}");
     assert!(!body.iter().any(|(k, _)| k.contains("port 22")), "only world-open rules are flagged");
     // The rules themselves, in the Inbound tab's table form.
@@ -287,6 +289,23 @@ async fn a_security_group_opens_on_an_overview() {
     assert!(body.iter().any(|(k, _)| k.contains("22") && k.contains("→  203.0.113.0/24")), "{body:#?}");
     assert!(has("Outbound (0 rules)", "") && has("", "No outbound rules"), "{body:#?}");
 
+    // The group's own id is no jump: ⏎ would only re-land here.
+    app.details_selected_index = Some(0);
+    let history = app.nav_history.len();
+    app.handle_key(key(KeyCode::Enter), &tx).await.unwrap();
+    assert_eq!(app.nav_history.len(), history, "Enter on the own-id row records no jump");
+    assert_eq!(app.details_selected_index, Some(0), "and leaves the cursor where it was");
+    let vpc_row = body.iter().position(|(k, _)| k == "VPC").unwrap();
+    app.details_selected_index = Some(vpc_row);
+    app.handle_key(key(KeyCode::Enter), &tx).await.unwrap();
+    assert_eq!(app.pending_jump.as_deref(), Some("vpc-0123456789abcdef0"), "the VPC row still jumps");
+
+    let (mut app, tx, _rx) = test_app().await;
+    select_mock(&mut app, ServiceType::EC2, Box::new(crate::aws::services::ec2::SecurityGroup::from_sdk(
+        &aws_sdk_ec2::types::SecurityGroup::builder().group_id("sg-0a1b2c3d4e5f60718").group_name("web-sg").build(),
+    )));
+    app.details_focused = true;
+    app.reset_detail_section_to_default(&tx);
     app.lazy.sg_network_interfaces.apply("sg-0a1b2c3d4e5f60718".into(), Ok(Vec::new()));
     assert!(app.get_detail_lines().iter().any(|(k, v)| k == "Network Interfaces" && v == "none — unused"));
 }

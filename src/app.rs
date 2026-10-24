@@ -23905,6 +23905,13 @@ impl App {
         })
     }
 
+    /// A row naming the resource on screen (a pane's own `Group ID` /
+    /// `Volume ID` row): `⏎` would only re-land on it, so the generic id
+    /// classifier offers no jump there.
+    pub(crate) fn names_selected_resource(&self, id: &str) -> bool {
+        self.get_selected_resource().is_some_and(|r| r.id() == id)
+    }
+
     fn trigger_jump(
         &mut self,
         allow_cross_service: bool,
@@ -23963,6 +23970,7 @@ impl App {
                     .or_else(|| self.appsync_row_jump_target(k, v))
                     .or_else(|| {
                         crate::ui::widgets::details_pane::resource_jump_target(k, v, current)
+                            .filter(|t| !self.names_selected_resource(&t.id))
                     })
             });
         let target = match target {
