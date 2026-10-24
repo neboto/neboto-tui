@@ -2496,11 +2496,11 @@ pub struct App {
     /// recomputing the grid's chrome offsets in the mouse handler, which is the
     /// kind of duplicated geometry that silently drifts.
     pub cw_dashboard_regions: RefCell<Vec<(usize, Rect)>>,
-    /// The detail footer drawn this frame when it carries the `⌫ back to …`
-    /// or `⌃F forward to …` hint (set by `detail_footer`, cleared each frame by
-    /// `render_details_pane`), so the hint's click region is placed from the
-    /// text actually drawn rather than re-deriving ~130 renderers' footers.
-    pub detail_footer_nav: RefCell<Option<String>>,
+    /// The detail footer `detail_footer` built this frame (cleared each frame
+    /// by `render_details_pane`). The wrapper repaints it from this text —
+    /// keys coloured, fitted to the pane, each hint a click target — rather
+    /// than every renderer drawing its own.
+    pub detail_footer_text: RefCell<Option<String>>,
     /// Hit targets of the open `C` / `M` popup. Only one is ever open, so they
     /// share this; each renderer overwrites it every frame it draws.
     pub popup_hits: RefCell<PopupHits>,
@@ -3385,7 +3385,7 @@ impl App {
             cw_dashboard_scroll: 0,
             cw_dashboard_cursor: None,
             cw_dashboard_regions: RefCell::new(Vec::new()),
-            detail_footer_nav: RefCell::new(None),
+            detail_footer_text: RefCell::new(None),
             popup_hits: RefCell::new(PopupHits::default()),
             cw_dashboard_zoomed: false,
             cw_dashboard_range_from_body: true,
@@ -5959,6 +5959,15 @@ impl App {
                         return Ok(());
                     }
                     _ => return Ok(())}
+            }
+
+            // While a body filter is on, `n` / `N` step through the rows that
+            // match it (`N` is the access lens again once it's cleared).
+            if !self.detail_search_query.is_empty() && key.modifiers.difference(KeyModifiers::SHIFT).is_empty() {
+                if let KeyCode::Char(c @ ('n' | 'N')) = key.code {
+                    self.step_detail_match(c == 'n');
+                    return Ok(());
+                }
             }
 
             // Flat detail view: digits jump the cursor to a section header
@@ -25559,7 +25568,7 @@ impl App {
 
     /// The selected resource's section descriptor, when the pane is on the
     /// descriptor table (src/sections.rs).
-    fn selected_descriptor(&self) -> Option<&'static crate::sections::SectionDescriptor> {
+    pub(crate) fn selected_descriptor(&self) -> Option<&'static crate::sections::SectionDescriptor> {
         self.get_selected_resource().and_then(|r| r.detail_sections())
     }
 
@@ -26230,18 +26239,7 @@ impl App {
             }
             offsets.push((name.clone(), lines.len()));
             lines.push(Self::flat_section_header(name));
-            // Trim each section's leading/trailing spacers so spacing between
-            // sections is uniform regardless of how a section pads itself.
-            let start = rows
-                .iter()
-                .position(|(k, v)| !(k.is_empty() && v.is_empty()))
-                .unwrap_or(rows.len());
-            let end = rows
-                .iter()
-                .rposition(|(k, v)| !(k.is_empty() && v.is_empty()))
-                .map(|i| i + 1)
-                .unwrap_or(start);
-            lines.extend(rows[start..end].iter().cloned());
+            lines.extend(trim_blank_edges(rows.clone()));
         }
         (lines, offsets)
     }
@@ -26594,6 +26592,36 @@ impl App {
         self.get_detail_lines_filtered().len()
     }
 
+    /// Rows of the filtered body that match the `/` query themselves, as
+    /// opposed to the group headers and spacers kept around them for context.
+    pub fn detail_match_rows(&self) -> Vec<usize> {
+        let q = self.detail_search_query.to_lowercase();
+        if q.is_empty() {
+            return Vec::new();
+        }
+        self.get_detail_lines_filtered()
+            .iter()
+            .enumerate()
+            .filter(|(_, (k, v))| k.to_lowercase().contains(&q) || v.to_lowercase().contains(&q))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// `n` / `N`: the cursor to the next (or previous) matching row, wrapping.
+    fn step_detail_match(&mut self, forward: bool) {
+        let rows = self.detail_match_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let cur = self.details_selected_index.unwrap_or(0);
+        let next = if forward {
+            rows.iter().copied().find(|&i| i > cur).unwrap_or(rows[0])
+        } else {
+            rows.iter().rev().copied().find(|&i| i < cur).unwrap_or(rows[rows.len() - 1])
+        };
+        self.details_selected_index = Some(next);
+    }
+
     fn next_detail(&mut self) {
         let max_lines = self.get_details_line_count();
         if max_lines == 0 {
@@ -26713,35 +26741,6 @@ impl App {
         }
     }
 
-    /// Record clickable regions for a **detail-pane** section tab strip. Same
-    /// per-tab layout as `record_subtab_regions` (key glyph + `" label "`), but
-    /// `leading`/`sep` are caller-supplied (the section bars vary) and each tab
-    /// maps to a `DetailSection` action that focuses the pane + replays its key.
-    pub fn record_detail_section_regions(
-        &self,
-        area: Rect,
-        leading: u16,
-        sep: u16,
-        tabs: impl IntoIterator<Item = (char, usize)>,
-    ) {
-        let mut x = area.x.saturating_add(leading);
-        for (i, (key, label_chars)) in tabs.into_iter().enumerate() {
-            if i > 0 {
-                x = x.saturating_add(sep);
-            }
-            let w = label_chars as u16 + 3; // key(1) + " label "(label+2)
-            self.push_click_region(
-                Rect {
-                    x,
-                    y: area.y,
-                    width: w,
-                    height: 1},
-                ClickAction::DetailSection(key),
-            );
-            x = x.saturating_add(w);
-        }
-    }
-
     /// Indices of group-header rows in the current (filtered) detail body. A
     /// group header is the `style_detail_row` convention of a non-empty key
     /// with an empty value that does not start with a space (rendered magenta
@@ -26837,6 +26836,11 @@ impl App {
     /// call this directly (never `get_detail_lines`, which would recurse into
     /// the flat cache).
     fn section_detail_lines(&self) -> Vec<(String, String)> {
+        trim_blank_edges(self.section_detail_lines_padded())
+    }
+
+    /// The renderer's rows as it returns them, edge spacers included.
+    fn section_detail_lines_padded(&self) -> Vec<(String, String)> {
         // Terraform state view takes priority when active.
         if let Some(tf) = &self.terraform_state {
             return crate::terraform::tf_state_detail_lines(tf);
@@ -35693,4 +35697,17 @@ mod ecr_row_jump_tests {
         assert!(App::ecr_image_jump_fallback("ops@example.com").is_none());
         assert!(App::ecr_image_jump_fallback(&format!("@{d}")).is_none());
     }
+}
+
+/// A section's rows without its leading and trailing blank spacers, which
+/// many renderers emit. A cursor never starts on, or `G` lands on, an empty
+/// line, and the flat view spaces sections evenly however each pads itself.
+fn trim_blank_edges(mut rows: Vec<(String, String)>) -> Vec<(String, String)> {
+    let blank = |(k, v): &(String, String)| k.is_empty() && v.is_empty();
+    while rows.last().is_some_and(blank) {
+        rows.pop();
+    }
+    let lead = rows.iter().take_while(|r| blank(r)).count();
+    rows.drain(..lead);
+    rows
 }

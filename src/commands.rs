@@ -167,6 +167,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(DetailPane, "h / ← / Esc", "back to list"),
     cmd(DetailPane, "[[ / ]]", "prev / next header"),
     cmd(DetailPane, "/", "filter body text"),
+    cmd(DetailPane, "n / N", "next / previous filter match"),
     cmd(DetailPane, "V · J / K", "visual select · extend"),
     cmd(DetailPane, "Ctrl-A", "select all"),
     cmd(DetailPane, "y / c", "copy selection or row"),

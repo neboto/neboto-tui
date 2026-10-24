@@ -258,6 +258,13 @@ takes the per-renderer row styling as a closure, scrolls in **screen** rows
 bottom-up from the cursor (the log tail's trick; never `Paragraph::wrap`),
 wraps by display width, and records the screen-row → logical-row map
 (`App.detail_body_rows`) that mouse clicks/drags and `→` arrow regions use.
+It also keeps last frame's top row while the cursor stays on screen (so `k`
+moves the cursor, not the view) and marks `/` matches in place.
+**Footer**: renderers pass `detail_footer(…)`'s plain string to the block
+as before; `render_details_pane` then repaints it (`render_detail_footer`,
+from `App.detail_footer_text`) — keys coloured, fitted beside the
+ownership ribbon, each hint a click target. A footer built any other way
+gets none of that.
 Everything that indexes the body (`j`/`k`, copy, visual, `/`, `[[`) stays
 on logical rows. A new body renderer must use the helper, or wrap silently
 doesn't apply to it. `w` stays watch mode; in the `/` search box `Ctrl-W`
@@ -267,7 +274,7 @@ deletes a word.
 `*_section_lines` return):
 - **Key-value row**: key padded to the body's **adaptive key column**
   (`key_col_widths`: the widest key in the section by display width, clamped
-  to `[KEY_COL_MIN=24, KEY_COL_MAX=48]` and to what the pane can spare; keys
+  to `[KEY_COL_MIN=18, KEY_COL_MAX=48]` (keys carry their 2-space indent) and to what the pane can spare; keys
   past the cap are ellipsised, never left to push the `:` out — the flat
   view's `━━` headers split the body so sections align independently); key
   `ACCENT` orange, value conditional colour (state / ✓ / ✗ / ⚠ / white).
@@ -1087,8 +1094,7 @@ and the approaches you rejected are the part nobody can recover from your code.
   `H`/`L` (sub-tabs, as in the list pane),
   `l`/`→`/`Enter` (follow jump), `h`/`←`/`Esc` (back to list), `⌫`/`Ctrl-O`
   (nav-back through history, same as the list pane; the footer names the
-  targets as clickable `⌫ back to …` / `⌃F forward to …` — regions placed
-  from the text `detail_footer` drew, `App.detail_footer_nav`), `y`/`e`,
+  targets as clickable `⌫ back to …` / `⌃F forward to …`), `y`/`e`,
   `m`/`o`/`i`/`t` (rich views), `W`/`U`/`N` (timeline / referenced-by /
   network-access lenses, also from the list pane), `X` (export detail;
   `Ctrl-X` exports the list),

@@ -139,22 +139,27 @@ async fn cursor_row_stays_fully_visible_after_g_and_k() {
     let (mut app, tx, _rx) = app_on_long_tag(true).await;
     let long = long_row(&app);
 
-    // `G` lands on the trailing spacer; the long row above it is drawn too.
+    // `G` lands on the last row, the long value itself (the section's
+    // trailing spacer is trimmed), and every screen row of it is drawn.
     app.handle_key(key(KeyCode::Char('G')), &tx).await.unwrap();
     let last = app.get_details_line_count() - 1;
     assert_eq!(app.details_selected_index, Some(last));
-    body_rows(&app);
-    let map = app.detail_body_rows.borrow().clone();
-    assert_eq!(map.last(), Some(&last), "cursor row must be on screen");
-
-    // `k` moves one *logical* row, onto the wrapped value — every screen
-    // row of it is drawn, tail included.
-    app.handle_key(key(KeyCode::Char('k')), &tx).await.unwrap();
-    assert_eq!(app.details_selected_index, Some(long));
+    assert_eq!(last, long, "G should land on the long row, not a spacer");
     let rows = body_rows(&app);
     let map = app.detail_body_rows.borrow().clone();
+    assert_eq!(map.last(), Some(&last), "cursor row must be on screen");
     let spans = map.iter().filter(|&&i| i == long).count();
     assert!(spans > 1, "the long value should span several screen rows");
+    let squashed: String = rows.concat().split_whitespace().collect();
+    assert!(squashed.contains(TAIL), "cursor row's tail clipped:\n{}", rows.join("\n"));
+
+    // `k` moves one *logical* row, off the wrapped value, and `j` back onto
+    // it: still drawn whole.
+    app.handle_key(key(KeyCode::Char('k')), &tx).await.unwrap();
+    assert_eq!(app.details_selected_index, Some(long - 1));
+    body_rows(&app);
+    app.handle_key(key(KeyCode::Char('j')), &tx).await.unwrap();
+    let rows = body_rows(&app);
     let squashed: String = rows.concat().split_whitespace().collect();
     assert!(squashed.contains(TAIL), "cursor row's tail clipped:\n{}", rows.join("\n"));
 
