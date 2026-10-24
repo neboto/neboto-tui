@@ -295,7 +295,7 @@ so it can't change by accident.
 │                          │    Group              sg-0abc123  web-servers → │
 │                          │    IAM Role           app-server-role         → │
 ├──────────────────────────┴─────────────────────────────────────────────────┤
-│  j/k move  l details  / search  m metrics  t logs  W trail  ? help  q quit │
+│ / search  ⏎ open  m metrics  W trail  N access  : commands  ? help  q quit │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
