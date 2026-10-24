@@ -210,7 +210,9 @@ current set rather than trusting a count here. Simple eager panes (the U13
 batch: Vpc, NatGateway, TgwAttachment, DxLag, RdsSnapshot, FsxVolume,
 GdDetector) share the `render_simple_split` skeleton in `details_pane/mod.rs`
 (its header is the one-row `header_line`: dot, name, state, then the
-subtitle's ` · ` facts that fit — use it for a new pane's header too); the
+subtitle's ` · ` facts that fit). Panes that build their own header lines
+pass them through `one_row_header`, which condenses them to the same row
+(`every_split_pane_has_a_one_row_header` fails a pane that doesn't); the
 Vpc and DxLag panes fill their Subnets/Gateways/Connections sections by
 **filtering sibling resources** already in `self.resources` (no extra
 fetches). Deliberately still flat: `ElasticIp` (the flat view is complete),

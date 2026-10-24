@@ -16,6 +16,7 @@ pub(super) fn render_asg_group_split(app: &App, group: &AsgGroup, area: Rect, fr
     frame.render_widget(block, area);
 
     let header_lines = build_asg_header_lines(group);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

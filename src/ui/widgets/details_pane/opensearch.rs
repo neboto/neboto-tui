@@ -37,6 +37,7 @@ pub(super) fn render_opensearch_split(app: &App, d: &OpenSearchDomain, area: Rec
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

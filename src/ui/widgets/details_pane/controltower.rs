@@ -36,6 +36,7 @@ pub(super) fn render_landing_zone_split(app: &App, z: &LandingZone, area: Rect, 
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -188,6 +189,7 @@ pub(super) fn render_enabled_control_split(app: &App, c: &EnabledControl, area: 
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -328,6 +330,7 @@ pub(super) fn render_enabled_baseline_split(app: &App, b: &EnabledBaseline, area
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -456,6 +459,7 @@ pub(super) fn render_ct_account_split(app: &App, a: &CtAccount, area: Rect, fram
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -731,6 +735,7 @@ pub(super) fn render_ct_compliance_split(app: &App, c: &CtCompliance, area: Rect
         Line::from(subtitle),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

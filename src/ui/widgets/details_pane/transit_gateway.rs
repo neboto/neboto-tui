@@ -14,6 +14,7 @@ pub(super) fn render_tgw_split(app: &App, tgw: &TransitGateway, area: Rect, fram
     frame.render_widget(block, area);
 
     let header = build_tgw_header_lines(tgw);
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -95,6 +96,7 @@ pub(super) fn render_tgw_route_table_split(
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

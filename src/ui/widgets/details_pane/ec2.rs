@@ -19,6 +19,7 @@ pub(super) fn render_ec2_instance_split(app: &App, instance: &Ec2Instance, area:
 
     // Build the header lines first so we can size the header area dynamically.
     let header_lines = build_ec2_header_lines(instance);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     // Layout: header | rule | tabs | rule | scrollable body
@@ -766,6 +767,7 @@ pub(super) fn render_security_group_split(
         ]));
     }
     header.push(Line::raw(""));
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -899,6 +901,7 @@ pub(super) fn render_ebs_volume_split(
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -1064,6 +1067,7 @@ pub(super) fn render_ami_split(app: &App, ami: &crate::aws::services::ec2::Ami, 
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -1234,6 +1238,7 @@ pub(super) fn render_snapshot_split(
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -1368,6 +1373,7 @@ pub(super) fn render_launch_template_split(
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

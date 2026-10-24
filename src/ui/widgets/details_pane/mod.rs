@@ -2155,6 +2155,7 @@ fn render_s3_bucket_split(app: &App, bucket: &S3Bucket, area: Rect, frame: &mut 
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
 
     let chunks = Layout::default()
@@ -4828,6 +4829,31 @@ fn descriptor_tabs(
         .collect()
 }
 
+/// A pane's hand-built header, condensed to the one row `header_line`
+/// draws: its first non-blank line is the name, and every later line breaks
+/// into facts at its `·` separators (a `header_kv` row becomes `Label value`).
+/// State dots are dropped, so `● running` matches the state and isn't shown
+/// twice. Lets each renderer keep building its header as it did, one call
+/// away from the shared look.
+pub(super) fn one_row_header(app: &App, lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
+    const DOTS: &[char] = &['●', '○', '◌', '◐', '✓', '✗', '⚠', '▲', '▼', '⛔'];
+    let texts: Vec<String> = lines
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+        .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|t| !t.is_empty())
+        .collect();
+    let strip = |t: &str| t.trim().trim_start_matches(DOTS).trim().to_string();
+    // Every line splits at `·`, the name's too (`ami-… · ● available`).
+    let mut parts = texts.iter().flat_map(|t| t.split('·').map(strip).collect::<Vec<_>>());
+    let Some(name) = parts.next() else {
+        return lines;
+    };
+    let facts: Vec<String> = parts.collect();
+    let facts: Vec<&str> = facts.iter().map(String::as_str).collect();
+    vec![header_line(app, &name, &facts, width)]
+}
+
 /// The pane's border title: its type, then the resource's name, so a
 /// full-width pane still says what it shows.
 fn pane_title_with_name(pane_title: &str, name: &str) -> String {
@@ -4841,7 +4867,8 @@ fn pane_title_with_name(pane_title: &str, name: &str) -> String {
 /// The one-row pane header: the state dot, the name in bold, the state in
 /// its colour, then `facts` dimmed, as many as fit in `width` (the first is
 /// cut with `…` rather than dropped). A fact that repeats the name, the
-/// state or an earlier fact, or says nothing (`—`, empty), is skipped.
+/// state (`Status ACTIVE` too) or an earlier fact, or says nothing (`—`,
+/// empty), is skipped.
 pub(crate) fn header_line(app: &App, name: &str, facts: &[&str], width: usize) -> Line<'static> {
     use unicode_width::UnicodeWidthStr;
     let resource = app.get_selected_resource();
@@ -4871,7 +4898,11 @@ pub(crate) fn header_line(app: &App, name: &str, facts: &[&str], width: usize) -
     let mut first = true;
     let mut shown: Vec<&str> = Vec::new();
     for fact in facts.iter().map(|f| f.trim()) {
-        if fact.is_empty() || fact == "—" || fact == name || fact.eq_ignore_ascii_case(&label) || shown.contains(&fact) {
+        let restates_state = !label.is_empty()
+            && [String::new(), "status ".into(), "state ".into()]
+                .iter()
+                .any(|p| fact.eq_ignore_ascii_case(&format!("{p}{label}")));
+        if fact.is_empty() || fact == "—" || fact == name || restates_state || shown.contains(&fact) {
             continue;
         }
         shown.push(fact);
@@ -4996,6 +5027,7 @@ fn render_tf_state_pane(app: &App, area: Rect, frame: &mut Frame) {
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

@@ -38,6 +38,7 @@ pub(super) fn render_ddb_table_split(app: &App, table: &DdbTable, area: Rect, fr
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

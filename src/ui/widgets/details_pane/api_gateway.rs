@@ -41,6 +41,7 @@ pub(super) fn render_rest_api_split(app: &App, api: &RestApi, area: Rect, frame:
         api.endpoint_type.clone()
     };
     let header = api_header_lines(api.name(), &api.id, &badge);
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -80,6 +81,7 @@ pub(super) fn render_http_api_split(app: &App, api: &HttpApi, area: Rect, frame:
         api.protocol.clone()
     };
     let header = api_header_lines(api.name(), &api.id, &badge);
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -482,6 +484,7 @@ pub(super) fn render_api_domain_split(app: &App, domain: &ApiCustomDomain, area:
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -604,6 +607,7 @@ pub(super) fn render_api_usage_plan_split(app: &App, plan: &ApiUsagePlan, area: 
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

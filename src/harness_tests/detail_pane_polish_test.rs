@@ -186,3 +186,27 @@ async fn simple_split_panes_have_a_one_row_header() {
     let text: String = narrow.spans.iter().map(|s| s.content.as_ref()).collect();
     assert!(text.ends_with('…') && unicode_width::UnicodeWidthStr::width(text.as_str()) <= 40, "{text}");
 }
+
+/// Every split pane's header is one row: the rows between the pane's top
+/// border and the rule above the section tabs. A pane that builds its own
+/// header goes through `one_row_header`; a new one that skips it fails here.
+#[tokio::test]
+async fn every_split_pane_has_a_one_row_header() {
+    let (mut app, tx, _rx) = test_app().await;
+    for (service, label, mock) in all_mocks() {
+        if mock.detail_sections().is_none() {
+            continue;
+        }
+        select_mock(&mut app, service, mock);
+        app.details_focused = true;
+        app.reset_detail_section_to_default(&tx);
+        let t = draw(&app, 150, 30);
+        let buf = t.backend().buffer();
+        let body = app.mouse_geom.get().detail_body_area.unwrap_or_else(|| panic!("{label}: no body"));
+        let row = |y: u16| -> String { (body.x..body.x + body.width).map(|x| buf[(x, y)].symbol().to_string()).collect() };
+        let top = (0..body.y).rev().find(|&y| buf[(body.x - 1, y)].symbol() == "╭").expect("pane top border");
+        let rule = (top + 1..body.y).find(|&y| row(y).starts_with("──")).expect("rule under the header");
+        assert_eq!(rule - top - 1, 1, "{label}: header is {} rows:\n{}", rule - top - 1,
+            (top..rule).map(row).collect::<Vec<_>>().join("\n"));
+    }
+}

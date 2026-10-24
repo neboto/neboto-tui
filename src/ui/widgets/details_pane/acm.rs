@@ -16,6 +16,7 @@ pub(super) fn render_acm_cert_split(app: &App, cert: &AcmCertificate, area: Rect
     frame.render_widget(block, area);
 
     let header_lines = build_acm_cert_header_lines(cert);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

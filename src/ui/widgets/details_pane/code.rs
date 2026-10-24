@@ -328,6 +328,7 @@ pub(super) fn render_code_commit_repo_split(
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -639,6 +640,7 @@ pub(super) fn render_cc_pr_split(
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -1008,6 +1010,7 @@ pub(super) fn render_code_build_split(
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -1227,6 +1230,7 @@ pub(super) fn render_code_exec_split(
     frame.render_widget(block, area);
 
     let header_lines = build_code_exec_header_lines(exec);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -1600,6 +1604,7 @@ pub(super) fn render_code_pipeline_split(
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -1855,6 +1860,7 @@ pub(super) fn render_code_deploy_group_split(
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -2007,6 +2013,7 @@ pub(super) fn render_code_artifact_repo_split(
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

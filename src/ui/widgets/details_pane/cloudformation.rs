@@ -27,6 +27,7 @@ pub(super) fn render_cfn_stack_split(app: &App, stack: &CfnStack, area: Rect, fr
     frame.render_widget(block, area);
 
     let header_lines = build_cfn_stack_header_lines(stack);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -1024,6 +1025,7 @@ pub(super) fn render_cfn_export_split(app: &App, export: &CfnExport, area: Rect,
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -1126,6 +1128,7 @@ pub(super) fn render_cfn_stackset_split(app: &App, ss: &CfnStackSet, area: Rect,
         header_lines.push(header_kv("Permission Model", model));
     }
     header_lines.push(Line::raw(""));
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

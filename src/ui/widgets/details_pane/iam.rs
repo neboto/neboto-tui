@@ -46,6 +46,7 @@ pub(super) fn render_access_analyzer_split(
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -171,6 +172,7 @@ pub(super) fn render_iam_role_split(app: &App, role: &IamRole, area: Rect, frame
     frame.render_widget(block, area);
 
     let header_lines = build_iam_role_header_lines(role);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -515,6 +517,7 @@ pub(super) fn render_iam_policy_split(app: &App, policy: &IamPolicy, area: Rect,
     frame.render_widget(block, area);
 
     let header_lines = build_iam_policy_header_lines(policy);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -728,6 +731,7 @@ pub(super) fn render_iam_user_split(app: &App, user: &IamUser, area: Rect, frame
     }
     header_lines.push(header_kv("Path", &user.path));
     header_lines.push(Line::raw(""));
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -1000,6 +1004,7 @@ pub(super) fn render_iam_group_split(app: &App, group: &IamGroup, area: Rect, fr
     }
     header_lines.push(header_kv("Path", &group.path));
     header_lines.push(Line::raw(""));
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -1132,6 +1137,7 @@ pub(super) fn render_iam_idp_split(app: &App, idp: &IamIdentityProvider, area: R
     if header_lines.len() as u16 > inner.height {
         header_lines.truncate(inner.height as usize);
     }
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -1267,6 +1273,7 @@ pub(super) fn render_iam_account_split(app: &App, settings: &IamAccountSettings,
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

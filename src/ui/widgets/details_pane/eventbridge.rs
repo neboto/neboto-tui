@@ -42,6 +42,7 @@ pub(super) fn render_eb_rule_split(app: &App, rule: &EbRule, area: Rect, frame: 
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -158,6 +159,7 @@ pub(super) fn render_eb_event_bus_split(app: &App, bus: &EbEventBus, area: Rect,
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -268,6 +270,7 @@ pub(super) fn render_eb_schedule_split(app: &App, sched: &EbSchedule, area: Rect
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -440,6 +443,7 @@ pub(super) fn render_eb_pipe_split(app: &App, pipe: &EbPipe, area: Rect, frame: 
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

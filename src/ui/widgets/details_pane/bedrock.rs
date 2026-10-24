@@ -23,6 +23,7 @@ pub(super) fn render_bedrock_guardrail_split(
     frame.render_widget(block, area);
 
     let header_lines = build_bedrock_guardrail_header_lines(g);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -407,6 +408,7 @@ pub(super) fn render_bedrock_kb_split(
     frame.render_widget(block, area);
 
     let header_lines = build_bedrock_kb_header_lines(kb);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -654,6 +656,7 @@ pub(super) fn render_bedrock_agent_split(app: &App, agent: &BedrockAgent, area: 
     frame.render_widget(block, area);
 
     let header_lines = build_bedrock_agent_header_lines(agent);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

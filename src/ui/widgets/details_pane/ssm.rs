@@ -16,6 +16,7 @@ pub(super) fn render_ssm_parameter_split(app: &App, param: &SsmParameter, area: 
     frame.render_widget(block, area);
 
     let header_lines = build_ssm_param_header_lines(param);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -256,6 +257,7 @@ pub(super) fn render_ssm_document_split(app: &App, doc: &SsmDocument, area: Rect
     frame.render_widget(block, area);
 
     let header_lines = build_ssm_doc_header_lines(doc);
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -429,6 +431,7 @@ pub(super) fn render_ssm_association_split(app: &App, assoc: &SsmAssociation, ar
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -654,6 +657,7 @@ pub(super) fn render_ssm_fleet_split(app: &App, inst: &SsmManagedInstance, area:
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -994,6 +998,7 @@ pub(super) fn render_ssm_command_split(app: &App, cmd: &SsmCommand, area: Rect, 
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -1188,6 +1193,7 @@ pub(super) fn render_ssm_automation_split(
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -1356,6 +1362,7 @@ pub(super) fn render_ssm_maint_window_split(app: &App, mw: &SsmMaintWindow, area
         ]),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -1588,6 +1595,7 @@ pub(super) fn render_ssm_baseline_split(app: &App, b: &SsmPatchBaseline, area: R
         Line::from(status_spans),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()
@@ -1793,6 +1801,7 @@ pub(super) fn render_ssm_ops_item_split(app: &App, item: &SsmOpsItem, area: Rect
         Line::from(status_spans),
         Line::raw(""),
     ];
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
 
     let chunks = Layout::default()

@@ -33,6 +33,7 @@ pub(super) fn render_backup_split(
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

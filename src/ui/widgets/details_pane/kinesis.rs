@@ -39,6 +39,7 @@ pub(super) fn render_kinesis_split(app: &App, st: &KinesisStream, area: Rect, fr
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -192,6 +193,7 @@ pub(super) fn render_firehose_split(app: &App, st: &FirehoseStream, area: Rect, 
         ]),
         Line::raw(""),
     ];
+    let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)

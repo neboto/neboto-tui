@@ -24,6 +24,7 @@ pub(super) fn render_ecs_split(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let header_lines = one_row_header(app, header_lines, area.width.saturating_sub(2) as usize);
     let header_h = header_lines.len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
