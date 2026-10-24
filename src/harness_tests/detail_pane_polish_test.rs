@@ -279,10 +279,39 @@ async fn a_security_group_opens_on_an_overview() {
     let has = |k: &str, v: &str| body.iter().any(|(bk, bv)| bk == k && bv == v);
     assert!(has("Description", "Web tier: HTTPS from the internet"), "{body:#?}");
     assert!(has("Owner", "123456789012"), "{body:#?}");
-    assert!(has("Inbound", "2 rules"), "{body:#?}");
+    assert!(!body.iter().any(|(k, _)| k == "Group Name"), "no Name tag, so the header already says it");
     assert!(has("  ⚠ TCP port 443 open to 0.0.0.0/0", ""), "{body:#?}");
-    assert!(!body.iter().any(|(k, _)| k.contains("port 22")), "only world-open rules are listed");
+    assert!(!body.iter().any(|(k, _)| k.contains("port 22")), "only world-open rules are flagged");
+    // The rules themselves, in the Inbound tab's table form.
+    assert!(has("Inbound (2 rules)", ""), "{body:#?}");
+    assert!(body.iter().any(|(k, _)| k.contains("22") && k.contains("→  203.0.113.0/24")), "{body:#?}");
+    assert!(has("Outbound (0 rules)", "") && has("", "No outbound rules"), "{body:#?}");
 
     app.lazy.sg_network_interfaces.apply("sg-0a1b2c3d4e5f60718".into(), Ok(Vec::new()));
     assert!(app.get_detail_lines().iter().any(|(k, v)| k == "Network Interfaces" && v == "none — unused"));
+}
+
+/// A long rule list shows its first eight on the Overview and points at
+/// the tab that has the rest.
+#[tokio::test]
+async fn the_overview_caps_a_long_rule_list() {
+    use aws_sdk_ec2::types::{IpPermission, IpRange};
+    let (mut app, tx, _rx) = test_app().await;
+    let mut b = aws_sdk_ec2::types::SecurityGroup::builder().group_id("sg-0big").group_name("big");
+    for port in 8000..8011 {
+        b = b.ip_permissions(
+            IpPermission::builder()
+                .ip_protocol("tcp")
+                .from_port(port)
+                .to_port(port)
+                .ip_ranges(IpRange::builder().cidr_ip("10.0.0.0/8").build())
+                .build(),
+        );
+    }
+    select_mock(&mut app, ServiceType::EC2, Box::new(crate::aws::services::ec2::SecurityGroup::from_sdk(&b.build())));
+    app.details_focused = true;
+    app.reset_detail_section_to_default(&tx);
+    let body = app.get_detail_lines();
+    assert_eq!(body.iter().filter(|(k, _)| k.contains("→  10.0.0.0/8")).count(), 8, "{body:#?}");
+    assert!(body.iter().any(|(k, v)| k.is_empty() && v == "· 3 more — 2 Inbound"), "{body:#?}");
 }

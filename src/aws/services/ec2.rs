@@ -1498,6 +1498,30 @@ pub fn sg_rule_rows(label: &str, rules: &[SgRule]) -> Vec<(String, String)> {
     sg_rule_rows_expanded(label, rules, None)
 }
 
+/// `Inbound (3 rules)`: the group header over a rule table.
+pub fn sg_rules_header(label: &str, n: usize) -> String {
+    format!("{label} ({n} rule{})", if n == 1 { "" } else { "s" })
+}
+
+/// One rule as a fixed-width table line.
+pub fn sg_rule_line(r: &SgRule) -> String {
+    // A plain content line (key starts with a space, empty value) so it
+    // renders as a fixed-width table rather than a key/value pair. Source
+    // goes last so a long IPv6 CIDR or sg-id+name can't break the columns.
+    let source = match &r.source_label {
+        Some(name) if !name.is_empty() => format!("{} ({})", r.source, name),
+        _ => r.source.clone(),
+    };
+    let rule = format!("  {:<5}  {:<11}  →  {}", r.protocol, r.ports, source);
+    // Attach the per-rule description (e.g. "my home ip") to the same line
+    // after a tab; `style_detail_row` renders the trailing part as a muted
+    // note so it reads as an annotation on the rule, not another data column.
+    match &r.description {
+        Some(desc) => format!("{rule}\t{desc}"),
+        None => rule,
+    }
+}
+
 /// [`sg_rule_rows`], with each prefix-list rule followed by the CIDRs it
 /// stands for — a `pl-` id alone doesn't say what the rule allows. The
 /// first [`PL_PREVIEW_ENTRIES`] are listed; past that, a count.
@@ -1506,18 +1530,7 @@ pub fn sg_rule_rows_expanded(
     rules: &[SgRule],
     pl_entries: Option<&PlEntries>,
 ) -> Vec<(String, String)> {
-    let mut rows = vec![
-        (
-            format!(
-                "{} ({} rule{})",
-                label,
-                rules.len(),
-                if rules.len() == 1 { "" } else { "s" }
-            ),
-            String::new(),
-        ),
-        (String::new(), String::new()),
-    ];
+    let mut rows = vec![(sg_rules_header(label, rules.len()), String::new()), (String::new(), String::new())];
 
     if rules.is_empty() {
         rows.push((format!("  No {} rules", label.to_lowercase()), String::new()));
@@ -1528,19 +1541,7 @@ pub fn sg_rule_rows_expanded(
     // as a fixed-width table rather than key/value pairs. Source goes last so a
     // long IPv6 CIDR or sg-id+name can't break column alignment.
     for r in rules {
-        let source = match &r.source_label {
-            Some(name) if !name.is_empty() => format!("{} ({})", r.source, name),
-            _ => r.source.clone(),
-        };
-        let rule = format!("  {:<5}  {:<11}  →  {}", r.protocol, r.ports, source);
-        // Attach the per-rule description (e.g. "my home ip") to the same line
-        // after a tab; `style_detail_row` renders the trailing part as a muted
-        // note so it reads as an annotation on the rule, not another data column.
-        let line = match &r.description {
-            Some(desc) => format!("{rule}\t{desc}"),
-            None => rule,
-        };
-        rows.push((line, String::new()));
+        rows.push((sg_rule_line(r), String::new()));
         if let (Some(map), true) = (pl_entries, r.source.starts_with("pl-")) {
             rows.extend(pl_entry_rows(map.get(&r.source)));
         }

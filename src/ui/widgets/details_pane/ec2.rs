@@ -849,29 +849,29 @@ pub fn security_group_section_lines(
     }
 }
 
-/// The Overview body: what the group is, how many rules it has, which of
-/// them open it to the internet, and how many interfaces carry it.
+const SG_OVERVIEW_RULES: usize = 8;
+
+/// The Overview body: what the group is, which rules open it to the
+/// internet, its rules (the first
+/// [`SG_OVERVIEW_RULES`] each way — the Inbound / Outbound tabs have them
+/// all, prefix lists expanded), and how many interfaces carry it.
 fn sg_overview_rows(
     sg: &crate::aws::services::ec2::SgView,
     used_by: Option<&crate::lazy::Lazy<Vec<crate::aws::services::ec2::SgEni>>>,
 ) -> Vec<(String, String)> {
+    use crate::aws::services::ec2::{sg_rule_line, sg_rules_header};
     let or_dash = |s: &str| if s.is_empty() { "—".to_string() } else { s.to_string() };
-    let rules = |n: usize| format!("{n} rule{}", if n == 1 { "" } else { "s" });
-    // vpc-/sg- values are Enter-jumpable via the generic resource_jump_target.
-    let mut rows = vec![
-        ("Group ID".to_string(), sg.group_id.to_string()),
-        ("Group Name".to_string(), or_dash(sg.group_name)),
-        ("Description".to_string(), or_dash(sg.description)),
-        ("VPC".to_string(), or_dash(sg.vpc_id.unwrap_or(""))),
-    ];
+    // The header already names the group and its id; the API name is news
+    // only when a Name tag replaced it there. vpc- values are Enter-jumpable.
+    let mut rows = Vec::new();
+    if sg.name != sg.group_name {
+        rows.push(("Group Name".to_string(), or_dash(sg.group_name)));
+    }
+    rows.push(("Description".to_string(), or_dash(sg.description)));
+    rows.push(("VPC".to_string(), or_dash(sg.vpc_id.unwrap_or(""))));
     if let Some(owner) = sg.owner_id.filter(|o| !o.is_empty()) {
         rows.push(("Owner".to_string(), owner.to_string()));
     }
-
-    rows.push((String::new(), String::new()));
-    rows.push(("Rules".to_string(), String::new()));
-    rows.push(("Inbound".to_string(), rules(sg.inbound.len())));
-    rows.push(("Outbound".to_string(), rules(sg.outbound.len())));
 
     rows.push((String::new(), String::new()));
     rows.push(("Exposure".to_string(), String::new()));
@@ -882,6 +882,21 @@ fn sg_overview_rows(
     for r in open {
         let ports = if r.ports == "All" { "all ports".to_string() } else { format!("port {}", r.ports) };
         rows.push((format!("  ⚠ {} {} open to {}", r.protocol, ports, r.source), String::new()));
+    }
+
+    for (label, rules, key) in [("Inbound", sg.inbound, '2'), ("Outbound", sg.outbound, '3')] {
+        rows.push((String::new(), String::new()));
+        rows.push((sg_rules_header(label, rules.len()), String::new()));
+        if rules.is_empty() {
+            rows.push((String::new(), format!("No {} rules", label.to_lowercase())));
+        }
+        rows.extend(rules.iter().take(SG_OVERVIEW_RULES).map(|r| (sg_rule_line(r), String::new())));
+        if rules.len() > SG_OVERVIEW_RULES {
+            rows.push((
+                String::new(),
+                format!("· {} more — {key} {label}", rules.len() - SG_OVERVIEW_RULES),
+            ));
+        }
     }
 
     rows.push((String::new(), String::new()));
