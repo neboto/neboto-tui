@@ -196,3 +196,79 @@ async fn every_spec_target_has_a_mock_that_charts() {
     assert_eq!(seen["AWS/GlobalAccelerator"], Some("us-west-2"));
     assert_eq!(seen["AWS/SQS"], None);
 }
+
+/// `5` reaches back 30 days (a stopped instance's last week of data), the
+/// change markers' timeline widens with it, and `W` — which the markers'
+/// legend offers — hands that timeline to the lens instead of doing nothing.
+#[tokio::test]
+async fn thirty_days_widens_the_markers_and_w_opens_their_timeline() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let svc = app.services[&ServiceType::Lambda].clone();
+    let (rows, _) = crate::headless::list_all(svc, ServiceType::Lambda).await.ok().unwrap();
+    select_mock(&mut app, ServiceType::Lambda, rows.into_iter().next().unwrap());
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    use crate::aws::services::cloudtrail::TrailRange;
+    assert_eq!(app.chart_timeline.as_ref().map(|t| t.range), Some(TrailRange::D7));
+
+    press(&mut app, &tx, KeyCode::Char('5')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert_eq!(st.range, crate::aws::services::ec2::MetricsTimeRange::ThirtyDays);
+    assert!(st.series.iter().all(|s| s.points.len() == 240), "30d at 3h");
+    assert_eq!(app.chart_timeline.as_ref().map(|t| t.range), Some(TrailRange::D30));
+    assert!(screen_of(&app).contains(" 5 30d "));
+    // `]` wraps from the longest back to the shortest.
+    press(&mut app, &tx, KeyCode::Char(']')).await;
+    assert_eq!(app.spec_metrics.as_ref().unwrap().range, crate::aws::services::ec2::MetricsTimeRange::OneHour);
+
+    let shift_w = KeyEvent::new(KeyCode::Char('W'), KeyModifiers::SHIFT);
+    app.handle_event(Event::Key(shift_w), &tx).await.unwrap();
+    assert!(app.metrics_in_pane.is_none() && app.spec_metrics.is_none());
+    let lens = app.trail_in_pane.as_ref().expect("W opens the timeline");
+    assert_eq!(lens.range, TrailRange::D30, "the markers' own timeline, not a refetch");
+    assert!(app.chart_timeline.is_none());
+}
+
+/// The change legend rides the chart it explains (its bottom border), the
+/// view's own footer names `c`/`W`, and the status bar under an open view
+/// shows no keys: the detail pane's would mean something else here, and
+/// `:`/`?` don't run inside it.
+#[tokio::test]
+async fn the_change_legend_sits_on_the_chart_and_the_status_bar_steps_back() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let svc = app.services[&ServiceType::Lambda].clone();
+    let (rows, _) = crate::headless::list_all(svc, ServiceType::Lambda).await.ok().unwrap();
+    let orders = rows.into_iter().find(|r| r.name() == "orders-api").unwrap();
+    select_mock(&mut app, ServiceType::Lambda, orders);
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    settle(&mut app, &tx, &mut rx).await;
+
+    let end = app.metrics_window_end;
+    let row = |ago: i64, what: &str| crate::timeline::TimelineRow {
+        ts_secs: end - ago,
+        time: String::new(),
+        source: crate::timeline::TimelineSource::Trail,
+        what: what.to_string(),
+        who: String::new(),
+        detail: String::new(),
+        error: String::new(),
+        failed: false,
+        json: String::new(),
+    };
+    let tl = app.chart_timeline.as_mut().unwrap();
+    tl.pending.clear();
+    tl.rows = vec![row(600, "StopInstances"), row(1200, "StartInstances"), row(1800, "StopInstances")];
+
+    let screen = screen_of(&app);
+    let lines: Vec<&str> = screen.lines().collect();
+    let caption = lines.iter().position(|l| l.contains("3 changes  StopInstances ×2 · StartInstances")).expect(&screen);
+    assert!(lines[caption].contains('└'), "on the chart's bottom border: {}", lines[caption]);
+    assert!(!screen.contains("c hide · W timeline"), "not on the pane border too: {screen}");
+    assert!(screen.contains("c changes") && screen.contains("W timeline"), "{screen}");
+    assert!(screen.contains("Esc close"), "the footer keeps Esc when it's tight: {screen}");
+    let status = lines.last().unwrap();
+    assert!(!status.contains("metrics") && !status.contains("back") && !status.contains("help"), "{status}");
+}

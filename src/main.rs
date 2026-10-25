@@ -757,6 +757,10 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
         // row has them. Every key dropped here is still in `?` and `:`.
         if app.search_active {
             main_hints = vec![("⏎", "confirm"), ("Esc", "cancel"), ("@service", "switch")];
+        } else if app.any_pane_overlay_active() {
+            // An open view or picker draws its own keys and owns the
+            // keymap: the detail pane's (`m`, `y`, `Esc back`) would mean
+            // something else here, and `:` is off inside them.
         } else if app.details_focused {
             // Kept short and stable — the detail-pane footer carries the
             // pane-specific hints.

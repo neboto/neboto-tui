@@ -832,16 +832,24 @@ pub fn range_from_digit(c: char) -> Option<MetricsTimeRange> {
         '2' => MetricsTimeRange::SixHours,
         '3' => MetricsTimeRange::TwentyFourHours,
         '4' => MetricsTimeRange::SevenDays,
+        '5' => MetricsTimeRange::ThirtyDays,
         _ => return None,
     })
 }
 
-pub const RANGES: [MetricsTimeRange; 4] = [
+pub const RANGES: [MetricsTimeRange; 5] = [
     MetricsTimeRange::OneHour,
     MetricsTimeRange::SixHours,
     MetricsTimeRange::TwentyFourHours,
     MetricsTimeRange::SevenDays,
+    MetricsTimeRange::ThirtyDays,
 ];
+
+/// The range `step` places along `RANGES` from `r`, wrapping.
+pub fn step_range(r: MetricsTimeRange, step: isize) -> MetricsTimeRange {
+    let i = RANGES.iter().position(|x| *x == r).unwrap_or(0) as isize;
+    RANGES[(i + step).rem_euclid(RANGES.len() as isize) as usize]
+}
 
 #[cfg(test)]
 mod tests {

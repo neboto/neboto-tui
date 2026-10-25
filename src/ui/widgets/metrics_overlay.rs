@@ -32,10 +32,22 @@ use ratatui::Frame;
 struct MarkerCtx {
     /// When the chart's fetch window ends: x is seconds from `end − x_max`.
     window_end: i64,
-    /// (epoch secs, failed) per timeline row, newest first.
-    events: Vec<(i64, bool)>,
+    /// One per timeline row, newest first.
+    events: Vec<Change>,
     /// Indices into `events` some chart actually drew, for the legend.
     drawn: std::collections::BTreeSet<usize>,
+    loading: bool,
+    range: crate::aws::services::cloudtrail::TrailRange,
+    /// A renderer drew the legend on its own chart ([`marker_caption`]), so
+    /// the pane border stays plain.
+    claimed: bool,
+}
+
+/// A timeline row, as much of it as the markers use.
+struct Change {
+    ts: i64,
+    failed: bool,
+    what: String,
 }
 
 thread_local! {
@@ -53,11 +65,11 @@ pub(super) fn marker_lines(x_max: f64, y_lo: f64, y_hi: f64) -> Vec<MarkerLine> 
         let Some(ctx) = m.as_mut() else { return Vec::new() };
         let start = ctx.window_end as f64 - x_max;
         let mut lines = Vec::new();
-        for (i, &(ts, failed)) in ctx.events.iter().enumerate() {
-            let x = ts as f64 - start;
+        for (i, c) in ctx.events.iter().enumerate() {
+            let x = c.ts as f64 - start;
             if (0.0..=x_max).contains(&x) {
                 ctx.drawn.insert(i);
-                lines.push(([(x, y_lo), (x, y_hi)], failed));
+                lines.push(([(x, y_lo), (x, y_hi)], c.failed));
             }
         }
         lines
@@ -108,84 +120,111 @@ pub fn render_metrics_in_pane(app: &App, kind: MetricsKind, area: Rect, frame: &
     MARKERS.with(|m| {
         *m.borrow_mut() = Some(MarkerCtx {
             window_end: app.metrics_window_end,
-            events: tl.rows.iter().map(|r| (r.ts_secs, r.failed)).collect(),
+            events: tl
+                .rows
+                .iter()
+                .map(|r| Change { ts: r.ts_secs, failed: r.failed, what: r.what.clone() })
+                .collect(),
             drawn: Default::default(),
+            loading: tl.is_loading(),
+            range: tl.range,
+            claimed: false,
         })
     });
     render_metrics_kind(app, kind, area, frame);
-    let drawn = MARKERS.with(|m| m.borrow_mut().take().map(|c| c.drawn).unwrap_or_default());
-    // On the pane's bottom border, like the ownership ribbon (which the
-    // metrics view hides), so the charts keep every row.
-    if area.width > 8 && area.height > 2 {
+    let Some(ctx) = MARKERS.with(|m| m.borrow_mut().take()) else { return };
+    // A hand-built kind with several charts: on the pane's bottom border,
+    // like the ownership ribbon (which the metrics view hides), with the
+    // keys, since those kinds' own hints don't name them.
+    if !ctx.claimed && area.width > 8 && area.height > 2 {
         let row = Rect { x: area.x + 2, y: area.bottom() - 1, width: area.width - 4, height: 1 };
-        let legend = marker_legend(tl, &drawn, app.metrics_window_end, row.width);
+        let mut legend = marker_legend(&ctx, row.width);
+        legend.spans.insert(0, Span::styled(" ┊ ", Style::default().fg(theme::text_dim())));
+        legend.spans.extend(marker_keys());
         let width = legend.width().min(row.width as usize) as u16;
         frame.render_widget(Paragraph::new(legend), Rect { width, ..row });
     }
 }
 
-/// The legend: the drawn events newest first, as many as fit, then how
-/// many didn't and where to read them all.
-fn marker_legend(
-    tl: &crate::ui::widgets::trail_lens::TrailLensState,
-    drawn: &std::collections::BTreeSet<usize>,
-    window_end: i64,
-    width: u16,
-) -> Line<'static> {
+/// The legend for a renderer to draw on its own chart, from what the
+/// charts drawn so far placed (call it after drawing them). Claims the
+/// legend, so the pane border stays plain. None outside a marker context.
+pub(super) fn marker_caption(width: u16) -> Option<Line<'static>> {
+    MARKERS.with(|m| {
+        let mut m = m.borrow_mut();
+        let ctx = m.as_mut()?;
+        ctx.claimed = true;
+        Some(marker_legend(ctx, width))
+    })
+}
+
+fn marker_keys() -> Vec<Span<'static>> {
     let dim = Style::default().fg(theme::text_dim());
     let key = Style::default().fg(theme::warning());
-    let mut spans = vec![Span::styled(" ┊ ", dim)];
-    let tail: Vec<Span<'static>> = vec![
+    vec![
         Span::styled("   c", key),
         Span::styled(" hide · ", dim),
         Span::styled("W", key),
         Span::styled(" timeline", dim),
-    ];
-    let tail_w: usize = tail.iter().map(|s| s.width()).sum();
-    if drawn.is_empty() {
-        let msg = if tl.is_loading() {
+    ]
+}
+
+/// The legend: how many changes the charts drew, then one entry per kind
+/// of change (newest first, `×N` when it repeats — a nightly scheduler's
+/// StopInstances is one entry, not seven), as many as fit in `width`. The
+/// lines say when; `W` lists every event.
+fn marker_legend(ctx: &MarkerCtx, width: u16) -> Line<'static> {
+    let dim = Style::default().fg(theme::text_dim());
+    let mut spans = Vec::new();
+    if ctx.drawn.is_empty() {
+        let msg = if ctx.loading {
             "loading changes…".to_string()
         } else {
-            format!("no changes in this window ({} in the last {})", tl.rows.len(), tl.range.label())
+            format!("no changes in this window ({} in the last {})", ctx.events.len(), ctx.range.label())
         };
         spans.push(Span::styled(msg, dim));
-        spans.extend(tail);
         return Line::from(spans);
     }
-    let budget = (width as usize).saturating_sub(4 + tail_w + 10);
-    let tail: Vec<Span<'static>> = tail.into_iter().chain([Span::styled(" ", dim)]).collect();
+    // (what, count, any failed), in order of each kind's newest event.
+    let mut kinds: Vec<(&str, usize, bool)> = Vec::new();
+    for &i in &ctx.drawn {
+        let c = &ctx.events[i];
+        match kinds.iter_mut().find(|k| k.0 == c.what) {
+            Some(k) => {
+                k.1 += 1;
+                k.2 |= c.failed;
+            }
+            None => kinds.push((&c.what, 1, c.failed)),
+        }
+    }
+    let n = ctx.drawn.len();
+    spans.push(Span::styled(format!("{n} change{}  ", if n == 1 { "" } else { "s" }), dim));
+    let more_w = 10;
+    let budget = (width as usize).saturating_sub(spans.iter().map(|s| s.width()).sum::<usize>() + more_w);
     let mut used = 0;
     let mut shown = 0;
-    for &i in drawn {
-        let row = &tl.rows[i];
-        let stamp = crate::aws::services::cloudwatch::fmt_epoch_secs(row.ts_secs);
-        // Time of day within the last day, else the date too (`10-21 14:02`).
-        let from = if window_end - row.ts_secs > 86_400 { 5 } else { 11 };
-        let what: String = if row.what.chars().count() > 40 {
-            row.what.chars().take(39).chain(['…']).collect()
-        } else {
-            row.what.clone()
-        };
-        let text = format!("{} {what}", stamp.get(from..).unwrap_or(&stamp));
-        let w = text.chars().count() + 3;
+    for &(what, count, failed) in &kinds {
+        let what: String = if what.chars().count() > 40 { what.chars().take(39).chain(['…']).collect() } else { what.to_string() };
+        let times = if count > 1 { format!(" ×{count}") } else { String::new() };
+        let w = what.chars().count() + times.chars().count() + 3;
         if shown > 0 && used + w > budget {
             break;
         }
         if shown > 0 {
             spans.push(Span::styled(" · ", dim));
         }
-        let style = if row.failed { Style::default().fg(theme::error()) } else { Style::default().fg(theme::text_primary()) };
-        spans.push(Span::styled(text, style));
+        let style = if failed { Style::default().fg(theme::error()) } else { Style::default().fg(theme::text_primary()) };
+        spans.push(Span::styled(what, style));
+        spans.push(Span::styled(times, dim));
         used += w;
         shown += 1;
     }
-    if shown < drawn.len() {
-        spans.push(Span::styled(format!("  +{} more", drawn.len() - shown), dim));
+    if shown < kinds.len() {
+        spans.push(Span::styled(format!("  +{} more", kinds.len() - shown), dim));
     }
-    if tl.is_loading() {
+    if ctx.loading {
         spans.push(Span::styled("  loading…", dim));
     }
-    spans.extend(tail);
     Line::from(spans)
 }
 
@@ -2952,7 +2991,14 @@ mod tests {
         let _scope = MarkerScope;
         if let Some(events) = events {
             MARKERS.with(|m| {
-                *m.borrow_mut() = Some(MarkerCtx { window_end: END, events, drawn: Default::default() })
+                *m.borrow_mut() = Some(MarkerCtx {
+                    window_end: END,
+                    events: events.into_iter().map(|(ts, failed)| Change { ts, failed, what: String::new() }).collect(),
+                    drawn: Default::default(),
+                    loading: false,
+                    range: Default::default(),
+                    claimed: false,
+                })
             });
         }
         let backend = ratatui::backend::TestBackend::new(80, 16);
@@ -2981,42 +3027,32 @@ mod tests {
     }
 
     #[test]
-    fn the_legend_names_drawn_changes_newest_first_and_counts_the_rest() {
-        use crate::timeline::{TimelineRow, TimelineSource};
-        let row = |ts: i64, what: &str, failed: bool| TimelineRow {
-            ts_secs: ts,
-            time: String::new(),
-            source: TimelineSource::Trail,
-            what: what.to_string(),
-            who: String::new(),
-            detail: String::new(),
-            error: String::new(),
-            failed,
-            json: String::new(),
-        };
-        let end = 1_800_000_000;
-        let tl = crate::ui::widgets::trail_lens::TrailLensState {
-            rows: vec![
-                row(end - 600, "UpdateService", false),
-                row(end - 2 * 86_400, "AttachRolePolicy", true),
-                row(end - 3 * 86_400, "PutRolePolicy", false),
+    fn the_legend_counts_each_kind_of_change_once() {
+        let change = |what: &str, failed: bool| Change { ts: 0, failed, what: what.to_string() };
+        let ctx = |drawn: &[usize]| MarkerCtx {
+            window_end: 0,
+            events: vec![
+                change("StopInstances", false),
+                change("StopInstances", false),
+                change("AttachRolePolicy", true),
+                change("StopInstances", false),
+                change("PutRolePolicy", false),
             ],
-            ..Default::default()
+            drawn: drawn.iter().copied().collect(),
+            loading: false,
+            range: Default::default(),
+            claimed: false,
         };
         let text = |l: Line| l.spans.iter().map(|s| s.content.to_string()).collect::<String>();
 
-        let wide = text(marker_legend(&tl, &[0, 1].into(), end, 200));
-        assert!(wide.contains(" UpdateService · "), "{wide}");
-        assert!(wide.contains("AttachRolePolicy"), "{wide}");
-        let dated = crate::aws::services::cloudwatch::fmt_epoch_secs(end - 2 * 86_400);
-        assert!(wide.contains(&format!("{} AttachRolePolicy", &dated[5..])), "an older change shows its date: {wide}");
-        assert!(!wide.contains("PutRolePolicy"), "undrawn changes stay out: {wide}");
+        let wide = text(marker_legend(&ctx(&[0, 1, 2, 3]), 200));
+        assert_eq!(wide, "4 changes  StopInstances ×3 · AttachRolePolicy");
 
-        let narrow = text(marker_legend(&tl, &[0, 1].into(), end, 60));
-        assert!(narrow.contains("UpdateService") && narrow.contains("+1 more"), "{narrow}");
+        let narrow = text(marker_legend(&ctx(&[0, 1, 2, 3]), 40));
+        assert!(narrow.contains("StopInstances ×3") && narrow.contains("+1 more"), "{narrow}");
 
-        let none = text(marker_legend(&tl, &Default::default(), end, 120));
-        assert!(none.contains("no changes in this window (3 in the last 7d)"), "{none}");
+        let none = text(marker_legend(&ctx(&[]), 120));
+        assert_eq!(none, "no changes in this window (5 in the last 7d)");
     }
 
     /// Side-by-side widgets must share a column edge. Computing each rect from

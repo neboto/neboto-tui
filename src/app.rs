@@ -4563,6 +4563,18 @@ impl App {
                     self.chart_timeline = None;
                     return Ok(());
                 }
+                // The markers' legend offers `W`: the timeline behind them
+                // becomes the lens (its fetch is already done, or still
+                // landing — the sink prefers the lens), else a fresh one.
+                KeyCode::Char('W') => {
+                    self.metrics_in_pane = None;
+                    self.spec_metrics = None;
+                    match self.chart_timeline.take() {
+                        Some(tl) => self.trail_in_pane = Some(tl),
+                        None => self.open_trail_lens(event_tx),
+                    }
+                    return Ok(());
+                }
                 // Change markers: toggle; the first show fetches the timeline.
                 KeyCode::Char('c') if self.metrics_supports_markers() => {
                     self.chart_markers = !self.chart_markers;
@@ -17824,10 +17836,30 @@ impl App {
             return;
         }
         let title = r.name().to_string();
-        let range = if self.metrics_in_pane == Some(MetricsKind::S3) { TrailRange::D30 } else { TrailRange::D7 };
+        let range = if self.chart_markers_need_30d() { TrailRange::D30 } else { TrailRange::D7 };
         self.chart_timeline =
             Some(crate::ui::widgets::trail_lens::TrailLensState::open(title, range, false));
         self.seed_timeline(event_tx, TimelineTarget::Markers);
+    }
+
+    /// S3's storage charts span 30 days, as does the spec view's `5`.
+    fn chart_markers_need_30d(&self) -> bool {
+        match self.metrics_in_pane {
+            Some(MetricsKind::S3) => true,
+            Some(MetricsKind::Spec) => self.spec_metrics_range == MetricsTimeRange::ThirtyDays,
+            _ => false,
+        }
+    }
+
+    /// The spec view moved onto 30d with a 7-day timeline behind its
+    /// markers: fetch the longer one, or the chart's first three weeks
+    /// would read as "nothing changed".
+    fn widen_chart_markers(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::cloudtrail::TrailRange;
+        if self.chart_markers_need_30d() && self.chart_timeline.as_ref().is_some_and(|t| t.range == TrailRange::D7) {
+            self.chart_timeline = None;
+            self.seed_chart_markers(event_tx);
+        }
     }
 
     /// Charts whose x axis is time over the fetch window. The dashboard
@@ -24136,7 +24168,7 @@ impl App {
 
     /// True when a modal/overlay covers the main panes — mouse events should
     /// not "pass through" to the list/detail underneath.
-    fn any_pane_overlay_active(&self) -> bool {
+    pub(crate) fn any_pane_overlay_active(&self) -> bool {
         self.help_visible
             || self.command_picker.visible
             || self.service_selector.visible
@@ -32336,17 +32368,19 @@ impl App {
             }
             _ if st.picker.is_some() => {}
             KeyCode::Char(']') => {
-                st.range = st.range.next();
+                st.range = crate::aws::metrics::step_range(st.range, 1);
                 self.fetch_spec_metrics(event_tx);
+                self.widen_chart_markers(event_tx);
             }
             KeyCode::Char('[') => {
-                st.range = st.range.prev();
+                st.range = crate::aws::metrics::step_range(st.range, -1);
                 self.fetch_spec_metrics(event_tx);
             }
-            KeyCode::Char(c @ '1'..='4') => {
+            KeyCode::Char(c @ '1'..='5') => {
                 if let Some(r) = crate::aws::metrics::range_from_digit(c) {
                     st.range = r;
                     self.fetch_spec_metrics(event_tx);
+                    self.widen_chart_markers(event_tx);
                 }
             }
             KeyCode::Char('r') => self.fetch_spec_metrics(event_tx),

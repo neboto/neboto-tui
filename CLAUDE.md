@@ -384,8 +384,12 @@ in `any_pane_overlay_active` (which gates the mouse).
 - **Metrics** (`m`): one `App.metrics_in_pane: Option<MetricsKind>` +
   `open_metrics_in_pane` + `render_metrics_in_pane` (`metrics_overlay.rs`).
   **Change markers** (#245, `c` toggles, on by default): the `W` timeline's
-  events drawn as vertical lines on every time-series chart, legend on the
-  pane's bottom border. `m` runs the same fan-out as `W` once per open, into
+  events drawn as vertical lines on every time-series chart. The legend
+  (one entry per event name, `×N`) goes on the chart's own bottom border
+  when the renderer asks for it (`marker_caption`, the spec view), else on
+  the pane's border with the `c`/`W` keys (the hand-built kinds). While any
+  in-pane view is open the status bar shows no keys — each view draws its
+  own and owns the keymap (`:` is off inside them). `W` from the charts hands their timeline to the lens. `m` runs the same fan-out as `W` once per open, into
   `App.chart_timeline` (`TimelineTarget::Markers` — never alive beside
   `trail_in_pane`, they share `trail_generation`), and the chart builders
   read a render-scoped context (`marker_lines`): **a chart drawn outside
