@@ -176,17 +176,9 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
         range.push(Span::styled(chip, style));
     }
     range.push(Span::styled(" ]", Style::default().fg(theme::warning())));
-    let what = if st.picker.is_some() {
-        "all metrics"
-    } else if !st.curated {
-        "picked"
-    } else if st.target.specs.is_empty() {
-        // A CloudWatch metric row: the row is the one metric.
-        "this metric"
-    } else {
-        "default set"
-    };
-    range.push(Span::styled(format!("   {} · {}", what, st.target.namespace), dim));
+    // Which set is charted needs no word: a picked metric's footer offers
+    // `d default set`, and the `a` list is plainly a list.
+    range.push(Span::styled(format!("   {}", st.target.namespace), dim));
     // A metric row's title is only the metric's name: its dimensions are
     // what say which instance or queue it is. A resource's title says so.
     if st.target.specs.is_empty() && !st.target.dimensions.is_empty() {
