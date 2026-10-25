@@ -562,7 +562,9 @@ in `any_pane_overlay_active` (which gates the mouse).
   `src/timeline.rs`) — "what changed around this resource?", six sources
   merged newest-first, each row wearing a colored badge. **CT**: one-shot
   `cloudtrail::fetch_trail_events` (`LookupEvents` filtered by
-  `ResourceName`, throttled 2 TPS so no polling, cap ~50; identifiers from
+  `ResourceName`, throttled 2 TPS so no polling, cap ~50 — a capped lookup reports
+  where it stopped (`TrailLookup::cut` → `trail_cut`), so the lens reads `N+`
+  and the chart legend `N+ changes` instead of passing it off as quiet; identifiers from
   `Resource::trail_lookup_keys()`, default `[id]`; IAM types add the
   friendly name). **ALM**: alarms matched by walking the **warm CloudWatch
   cache** (any dimension value == resource id *or* name — namespaces

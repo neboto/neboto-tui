@@ -3507,10 +3507,11 @@ impl App {
                     self.log_tail.follow = true;
                 }
             }
-            Event::TrailLensLoaded { generation, events } => {
+            Event::TrailLensLoaded { generation, events, cut } => {
                 // Ignore a lookup that was superseded (range change) or closed.
                 if generation == self.trail_generation {
                     if let Some(st) = self.timeline_sink() {
+                        st.trail_cut = cut;
                         st.set_rows(
                             crate::timeline::TimelineSource::Trail,
                             events
@@ -18025,8 +18026,8 @@ impl App {
             )
             .await
             {
-                Ok(events) => {
-                    let _ = tx.send(Event::TrailLensLoaded { generation, events });
+                Ok(found) => {
+                    let _ = tx.send(Event::TrailLensLoaded { generation, events: found.events, cut: found.cut });
                 }
                 Err(e) => {
                     let _ = tx.send(Event::TrailLensError {

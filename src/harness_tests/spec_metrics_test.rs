@@ -326,3 +326,31 @@ async fn a_metric_row_shows_its_namespace_and_dimensions() {
     assert!(screen.contains("]   AWS/EC2 · InstanceId=i-0abc"), "{screen}");
     assert!(app.spec_metrics.as_ref().unwrap().as_text().contains("AWS/EC2 · InstanceId=i-0abc"));
 }
+
+/// A CloudTrail lookup that stopped at its cap says so in the `W` lens:
+/// the count reads `N+` and the header names the time it read back to.
+#[tokio::test]
+async fn a_capped_lookup_says_how_far_back_it_read() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let svc = app.services[&ServiceType::Lambda].clone();
+    let (rows, _) = crate::headless::list_all(svc, ServiceType::Lambda).await.ok().unwrap();
+    select_mock(&mut app, ServiceType::Lambda, rows.into_iter().next().unwrap());
+    let shift_w = KeyEvent::new(KeyCode::Char('W'), KeyModifiers::SHIFT);
+    app.handle_event(Event::Key(shift_w), &tx).await.unwrap();
+    assert!(app.trail_in_pane.is_some());
+
+    let cut = 1_800_000_000;
+    let event = crate::aws::services::cloudtrail::CloudTrailEvent::from_sdk(
+        &aws_sdk_cloudtrail::types::Event::builder()
+            .event_name("StopInstances")
+            .event_time(aws_sdk_cloudtrail::primitives::DateTime::from_secs(cut))
+            .build(),
+    );
+    let generation = app.trail_generation;
+    app.handle_event(Event::TrailLensLoaded { generation, events: vec![event], cut: Some(cut) }, &tx).await.unwrap();
+    let screen = screen_of(&app);
+    let at = crate::aws::services::cloudwatch::fmt_epoch_secs(cut);
+    assert!(screen.contains(&format!("CloudTrail stopped at its cap: nothing before {} read", &at[5..])), "{screen}");
+    assert!(screen.contains("1+"), "{screen}");
+}

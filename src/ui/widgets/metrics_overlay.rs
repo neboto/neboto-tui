@@ -41,6 +41,12 @@ struct MarkerCtx {
     /// A renderer drew the legend on its own chart ([`marker_caption`]), so
     /// the pane border stays plain.
     claimed: bool,
+    /// The CloudTrail lookup stopped at its cap here: no event before it
+    /// was read (`TrailLensState::trail_cut`).
+    cut: Option<i64>,
+    /// The earliest start of any chart drawn, to tell whether one reaches
+    /// back past `cut`.
+    earliest: Option<i64>,
 }
 
 /// A timeline row, as much of it as the markers use.
@@ -64,6 +70,7 @@ pub(super) fn marker_lines(x_max: f64, y_lo: f64, y_hi: f64) -> Vec<MarkerLine> 
         let mut m = m.borrow_mut();
         let Some(ctx) = m.as_mut() else { return Vec::new() };
         let start = ctx.window_end as f64 - x_max;
+        ctx.earliest = Some(ctx.earliest.map_or(start as i64, |e| e.min(start as i64)));
         let mut lines = Vec::new();
         for (i, c) in ctx.events.iter().enumerate() {
             let x = c.ts as f64 - start;
@@ -129,6 +136,8 @@ pub fn render_metrics_in_pane(app: &App, kind: MetricsKind, area: Rect, frame: &
             loading: tl.is_loading(),
             range: tl.range,
             claimed: false,
+            cut: tl.trail_cut,
+            earliest: None,
         })
     });
     render_metrics_kind(app, kind, area, frame);
@@ -176,9 +185,15 @@ fn marker_keys() -> Vec<Span<'static>> {
 fn marker_legend(ctx: &MarkerCtx, width: u16) -> Line<'static> {
     let dim = Style::default().fg(theme::text_dim());
     let mut spans = Vec::new();
+    // The lookup stopped short of the chart's start: the drawn changes are
+    // only the newest, and the stretch before `cut` is unknown, not quiet.
+    let cut = ctx.cut.filter(|&c| ctx.earliest.is_some_and(|e| e < c));
     if ctx.drawn.is_empty() {
         let msg = if ctx.loading {
             "loading changes…".to_string()
+        } else if let Some(c) = cut {
+            let at = crate::aws::services::cloudwatch::fmt_epoch_secs(c);
+            format!("no changes since {} (CloudTrail read no further)", &at[5..])
         } else {
             format!("no changes in this window ({} in the last {})", ctx.events.len(), ctx.range.label())
         };
@@ -198,7 +213,8 @@ fn marker_legend(ctx: &MarkerCtx, width: u16) -> Line<'static> {
         }
     }
     let n = ctx.drawn.len();
-    spans.push(Span::styled(format!("{n} change{}  ", if n == 1 { "" } else { "s" }), dim));
+    let plus = if cut.is_some() { "+" } else { "" };
+    spans.push(Span::styled(format!("{n}{plus} change{}  ", if n == 1 && plus.is_empty() { "" } else { "s" }), dim));
     let more_w = 10;
     let budget = (width as usize).saturating_sub(spans.iter().map(|s| s.width()).sum::<usize>() + more_w);
     let mut used = 0;
@@ -2998,6 +3014,8 @@ mod tests {
                     loading: false,
                     range: Default::default(),
                     claimed: false,
+                    cut: None,
+                    earliest: None,
                 })
             });
         }
@@ -3042,6 +3060,8 @@ mod tests {
             loading: false,
             range: Default::default(),
             claimed: false,
+            cut: None,
+            earliest: None,
         };
         let text = |l: Line| l.spans.iter().map(|s| s.content.to_string()).collect::<String>();
 
@@ -3053,6 +3073,14 @@ mod tests {
 
         let none = text(marker_legend(&ctx(&[]), 120));
         assert_eq!(none, "no changes in this window (5 in the last 7d)");
+
+        // The lookup stopped at its cap: a chart reaching back past that
+        // point counts with a `+`, or says how far back it knows nothing.
+        let capped = |drawn: &[usize], earliest: i64| MarkerCtx { cut: Some(1_000), earliest: Some(earliest), ..ctx(drawn) };
+        assert!(text(marker_legend(&capped(&[0, 1, 2, 3], 500), 200)).starts_with("4+ changes  "));
+        assert!(text(marker_legend(&capped(&[0, 1, 2, 3], 1_500), 200)).starts_with("4 changes  "), "window inside what was read");
+        let quiet = text(marker_legend(&capped(&[], 500), 200));
+        assert!(quiet.starts_with("no changes since ") && quiet.ends_with("(CloudTrail read no further)"), "{quiet}");
     }
 
     /// Side-by-side widgets must share a column edge. Computing each rect from

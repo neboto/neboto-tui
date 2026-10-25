@@ -69,6 +69,9 @@ pub struct TrailLensState {
     pub message: Option<String>,
     /// Ownership summary line (`crate::ownership`), shown in the header.
     pub ownership: Option<String>,
+    /// The CloudTrail lookup stopped at its cap at this time (epoch secs):
+    /// its events before it were never read.
+    pub trail_cut: Option<i64>,
 }
 
 impl TrailLensState {
@@ -87,6 +90,7 @@ impl TrailLensState {
         self.pending = sources;
         self.error = None;
         self.aux_notes.clear();
+        self.trail_cut = None;
     }
 
     pub fn is_loading(&self) -> bool {
@@ -299,11 +303,12 @@ pub fn render_trail_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) {
             format!("{} ", source.badge().trim()),
             Style::default().fg(source_color(source)),
         ));
+        let more = if source == TimelineSource::Trail && st.trail_cut.is_some() { "+" } else { "" };
         counts.push(Span::styled(
             if in_flight {
                 "… ".to_string()
             } else {
-                format!("{}  ", list.len())
+                format!("{}{more}  ", list.len())
             },
             Style::default().fg(theme::text_dim()),
         ));
@@ -312,6 +317,15 @@ pub fn render_trail_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) {
         counts.push(Span::styled(
             format!(" ⛓ {}", own),
             Style::default().fg(theme::text_dim()),
+        ));
+    }
+    // The lookup stopped at its cap: say how far back the CloudTrail rows
+    // go, so an empty stretch before it isn't read as "nothing changed".
+    if let Some(cut) = st.trail_cut {
+        let at = crate::aws::services::cloudwatch::fmt_epoch_secs(cut);
+        counts.push(Span::styled(
+            format!("  · CloudTrail stopped at its cap: nothing before {} read", &at[5..]),
+            Style::default().fg(theme::warning()),
         ));
     }
     for note in &st.aux_notes {

@@ -371,6 +371,9 @@ pub enum Event {
     TrailLensLoaded {
         generation: u64,
         events: Vec<crate::aws::services::cloudtrail::CloudTrailEvent>,
+        /// The lookup stopped at its cap here (epoch secs): older events
+        /// went unread.
+        cut: Option<i64>,
     },
     /// The CloudTrail lens lookup failed.
     TrailLensError {

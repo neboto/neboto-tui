@@ -260,13 +260,15 @@ impl CtEventQuery {
 /// polling. `ReadOnly` can't combine with a `ResourceName` attribute, so
 /// mutations-only (`include_reads=false`) is filtered client-side using the same
 /// `read_only` flag `is_noise()` uses. Capped at ~50 matched events, with a hard
-/// scan cap so an all-reads resource can't paginate unbounded.
+/// scan cap so an all-reads resource can't paginate unbounded; a lookup that
+/// stops at either says where (`TrailLookup::cut`), since the events are
+/// newest first and everything older than that point went unread.
 pub async fn fetch_trail_events(
     client: CloudTrailClient,
     keys: Vec<String>,
     range: TrailRange,
     include_reads: bool,
-) -> Result<Vec<CloudTrailEvent>> {
+) -> Result<TrailLookup> {
     const MAX_EVENTS: usize = 50;
     const MAX_SCAN: usize = 2000; // bound pagination when filtering reads out
 
@@ -289,6 +291,7 @@ pub async fn fetch_trail_events(
 
         let mut events: Vec<CloudTrailEvent> = Vec::new();
         let mut scanned = 0usize;
+        let mut cut = None;
         let mut paginator = client
             .lookup_events()
             .lookup_attributes(attr)
@@ -303,10 +306,12 @@ pub async fn fetch_trail_events(
                 Ok(event) => {
                     scanned += 1;
                     let parsed = CloudTrailEvent::from_sdk(&event);
+                    let at = parsed.event_time_secs;
                     if include_reads || !parsed.read_only {
                         events.push(parsed);
                     }
                     if events.len() >= MAX_EVENTS || scanned >= MAX_SCAN {
+                        cut = Some(at);
                         break;
                     }
                 }
@@ -314,12 +319,21 @@ pub async fn fetch_trail_events(
             }
         }
 
-        if !events.is_empty() {
-            return Ok(events);
+        if !events.is_empty() || cut.is_some() {
+            return Ok(TrailLookup { events, cut });
         }
     }
 
-    Ok(Vec::new())
+    Ok(TrailLookup::default())
+}
+
+/// What [`fetch_trail_events`] read: the events, newest first, and — when it
+/// stopped at a cap — the time of the last event it read. Nothing before
+/// `cut` was looked at, so "no changes" there means "not fetched".
+#[derive(Debug, Default)]
+pub struct TrailLookup {
+    pub events: Vec<CloudTrailEvent>,
+    pub cut: Option<i64>,
 }
 
 /// A trail configuration (Trails sub-tab): `DescribeTrails` enriched with
