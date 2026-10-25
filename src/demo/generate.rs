@@ -86,15 +86,13 @@ fn filter_log_events(body: &str, now_ms: i64) -> Option<String> {
     Some(serde_json::json!({ "events": events, "searchedLogStreams": [] }).to_string())
 }
 
-/// The namespaces whose `MetricStat` queries get a generated series — the
-/// spec-charted kinds (`aws::metrics`). Anything else (a dashboard's
-/// expressions, SEARCH queries) falls through to the fixtures.
-const METRIC_NAMESPACES: &[&str] = &["AWS/EC2", "AWS/Lambda", "AWS/RDS"];
-
 /// Each query's series as a fixed function of (metric, resource, time): a
 /// slow wave around a per-metric level plus repeatable jitter, so a refetch
 /// shows the same history with a new point at the end. `orders-api`'s
-/// errors climb over the last 40 minutes, the story its alarm tells.
+/// errors climb over the last 40 minutes, the story its alarm tells. Only
+/// a request made of plain `MetricStat` queries (the spec-charted kinds,
+/// `aws::metrics`) is answered; one with an expression (SEARCH, math)
+/// falls through to the fixtures.
 fn get_metric_data(body: &str, now: i64) -> Option<String> {
     let req: serde_json::Value = serde_json::from_str(body).ok()?;
     let ts = |k: &str| req.get(k).and_then(|v| v.get("$timestamp").or(Some(v))).and_then(|v| v.as_f64());
@@ -104,10 +102,6 @@ fn get_metric_data(body: &str, now: i64) -> Option<String> {
     for q in queries {
         let stat = q.get("MetricStat")?;
         let metric = stat.get("Metric")?;
-        let namespace = metric.get("Namespace")?.as_str()?;
-        if !METRIC_NAMESPACES.contains(&namespace) {
-            return None;
-        }
         let name = metric.get("MetricName")?.as_str()?;
         let resource: String = metric
             .get("Dimensions")
@@ -347,7 +341,11 @@ mod tests {
         let errors: Vec<f64> = r[0]["Values"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
         assert!(errors[50..].iter().sum::<f64>() > errors[..10].iter().sum::<f64>(), "orders-api errors climb");
         assert_eq!(get_metric_data(&body, now), get_metric_data(&body, now), "repeatable");
-        let other = body.replace("AWS/EC2", "AWS/Kafka");
-        assert!(get_metric_data(&other, now).is_none(), "other namespaces fall through");
+        let search = serde_json::json!({
+            "StartTime": {"$timestamp": now - 3_600}, "EndTime": {"$timestamp": now},
+            "MetricDataQueries": [{"Id": "m0", "Expression": "SUM(SEARCH('{AWS/Kafka} x', 'Sum', 60))"}]
+        })
+        .to_string();
+        assert!(get_metric_data(&search, now).is_none(), "expressions fall through");
     }
 }

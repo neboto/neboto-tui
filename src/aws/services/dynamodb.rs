@@ -10,7 +10,6 @@ use std::any::Any;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-pub use crate::aws::services::ec2::MetricsTimeRange;
 
 pub struct DynamoDbService {
     client: DdbClient,
@@ -709,84 +708,6 @@ fn friendly_query_error(raw: &str) -> String {
 }
 
 // ── Metrics (AWS/DynamoDB) ────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct DdbMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub consumed_read: Vec<(f64, f64)>,
-    pub consumed_write: Vec<(f64, f64)>,
-    pub read_throttle: Vec<(f64, f64)>,
-    pub write_throttle: Vec<(f64, f64)>,
-    pub x_max: f64,
-}
-
-#[derive(Debug, Clone)]
-pub enum DdbMetricsState {
-    Loading,
-    Loaded(DdbMetricsData),
-}
-
-pub async fn fetch_ddb_metrics(
-    cw: aws_sdk_cloudwatch::Client,
-    table: String,
-    time_range: MetricsTimeRange,
-) -> Result<DdbMetricsData> {
-    use aws_sdk_cloudwatch::types::{Dimension, Statistic};
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start = now - time_range.duration_secs();
-    let period = time_range.period_secs();
-    let start_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(start);
-    let end_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(now);
-
-    let dim = || Dimension::builder().name("TableName").value(&table).build();
-    let metric = |name: &'static str| {
-        cw.get_metric_statistics()
-            .namespace("AWS/DynamoDB")
-            .metric_name(name)
-            .dimensions(dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Sum]))
-            .send()
-    };
-
-    let (cr, cw_r, rt, wt) = tokio::join!(
-        metric("ConsumedReadCapacityUnits"),
-        metric("ConsumedWriteCapacityUnits"),
-        metric("ReadThrottleEvents"),
-        metric("WriteThrottleEvents"),
-    );
-
-    let parse = |resp: std::result::Result<
-        aws_sdk_cloudwatch::operation::get_metric_statistics::GetMetricStatisticsOutput,
-        _,
-    >| -> Vec<(f64, f64)> {
-        let dps = match resp {
-            Ok(r) => r.datapoints().to_vec(),
-            Err(_) => vec![],
-        };
-        let mut pts: Vec<(f64, f64)> = dps
-            .iter()
-            .filter_map(|dp| Some((dp.timestamp()?.secs() as f64 - start as f64, dp.sum()?)))
-            .collect();
-        pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        pts
-    };
-
-    Ok(DdbMetricsData {
-        time_range,
-        consumed_read: parse(cr),
-        consumed_write: parse(cw_r),
-        read_throttle: parse(rt),
-        write_throttle: parse(wt),
-        x_max: time_range.duration_secs() as f64,
-    })
-}
 
 // ── Timestamp helpers ─────────────────────────────────────────────────────────
 

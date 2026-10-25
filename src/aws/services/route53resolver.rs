@@ -742,64 +742,6 @@ async fn fetch_resolver_tags(
 
 // ── Endpoint CloudWatch metrics (`m`) — AWS/Route53Resolver, dim EndpointId ───
 
-use crate::aws::services::ec2::{parse_metric_datapoints, MetricsTimeRange};
-
-#[derive(Debug, Clone)]
-pub struct ResolverEpMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub inbound_queries: Vec<(f64, f64)>,
-    pub outbound_queries: Vec<(f64, f64)>,
-    pub x_max: f64,
-}
-
-#[derive(Debug, Clone)]
-pub enum ResolverEpMetricsState {
-    Loading,
-    Loaded(ResolverEpMetricsData),
-}
-
-/// Query volume through one resolver endpoint. Resolver metrics are regional
-/// (unlike the Route 53 data plane) — regular regional CloudWatch client.
-/// Both directions are fetched; only the endpoint's own direction has data,
-/// the other series is simply empty.
-pub async fn fetch_resolver_ep_metrics(
-    cw: aws_sdk_cloudwatch::Client,
-    endpoint_id: String,
-    time_range: MetricsTimeRange,
-) -> crate::error::Result<ResolverEpMetricsData> {
-    use aws_sdk_cloudwatch::types::{Dimension, Statistic};
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start = now - time_range.duration_secs();
-    let period = time_range.period_secs();
-    let start_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(start);
-    let end_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(now);
-
-    let metric = |name: &'static str| {
-        cw.get_metric_statistics()
-            .namespace("AWS/Route53Resolver")
-            .metric_name(name)
-            .dimensions(Dimension::builder().name("EndpointId").value(&endpoint_id).build())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Sum]))
-            .send()
-    };
-
-    let (inbound, outbound) =
-        tokio::join!(metric("InboundQueryVolume"), metric("OutboundQueryVolume"));
-
-    Ok(ResolverEpMetricsData {
-        time_range,
-        inbound_queries: parse_metric_datapoints(inbound, start),
-        outbound_queries: parse_metric_datapoints(outbound, start),
-        x_max: time_range.duration_secs() as f64,
-    })
-}
 
 #[cfg(test)]
 mod tests {

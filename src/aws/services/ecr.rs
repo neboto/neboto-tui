@@ -1388,60 +1388,6 @@ fn is_leap(y: i32) -> bool {
 
 // ── CloudWatch metrics (`m` overlay) — AWS/ECR, dimension RepositoryName ──────
 
-pub use crate::aws::services::ec2::{parse_metric_datapoints, MetricsTimeRange};
-
-#[derive(Debug, Clone)]
-pub struct EcrMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub pull_count: Vec<(f64, f64)>,
-    pub x_max: f64,
-}
-
-#[derive(Debug, Clone)]
-pub enum EcrMetricsState {
-    Loading,
-    Loaded(EcrMetricsData),
-}
-
-/// Pull `AWS/ECR` metrics for one repository. `RepositoryPullCount` is the
-/// namespace's only metric — one chart, but it answers "is anything still
-/// pulling this image?" before an archive/cleanup.
-pub async fn fetch_ecr_metrics(
-    cw: aws_sdk_cloudwatch::Client,
-    repo_name: String,
-    time_range: MetricsTimeRange,
-) -> crate::error::Result<EcrMetricsData> {
-    use aws_sdk_cloudwatch::types::{Dimension, Statistic};
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start = now - time_range.duration_secs();
-
-    let resp = cw
-        .get_metric_statistics()
-        .namespace("AWS/ECR")
-        .metric_name("RepositoryPullCount")
-        .dimensions(
-            Dimension::builder()
-                .name("RepositoryName")
-                .value(&repo_name)
-                .build(),
-        )
-        .start_time(aws_sdk_cloudwatch::primitives::DateTime::from_secs(start))
-        .end_time(aws_sdk_cloudwatch::primitives::DateTime::from_secs(now))
-        .period(time_range.period_secs())
-        .set_statistics(Some(vec![Statistic::Sum]))
-        .send()
-        .await;
-
-    Ok(EcrMetricsData {
-        time_range,
-        pull_count: parse_metric_datapoints(resp, start),
-        x_max: time_range.duration_secs() as f64,
-    })
-}
 
 #[cfg(test)]
 mod image_tests {
