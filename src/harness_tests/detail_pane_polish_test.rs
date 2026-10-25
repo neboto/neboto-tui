@@ -374,3 +374,74 @@ async fn exposure_folds_a_hundred_open_rules() {
     );
     assert!(body.iter().any(|(k, v)| k.is_empty() && v == "· 101 rules open to the internet — 2 Inbound has them all"), "{body:#?}");
 }
+
+fn nacl_entry(n: i32, allow: bool, proto: &str, cidr: &str, egress: bool) -> aws_sdk_ec2::types::NetworkAclEntry {
+    use aws_sdk_ec2::types::{NetworkAclEntry, PortRange, RuleAction};
+    NetworkAclEntry::builder()
+        .rule_number(n)
+        .protocol(proto)
+        .cidr_block(cidr)
+        .egress(egress)
+        .rule_action(if allow { RuleAction::Allow } else { RuleAction::Deny })
+        .port_range(PortRange::builder().from(443).to(443).build())
+        .build()
+}
+
+/// A network ACL opens on an Overview: what each direction does in a line,
+/// the rules with the catch-all drawn `*`, and its subnets as jumps.
+#[tokio::test]
+async fn a_network_acl_opens_on_an_overview() {
+    use aws_sdk_ec2::types::{NetworkAcl, NetworkAclAssociation};
+    let (mut app, tx, _rx) = test_app().await;
+    let acl = NetworkAcl::builder()
+        .network_acl_id("acl-0web")
+        .vpc_id("vpc-0123456789abcdef0")
+        .is_default(false)
+        .entries(nacl_entry(90, false, "6", "198.51.100.0/24", false))
+        .entries(nacl_entry(100, true, "6", "0.0.0.0/0", false))
+        .entries(nacl_entry(32767, false, "-1", "0.0.0.0/0", false))
+        .entries(nacl_entry(100, true, "-1", "0.0.0.0/0", true))
+        .entries(nacl_entry(32767, false, "-1", "0.0.0.0/0", true))
+        .associations(NetworkAclAssociation::builder().subnet_id("subnet-0aaa1111").build())
+        .build();
+    select_mock(&mut app, ServiceType::VPC, Box::new(crate::aws::services::vpc::NetworkAcl::from_sdk(&acl)));
+    app.details_focused = true;
+    app.reset_detail_section_to_default(&tx);
+
+    assert_eq!(app.selected_descriptor().unwrap().sections[0].label, "Overview");
+    let body = app.get_detail_lines();
+    let has = |k: &str, v: &str| body.iter().any(|(bk, bv)| bk == k && bv == v);
+    assert_eq!(body[0], ("ACL ID".to_string(), "acl-0web".to_string()));
+    assert!(has("Inbound", "1 allow · 1 deny, then deny the rest — first match wins"), "{body:#?}");
+    assert!(has("Outbound", "allows all traffic (rule 100)"), "{body:#?}");
+    assert!(body.iter().any(|(k, _)| k.trim_start().starts_with("*  ✗ DENY")), "the catch-all reads *: {body:#?}");
+    assert!(!body.iter().any(|(k, _)| k.contains("32767")), "{body:#?}");
+
+    let subnet = body.iter().position(|(k, _)| k.trim() == "subnet-0aaa1111").expect("subnet row");
+    app.details_selected_index = Some(subnet);
+    app.handle_key(key(KeyCode::Enter), &tx).await.unwrap();
+    assert_eq!(app.pending_jump.as_deref(), Some("subnet-0aaa1111"), "a subnet row jumps to it");
+}
+
+/// Each direction's effect, decided by the first rule.
+#[test]
+fn a_network_acl_effect_reads_its_first_rule() {
+    use aws_sdk_ec2::types::NetworkAcl;
+    let effect = |entries: Vec<aws_sdk_ec2::types::NetworkAclEntry>| {
+        let acl = crate::aws::services::vpc::NetworkAcl::from_sdk(
+            &NetworkAcl::builder().network_acl_id("acl-x").set_entries(Some(entries)).build(),
+        );
+        crate::ui::widgets::details_pane::network_acl_section_lines(
+            &acl,
+            crate::aws::services::vpc::NetworkAclDetailSection::Overview,
+        )
+        .into_iter()
+        .find(|(k, _)| k == "Inbound")
+        .unwrap()
+        .1
+    };
+    let catch_all = || nacl_entry(32767, false, "-1", "0.0.0.0/0", false);
+    assert_eq!(effect(vec![catch_all()]), "denies all traffic (no rules)");
+    assert_eq!(effect(vec![nacl_entry(50, false, "-1", "0.0.0.0/0", false), catch_all()]), "denies all traffic (rule 50)");
+    assert_eq!(effect(vec![nacl_entry(100, true, "-1", "::/0", false), catch_all()]), "allows all traffic (rule 100)");
+}

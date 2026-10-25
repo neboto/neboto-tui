@@ -1768,6 +1768,7 @@ impl NetworkAcl {
 crate::sections! {
     pub enum NetworkAclDetailSection,
     pub static NETWORK_ACL_SECTIONS = [
+        Overview "Overview",
         Inbound "Inbound",
         Outbound "Outbound",
         Associations "Associations",
