@@ -2,9 +2,9 @@
 # front of it, then back, and N: the service's effective network access.
 #
 # Rows counted:
-#   - ECS service · 4 Networking: 0 blank, 1 header, 2 Container, 3 Target Group → j j j ⏎
-#   - Target group · 2 Config: G lands on the trailing blank row; k is the
-#     storefront-alb row under "Load Balancers" → G k ⏎
+#   - ECS service · 4 Networking: 0 Load Balancers, 1 Container, 2 Target Group → j j ⏎
+#   - Target group · 3 Config: the storefront-alb row under "Load Balancers" is
+#     the last row → G ⏎
 
 Output demo/scenes/follow-links.gif
 Output demo/scenes/follow-links.mp4
@@ -49,17 +49,15 @@ Sleep 1.5s
 # Networking: the load balancer wiring, with → on everything followable.
 Type "4"
 Sleep 2s
-Type "jjj"
+Type "jj"
 Sleep 800ms
 Enter
 Sleep 2.2s
 
 # The target group: three healthy targets. Its Config lists the ALB.
-Type "2"
+Type "3"
 Sleep 1.5s
 Type "G"
-Sleep 300ms
-Type "k"
 Sleep 800ms
 Enter
 Sleep 2s

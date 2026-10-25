@@ -35,7 +35,7 @@ mp4 demo/neboto.mp4 "$media/demo.mp4"
 gif demo/neboto.gif "$media/demo.gif"
 png demo/poster.png "$media/poster.png"
 png demo/screenshot.png "$media/screenshot.png"
-for scene in follow-links who-changed lambda-tail stack-drift; do
+for scene in follow-links who-changed lambda-tail stack-drift metrics; do
   mp4 "demo/scenes/$scene.mp4" "$media/scenes/$scene.mp4"
 done
 echo "wrote $media (recordings cropped by ${bar}px; the page's <img> for screenshot.png says 1200×670)"
