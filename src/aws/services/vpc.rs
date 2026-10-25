@@ -1018,6 +1018,7 @@ impl RouteTable {
 crate::sections! {
     pub enum RouteTableDetailSection,
     pub static ROUTE_TABLE_SECTIONS = [
+        Overview "Overview",
         Routes "Routes",
         Associations "Associations",
         Tags "Tags",
@@ -1768,6 +1769,7 @@ impl NetworkAcl {
 crate::sections! {
     pub enum NetworkAclDetailSection,
     pub static NETWORK_ACL_SECTIONS = [
+        Overview "Overview",
         Inbound "Inbound",
         Outbound "Outbound",
         Associations "Associations",

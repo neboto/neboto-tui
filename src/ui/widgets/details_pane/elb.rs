@@ -262,7 +262,7 @@ pub(super) fn lb_tags_lines(lb: &LoadBalancer) -> Vec<(String, String)> {
 
 pub(super) fn render_target_group_split(app: &App, tg: &TargetGroup, area: Rect, frame: &mut Frame) {
     let focused = app.details_focused;
-    let footer = detail_footer(app, focused, 4, "");
+    let footer = detail_footer(app, focused, 5, "");
 
     let mut block = theme::pane_block("Target Group", focused);
     block = block.title_bottom(
@@ -311,13 +311,6 @@ pub(super) fn build_target_group_header_lines(tg: &TargetGroup) -> Vec<Line<'sta
     lines.push(Line::raw(""));
     lines.push(header_kv("Protocol", &tg.target_display()));
     lines.push(header_kv("Target Type", &tg.target_type));
-    if let Some(vpc) = &tg.vpc_id {
-        lines.push(header_kv("VPC", vpc));
-    }
-    lines.push(header_kv(
-        "Load Balancers",
-        &tg.load_balancer_arns.len().to_string(),
-    ));
 
     lines.push(Line::raw(""));
     lines
@@ -335,6 +328,7 @@ pub fn target_group_section_lines(
     attributes_state: Option<&crate::lazy::Lazy<Vec<(String, String)>>>,
 ) -> Vec<(String, String)> {
     match section {
+        TargetGroupDetailSection::Overview => target_group_overview_rows(tg, health_state),
         TargetGroupDetailSection::Health => target_group_health_lines(health_state),
         TargetGroupDetailSection::Config => target_group_config_lines(tg),
         TargetGroupDetailSection::Attributes => target_group_attributes_lines(attributes_state),
@@ -465,6 +459,187 @@ pub(super) fn target_group_attributes_lines(
     rows
 }
 
+/// Targets, load balancers and problem reasons the Overview lists before
+/// pointing at the tab that has them all.
+const TG_OVERVIEW_TARGETS: usize = 8;
+const TG_OVERVIEW_LBS: usize = 4;
+const TG_OVERVIEW_PROBLEMS: usize = 3;
+
+/// The Health tab's table heading and its rule (plain content lines).
+fn target_health_table_header() -> [(String, String); 2] {
+    [
+        (format!(" {:<22}  {:>5}  {:<12}  {:<11}", "Target", "Port", "Zone", "State"), String::new()),
+        (
+            format!(" {}  {}  {}  {}", "─".repeat(22), "─".repeat(5), "─".repeat(12), "─".repeat(11)),
+            String::new(),
+        ),
+    ]
+}
+
+/// One registered target as a table line, shared by Overview and Health so
+/// the two can't drift. The id stays in the text, so ⏎ jumps an instance.
+fn target_health_line(e: &crate::aws::services::elb::TargetHealthEntry) -> (String, String) {
+    let port = e.port.map(|p| p.to_string()).unwrap_or_else(|| "-".to_string());
+    let zone = e.availability_zone.clone().unwrap_or_else(|| "-".to_string());
+    (format!(" {:<22}  {:>5}  {:<12}  {:<11}", e.target_id, port, zone, e.state), String::new())
+}
+
+/// The health check in a line: `HTTP /health :traffic-port every 30s, 5/2`
+/// (healthy/unhealthy thresholds), then the success codes.
+fn health_check_summary(tg: &TargetGroup) -> String {
+    if !tg.health_check_enabled {
+        return "disabled".to_string();
+    }
+    let mut s = if tg.health_check_protocol.is_empty() { tg.protocol.clone() } else { tg.health_check_protocol.clone() };
+    if let Some(path) = tg.health_check_path.as_deref().filter(|p| !p.is_empty()) {
+        s.push_str(&format!(" {path}"));
+    }
+    if let Some(port) = tg.health_check_port.as_deref().filter(|p| !p.is_empty()) {
+        s.push_str(&format!(" :{port}"));
+    }
+    if let Some(i) = tg.health_check_interval_secs {
+        s.push_str(&format!(" every {i}s"));
+    }
+    if let (Some(h), Some(u)) = (tg.healthy_threshold, tg.unhealthy_threshold) {
+        s.push_str(&format!(", {h}/{u}"));
+    }
+    if let Some(m) = tg.matcher.as_deref().filter(|m| !m.is_empty()) {
+        s.push_str(&format!(", codes {m}"));
+    }
+    let s = s.trim().to_string();
+    if s.is_empty() { "—".to_string() } else { s }
+}
+
+/// `3 healthy · 1 unhealthy · 1 draining`: healthy always first (a `0
+/// healthy` is the news), then the other states in the order they appear.
+fn target_state_counts(entries: &[crate::aws::services::elb::TargetHealthEntry]) -> String {
+    let mut counts: Vec<(&str, usize)> = vec![("healthy", 0)];
+    for e in entries {
+        match counts.iter_mut().find(|(s, _)| *s == e.state) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((e.state.as_str(), 1)),
+        }
+    }
+    counts.iter().map(|(s, n)| format!("{n} {s}")).collect::<Vec<_>>().join(" · ")
+}
+
+/// Targets AWS isn't sending traffic to for a reason someone should read,
+/// folded by state + reason so fifty failing instances are one line.
+/// `initial` and `draining` are passing states (registering, leaving).
+fn target_problem_rows(entries: &[crate::aws::services::elb::TargetHealthEntry]) -> Vec<(String, String)> {
+    let mut groups: Vec<(&str, String, Vec<&str>)> = Vec::new();
+    for e in entries.iter().filter(|e| !matches!(e.state.as_str(), "healthy" | "initial" | "draining")) {
+        let why = e
+            .description
+            .clone()
+            .filter(|d| !d.is_empty())
+            .or_else(|| e.reason.clone())
+            .unwrap_or_else(|| "no reason given".to_string());
+        match groups.iter_mut().find(|(s, w, _)| *s == e.state && *w == why) {
+            Some((_, _, ids)) => ids.push(&e.target_id),
+            None => groups.push((&e.state, why, vec![&e.target_id])),
+        }
+    }
+    let mut rows: Vec<(String, String)> = groups
+        .iter()
+        .take(TG_OVERVIEW_PROBLEMS)
+        .map(|(state, why, ids)| {
+            let who = match ids.as_slice() {
+                [one] => one.to_string(),
+                many => format!("{} targets", many.len()),
+            };
+            (format!("  ⚠ {who} {state} — {why}"), String::new())
+        })
+        .collect();
+    if groups.len() > TG_OVERVIEW_PROBLEMS {
+        rows.push((
+            String::new(),
+            format!("· {} more reasons — 2 Health", groups.len() - TG_OVERVIEW_PROBLEMS),
+        ));
+    }
+    rows
+}
+
+/// A load balancer's name, from its ARN (`…:loadbalancer/app/NAME/hash`).
+fn lb_name_from_arn(arn: &str) -> &str {
+    arn.rsplit('/').nth(1).unwrap_or(arn)
+}
+
+fn target_group_overview_rows(
+    tg: &TargetGroup,
+    health: Option<&crate::lazy::Lazy<Vec<crate::aws::services::elb::TargetHealthEntry>>>,
+) -> Vec<(String, String)> {
+    let or_dash = |s: &str| if s.is_empty() { "—".to_string() } else { s.to_string() };
+    // The header repeats the name, but only a body row can be copied with
+    // `y` from here.
+    let mut rows = vec![
+        ("Target Group ARN".to_string(), tg.arn.clone()),
+        ("Name".to_string(), or_dash(&tg.name)),
+    ];
+    let protocol = match &tg.protocol_version {
+        Some(v) if !v.is_empty() => format!("{} ({v})", tg.target_display()),
+        _ => tg.target_display(),
+    };
+    rows.push(("Protocol".to_string(), or_dash(&protocol)));
+    rows.push(("Target Type".to_string(), or_dash(&tg.target_type)));
+    if let Some(vpc) = tg.vpc_id.as_deref().filter(|v| !v.is_empty()) {
+        rows.push(("VPC".to_string(), vpc.to_string()));
+    }
+
+    rows.push((String::new(), String::new()));
+    rows.push(("Health".to_string(), String::new()));
+    let entries = match health {
+        None | Some(crate::lazy::Lazy::Loading) => {
+            rows.push(("Targets".to_string(), "Loading…".to_string()));
+            None
+        }
+        Some(crate::lazy::Lazy::Error(e)) => {
+            rows.extend(error_rows(e));
+            None
+        }
+        Some(crate::lazy::Lazy::Loaded(list)) if list.is_empty() => {
+            rows.push(("Targets".to_string(), "none registered".to_string()));
+            None
+        }
+        Some(crate::lazy::Lazy::Loaded(list)) => {
+            rows.push(("Targets".to_string(), target_state_counts(list)));
+            rows.extend(target_problem_rows(list));
+            Some(list)
+        }
+    };
+    rows.push(("Check".to_string(), health_check_summary(tg)));
+
+    rows.push((String::new(), String::new()));
+    rows.push((format!("Load Balancers ({})", tg.load_balancer_arns.len()), String::new()));
+    if tg.load_balancer_arns.is_empty() {
+        rows.push((String::new(), "Not attached to a load balancer".to_string()));
+    }
+    // The full ARN in the value is the Enter-able jump (arn_jump_target).
+    rows.extend(
+        tg.load_balancer_arns
+            .iter()
+            .take(TG_OVERVIEW_LBS)
+            .map(|arn| (lb_name_from_arn(arn).to_string(), arn.clone())),
+    );
+    if tg.load_balancer_arns.len() > TG_OVERVIEW_LBS {
+        rows.push((
+            String::new(),
+            format!("· {} more — 3 Config", tg.load_balancer_arns.len() - TG_OVERVIEW_LBS),
+        ));
+    }
+
+    if let Some(list) = entries {
+        rows.push((String::new(), String::new()));
+        rows.push((format!("Registered Targets ({})", list.len()), String::new()));
+        rows.extend(target_health_table_header());
+        rows.extend(list.iter().take(TG_OVERVIEW_TARGETS).map(target_health_line));
+        if list.len() > TG_OVERVIEW_TARGETS {
+            rows.push((String::new(), format!("· {} more — 2 Health", list.len() - TG_OVERVIEW_TARGETS)));
+        }
+    }
+    rows
+}
+
 pub(super) fn target_group_health_lines(health_state: Option<&crate::lazy::Lazy<Vec<crate::aws::services::elb::TargetHealthEntry>>>) -> Vec<(String, String)> {
     let mut rows = vec![("".to_string(), "".to_string())];
 
@@ -483,34 +658,9 @@ pub(super) fn target_group_health_lines(health_state: Option<&crate::lazy::Lazy<
                 ));
                 rows.push(("".to_string(), "".to_string()));
 
-                // Fixed-width table: Target / Port / Zone / State
-                rows.push((
-                    format!(
-                        " {:<22}  {:>5}  {:<12}  {:<11}",
-                        "Target", "Port", "Zone", "State"
-                    ),
-                    "".to_string(),
-                ));
-                rows.push((
-                    format!(
-                        " {}  {}  {}  {}",
-                        "─".repeat(22),
-                        "─".repeat(5),
-                        "─".repeat(12),
-                        "─".repeat(11)
-                    ),
-                    "".to_string(),
-                ));
+                rows.extend(target_health_table_header());
                 for e in entries {
-                    let port = e.port.map(|p| p.to_string()).unwrap_or_else(|| "-".to_string());
-                    let zone = e.availability_zone.clone().unwrap_or_else(|| "-".to_string());
-                    rows.push((
-                        format!(
-                            " {:<22}  {:>5}  {:<12}  {:<11}",
-                            e.target_id, port, zone, e.state
-                        ),
-                        "".to_string(),
-                    ));
+                    rows.push(target_health_line(e));
                     if e.state != "healthy" {
                         if let Some(reason) = &e.reason {
                             rows.push((format!("    reason: {}", reason), "".to_string()));
@@ -582,7 +732,7 @@ pub(super) fn target_group_config_lines(tg: &TargetGroup) -> Vec<(String, String
             format!("{} attached", tg.load_balancer_arns.len()),
         ));
         for arn in &tg.load_balancer_arns {
-            let name = arn.rsplit('/').nth(1).unwrap_or(arn);
+            let name = lb_name_from_arn(arn);
             // Carry the full ARN in the value so the row is an Enter-able jump
             // anchor to the Load Balancers tab (resolved by arn_jump_target).
             rows.push((format!("  {}", name), arn.clone()));
