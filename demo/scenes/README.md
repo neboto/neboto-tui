@@ -7,7 +7,7 @@ lists what's planted in it.
 
 The failed-deploy story is the hero loop, `demo/neboto.tape`, which also
 writes the site's `demo/poster.png`. `who-changed.tape` writes the site's
-still, `demo/screenshot.png`. The README shows the four below as a gallery.
+still, `demo/screenshot.png`. The README shows the five below as a gallery.
 
 | Scene | Shows |
 |---|---|
@@ -15,6 +15,7 @@ still, `demo/screenshot.png`. The README shows the four below as a gallery.
 | `who-changed.tape` | `W` on `web-sg`: SSH open to the world, and CloudTrail says who opened it |
 | `lambda-tail.tape` | `t` live-tails a Lambda's logs, `/` filters to the errors |
 | `stack-drift.tape` | A CloudFormation stack that drifted, and `W` finds the console edit behind it |
+| `metrics.tape` | `m` on an ECS service: CPU and memory with the failed deploy drawn on the chart, `W` to those changes and `Esc` back; then a Lambda's errors, `s` and the 30-day range |
 
 Record from the repo root, with the tools the main tape lists (`vhs` v0.11.0,
 `ttyd`, `ffmpeg`, a Nerd Font):

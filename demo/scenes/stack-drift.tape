@@ -2,8 +2,8 @@
 # which property, and W on the drifted target group shows who changed it.
 #
 # Rows counted:
-#   - Stack · 8 Drift: 0 blank, 1 Stack Drift, 2 blank, 3 WebTargetGroup,
-#     4 Type, 5 Physical ID → jjjjj ⏎ follows the target group
+#   - Stack · 8 Drift: 0 Stack Drift, 1 blank, 2 WebTargetGroup, 3 Type,
+#     4 Physical ID → jjjj ⏎ follows the target group
 
 Output demo/scenes/stack-drift.gif
 Output demo/scenes/stack-drift.mp4
@@ -48,7 +48,7 @@ Type "8"
 Sleep 2.5s
 
 # Follow the drifted resource, then ask who changed it.
-Type "jjjjj"
+Type "jjjj"
 Sleep 800ms
 Enter
 Sleep 2s

@@ -74,6 +74,10 @@ Each clip is one workflow against `neboto --demo`. Click for full size.
     <td width="50%"><a href="demo/scenes/lambda-tail.gif"><img src="demo/scenes/lambda-tail.gif" alt="Live-tailing a Lambda function's logs, filtered to errors"></a><br><b>Tail the logs.</b> <kbd>t</kbd> live-tails a Lambda; <kbd>/</kbd> filters to the DynamoDB throttles.</td>
     <td width="50%"><a href="demo/scenes/stack-drift.gif"><img src="demo/scenes/stack-drift.gif" alt="A drifted CloudFormation stack; the change timeline on the drifted resource shows the console edit behind it"></a><br><b>Explain the drift.</b> A stack's Drift section names the changed property; <kbd>W</kbd> on that resource finds the console edit.</td>
   </tr>
+  <tr>
+    <td width="50%"><a href="demo/scenes/metrics.gif"><img src="demo/scenes/metrics.gif" alt="An ECS service's CPU and memory with the failed deploy drawn on the chart, its change timeline, then a Lambda's errors and 30-day latency"></a><br><b>Chart it.</b> <kbd>m</kbd> charts a service with its changes drawn in; <kbd>W</kbd> opens them and <kbd>Esc</kbd> comes back. <kbd>s</kbd> cycles the statistic, <kbd>5</kbd> is the last 30 days.</td>
+    <td width="50%"></td>
+  </tr>
 </table>
 
 ---
