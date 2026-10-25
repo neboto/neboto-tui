@@ -262,6 +262,31 @@ async fn thirty_days_widens_the_markers_and_w_opens_their_timeline() {
     assert!(app.trail_in_pane.is_none() && app.metrics_in_pane.is_none());
 }
 
+/// `[` from 1h wraps to 30d, and the changes widen with it, as `]` and
+/// `5` do — else the chart spans 30 days with a week of markers and `W`
+/// opens on 7d (#288).
+#[tokio::test]
+async fn bracket_back_to_thirty_days_widens_the_markers_too() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let svc = app.services[&ServiceType::Lambda].clone();
+    let (rows, _) = crate::headless::list_all(svc, ServiceType::Lambda).await.ok().unwrap();
+    select_mock(&mut app, ServiceType::Lambda, rows.into_iter().next().unwrap());
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    use crate::aws::services::cloudtrail::TrailRange;
+    assert_eq!(app.chart_timeline.as_ref().map(|t| t.range), Some(TrailRange::D7));
+
+    press(&mut app, &tx, KeyCode::Char('[')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    assert_eq!(app.spec_metrics.as_ref().unwrap().range, crate::aws::services::ec2::MetricsTimeRange::ThirtyDays);
+    assert_eq!(app.chart_timeline.as_ref().map(|t| t.range), Some(TrailRange::D30));
+
+    let shift_w = KeyEvent::new(KeyCode::Char('W'), KeyModifiers::SHIFT);
+    app.handle_event(Event::Key(shift_w), &tx).await.unwrap();
+    assert_eq!(app.trail_in_pane.as_ref().map(|t| t.range), Some(TrailRange::D30));
+}
+
 /// The change legend rides the chart it explains (its bottom border), the
 /// view's own footer names `c`/`W`, and the status bar under an open view
 /// shows no keys: the detail pane's would mean something else here, and

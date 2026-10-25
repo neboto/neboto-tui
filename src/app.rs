@@ -32407,6 +32407,8 @@ impl App {
             KeyCode::Char('[') => {
                 st.range = crate::aws::metrics::step_range(st.range, -1);
                 self.fetch_spec_metrics(event_tx);
+                // From 1h this wraps to 30d.
+                self.widen_chart_markers(event_tx);
             }
             KeyCode::Char(c @ '1'..='5') => {
                 if let Some(r) = crate::aws::metrics::range_from_digit(c) {
