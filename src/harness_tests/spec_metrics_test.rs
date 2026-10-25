@@ -58,8 +58,8 @@ async fn m_on_a_function_charts_its_curated_set() {
 
     let screen = screen_of(&app);
     assert!(screen.contains("Metrics — Lambda function · orders-api"), "{screen}");
-    assert!(screen.contains(" 1 1h ") && screen.contains("default set"), "{screen}");
-    assert!(screen.contains("AWS/Lambda · FunctionName=orders-api"), "what is queried: {screen}");
+    assert!(screen.contains(" 1 1h ") && screen.contains("default set · AWS/Lambda"), "{screen}");
+    assert!(!screen.contains("FunctionName="), "the title already names the function: {screen}");
     assert!(screen.contains("▸ Invocations") && screen.contains("(sum)"), "{screen}");
     assert!(screen.contains("Duration") && screen.contains(" ms"), "{screen}");
     // Invocations shares its chart with errors and throttles: a legend.
@@ -323,7 +323,6 @@ async fn a_metric_row_shows_its_namespace_and_dimensions() {
     settle(&mut app, &tx, &mut rx).await;
     let screen = screen_of(&app);
     assert!(screen.contains("Metrics — CloudWatch metric · CPUUtilization"), "{screen}");
-    assert!(screen.contains("this metric"), "{screen}");
-    assert!(screen.contains("AWS/EC2 · InstanceId=i-0abc"), "{screen}");
+    assert!(screen.contains("this metric · AWS/EC2 · InstanceId=i-0abc"), "{screen}");
     assert!(app.spec_metrics.as_ref().unwrap().as_text().contains("AWS/EC2 · InstanceId=i-0abc"));
 }
