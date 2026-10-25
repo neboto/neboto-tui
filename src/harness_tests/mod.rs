@@ -42,6 +42,7 @@ mod xray_test;
 mod cost_anomalies_test;
 mod cost_tag_grouping_test;
 mod r53_records_test;
+mod r53_zone_overview_test;
 mod r53_zone_tags_test;
 mod detail_wrap_test;
 mod detail_pane_polish_test;
