@@ -42,6 +42,7 @@ pub mod macro_picker;
 pub mod message_log;
 pub mod messaging_tabs;
 pub mod metrics_overlay;
+pub mod spec_metrics;
 pub mod network_firewall_tabs;
 pub mod ram_tabs;
 pub mod ta_tabs;

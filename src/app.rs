@@ -555,12 +555,12 @@ pub enum LayoutMode {
 /// Rendered in-pane (not a modal) and expandable with `Z`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MetricsKind {
-    Ec2,
+    /// Charted from a spec table (`aws::metrics`, `App.spec_metrics`):
+    /// EC2 instances, Lambda functions, RDS instances and clusters.
+    Spec,
     Ebs,
-    Lambda,
     Ecs,
     EcsTask,
-    Rds,
     Asg,
     CwAlarm,
     Cost,
@@ -1099,11 +1099,9 @@ pub use crate::aws::services::inspector::InspSeverityScope;
 
 
 /// EC2 metrics types (CloudWatch-backed).
-pub use crate::aws::services::ec2::{Ec2MetricsState, EbsMetricsState, MetricsTimeRange};
+pub use crate::aws::services::ec2::{EbsMetricsState, MetricsTimeRange};
 pub use crate::aws::services::ecs::EcsMetricsState;
 pub use crate::aws::services::ecs::EcsTaskMetricsState;
-pub use crate::aws::services::lambda::LambdaMetricsState;
-pub use crate::aws::services::rds::RdsMetricsState;
 
 /// Sub-tab view for RDS resources
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -2659,9 +2657,13 @@ pub struct App {
 
     // Metric charts shown in the detail pane (in-pane, not a modal; `Z` expands).
     pub metrics_in_pane: Option<MetricsKind>,
+    // The shared range of the kinds that don't keep their own (WAF, NFW, EKS…).
     pub ec2_metrics_time_range: MetricsTimeRange,
-    // Keyed by instance ID; re-fetched on time-range change
-    pub ec2_metrics: HashMap<String, Ec2MetricsState>,
+    // The spec-driven metrics view (`MetricsKind::Spec`) and its sticky range.
+    pub spec_metrics: Option<crate::ui::widgets::spec_metrics::SpecMetricsState>,
+    pub spec_metrics_range: MetricsTimeRange,
+    // Bumped per fetch, so a superseded one (reopen, range, `r`) is dropped.
+    pub spec_metrics_generation: u64,
 
     // EBS volume metrics overlay
     pub ebs_metrics_time_range: MetricsTimeRange,
@@ -2672,12 +2674,6 @@ pub struct App {
     pub asg_metrics_time_range: MetricsTimeRange,
     // Keyed by ASG name; re-fetched on time-range change
     pub asg_metrics: HashMap<String, AsgMetricsState>,
-
-    // Lambda metrics overlay
-    pub lambda_metrics_time_range: MetricsTimeRange,
-    pub lambda_metrics_scroll: usize, // first visible chart index (0–2 of 5)
-    // Keyed by function name; re-fetched on time-range change
-    pub lambda_metrics: HashMap<String, LambdaMetricsState>,
 
     // Function name currently downloading its package (gates re-trigger + status).
     pub lambda_code_downloading: Option<String>,
@@ -2697,11 +2693,6 @@ pub struct App {
 
     // RDS sub-tab and detail section
     pub rds_view: RdsView,
-
-    // RDS instance metrics overlay
-    pub rds_metrics_time_range: MetricsTimeRange,
-    // Keyed by db_identifier; re-fetched on time-range change
-    pub rds_metrics: HashMap<String, RdsMetricsState>,
 
     // ELB sub-tab and detail section state
     pub elb_view: ElbView,
@@ -3478,14 +3469,13 @@ impl App {
             cw_alarm_metrics: HashMap::new(),
             metrics_in_pane: None,
             ec2_metrics_time_range: MetricsTimeRange::OneHour,
+            spec_metrics: None,
+            spec_metrics_range: MetricsTimeRange::OneHour,
+            spec_metrics_generation: 0,
             ebs_metrics_time_range: MetricsTimeRange::OneHour,
             ebs_metrics: HashMap::new(),
             asg_metrics_time_range: MetricsTimeRange::OneHour,
             asg_metrics: HashMap::new(),
-            ec2_metrics: HashMap::new(),
-            lambda_metrics_time_range: MetricsTimeRange::OneHour,
-            lambda_metrics_scroll: 0,
-            lambda_metrics: HashMap::new(),
             lambda_code_downloading: None,
             invoice_pdf_downloading: None,
             ecs_metrics_time_range: MetricsTimeRange::OneHour,
@@ -3493,8 +3483,6 @@ impl App {
             ecs_task_metrics_time_range: MetricsTimeRange::OneHour,
             ecs_task_metrics: HashMap::new(),
             rds_view: RdsView::Instances,
-            rds_metrics_time_range: MetricsTimeRange::OneHour,
-            rds_metrics: HashMap::new(),
             elb_view: ElbView::LoadBalancers,
             elb_metrics: HashMap::new(),
             elb_metrics_time_range: MetricsTimeRange::OneHour,
@@ -4157,10 +4145,6 @@ impl App {
                     self.success_message_time = Some(Instant::now());
                 }
             }
-            Event::Ec2MetricsLoaded { instance_id, data } => {
-                self.ec2_metrics
-                    .insert(instance_id, Ec2MetricsState::Loaded(data));
-            }
             Event::EbsMetricsLoaded { volume_id, data } => {
                 self.ebs_metrics
                     .insert(volume_id, EbsMetricsState::Loaded(data));
@@ -4168,10 +4152,6 @@ impl App {
             Event::AsgMetricsLoaded { group_name, data } => {
                 self.asg_metrics
                     .insert(group_name, AsgMetricsState::Loaded(data));
-            }
-            Event::LambdaMetricsLoaded { function_name, data } => {
-                self.lambda_metrics
-                    .insert(function_name, LambdaMetricsState::Loaded(data));
             }
             Event::LambdaCodeDownloaded { function_name, result } => {
                 if self.lambda_code_downloading.as_deref() == Some(function_name.as_str()) {
@@ -4218,10 +4198,6 @@ impl App {
             Event::EcsTaskMetricsLoaded { task_key, data } => {
                 self.ecs_task_metrics
                     .insert(task_key, EcsTaskMetricsState::Loaded(data));
-            }
-            Event::RdsMetricsLoaded { db_identifier, data } => {
-                self.rds_metrics
-                    .insert(db_identifier, RdsMetricsState::Loaded(data));
             }
             Event::AccountInfoLoaded {
                 account_id,
@@ -4995,8 +4971,19 @@ impl App {
                     }
                     return Ok(());
                 }
+                // Esc (and `a`) step out of the spec view's metric picker first.
+                KeyCode::Esc | KeyCode::Char('a')
+                    if kind == MetricsKind::Spec
+                        && self.spec_metrics.as_ref().is_some_and(|m| m.picker.is_some()) =>
+                {
+                    if let Some(m) = self.spec_metrics.as_mut() {
+                        m.picker = None;
+                    }
+                    return Ok(());
+                }
                 KeyCode::Esc | KeyCode::Char('m') | KeyCode::Char('q') => {
                     self.metrics_in_pane = None;
+                    self.spec_metrics = None;
                     self.chart_timeline = None;
                     return Ok(());
                 }
@@ -5021,18 +5008,7 @@ impl App {
                 _ => {}
             }
             match kind {
-                MetricsKind::Ec2 => match key.code {
-                    KeyCode::Char('r') => self.trigger_ec2_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.ec2_metrics_time_range = self.ec2_metrics_time_range.prev();
-                        self.trigger_ec2_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.ec2_metrics_time_range = self.ec2_metrics_time_range.next();
-                        self.trigger_ec2_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
+                MetricsKind::Spec => self.handle_spec_metrics_key(key, event_tx),
                 MetricsKind::Ebs => match key.code {
                     KeyCode::Char('r') => self.trigger_ebs_metrics_load(event_tx),
                     KeyCode::Char('[') => {
@@ -5042,28 +5018,6 @@ impl App {
                     KeyCode::Char(']') => {
                         self.ebs_metrics_time_range = self.ebs_metrics_time_range.next();
                         self.trigger_ebs_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Lambda => match key.code {
-                    KeyCode::Char('r') => self.trigger_lambda_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.lambda_metrics_time_range = self.lambda_metrics_time_range.prev();
-                        self.lambda_metrics_scroll = 0;
-                        self.trigger_lambda_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.lambda_metrics_time_range = self.lambda_metrics_time_range.next();
-                        self.lambda_metrics_scroll = 0;
-                        self.trigger_lambda_metrics_load(event_tx);
-                    }
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        if self.lambda_metrics_scroll < 2 {
-                            self.lambda_metrics_scroll += 1;
-                        }
-                    }
-                    KeyCode::Char('k') | KeyCode::Up if self.lambda_metrics_scroll > 0 => {
-                        self.lambda_metrics_scroll -= 1;
                     }
                     _ => {}
                 },
@@ -5090,18 +5044,6 @@ impl App {
                         self.ecs_task_metrics_time_range =
                             self.ecs_task_metrics_time_range.next();
                         self.trigger_ecs_task_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Rds => match key.code {
-                    KeyCode::Char('r') => self.trigger_rds_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.rds_metrics_time_range = self.rds_metrics_time_range.prev();
-                        self.trigger_rds_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.rds_metrics_time_range = self.rds_metrics_time_range.next();
-                        self.trigger_rds_metrics_load(event_tx);
                     }
                     _ => {}
                 },
@@ -30632,40 +30574,6 @@ impl App {
         }
     }
 
-    fn trigger_lambda_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(func) = self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::lambda::LambdaFunction>())
-        {
-            let function_name = func.function_name.clone();
-            let time_range = self.lambda_metrics_time_range;
-            self.lambda_metrics
-                .insert(function_name.clone(), LambdaMetricsState::Loading);
-            let cw_client = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                match crate::aws::services::lambda::fetch_lambda_metrics(
-                    cw_client,
-                    function_name.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    Ok(data) => {
-                        let _ = tx.send(crate::event::Event::LambdaMetricsLoaded {
-                            function_name,
-                            data});
-                    }
-                    Err(e) => {
-                        let _ = tx.send(crate::event::Event::ResourceLoadError {
-                            service: crate::aws::service::ServiceType::Lambda,
-                            error: format!("Failed to load Lambda metrics: {}", e)});
-                    }
-                }
-            });
-        }
-    }
-
     /// Lazy Code section: `GetFunction` metadata for the selected function,
     /// keyed by ARN. Idempotent once Loading/Loaded.
     /// Lazy Config section: reserved + provisioned concurrency and the
@@ -33809,45 +33717,167 @@ impl App {
         );
     }
 
-    fn trigger_rds_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        use crate::aws::services::rds::{RdsCluster, RdsInstance};
-        // Resolve (identifier, dimension) for either an instance or a cluster.
-        let target = self.get_selected_resource().and_then(|r| {
-            if let Some(db) = r.as_any().downcast_ref::<RdsInstance>() {
-                Some((db.db_identifier.clone(), "DBInstanceIdentifier"))
-            } else {
-                r.as_any()
-                    .downcast_ref::<RdsCluster>()
-                    .map(|c| (c.cluster_identifier.clone(), "DBClusterIdentifier"))
-            }
-        });
-        if let Some((db_identifier, dimension)) = target {
-            let time_range = self.rds_metrics_time_range;
-            self.rds_metrics
-                .insert(db_identifier.clone(), RdsMetricsState::Loading);
-            let cw_client = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                match crate::aws::services::rds::fetch_rds_metrics(
-                    cw_client,
-                    db_identifier.clone(),
-                    dimension,
-                    time_range,
-                )
-                .await
-                {
-                    Ok(data) => {
-                        let _ = tx.send(crate::event::Event::RdsMetricsLoaded {
-                            db_identifier,
-                            data});
-                    }
-                    Err(e) => {
-                        let _ = tx.send(crate::event::Event::ResourceLoadError {
-                            service: crate::aws::service::ServiceType::RDS,
-                            error: format!("Failed to load RDS metrics: {}", e)});
-                    }
+    /// The spec-table metrics (`aws::metrics`) for the selection, when its
+    /// kind is charted that way rather than by its own `MetricsKind`.
+    fn selected_metric_target(&self) -> Option<crate::aws::metrics::MetricTarget> {
+        use crate::aws::metrics::{MetricTarget, EC2_INSTANCE, LAMBDA_FUNCTION, RDS_DATABASE};
+        use crate::aws::services::{ec2::Ec2Instance, lambda::LambdaFunction, rds::{RdsCluster, RdsInstance}};
+        let r = self.get_selected_resource()?;
+        let any = r.as_any();
+        let (kind, namespace, dim, value, specs) = if let Some(i) = any.downcast_ref::<Ec2Instance>() {
+            ("EC2 instance", "AWS/EC2", "InstanceId", i.instance_id.clone(), EC2_INSTANCE)
+        } else if let Some(f) = any.downcast_ref::<LambdaFunction>() {
+            ("Lambda function", "AWS/Lambda", "FunctionName", f.function_name.clone(), LAMBDA_FUNCTION)
+        } else if let Some(db) = any.downcast_ref::<RdsInstance>() {
+            ("RDS instance", "AWS/RDS", "DBInstanceIdentifier", db.db_identifier.clone(), RDS_DATABASE)
+        } else {
+            // Aurora / Multi-AZ clusters roll up under the cluster id; some
+            // per-instance metrics (free storage) aren't published there.
+            let c = any.downcast_ref::<RdsCluster>()?;
+            ("RDS cluster", "AWS/RDS", "DBClusterIdentifier", c.cluster_identifier.clone(), RDS_DATABASE)
+        };
+        Some(MetricTarget {
+            title: format!("{kind} · {}", r.name()),
+            namespace,
+            dimensions: vec![(dim.to_string(), value)],
+            specs,
+        })
+    }
+
+    fn open_spec_metrics(
+        &mut self,
+        target: crate::aws::metrics::MetricTarget,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
+        self.spec_metrics =
+            Some(crate::ui::widgets::spec_metrics::SpecMetricsState::open(target, self.spec_metrics_range));
+        self.fetch_spec_metrics(event_tx);
+    }
+
+    /// One task, one `GetMetricData` call for every series of the view's
+    /// range, delivered through the apply-closure event: stamped with the
+    /// lazy epoch (a profile / region / role switch drops it) and the view's
+    /// generation (a reopen, a range change or `r` supersedes it). Off the
+    /// LazyMaps on purpose, like the other metrics: every open refetches.
+    fn fetch_spec_metrics(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        self.spec_metrics_generation += 1;
+        let generation = self.spec_metrics_generation;
+        let end = epoch_now();
+        // The change markers place themselves against the same `now`.
+        self.metrics_window_end = end;
+        let Some(st) = self.spec_metrics.as_mut() else { return };
+        st.loading = true;
+        self.spec_metrics_range = st.range;
+        let (queries, range) = (st.queries.clone(), st.range);
+        let cw = self.aws_clients.cloudwatch_client();
+        let epoch = self.lazy.epoch();
+        let tx = event_tx.clone();
+        tokio::spawn(async move {
+            let series = crate::aws::metrics::fetch_series(&cw, &queries, range, end).await;
+            let apply: Box<dyn FnOnce(&mut App) + Send> = Box::new(move |app: &mut App| {
+                if app.spec_metrics_generation != generation {
+                    return;
+                }
+                if let Some(st) = app.spec_metrics.as_mut() {
+                    st.set_series(end, series);
                 }
             });
+            let _ = tx.send(Event::Lazy(crate::lazy::LazyApply { epoch, apply }));
+        });
+    }
+
+    /// `a`: every metric CloudWatch has with the resource's dimensions.
+    fn open_spec_metric_picker(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::ui::widgets::spec_metrics::MetricPicker;
+        let Some(st) = self.spec_metrics.as_mut() else { return };
+        st.picker = Some(MetricPicker { loading: true, ..Default::default() });
+        let dims = st.target.dimensions.clone();
+        let cw = self.aws_clients.cloudwatch_client();
+        let epoch = self.lazy.epoch();
+        let generation = self.spec_metrics_generation;
+        let tx = event_tx.clone();
+        tokio::spawn(async move {
+            let result = crate::aws::metrics::list_definitions(&cw, &dims).await;
+            let apply: Box<dyn FnOnce(&mut App) + Send> = Box::new(move |app: &mut App| {
+                if app.spec_metrics_generation != generation {
+                    return;
+                }
+                let Some(p) = app.spec_metrics.as_mut().and_then(|st| st.picker.as_mut()) else { return };
+                p.loading = false;
+                match result {
+                    Ok(defs) => p.defs = defs,
+                    Err(e) => p.error = Some(e),
+                }
+            });
+            let _ = tx.send(Event::Lazy(crate::lazy::LazyApply { epoch, apply }));
+        });
+    }
+
+    /// The spec view's own keys; Esc / `m` / `q` / `c` / `Z` are the shared
+    /// metrics prelude's.
+    fn handle_spec_metrics_key(&mut self, key: KeyEvent, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(st) = self.spec_metrics.as_mut() else { return };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('d') if ctrl => st.move_by(10),
+            KeyCode::Char('u') if ctrl => st.move_by(-10),
+            KeyCode::Char('j') | KeyCode::Down => st.move_by(1),
+            KeyCode::Char('k') | KeyCode::Up => st.move_by(-1),
+            KeyCode::Char('g') | KeyCode::Home => st.move_by(isize::MIN / 2),
+            KeyCode::Char('G') | KeyCode::End => st.move_by(isize::MAX / 2),
+            // The picker: ⏎ charts the metric (Esc / `a` close it, above).
+            KeyCode::Enter => {
+                let picked = st.picker.as_ref().and_then(|p| p.defs.get(p.selected)).map(|d| d.query());
+                if let Some(q) = picked {
+                    st.picker = None;
+                    st.queries = vec![q];
+                    st.curated = false;
+                    st.series.clear();
+                    st.selected = 0;
+                    self.fetch_spec_metrics(event_tx);
+                }
+            }
+            _ if st.picker.is_some() => {}
+            KeyCode::Char(']') => {
+                st.range = st.range.next();
+                self.fetch_spec_metrics(event_tx);
+            }
+            KeyCode::Char('[') => {
+                st.range = st.range.prev();
+                self.fetch_spec_metrics(event_tx);
+            }
+            KeyCode::Char(c @ '1'..='4') => {
+                if let Some(r) = crate::aws::metrics::range_from_digit(c) {
+                    st.range = r;
+                    self.fetch_spec_metrics(event_tx);
+                }
+            }
+            KeyCode::Char('r') => self.fetch_spec_metrics(event_tx),
+            KeyCode::Char('s') => {
+                let i = st.selected;
+                if let Some(q) = st.queries.get_mut(i) {
+                    q.stat = q.stat.next();
+                    self.fetch_spec_metrics(event_tx);
+                }
+            }
+            KeyCode::Char('a') => self.open_spec_metric_picker(event_tx),
+            KeyCode::Char('d') if !st.curated => {
+                st.queries = st.target.curated_queries();
+                st.curated = true;
+                st.series.clear();
+                st.selected = 0;
+                self.fetch_spec_metrics(event_tx);
+            }
+            KeyCode::Char('y') => {
+                if let Some(text) = st.selected_series().map(|s| s.summary()) {
+                    self.copy_to_clipboard(&text, "metric");
+                }
+            }
+            KeyCode::Char('e') => {
+                self.pending_editor_content = Some((st.as_text(), ".txt".to_string()));
+                self.editor_requested = true;
+            }
+            _ => {}
         }
     }
 
@@ -33856,25 +33886,18 @@ impl App {
     /// selection has no metrics.
     fn open_metrics_in_pane(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         self.metrics_window_end = epoch_now();
-        let kind = if self.is_selected_ec2_instance() {
-            self.trigger_ec2_metrics_load(event_tx);
-            Some(MetricsKind::Ec2)
+        let kind = if let Some(target) = self.selected_metric_target() {
+            self.open_spec_metrics(target, event_tx);
+            Some(MetricsKind::Spec)
         } else if self.is_selected_ebs_volume() {
             self.trigger_ebs_metrics_load(event_tx);
             Some(MetricsKind::Ebs)
-        } else if self.is_selected_lambda_function() {
-            self.lambda_metrics_scroll = 0;
-            self.trigger_lambda_metrics_load(event_tx);
-            Some(MetricsKind::Lambda)
         } else if self.is_selected_ecs_service() {
             self.trigger_ecs_metrics_load(event_tx);
             Some(MetricsKind::Ecs)
         } else if self.is_selected_ecs_task() {
             self.trigger_ecs_task_metrics_load(event_tx);
             Some(MetricsKind::EcsTask)
-        } else if self.is_selected_rds_instance() || self.is_selected_rds_cluster() {
-            self.trigger_rds_metrics_load(event_tx);
-            Some(MetricsKind::Rds)
         } else if self.is_selected_cw_alarm() {
             self.cw_alarm_metrics_time_range = self.default_alarm_metrics_range();
             self.trigger_cw_alarm_metrics_load(event_tx);
@@ -34526,7 +34549,14 @@ impl App {
                     l.selected = idx;
                 }
             }
-            PaneView::LogTail | PaneView::Metrics => return false,
+            PaneView::Metrics => {
+                let Some(m) = self.spec_metrics.as_mut() else { return false };
+                match m.picker.as_mut() {
+                    Some(p) => p.selected = idx,
+                    None => m.selected = idx,
+                }
+            }
+            PaneView::LogTail => return false,
         }
         true
     }
@@ -34536,8 +34566,9 @@ impl App {
     /// is `↓` / `↑` (in the log tail, scrolling up pauses follow, as `k` does),
     /// a click puts the cursor on a row and a double-click is `⏎`: drill in,
     /// jump, or open. Like the list pane, one click never acts. Right-click
-    /// anywhere is `Esc`. Metrics only takes the right-click: a wheel that
-    /// changed the time range would be a surprise. The view stays open on any
+    /// anywhere is `Esc`. The hand-built metrics kinds only take the
+    /// right-click (a wheel that changed the time range would be a
+    /// surprise); the spec view's wheel and clicks move its row cursor. The view stays open on any
     /// other click, since it *is* the pane. Returns whether a view was open;
     /// when one is, it owns every mouse event.
     async fn handle_pane_view_mouse(
@@ -34556,10 +34587,10 @@ impl App {
             )
         };
         match mouse.kind {
-            MouseEventKind::ScrollDown if inside && view != PaneView::Metrics => {
+            MouseEventKind::ScrollDown if inside && (view != PaneView::Metrics || self.spec_metrics.is_some()) => {
                 self.handle_key(press(KeyCode::Down), event_tx).await?;
             }
-            MouseEventKind::ScrollUp if inside && view != PaneView::Metrics => {
+            MouseEventKind::ScrollUp if inside && (view != PaneView::Metrics || self.spec_metrics.is_some()) => {
                 self.handle_key(press(KeyCode::Up), event_tx).await?;
             }
             MouseEventKind::Down(MouseButton::Left) => {
@@ -35122,40 +35153,6 @@ impl App {
                 .await
                 {
                     let _ = tx.send(crate::event::Event::BedrockMetricsLoaded { model_id, data });
-                }
-            });
-        }
-    }
-
-    fn trigger_ec2_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(instance) = self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::ec2::Ec2Instance>())
-        {
-            let instance_id = instance.instance_id.clone();
-            let time_range = self.ec2_metrics_time_range;
-            self.ec2_metrics
-                .insert(instance_id.clone(), Ec2MetricsState::Loading);
-            let cw_client = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                match crate::aws::services::ec2::fetch_ec2_metrics(
-                    cw_client,
-                    instance_id.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    Ok(data) => {
-                        let _ = tx.send(crate::event::Event::Ec2MetricsLoaded {
-                            instance_id,
-                            data});
-                    }
-                    Err(e) => {
-                        let _ = tx.send(crate::event::Event::ResourceLoadError {
-                            service: crate::aws::service::ServiceType::EC2,
-                            error: format!("Failed to load EC2 metrics: {}", e)});
-                    }
                 }
             });
         }

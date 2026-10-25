@@ -450,10 +450,19 @@ in `any_pane_overlay_active` (which gates the mouse).
   with a flavor). Each is
   namespace +
   dimension-set specific — see the `fetch_*_metrics` fn and `MetricsKind` arm for
-  a given service. Adding one ≈ an enum variant + an open arm + a render arm
-  **+ an arm in `supports_metrics_overlay()`** — that gates the status-bar
-  `m` hint (not the key itself), and it lagging is exactly how DX VIFs shipped
-  with a working `m` but no hint.
+  a given service. **New kinds go through the spec table**
+  (`src/aws/metrics.rs`, `MetricsKind::Spec`, rendered by
+  `spec_metrics.rs`; EC2, Lambda and RDS so far): a `&[MetricSpec]`
+  (metric, label, stat, unit, `rate`, `group` for metrics that share a
+  chart) and an arm in `selected_metric_target` give the row list, the
+  chart, change markers, per-metric errors, the `a` picker (`ListMetrics`
+  on the resource's dimensions) and `s` stat cycling, from one
+  `GetMetricData` call over `Event::Lazy`. A hand-built kind (an enum
+  variant + an open arm + a render arm) is for what a spec can't say yet:
+  SEARCH expressions, a fixed home region, S3's daily series, dashboards,
+  Cost. Either way it needs **an arm in `supports_metrics_overlay()`** —
+  that gates the status-bar `m` hint (not the key itself), and it lagging
+  is exactly how DX VIFs shipped with a working `m` but no hint.
   Notable dimension gotchas: RDS instances vs clusters use different dims;
   S3 storage metrics are **daily** (fixed 30d window, no time-range knob; only
   offered for current-region buckets, not other-region stubs);
@@ -1396,7 +1405,8 @@ Fixtures live in `src/demo/fixtures/<service>/` and are registered in
   by-id call rather than adding one fixture per id.
 - **Generated:** `FilterLogEvents` on a scripted group (`generate.rs`) is
   computed per request from a fixed clock, so a live tail keeps moving and a
-  search finds the same lines.
+  search finds the same lines; so is `GetMetricData` for the spec-charted
+  namespaces (`METRIC_NAMESPACES`), so `m` draws moving series.
 - **No fixture:** an unmatched operation returns a protocol-correct *empty*
   success, so the service lists empty and `resource_list.rs` says "Not in the
   demo dataset yet". Except restXml (S3, Route 53, CloudFront): an empty
