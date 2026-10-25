@@ -1811,7 +1811,7 @@ impl CfnStackSet {
 crate::sections! {
     pub enum CfnStackSetDetailSection,
     pub static CFN_STACKSET_SECTIONS = [
-        Config "Config" => crate::app::App::hook_cfn_stackset_section,
+        Overview "Overview" => crate::app::App::hook_cfn_stackset_section,
         Instances "Instances" => crate::app::App::hook_cfn_stackset_section,
         Operations "Operations" => crate::app::App::hook_cfn_stackset_section,
         Tags "Tags" => crate::app::App::hook_cfn_stackset_section,

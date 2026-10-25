@@ -813,7 +813,7 @@ impl RdsInstance {
 crate::sections! {
     pub enum RdsInstanceDetailSection,
     pub static RDS_INSTANCE_SECTIONS = [
-        Config "Config",
+        Overview "Overview",
         Storage "Storage",
         Network "Network",
         PerfInsights "Perf Insights" => crate::app::App::trigger_rds_pi_load,
@@ -1110,7 +1110,7 @@ fn pick_log_export(exports: &[String]) -> Option<&String> {
 crate::sections! {
     pub enum RdsClusterDetailSection,
     pub static RDS_CLUSTER_SECTIONS = [
-        Config "Config",
+        Overview "Overview",
         Endpoints "Endpoints",
         Members "Members",
         Backups "Backups",

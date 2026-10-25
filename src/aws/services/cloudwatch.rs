@@ -469,7 +469,7 @@ impl CwAlarm {
 crate::sections! {
     pub enum CwAlarmDetailSection,
     pub static CW_ALARM_SECTIONS = [
-        Config "Config",
+        Overview "Overview",
         Actions "Actions" => crate::app::App::trigger_cw_history_load,
         History "History" => crate::app::App::trigger_cw_history_load,
     ]

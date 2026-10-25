@@ -194,7 +194,7 @@ pub fn lambda_section_lines(
     enrollment: Option<&crate::aws::services::computeoptimizer::CoEnrollment>,
 ) -> Vec<(String, String)> {
     match section {
-        LambdaDetailSection::Config => lambda_config_lines(func, conc_state),
+        LambdaDetailSection::Overview => lambda_config_lines(func, conc_state),
         LambdaDetailSection::Code => lambda_code_lines(code_state, downloading),
         LambdaDetailSection::Triggers => lambda_triggers_lines(esm_state, eb_rules_state),
         LambdaDetailSection::Environment => lambda_env_lines(func),

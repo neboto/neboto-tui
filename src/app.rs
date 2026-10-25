@@ -25528,7 +25528,7 @@ impl App {
             None => return};
         let client = self.aws_clients.cloudformation_client();
         match section {
-            CfnStackSetDetailSection::Config | CfnStackSetDetailSection::Tags => {
+            CfnStackSetDetailSection::Overview | CfnStackSetDetailSection::Tags => {
                 self.trigger_lazy(
                     |app| &mut app.lazy.cfn_stackset_detail,
                     key.clone(),

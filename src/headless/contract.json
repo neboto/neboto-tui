@@ -497,7 +497,7 @@
       "Policy"
     ],
     "CFN StackSet": [
-      "Config",
+      "Overview",
       "Instances",
       "Operations",
       "Tags"
@@ -507,7 +507,7 @@
       "Document"
     ],
     "CW Alarm": [
-      "Config",
+      "Overview",
       "Actions",
       "History"
     ],
@@ -983,7 +983,7 @@
       "Tags"
     ],
     "Lambda Function": [
-      "Config",
+      "Overview",
       "Code",
       "Triggers",
       "Environment",
@@ -1131,7 +1131,7 @@
       "Tags"
     ],
     "RDS Cluster": [
-      "Config",
+      "Overview",
       "Endpoints",
       "Members",
       "Backups",
@@ -1140,7 +1140,7 @@
       "Tags"
     ],
     "RDS Instance": [
-      "Config",
+      "Overview",
       "Storage",
       "Network",
       "Perf Insights",
@@ -1270,7 +1270,7 @@
       "Tags"
     ],
     "SNS Topic": [
-      "Config",
+      "Overview",
       "Subscriptions",
       "Permissions",
       "Tags"

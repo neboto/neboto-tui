@@ -338,7 +338,7 @@ pub fn sns_topic_section_lines(
     subs_state: Option<&crate::lazy::Lazy<Vec<crate::aws::services::messaging::SnsSubscription>>>,
 ) -> Vec<(String, String)> {
     match section {
-        SnsTopicDetailSection::Config => sns_config_lines(topic),
+        SnsTopicDetailSection::Overview => sns_config_lines(topic),
         SnsTopicDetailSection::Subscriptions => sns_subscriptions_lines(subs_state),
         SnsTopicDetailSection::Permissions => sns_permissions_lines(topic),
         SnsTopicDetailSection::Tags => sns_tags_lines(topic),

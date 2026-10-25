@@ -579,7 +579,7 @@ pub fn rds_instance_section_lines(
     >,
 ) -> Vec<(String, String)> {
     match section {
-        RdsInstanceDetailSection::Config => rds_config_lines(db),
+        RdsInstanceDetailSection::Overview => rds_config_lines(db),
         RdsInstanceDetailSection::Storage => rds_storage_lines(db),
         RdsInstanceDetailSection::Network => rds_network_lines(db),
         RdsInstanceDetailSection::PerfInsights => rds_pi_lines(db, pi_state),
@@ -1221,7 +1221,7 @@ pub fn rds_cluster_section_lines(
             );
         }
         RdsClusterDetailSection::Events => return rds_events_lines(events_state),
-        RdsClusterDetailSection::Config => {
+        RdsClusterDetailSection::Overview => {
             rows.push(("Cluster ID".to_string(), c.cluster_identifier.clone()));
             rows.push(("Engine".to_string(), format!("{} {}", c.engine, c.engine_version)));
             rows.push(("Mode".to_string(), c.engine_mode.clone()));

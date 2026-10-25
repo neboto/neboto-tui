@@ -790,7 +790,7 @@ async fn get_secret_lists_its_version_stages() {
 #[tokio::test]
 async fn get_delegated_admin_stack_set_carries_call_as() {
     let v = demo_get_json(get_args("cfn", &["org-guardrails"])).await;
-    let config = v["sections"]["Config"].to_string();
+    let config = v["sections"]["Overview"].to_string();
     assert!(config.contains("DELEGATED_ADMIN"), "{config}");
     assert!(config.contains("Enabled"), "auto-deployment from DescribeStackSet: {config}");
     let instances = v["sections"]["Instances"].to_string();
@@ -799,7 +799,7 @@ async fn get_delegated_admin_stack_set_carries_call_as() {
 
     // The self-managed set is unchanged: no Access row, its own detail.
     let v = demo_get_json(get_args("cfn", &["acme-config-baseline"])).await;
-    let config = v["sections"]["Config"].to_string();
+    let config = v["sections"]["Overview"].to_string();
     assert!(!config.contains("DELEGATED_ADMIN"), "{config}");
     assert!(config.contains("AWSCloudFormationStackSetExecutionRole"), "{config}");
 }

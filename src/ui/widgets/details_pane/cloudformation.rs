@@ -1167,7 +1167,7 @@ pub fn cfn_stackset_section_lines(
     op_results: &crate::lazy::LazyMap<Vec<crate::aws::services::cloudformation::CfnStackSetOpResult>>,
 ) -> Vec<(String, String)> {
     match section {
-        CfnStackSetDetailSection::Config => cfn_stackset_config_lines(ss, detail_state),
+        CfnStackSetDetailSection::Overview => cfn_stackset_config_lines(ss, detail_state),
         CfnStackSetDetailSection::Instances => cfn_stackset_instances_lines(instances_state),
         CfnStackSetDetailSection::Operations => {
             cfn_stackset_operations_lines(ss.api_key(), operations_state, op_results)

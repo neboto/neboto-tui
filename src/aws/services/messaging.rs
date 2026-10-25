@@ -514,7 +514,7 @@ async fn fetch_topic(sns: &SnsClient, arn: String) -> Option<SnsTopic> {
 crate::sections! {
     pub enum SnsTopicDetailSection,
     pub static SNS_TOPIC_SECTIONS = [
-        Config "Config",
+        Overview "Overview",
         Subscriptions "Subscriptions" => crate::app::App::trigger_sns_subscriptions_load,
         Permissions "Permissions",
         Tags "Tags",

@@ -247,7 +247,7 @@ impl LambdaFunction {
 crate::sections! {
     pub enum LambdaDetailSection,
     pub static LAMBDA_SECTIONS = [
-        Config "Config" => crate::app::App::trigger_lambda_overview_enter,
+        Overview "Overview" => crate::app::App::trigger_lambda_overview_enter,
         Code "Code" => crate::app::App::trigger_lambda_code_load,
         Triggers "Triggers" => crate::app::App::trigger_lambda_triggers_load,
         Environment "Environment",

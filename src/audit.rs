@@ -84,7 +84,7 @@ static CHECKS: [Check; 24] = [
         title: "RDS instance publicly accessible",
         why: "A publicly accessible instance gets a public DNS name resolving to a public IP. Its security groups are then the only thing between the database and the internet.",
         sources: &[ServiceType::RDS],
-        section: Some("Config"),
+        section: Some("Overview"),
         facts: false,
         run: check_rds_public,
     },
