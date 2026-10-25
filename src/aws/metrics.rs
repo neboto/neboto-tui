@@ -64,6 +64,8 @@ pub enum Unit {
     Percent,
     Bytes,
     BytesPerSec,
+    /// Decimal bits: `1.2 Gbps`, as network links are sold.
+    BitsPerSec,
     Count,
     PerSec,
     Millis,
@@ -99,7 +101,7 @@ impl MetricSpec {
     }
 }
 
-use Stat::{Average as Avg, Maximum as Max, Sum};
+use Stat::{Average as Avg, Maximum as Max, Minimum as Min, Sum};
 
 pub const EC2_INSTANCE: &[MetricSpec] = &[
     m("CPUUtilization", "CPU", Avg, Unit::Percent),
@@ -127,6 +129,252 @@ pub const RDS_DATABASE: &[MetricSpec] = &[
     m("FreeStorageSpace", "Free storage", Avg, Unit::Bytes),
 ];
 
+pub const EBS_VOLUME: &[MetricSpec] = &[
+    m("VolumeReadOps", "Read IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("VolumeWriteOps", "Write IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("VolumeReadBytes", "Read throughput", Sum, Unit::BytesPerSec).rate().group("bytes"),
+    m("VolumeWriteBytes", "Write throughput", Sum, Unit::BytesPerSec).rate().group("bytes"),
+    m("VolumeQueueLength", "Queue length", Avg, Unit::Raw),
+    m("BurstBalance", "Burst balance", Avg, Unit::Percent),
+];
+
+pub const DDB_TABLE: &[MetricSpec] = &[
+    m("ConsumedReadCapacityUnits", "Read capacity", Sum, Unit::Count).group("capacity"),
+    m("ConsumedWriteCapacityUnits", "Write capacity", Sum, Unit::Count).group("capacity"),
+    m("ReadThrottleEvents", "Read throttles", Sum, Unit::Count).group("throttles"),
+    m("WriteThrottleEvents", "Write throttles", Sum, Unit::Count).group("throttles"),
+];
+
+pub const EFS_FILE_SYSTEM: &[MetricSpec] = &[
+    m("DataReadIOBytes", "Read", Sum, Unit::BytesPerSec).rate().group("io"),
+    m("DataWriteIOBytes", "Write", Sum, Unit::BytesPerSec).rate().group("io"),
+    m("TotalIOBytes", "Total I/O", Sum, Unit::BytesPerSec).rate(),
+    m("PercentIOLimit", "I/O limit", Max, Unit::Percent),
+    m("BurstCreditBalance", "Burst credits", Avg, Unit::Bytes),
+    m("ClientConnections", "Client connections", Sum, Unit::Count),
+];
+
+pub const ELASTICACHE_NODE: &[MetricSpec] = &[
+    m("CPUUtilization", "CPU", Avg, Unit::Percent).group("cpu"),
+    m("EngineCPUUtilization", "Engine CPU", Avg, Unit::Percent).group("cpu"),
+    m("DatabaseMemoryUsagePercentage", "Memory used", Avg, Unit::Percent),
+    m("CurrConnections", "Connections", Avg, Unit::Count),
+    m("CacheHits", "Cache hits", Sum, Unit::Count),
+    m("Evictions", "Evictions", Sum, Unit::Count),
+];
+
+pub const KINESIS_STREAM: &[MetricSpec] = &[
+    m("IncomingRecords", "Incoming records", Sum, Unit::Count),
+    m("IncomingBytes", "Incoming", Sum, Unit::BytesPerSec).rate().group("bytes"),
+    m("GetRecords.Bytes", "Read", Sum, Unit::BytesPerSec).rate().group("bytes"),
+    m("GetRecords.IteratorAgeMilliseconds", "Iterator age", Max, Unit::Millis),
+    m("ReadProvisionedThroughputExceeded", "Read throttled", Sum, Unit::Count).group("throttled"),
+    m("WriteProvisionedThroughputExceeded", "Write throttled", Sum, Unit::Count).group("throttled"),
+];
+
+pub const FIREHOSE_STREAM: &[MetricSpec] = &[
+    m("IncomingRecords", "Incoming records", Sum, Unit::Count).group("records"),
+    m("DeliveryToS3.Records", "Delivered to S3", Sum, Unit::Count).group("records"),
+    m("IncomingBytes", "Incoming", Sum, Unit::BytesPerSec).rate(),
+    m("DeliveryToS3.Success", "S3 success (ratio)", Avg, Unit::Raw),
+    m("DeliveryToS3.DataFreshness", "Data freshness", Max, Unit::Seconds),
+    m("ThrottledRecords", "Throttled", Sum, Unit::Count),
+];
+
+pub const REDSHIFT_CLUSTER: &[MetricSpec] = &[
+    m("CPUUtilization", "CPU", Avg, Unit::Percent),
+    m("PercentageDiskSpaceUsed", "Disk used", Avg, Unit::Percent),
+    m("DatabaseConnections", "Connections", Avg, Unit::Count),
+    m("HealthStatus", "Health (1 = healthy)", Min, Unit::Raw),
+    m("ReadIOPS", "Read IOPS", Avg, Unit::PerSec).group("iops"),
+    m("WriteIOPS", "Write IOPS", Avg, Unit::PerSec).group("iops"),
+];
+
+pub const REDSHIFT_WORKGROUP: &[MetricSpec] = &[
+    m("ComputeCapacity", "Compute (RPU)", Avg, Unit::Raw),
+    m("ComputeSeconds", "Compute (RPU-seconds)", Sum, Unit::Raw),
+    m("DatabaseConnections", "Connections", Avg, Unit::Count),
+    m("QueriesCompletedPerSecond", "Queries completed", Avg, Unit::PerSec),
+    m("QueriesRunning", "Queries running", Avg, Unit::Count).group("queries"),
+    m("QueriesQueued", "Queries queued", Avg, Unit::Count).group("queries"),
+];
+
+pub const SQS_QUEUE: &[MetricSpec] = &[
+    m("NumberOfMessagesSent", "Sent", Sum, Unit::Count).group("messages"),
+    m("NumberOfMessagesReceived", "Received", Sum, Unit::Count).group("messages"),
+    m("NumberOfMessagesDeleted", "Deleted", Sum, Unit::Count).group("messages"),
+    m("ApproximateNumberOfMessagesVisible", "Visible", Avg, Unit::Count),
+    m("ApproximateAgeOfOldestMessage", "Oldest message", Max, Unit::Seconds),
+    m("NumberOfEmptyReceives", "Empty receives", Sum, Unit::Count),
+];
+
+pub const SNS_TOPIC: &[MetricSpec] = &[
+    m("NumberOfMessagesPublished", "Published", Sum, Unit::Count),
+    m("NumberOfNotificationsDelivered", "Delivered", Sum, Unit::Count).group("notifications"),
+    m("NumberOfNotificationsFailed", "Failed", Sum, Unit::Count).group("notifications"),
+    m("NumberOfNotificationsFilteredOut", "Filtered out", Sum, Unit::Count),
+    m("NumberOfNotificationsRedrivenToDlq", "Redriven to DLQ", Sum, Unit::Count),
+    m("PublishSize", "Publish size", Avg, Unit::Bytes),
+];
+
+pub const SFN_STATE_MACHINE: &[MetricSpec] = &[
+    m("ExecutionsStarted", "Started", Sum, Unit::Count).group("executions"),
+    m("ExecutionsSucceeded", "Succeeded", Sum, Unit::Count).group("executions"),
+    m("ExecutionsFailed", "Failed", Sum, Unit::Count).group("executions"),
+    m("ExecutionsAborted", "Aborted", Sum, Unit::Count).group("executions"),
+    m("ExecutionsTimedOut", "Timed out", Sum, Unit::Count).group("executions"),
+    m("ExecutionTime", "Execution time", Avg, Unit::Millis),
+];
+
+pub const BEDROCK_MODEL: &[MetricSpec] = &[
+    m("Invocations", "Invocations", Sum, Unit::Count),
+    m("InvocationLatency", "Latency", Avg, Unit::Millis),
+    m("InputTokenCount", "Input tokens", Sum, Unit::Count).group("tokens"),
+    m("OutputTokenCount", "Output tokens", Sum, Unit::Count).group("tokens"),
+    m("InvocationClientErrors", "Client errors", Sum, Unit::Count).group("errors"),
+    m("InvocationServerErrors", "Server errors", Sum, Unit::Count).group("errors"),
+    m("InvocationThrottles", "Throttles", Sum, Unit::Count),
+];
+
+pub const TRANSFER_SERVER: &[MetricSpec] = &[
+    m("BytesIn", "Bytes in", Sum, Unit::BytesPerSec).rate().group("bytes"),
+    m("BytesOut", "Bytes out", Sum, Unit::BytesPerSec).rate().group("bytes"),
+    m("FilesIn", "Files in", Sum, Unit::Count).group("files"),
+    m("FilesOut", "Files out", Sum, Unit::Count).group("files"),
+    m("OnUploadExecutionsSuccess", "Upload workflows ok", Sum, Unit::Count).group("workflows"),
+    m("OnUploadExecutionsFailed", "Upload workflows failed", Sum, Unit::Count).group("workflows"),
+];
+
+pub const NAT_GATEWAY: &[MetricSpec] = &[
+    m("BytesOutToDestination", "Out to destination", Sum, Unit::BytesPerSec).rate().group("bytes"),
+    m("BytesInFromDestination", "In from destination", Sum, Unit::BytesPerSec).rate().group("bytes"),
+    m("ActiveConnectionCount", "Active connections", Max, Unit::Count),
+    m("ConnectionEstablishedCount", "New connections", Sum, Unit::Count),
+    m("ErrorPortAllocation", "Port allocation errors", Sum, Unit::Count),
+    m("PacketsDropCount", "Packets dropped", Sum, Unit::Count),
+];
+
+/// `VpnId` alone aggregates both tunnels.
+pub const VPN_CONNECTION: &[MetricSpec] = &[
+    m("TunnelState", "Tunnels up (1 = both)", Avg, Unit::Raw),
+    m("TunnelDataIn", "Data in", Sum, Unit::BytesPerSec).rate().group("data"),
+    m("TunnelDataOut", "Data out", Sum, Unit::BytesPerSec).rate().group("data"),
+];
+
+pub const DX_CONNECTION: &[MetricSpec] = &[
+    m("ConnectionState", "State (1 = up)", Min, Unit::Raw),
+    m("ConnectionBpsEgress", "Egress", Avg, Unit::BitsPerSec).group("bps"),
+    m("ConnectionBpsIngress", "Ingress", Avg, Unit::BitsPerSec).group("bps"),
+    m("ConnectionPpsEgress", "Egress packets", Avg, Unit::PerSec).group("pps"),
+    m("ConnectionPpsIngress", "Ingress packets", Avg, Unit::PerSec).group("pps"),
+    m("ConnectionErrorCount", "Errors", Sum, Unit::Count),
+    m("ConnectionLightLevelTx", "Light Tx (dBm)", Avg, Unit::Raw).group("light"),
+    m("ConnectionLightLevelRx", "Light Rx (dBm)", Avg, Unit::Raw).group("light"),
+];
+
+/// Per-VIF traffic: the per-workload signal on a shared connection.
+pub const DX_VIRTUAL_INTERFACE: &[MetricSpec] = &[
+    m("VirtualInterfaceBpsEgress", "Egress", Avg, Unit::BitsPerSec).group("bps"),
+    m("VirtualInterfaceBpsIngress", "Ingress", Avg, Unit::BitsPerSec).group("bps"),
+    m("VirtualInterfacePpsEgress", "Egress packets", Avg, Unit::PerSec).group("pps"),
+    m("VirtualInterfacePpsIngress", "Ingress packets", Avg, Unit::PerSec).group("pps"),
+];
+
+/// The namespace's only metric.
+pub const ECR_REPOSITORY: &[MetricSpec] = &[m("RepositoryPullCount", "Pulls", Sum, Unit::Count)];
+
+pub const WORKSPACE: &[MetricSpec] = &[
+    m("ConnectionSuccess", "Connections ok", Sum, Unit::Count).group("connections"),
+    m("ConnectionFailure", "Connections failed", Sum, Unit::Count).group("connections"),
+    m("UserConnected", "User connected", Max, Unit::Count),
+    m("InSessionLatency", "In-session latency", Avg, Unit::Millis),
+    m("SessionLaunchTime", "Session launch", Avg, Unit::Seconds),
+    m("Unhealthy", "Unhealthy", Max, Unit::Count),
+];
+
+pub const ATHENA_WORKGROUP: &[MetricSpec] = &[
+    m("ProcessedBytes", "Data scanned", Sum, Unit::Bytes),
+    m("TotalExecutionTime", "Total time", Avg, Unit::Millis),
+    m("EngineExecutionTime", "Engine", Avg, Unit::Millis).group("phases"),
+    m("QueryQueueTime", "Queued", Avg, Unit::Millis).group("phases"),
+    m("QueryPlanningTime", "Planning", Avg, Unit::Millis).group("phases"),
+    m("DPUConsumed", "DPU consumed", Sum, Unit::Raw),
+];
+
+/// Driver aggregates; Maximum, since each is a running total per run.
+pub const GLUE_JOB: &[MetricSpec] = &[
+    m("glue.driver.aggregate.bytesRead", "Bytes read", Max, Unit::Bytes),
+    m("glue.driver.aggregate.recordsRead", "Records read", Max, Unit::Count),
+    m("glue.driver.aggregate.elapsedTime", "Elapsed", Max, Unit::Millis),
+    m("glue.driver.aggregate.numCompletedTasks", "Completed tasks", Max, Unit::Count).group("tasks"),
+    m("glue.driver.aggregate.numFailedTasks", "Failed tasks", Max, Unit::Count).group("tasks"),
+    m("glue.driver.aggregate.numCompletedStages", "Completed stages", Max, Unit::Count),
+];
+
+pub const TRANSIT_GATEWAY: &[MetricSpec] = &[
+    m("BytesIn", "Bytes in", Sum, Unit::BytesPerSec).rate().group("bytes"),
+    m("BytesOut", "Bytes out", Sum, Unit::BytesPerSec).rate().group("bytes"),
+    m("PacketsIn", "Packets in", Sum, Unit::Count).group("packets"),
+    m("PacketsOut", "Packets out", Sum, Unit::Count).group("packets"),
+    m("PacketDropCountBlackhole", "Dropped (blackhole)", Sum, Unit::Count).group("drops"),
+    m("PacketDropCountNoRoute", "Dropped (no route)", Sum, Unit::Count).group("drops"),
+];
+
+/// "Is this group receiving anything?"
+pub const LOG_GROUP: &[MetricSpec] = &[
+    m("IncomingLogEvents", "Incoming events", Sum, Unit::Count),
+    m("IncomingBytes", "Incoming", Sum, Unit::BytesPerSec).rate(),
+];
+
+pub const EB_RULE: &[MetricSpec] = &[
+    m("TriggeredRules", "Matched", Sum, Unit::Count).group("calls"),
+    m("Invocations", "Invoked", Sum, Unit::Count).group("calls"),
+    m("FailedInvocations", "Failed", Sum, Unit::Count).group("calls"),
+    m("DeadLetterInvocations", "To DLQ", Sum, Unit::Count),
+    m("ThrottledRules", "Throttled", Sum, Unit::Count),
+];
+
+/// Both directions are fetched; the endpoint's own is the one with data.
+pub const RESOLVER_ENDPOINT: &[MetricSpec] = &[
+    m("InboundQueryVolume", "Inbound queries", Sum, Unit::Count).group("queries"),
+    m("OutboundQueryVolume", "Outbound queries", Sum, Unit::Count).group("queries"),
+];
+
+pub const CODEBUILD_PROJECT: &[MetricSpec] = &[
+    m("Builds", "Builds", Sum, Unit::Count).group("builds"),
+    m("SucceededBuilds", "Succeeded", Sum, Unit::Count).group("builds"),
+    m("FailedBuilds", "Failed", Sum, Unit::Count).group("builds"),
+    m("Duration", "Duration", Avg, Unit::Seconds),
+];
+
+/// Cache hit rate and origin latency need additional metrics switched on.
+pub const CLOUDFRONT_DISTRIBUTION: &[MetricSpec] = &[
+    m("Requests", "Requests", Sum, Unit::Count),
+    m("BytesDownloaded", "Downloaded", Sum, Unit::BytesPerSec).rate().group("bytes"),
+    m("BytesUploaded", "Uploaded", Sum, Unit::BytesPerSec).rate().group("bytes"),
+    m("TotalErrorRate", "Error rate", Avg, Unit::Percent).group("errors"),
+    m("4xxErrorRate", "4xx rate", Avg, Unit::Percent).group("errors"),
+    m("5xxErrorRate", "5xx rate", Avg, Unit::Percent).group("errors"),
+    m("CacheHitRate", "Cache hit rate", Avg, Unit::Percent),
+    m("OriginLatency", "Origin latency", Avg, Unit::Millis),
+];
+
+pub const R53_HEALTH_CHECK: &[MetricSpec] = &[
+    m("HealthCheckStatus", "Status (1 = healthy)", Min, Unit::Raw),
+    m("HealthCheckPercentageHealthy", "Checkers healthy", Avg, Unit::Percent),
+    m("ConnectionTime", "Connect", Avg, Unit::Millis).group("timing"),
+    m("TimeToFirstByte", "First byte", Avg, Unit::Millis).group("timing"),
+];
+
+/// Public zones only: private zones publish nothing.
+pub const R53_HOSTED_ZONE: &[MetricSpec] = &[m("DNSQueries", "DNS queries", Sum, Unit::Count)];
+
+pub const GA_ACCELERATOR: &[MetricSpec] = &[
+    m("NewFlowCount", "New flows", Sum, Unit::Count),
+    m("ProcessedBytesIn", "Bytes in", Sum, Unit::BytesPerSec).rate().group("bytes"),
+    m("ProcessedBytesOut", "Bytes out", Sum, Unit::BytesPerSec).rate().group("bytes"),
+];
+
 /// What `m` charts for one resource: where its metrics live and its curated set.
 #[derive(Debug, Clone)]
 pub struct MetricTarget {
@@ -135,6 +383,13 @@ pub struct MetricTarget {
     pub namespace: &'static str,
     pub dimensions: Vec<(String, String)>,
     pub specs: &'static [MetricSpec],
+    /// The region CloudWatch publishes these in when it isn't the current
+    /// one: `us-east-1` for global services (CloudFront, Route 53),
+    /// `us-west-2` for Global Accelerator.
+    pub home: Option<&'static str>,
+    /// Said in place of the rows when every metric came back empty: what
+    /// has to be switched on for them to exist (Glue job metrics, …).
+    pub hint: Option<&'static str>,
 }
 
 impl MetricTarget {
@@ -416,6 +671,13 @@ pub fn fmt_value(v: f64, unit: Unit) -> String {
         Unit::Percent => format!("{v:.1}%"),
         Unit::Bytes => bytes(v),
         Unit::BytesPerSec => format!("{}/s", bytes(v)),
+        Unit::BitsPerSec => {
+            let (d, u) = [(1e9, "Gbps"), (1e6, "Mbps"), (1e3, "kbps")]
+                .into_iter()
+                .find(|(d, _)| v.abs() >= *d)
+                .unwrap_or((1.0, "bps"));
+            format!("{:.1} {u}", v / d)
+        }
         Unit::Count | Unit::Raw => si(v),
         Unit::PerSec => format!("{}/s", si(v)),
         Unit::Millis if v >= 1000.0 => format!("{:.2} s", v / 1000.0),
@@ -455,6 +717,7 @@ mod tests {
         assert_eq!(fmt_value(0.0042, Unit::Seconds), "4.2 ms");
         assert_eq!(fmt_value(12_345.0, Unit::Count), "12.3k");
         assert_eq!(fmt_value(3.0, Unit::Count), "3");
+        assert_eq!(fmt_value(1.25e9, Unit::BitsPerSec), "1.2 Gbps");
     }
 
     #[test]
@@ -464,6 +727,8 @@ mod tests {
             namespace: "AWS/EC2",
             dimensions: vec![("InstanceId".into(), "i-1".into())],
             specs: EC2_INSTANCE,
+            home: None,
+            hint: None,
         };
         let q = t.curated_queries();
         assert_eq!(q.len(), EC2_INSTANCE.len());

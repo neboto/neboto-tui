@@ -558,7 +558,6 @@ pub enum MetricsKind {
     /// Charted from a spec table (`aws::metrics`, `App.spec_metrics`):
     /// EC2 instances, Lambda functions, RDS instances and clusters.
     Spec,
-    Ebs,
     Ecs,
     EcsTask,
     Asg,
@@ -566,8 +565,6 @@ pub enum MetricsKind {
     Cost,
     Waf,
     Api,
-    Ddb,
-    Efs,
     Elb,
     ElbTarget,
     Nfw,
@@ -575,40 +572,13 @@ pub enum MetricsKind {
     CwMetric,
     Fsx,
     FsxVolume,
-    ElastiCache,
     OpenSearch,
-    Kinesis,
-    Firehose,
-    CloudFront,
-    Sqs,
-    Sns,
-    StepFunctions,
-    BedrockModel,
     S3,
-    Transfer,
-    R53HealthCheck,
     Ses,
     Msk,
-    NatGw,
-    Dx,
-    DxVif,
-    Vpn,
-    Ecr,
-    Ga,
-    Workspaces,
     Cognito,
-    AthenaWg,
-    GlueJob,
-    Redshift,
-    RedshiftSl,
     Dms,
     VpcEndpoint,
-    Tgw,
-    LogGroup,
-    EbRule,
-    R53Zone,
-    ResolverEndpoint,
-    CodeBuild,
     CwDashboard,
     AgentCore}
 
@@ -665,22 +635,12 @@ impl CloudFrontView {
     }
 }
 
-/// Load state for lazily-fetched Route53 records.
-pub use crate::aws::services::route53::R53HealthMetricsState;
 
 
-/// Load state for lazily-fetched CloudFront tags.
-pub use crate::aws::services::cloudfront::CfMetricsState;
-
-/// Load states for lazily-fetched DynamoDB data.
-pub use crate::aws::services::dynamodb::DdbMetricsState;
 
 
-/// Load state for lazily-fetched EFS metrics (`m` overlay).
-pub use crate::aws::services::efs::EfsMetricsState;
 
-/// Load state for lazily-fetched ElastiCache `m` metrics.
-pub use crate::aws::services::elasticache::ElastiCacheMetricsState;
+
 
 /// Load state for lazily-fetched OpenSearch `m` metrics.
 pub use crate::aws::services::opensearch::OpenSearchMetricsState;
@@ -730,8 +690,6 @@ impl LambdaView {
     }
 }
 
-/// Load states for lazily-fetched Kinesis / Firehose `m` metrics.
-pub use crate::aws::services::kinesis::{FirehoseMetricsState, KinesisMetricsState};
 
 /// Sub-tab view for Step Functions (State Machines / Executions).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -820,8 +778,6 @@ impl RedshiftView {
     }
 }
 
-/// Load states for the Redshift cluster / serverless workgroup `m` metrics.
-pub use crate::aws::services::redshift::{RedshiftMetricsState, RedshiftSlMetricsState};
 
 /// Sub-tab view for AWS Batch (Job Queues / Compute Environments / Jobs /
 /// Job Definitions).
@@ -1077,9 +1033,6 @@ impl SesView {
 }
 
 
-/// SQS/SNS CloudWatch metrics (`m` overlay) load states.
-pub use crate::aws::services::messaging::{SnsMetricsState, SqsMetricsState};
-pub use crate::aws::services::step_functions::SfnMetricsState;
 
 /// CloudWatch metrics state for an ELB load balancer / target group (`m` overlay).
 pub use crate::aws::services::elb::ElbMetricsState;
@@ -1099,7 +1052,7 @@ pub use crate::aws::services::inspector::InspSeverityScope;
 
 
 /// EC2 metrics types (CloudWatch-backed).
-pub use crate::aws::services::ec2::{EbsMetricsState, MetricsTimeRange};
+pub use crate::aws::services::ec2::MetricsTimeRange;
 pub use crate::aws::services::ecs::EcsMetricsState;
 pub use crate::aws::services::ecs::EcsTaskMetricsState;
 
@@ -1400,6 +1353,14 @@ const MAX_TIMELINE_ALARMS: usize = 5;
 pub(crate) const MAX_R53_TAB_ZONE_RECORDS: i64 = 3_000;
 /// …and so are zones beyond this many per trigger.
 const MAX_R53_TAB_ZONES: usize = 100;
+
+/// The CloudWatch client for a spec target: its home region, or the current one.
+fn spec_metrics_client(clients: &AwsClients, home: Option<&str>) -> aws_sdk_cloudwatch::Client {
+    match home {
+        Some(region) => clients.cloudwatch_client_in(region),
+        None => clients.cloudwatch_client(),
+    }
+}
 
 fn epoch_now() -> i64 {
     std::time::SystemTime::now()
@@ -2308,9 +2269,6 @@ pub struct App {
     pub quota_service_code: String,
     pub quota_services: Vec<(String, String)>, // (code, name) from ListServices
 
-    // DynamoDB: table split pane + lazy TTL/tags + metrics overlay + item browser
-    pub ddb_metrics: HashMap<String, DdbMetricsState>,
-    pub ddb_metrics_time_range: MetricsTimeRange,
     pub ddb_browser: crate::ui::widgets::ddb_item_browser::DdbBrowserState,
     /// AgentCore Memory session browser (`i` on a memory store).
     pub memory_browser: crate::ui::widgets::memory_browser::MemoryBrowserState,
@@ -2396,9 +2354,6 @@ pub struct App {
     /// per-zone record budget, past the zone-count budget). Shown in the
     /// tab strip so a missing record is explained, not mysterious.
     pub r53_records_skipped: (usize, usize),
-    /// Health-check CloudWatch metrics (`m` overlay), keyed by health-check id.
-    pub r53_health_metrics: HashMap<String, R53HealthMetricsState>,
-    pub r53_health_metrics_time_range: MetricsTimeRange,
 
     // Step Functions state-machine detail section state
 
@@ -2406,9 +2361,6 @@ pub struct App {
 
     // CloudFront sub-tab view (Distributions / Functions / Policies / OACs)
     pub cf_view: CloudFrontView,
-    // CloudFront distribution detail section state
-    pub cf_metrics: HashMap<String, CfMetricsState>,
-    pub cf_metrics_time_range: MetricsTimeRange,
 
     // KMS key detail section state
     pub ram_owner: String, // "SELF" / "OTHER-ACCOUNTS"
@@ -2432,13 +2384,7 @@ pub struct App {
     // EKS detail section state (children keyed by cluster name)
     pub eks_metrics: HashMap<String, crate::aws::services::eks::EksMetricsState>,
 
-    // EFS detail section state (children keyed by file system id)
-    pub efs_metrics: HashMap<String, EfsMetricsState>,
-    pub efs_metrics_time_range: MetricsTimeRange,
 
-    // ElastiCache detail section state (tags + metrics keyed by cache id)
-    pub elasticache_metrics: HashMap<String, ElastiCacheMetricsState>,
-    pub elasticache_metrics_time_range: MetricsTimeRange,
 
     // OpenSearch detail section state (tags + metrics keyed by domain name)
     pub opensearch_metrics: HashMap<String, OpenSearchMetricsState>,
@@ -2448,37 +2394,17 @@ pub struct App {
     pub msk_metrics: HashMap<String, MskMetricsState>,
     pub msk_metrics_time_range: MetricsTimeRange,
 
-    // U14 metrics-gap fills (`m` overlay state, keyed by Resource::id())
-    pub nat_metrics: HashMap<String, crate::aws::services::vpc::NatMetricsState>,
-    pub nat_metrics_time_range: MetricsTimeRange,
-    pub vpn_metrics: HashMap<String, crate::aws::services::vpc::VpnMetricsState>,
-    pub vpn_metrics_time_range: MetricsTimeRange,
-    pub dx_metrics: HashMap<String, crate::aws::services::direct_connect::DxMetricsState>,
-    pub dx_metrics_time_range: MetricsTimeRange,
-    /// Per-VIF traffic metrics, keyed by VIF id (shares `dx_metrics_time_range`).
-    pub dx_vif_metrics: HashMap<String, crate::aws::services::direct_connect::DxVifMetricsState>,
-    pub ecr_metrics: HashMap<String, crate::aws::services::ecr::EcrMetricsState>,
-    pub ecr_metrics_time_range: MetricsTimeRange,
     /// One map for all five AgentCore families, keyed by resource id — the
     /// flavor rides in the loaded data.
     pub agentcore_metrics:
         HashMap<String, crate::aws::services::agentcore::AgentCoreMetricsState>,
     pub agentcore_metrics_time_range: MetricsTimeRange,
-    pub ga_metrics: HashMap<String, crate::aws::services::global_accelerator::GaMetricsState>,
-    pub ga_metrics_time_range: MetricsTimeRange,
-    pub workspace_metrics: HashMap<String, crate::aws::services::workspaces::WsMetricsState>,
-    pub workspace_metrics_time_range: MetricsTimeRange,
     pub cognito_metrics: HashMap<String, crate::aws::services::cognito::CognitoMetricsState>,
     pub cognito_metrics_time_range: MetricsTimeRange,
 
     // Second metrics-gap batch (`m` overlay state, keyed by Resource::id())
     pub vpce_metrics: HashMap<String, crate::aws::services::vpc::VpceMetricsState>,
     pub vpce_metrics_time_range: MetricsTimeRange,
-    /// TGW + attachment metrics share one map — ids (tgw- / tgw-attach-) don't collide.
-    pub tgw_metrics: HashMap<String, crate::aws::services::transit_gateway::TgwMetricsState>,
-    pub tgw_metrics_time_range: MetricsTimeRange,
-    pub log_group_metrics: HashMap<String, crate::aws::services::cloudwatch::LogGroupMetricsState>,
-    pub log_group_metrics_time_range: MetricsTimeRange,
     /// Charted dashboards (`m` on a CW dashboard), keyed by dashboard name.
     pub cw_dashboard_metrics:
         HashMap<String, crate::aws::services::cloudwatch::CwDashboardMetricsState>,
@@ -2506,15 +2432,6 @@ pub struct App {
     /// Cleared once the user steps the range themselves, so a refresh stops
     /// re-adopting the dashboard body's own `start`.
     pub cw_dashboard_range_from_body: bool,
-    pub eb_rule_metrics: HashMap<String, crate::aws::services::eventbridge::EbRuleMetricsState>,
-    pub eb_rule_metrics_time_range: MetricsTimeRange,
-    pub r53_zone_metrics: HashMap<String, crate::aws::services::route53::R53ZoneMetricsState>,
-    pub r53_zone_metrics_time_range: MetricsTimeRange,
-    pub resolver_ep_metrics:
-        HashMap<String, crate::aws::services::route53resolver::ResolverEpMetricsState>,
-    pub resolver_ep_metrics_time_range: MetricsTimeRange,
-    pub codebuild_metrics: HashMap<String, crate::aws::services::code::CodeBuildMetricsState>,
-    pub codebuild_metrics_time_range: MetricsTimeRange,
 
     // Kinesis detail section state (consumers keyed by stream ARN; tags/metrics
     // keyed by stream name)
@@ -2525,13 +2442,8 @@ pub struct App {
     pub kinesis_view: KinesisView,
     pub ecr_view: EcrView,
     pub lambda_view: LambdaView,
-    pub kinesis_metrics: HashMap<String, KinesisMetricsState>,
-    pub kinesis_metrics_time_range: MetricsTimeRange,
     pub redshift_view: RedshiftView,
     pub controltower_view: ControlTowerView,
-    pub redshift_metrics: HashMap<String, RedshiftMetricsState>,
-    pub redshift_sl_metrics: HashMap<String, RedshiftSlMetricsState>,
-    pub redshift_metrics_time_range: MetricsTimeRange,
     pub batch_view: BatchView,
     /// Batch Jobs sub-tab status group (`f`).
     pub batch_job_filter: BatchJobStatusFilter,
@@ -2547,16 +2459,9 @@ pub struct App {
     pub dms_metrics: HashMap<String, crate::aws::services::dms::DmsMetricsState>,
     pub dms_metrics_time_range: MetricsTimeRange,
 
-    // Firehose detail section state (tags/metrics keyed by delivery-stream name)
-    pub firehose_metrics: HashMap<String, FirehoseMetricsState>,
-    pub firehose_metrics_time_range: MetricsTimeRange,
 
     // Athena sub-tab view + per-type detail sections
     pub athena_view: AthenaView,
-    // Lazy: tables keyed by `catalog/db`; workgroup tags keyed by workgroup name.
-    // Workgroup `m` metrics keyed by workgroup name.
-    pub athena_wg_metrics: HashMap<String, crate::aws::services::athena::AthenaWgMetricsState>,
-    pub athena_wg_metrics_time_range: MetricsTimeRange,
 
     // Firewall Manager sub-tab view + per-type detail sections + the phase-0
     // admin posture (folded into policy Overviews + the non-admin empty state).
@@ -2566,9 +2471,6 @@ pub struct App {
     // Glue sub-tab view + per-type detail sections (all sub-tabs load eagerly;
     // no lazy sections, so no HashMap state).
     pub glue_view: GlueView,
-    // Job `m` metrics keyed by job name.
-    pub glue_job_metrics: HashMap<String, crate::aws::services::glue::GlueJobMetricsState>,
-    pub glue_job_metrics_time_range: MetricsTimeRange,
 
     // SES sub-tab view + identity detail section + account-level posture + the
     // account-wide `m` metrics (single series, so no per-resource keying).
@@ -2665,10 +2567,6 @@ pub struct App {
     // Bumped per fetch, so a superseded one (reopen, range, `r`) is dropped.
     pub spec_metrics_generation: u64,
 
-    // EBS volume metrics overlay
-    pub ebs_metrics_time_range: MetricsTimeRange,
-    // Keyed by volume ID; re-fetched on time-range change
-    pub ebs_metrics: HashMap<String, EbsMetricsState>,
 
     // Auto Scaling group metrics overlay
     pub asg_metrics_time_range: MetricsTimeRange,
@@ -2706,22 +2604,9 @@ pub struct App {
 
     // Messaging (SQS/SNS) sub-tab and detail section state
     pub msg_view: MsgView,
-    // Bedrock model / inference-profile metrics overlay (`m`): keyed by resource id
-    pub bedrock_metrics: HashMap<String, crate::aws::services::bedrock::BedrockMetricsState>,
-    pub bedrock_metrics_time_range: MetricsTimeRange,
     /// S3 bucket daily storage metrics (`m` overlay), keyed by bucket name.
     /// Fixed 30-day/daily window — no time-range knob (storage is daily).
     pub s3_metrics: HashMap<String, crate::aws::services::s3::S3MetricsState>,
-    /// Transfer Family server CloudWatch metrics (`m` overlay), keyed by server id.
-    pub transfer_metrics: HashMap<String, crate::aws::services::transfer::TransferMetricsState>,
-    pub transfer_metrics_time_range: MetricsTimeRange,
-    // SQS/SNS metrics overlay (`m`): keyed by queue url / topic ARN
-    pub sqs_metrics: HashMap<String, SqsMetricsState>,
-    pub sqs_metrics_time_range: MetricsTimeRange,
-    pub sns_metrics: HashMap<String, SnsMetricsState>,
-    pub sns_metrics_time_range: MetricsTimeRange,
-    pub sfn_metrics: HashMap<String, SfnMetricsState>,
-    pub sfn_metrics_time_range: MetricsTimeRange,
 
     // Config (Secrets Manager / SSM) sub-tab and detail section state
     pub ssm_view: SsmView,
@@ -3287,8 +3172,6 @@ impl App {
             apigw_metrics_time_range: MetricsTimeRange::OneHour,
             quota_service_code: "ec2".to_string(),
             quota_services: Vec::new(),
-            ddb_metrics: HashMap::new(),
-            ddb_metrics_time_range: MetricsTimeRange::OneHour,
             ddb_browser: crate::ui::widgets::ddb_item_browser::DdbBrowserState::new(),
             memory_browser: crate::ui::widgets::memory_browser::MemoryBrowserState::new(),
             s3_object_browser: crate::ui::widgets::s3_object_browser::S3ObjectBrowserState::new(),
@@ -3324,11 +3207,7 @@ impl App {
             session_handover_files: Vec::new(),
             r53_view: R53View::Zones,
             r53_records_skipped: (0, 0),
-            r53_health_metrics: HashMap::new(),
-            r53_health_metrics_time_range: MetricsTimeRange::TwentyFourHours,
             cf_view: CloudFrontView::Distributions,
-            cf_metrics: HashMap::new(),
-            cf_metrics_time_range: MetricsTimeRange::OneHour,
             ram_owner: "SELF".to_string(),
             ta_scope: crate::aws::services::trusted_advisor::TaScope::Account,
             // Show everything by default — hiding rows silently costs trust
@@ -3339,38 +3218,17 @@ impl App {
 
             eks_metrics: HashMap::new(),
 
-            efs_metrics: HashMap::new(),
-            efs_metrics_time_range: MetricsTimeRange::OneHour,
-            elasticache_metrics: HashMap::new(),
-            elasticache_metrics_time_range: MetricsTimeRange::OneHour,
             opensearch_metrics: HashMap::new(),
             opensearch_metrics_time_range: MetricsTimeRange::OneHour,
 
             msk_metrics: HashMap::new(),
             msk_metrics_time_range: MetricsTimeRange::OneHour,
-            nat_metrics: HashMap::new(),
-            nat_metrics_time_range: MetricsTimeRange::TwentyFourHours,
-            vpn_metrics: HashMap::new(),
-            vpn_metrics_time_range: MetricsTimeRange::TwentyFourHours,
-            dx_metrics: HashMap::new(),
-            dx_metrics_time_range: MetricsTimeRange::TwentyFourHours,
-            dx_vif_metrics: HashMap::new(),
-            ecr_metrics: HashMap::new(),
-            ecr_metrics_time_range: MetricsTimeRange::SevenDays,
             agentcore_metrics: HashMap::new(),
             agentcore_metrics_time_range: MetricsTimeRange::SixHours,
-            ga_metrics: HashMap::new(),
-            ga_metrics_time_range: MetricsTimeRange::TwentyFourHours,
-            workspace_metrics: HashMap::new(),
-            workspace_metrics_time_range: MetricsTimeRange::TwentyFourHours,
             cognito_metrics: HashMap::new(),
             cognito_metrics_time_range: MetricsTimeRange::TwentyFourHours,
             vpce_metrics: HashMap::new(),
             vpce_metrics_time_range: MetricsTimeRange::TwentyFourHours,
-            tgw_metrics: HashMap::new(),
-            tgw_metrics_time_range: MetricsTimeRange::TwentyFourHours,
-            log_group_metrics: HashMap::new(),
-            log_group_metrics_time_range: MetricsTimeRange::TwentyFourHours,
             cw_dashboard_metrics: HashMap::new(),
             cw_dashboard_metrics_time_range: MetricsTimeRange::SixHours,
             cw_dashboard_scroll: 0,
@@ -3380,27 +3238,14 @@ impl App {
             popup_hits: RefCell::new(PopupHits::default()),
             cw_dashboard_zoomed: false,
             cw_dashboard_range_from_body: true,
-            eb_rule_metrics: HashMap::new(),
-            eb_rule_metrics_time_range: MetricsTimeRange::TwentyFourHours,
-            r53_zone_metrics: HashMap::new(),
-            r53_zone_metrics_time_range: MetricsTimeRange::TwentyFourHours,
-            resolver_ep_metrics: HashMap::new(),
-            resolver_ep_metrics_time_range: MetricsTimeRange::TwentyFourHours,
-            codebuild_metrics: HashMap::new(),
-            codebuild_metrics_time_range: MetricsTimeRange::TwentyFourHours,
             sfn_view: SfnView::StateMachines,
             sfn_exec_status_filter: ExecStatusFilter::All,
             code_exec_status_filter: ExecStatusFilter::All,
             kinesis_view: KinesisView::Streams,
             ecr_view: EcrView::Repositories,
             lambda_view: LambdaView::Functions,
-            kinesis_metrics: HashMap::new(),
-            kinesis_metrics_time_range: MetricsTimeRange::OneHour,
             redshift_view: RedshiftView::Clusters,
             controltower_view: ControlTowerView::LandingZone,
-            redshift_metrics: HashMap::new(),
-            redshift_sl_metrics: HashMap::new(),
-            redshift_metrics_time_range: MetricsTimeRange::OneHour,
             batch_view: BatchView::Queues,
             batch_job_filter: BatchJobStatusFilter::All,
             xray_view: XRayView::ServiceMap,
@@ -3411,17 +3256,11 @@ impl App {
             dms_view: DmsView::Tasks,
             dms_metrics: HashMap::new(),
             dms_metrics_time_range: MetricsTimeRange::OneHour,
-            firehose_metrics: HashMap::new(),
-            firehose_metrics_time_range: MetricsTimeRange::OneHour,
 
             athena_view: AthenaView::Workgroups,
-            athena_wg_metrics: HashMap::new(),
-            athena_wg_metrics_time_range: MetricsTimeRange::TwentyFourHours,
             fms_view: FmsView::Policies,
             fms_admin: None,
             glue_view: GlueView::Databases,
-            glue_job_metrics: HashMap::new(),
-            glue_job_metrics_time_range: MetricsTimeRange::TwentyFourHours,
 
             ses_view: SesView::Identities,
             ses_account: None,
@@ -3472,8 +3311,6 @@ impl App {
             spec_metrics: None,
             spec_metrics_range: MetricsTimeRange::OneHour,
             spec_metrics_generation: 0,
-            ebs_metrics_time_range: MetricsTimeRange::OneHour,
-            ebs_metrics: HashMap::new(),
             asg_metrics_time_range: MetricsTimeRange::OneHour,
             asg_metrics: HashMap::new(),
             lambda_code_downloading: None,
@@ -3487,17 +3324,7 @@ impl App {
             elb_metrics: HashMap::new(),
             elb_metrics_time_range: MetricsTimeRange::OneHour,
             msg_view: MsgView::Queues,
-            bedrock_metrics: HashMap::new(),
-            bedrock_metrics_time_range: MetricsTimeRange::OneHour,
             s3_metrics: HashMap::new(),
-            transfer_metrics: HashMap::new(),
-            transfer_metrics_time_range: MetricsTimeRange::TwentyFourHours,
-            sqs_metrics: HashMap::new(),
-            sqs_metrics_time_range: MetricsTimeRange::OneHour,
-            sns_metrics: HashMap::new(),
-            sns_metrics_time_range: MetricsTimeRange::OneHour,
-            sfn_metrics: HashMap::new(),
-            sfn_metrics_time_range: MetricsTimeRange::OneHour,
             ssm_view: SsmView::Parameters,
             config_view: ConfigView::Rules,
             waf_view: WafView::WebAcls,
@@ -3627,59 +3454,17 @@ impl App {
                     crate::aws::services::eks::EksMetricsState::Loaded(data),
                 );
             }
-            Event::EfsMetricsLoaded {
-                file_system_id,
-                data} => {
-                self.efs_metrics
-                    .insert(file_system_id, EfsMetricsState::Loaded(data));
-            }
-            Event::ElastiCacheMetricsLoaded { cache_id, data } => {
-                self.elasticache_metrics
-                    .insert(cache_id, ElastiCacheMetricsState::Loaded(data));
-            }
             Event::OpenSearchMetricsLoaded { domain, data } => {
                 self.opensearch_metrics
                     .insert(domain, OpenSearchMetricsState::Loaded(data));
             }
-            Event::CloudFrontMetricsLoaded { distribution_id, data } => {
-                self.cf_metrics
-                    .insert(distribution_id, CfMetricsState::Loaded(Box::new(data)));
-            }
-            Event::KinesisMetricsLoaded { stream_name, data } => {
-                self.kinesis_metrics
-                    .insert(stream_name, KinesisMetricsState::Loaded(data));
-            }
-            Event::RedshiftMetricsLoaded { cluster_id, data } => {
-                self.redshift_metrics
-                    .insert(cluster_id, RedshiftMetricsState::Loaded(data));
-            }
-            Event::RedshiftSlMetricsLoaded { workgroup, data } => {
-                self.redshift_sl_metrics
-                    .insert(workgroup, RedshiftSlMetricsState::Loaded(data));
-            }
-            Event::FirehoseMetricsLoaded { stream_name, data } => {
-                self.firehose_metrics
-                    .insert(stream_name, FirehoseMetricsState::Loaded(data));
-            }
             Event::FmsAdminLoaded { info } => {
                 self.fms_admin = Some(info);
-            }
-            Event::BedrockMetricsLoaded { model_id, data } => {
-                self.bedrock_metrics.insert(
-                    model_id,
-                    crate::aws::services::bedrock::BedrockMetricsState::Loaded(data),
-                );
             }
             Event::S3MetricsLoaded { bucket, data } => {
                 self.s3_metrics.insert(
                     bucket,
                     crate::aws::services::s3::S3MetricsState::Loaded(data),
-                );
-            }
-            Event::TransferMetricsLoaded { server_id, data } => {
-                self.transfer_metrics.insert(
-                    server_id,
-                    crate::aws::services::transfer::TransferMetricsState::Loaded(data),
                 );
             }
             Event::SesAccountLoaded { info } => {
@@ -3694,34 +3479,10 @@ impl App {
                     crate::aws::services::ses::SesMetricsState::Loaded(Box::new(data)),
                 );
             }
-            Event::NatMetricsLoaded { nat_id, data } => {
-                self.nat_metrics.insert(
-                    nat_id,
-                    crate::aws::services::vpc::NatMetricsState::Loaded(data),
-                );
-            }
-            Event::VpnMetricsLoaded { vpn_id, data } => {
-                self.vpn_metrics.insert(
-                    vpn_id,
-                    crate::aws::services::vpc::VpnMetricsState::Loaded(data),
-                );
-            }
             Event::VpceMetricsLoaded { endpoint_id, data } => {
                 self.vpce_metrics.insert(
                     endpoint_id,
                     crate::aws::services::vpc::VpceMetricsState::Loaded(data),
-                );
-            }
-            Event::TgwMetricsLoaded { id, data } => {
-                self.tgw_metrics.insert(
-                    id,
-                    crate::aws::services::transit_gateway::TgwMetricsState::Loaded(data),
-                );
-            }
-            Event::LogGroupMetricsLoaded { arn, data } => {
-                self.log_group_metrics.insert(
-                    arn,
-                    crate::aws::services::cloudwatch::LogGroupMetricsState::Loaded(data),
                 );
             }
             Event::CwDashboardMetricsLoaded { name, data } => {
@@ -3740,45 +3501,9 @@ impl App {
                     crate::aws::services::cloudwatch::CwDashboardMetricsState::Error(error),
                 );
             }
-            Event::EbRuleMetricsLoaded { arn, data } => {
-                self.eb_rule_metrics.insert(
-                    arn,
-                    crate::aws::services::eventbridge::EbRuleMetricsState::Loaded(data),
-                );
-            }
-            Event::R53ZoneMetricsLoaded { id, data } => {
-                self.r53_zone_metrics.insert(
-                    id,
-                    crate::aws::services::route53::R53ZoneMetricsState::Loaded(data),
-                );
-            }
-            Event::ResolverEpMetricsLoaded { id, data } => {
-                self.resolver_ep_metrics.insert(
-                    id,
-                    crate::aws::services::route53resolver::ResolverEpMetricsState::Loaded(data),
-                );
-            }
             Event::DmsMetricsLoaded { arn, data } => {
                 self.dms_metrics
                     .insert(arn, crate::aws::services::dms::DmsMetricsState::Loaded(data));
-            }
-            Event::CodeBuildMetricsLoaded { arn, data } => {
-                self.codebuild_metrics.insert(
-                    arn,
-                    crate::aws::services::code::CodeBuildMetricsState::Loaded(data),
-                );
-            }
-            Event::DxMetricsLoaded { connection_id, data } => {
-                self.dx_metrics.insert(
-                    connection_id,
-                    crate::aws::services::direct_connect::DxMetricsState::Loaded(Box::new(data)),
-                );
-            }
-            Event::DxVifMetricsLoaded { vif_id, data } => {
-                self.dx_vif_metrics.insert(
-                    vif_id,
-                    crate::aws::services::direct_connect::DxVifMetricsState::Loaded(data),
-                );
             }
             Event::AgentCoreMetricsLoaded { key, data } => {
                 self.agentcore_metrics.insert(
@@ -3786,40 +3511,10 @@ impl App {
                     crate::aws::services::agentcore::AgentCoreMetricsState::Loaded(data),
                 );
             }
-            Event::EcrMetricsLoaded { repo, data } => {
-                self.ecr_metrics.insert(
-                    repo,
-                    crate::aws::services::ecr::EcrMetricsState::Loaded(data),
-                );
-            }
-            Event::GaMetricsLoaded { arn, data } => {
-                self.ga_metrics.insert(
-                    arn,
-                    crate::aws::services::global_accelerator::GaMetricsState::Loaded(data),
-                );
-            }
-            Event::WorkspaceMetricsLoaded { workspace_id, data } => {
-                self.workspace_metrics.insert(
-                    workspace_id,
-                    crate::aws::services::workspaces::WsMetricsState::Loaded(data),
-                );
-            }
             Event::CognitoMetricsLoaded { pool_id, data } => {
                 self.cognito_metrics.insert(
                     pool_id,
                     crate::aws::services::cognito::CognitoMetricsState::Loaded(data),
-                );
-            }
-            Event::AthenaWgMetricsLoaded { workgroup, data } => {
-                self.athena_wg_metrics.insert(
-                    workgroup,
-                    crate::aws::services::athena::AthenaWgMetricsState::Loaded(data),
-                );
-            }
-            Event::GlueJobMetricsLoaded { job_name, data } => {
-                self.glue_job_metrics.insert(
-                    job_name,
-                    crate::aws::services::glue::GlueJobMetricsState::Loaded(data),
                 );
             }
             Event::Lazy(a) => {
@@ -3832,24 +3527,6 @@ impl App {
             }
             Event::MskMetricsLoaded { arn, data } => {
                 self.msk_metrics.insert(arn, MskMetricsState::Loaded(data));
-            }
-            Event::R53HealthCheckMetricsLoaded { id, data } => {
-                self.r53_health_metrics
-                    .insert(id, R53HealthMetricsState::Loaded(data));
-            }
-            Event::SqsMetricsLoaded { queue_url, data } => {
-                self.sqs_metrics
-                    .insert(queue_url, SqsMetricsState::Loaded(data));
-            }
-            Event::SnsMetricsLoaded { topic_arn, data } => {
-                self.sns_metrics
-                    .insert(topic_arn, SnsMetricsState::Loaded(data));
-            }
-            Event::SfnMetricsLoaded {
-                state_machine_arn,
-                data} => {
-                self.sfn_metrics
-                    .insert(state_machine_arn, SfnMetricsState::Loaded(data));
             }
             Event::FsxMetricsLoaded { file_system_id, data } => {
                 self.fsx_metrics.insert(
@@ -3960,9 +3637,6 @@ impl App {
                 if self.quota_service_selector.visible {
                     self.quota_service_selector.set_services(services);
                 }
-            }
-            Event::DdbMetricsLoaded { table, data } => {
-                self.ddb_metrics.insert(table, DdbMetricsState::Loaded(data));
             }
             Event::MemoryBrowserLoaded {
                 rows,
@@ -4144,10 +3818,6 @@ impl App {
                     });
                     self.success_message_time = Some(Instant::now());
                 }
-            }
-            Event::EbsMetricsLoaded { volume_id, data } => {
-                self.ebs_metrics
-                    .insert(volume_id, EbsMetricsState::Loaded(data));
             }
             Event::AsgMetricsLoaded { group_name, data } => {
                 self.asg_metrics
@@ -5009,18 +4679,6 @@ impl App {
             }
             match kind {
                 MetricsKind::Spec => self.handle_spec_metrics_key(key, event_tx),
-                MetricsKind::Ebs => match key.code {
-                    KeyCode::Char('r') => self.trigger_ebs_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.ebs_metrics_time_range = self.ebs_metrics_time_range.prev();
-                        self.trigger_ebs_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.ebs_metrics_time_range = self.ebs_metrics_time_range.next();
-                        self.trigger_ebs_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
                 MetricsKind::Ecs => match key.code {
                     KeyCode::Char('r') => self.trigger_ecs_metrics_load(event_tx),
                     KeyCode::Char('[') => {
@@ -5133,44 +4791,6 @@ impl App {
                     }
                     _ => {}
                 },
-                MetricsKind::Ddb => match key.code {
-                    KeyCode::Char('r') => self.trigger_ddb_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.ddb_metrics_time_range = self.ddb_metrics_time_range.prev();
-                        self.trigger_ddb_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.ddb_metrics_time_range = self.ddb_metrics_time_range.next();
-                        self.trigger_ddb_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Efs => match key.code {
-                    KeyCode::Char('r') => self.trigger_efs_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.efs_metrics_time_range = self.efs_metrics_time_range.prev();
-                        self.trigger_efs_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.efs_metrics_time_range = self.efs_metrics_time_range.next();
-                        self.trigger_efs_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::ElastiCache => match key.code {
-                    KeyCode::Char('r') => self.trigger_elasticache_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.elasticache_metrics_time_range =
-                            self.elasticache_metrics_time_range.prev();
-                        self.trigger_elasticache_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.elasticache_metrics_time_range =
-                            self.elasticache_metrics_time_range.next();
-                        self.trigger_elasticache_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
                 MetricsKind::OpenSearch => match key.code {
                     KeyCode::Char('r') => self.trigger_opensearch_metrics_load(event_tx),
                     KeyCode::Char('[') => {
@@ -5182,66 +4802,6 @@ impl App {
                         self.opensearch_metrics_time_range =
                             self.opensearch_metrics_time_range.next();
                         self.trigger_opensearch_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Kinesis => match key.code {
-                    KeyCode::Char('r') => self.trigger_kinesis_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.kinesis_metrics_time_range = self.kinesis_metrics_time_range.prev();
-                        self.trigger_kinesis_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.kinesis_metrics_time_range = self.kinesis_metrics_time_range.next();
-                        self.trigger_kinesis_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Firehose => match key.code {
-                    KeyCode::Char('r') => self.trigger_firehose_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.firehose_metrics_time_range = self.firehose_metrics_time_range.prev();
-                        self.trigger_firehose_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.firehose_metrics_time_range = self.firehose_metrics_time_range.next();
-                        self.trigger_firehose_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Redshift => match key.code {
-                    KeyCode::Char('r') => self.trigger_redshift_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.redshift_metrics_time_range = self.redshift_metrics_time_range.prev();
-                        self.trigger_redshift_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.redshift_metrics_time_range = self.redshift_metrics_time_range.next();
-                        self.trigger_redshift_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::RedshiftSl => match key.code {
-                    KeyCode::Char('r') => self.trigger_redshift_sl_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.redshift_metrics_time_range = self.redshift_metrics_time_range.prev();
-                        self.trigger_redshift_sl_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.redshift_metrics_time_range = self.redshift_metrics_time_range.next();
-                        self.trigger_redshift_sl_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::CloudFront => match key.code {
-                    KeyCode::Char('r') => self.trigger_cloudfront_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.cf_metrics_time_range = self.cf_metrics_time_range.prev();
-                        self.trigger_cloudfront_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.cf_metrics_time_range = self.cf_metrics_time_range.next();
-                        self.trigger_cloudfront_metrics_load(event_tx);
                     }
                     _ => {}
                 },
@@ -5345,86 +4905,12 @@ impl App {
                     }
                     _ => {}
                 },
-                MetricsKind::Sqs => match key.code {
-                    KeyCode::Char('r') => self.trigger_sqs_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.sqs_metrics_time_range = self.sqs_metrics_time_range.prev();
-                        self.trigger_sqs_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.sqs_metrics_time_range = self.sqs_metrics_time_range.next();
-                        self.trigger_sqs_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Sns => match key.code {
-                    KeyCode::Char('r') => self.trigger_sns_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.sns_metrics_time_range = self.sns_metrics_time_range.prev();
-                        self.trigger_sns_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.sns_metrics_time_range = self.sns_metrics_time_range.next();
-                        self.trigger_sns_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::StepFunctions => match key.code {
-                    KeyCode::Char('r') => self.trigger_sfn_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.sfn_metrics_time_range = self.sfn_metrics_time_range.prev();
-                        self.trigger_sfn_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.sfn_metrics_time_range = self.sfn_metrics_time_range.next();
-                        self.trigger_sfn_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::BedrockModel => match key.code {
-                    KeyCode::Char('r') => self.trigger_bedrock_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.bedrock_metrics_time_range = self.bedrock_metrics_time_range.prev();
-                        self.trigger_bedrock_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.bedrock_metrics_time_range = self.bedrock_metrics_time_range.next();
-                        self.trigger_bedrock_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
                 // S3 storage is a fixed 30-day daily window; only refresh.
                 MetricsKind::S3 => {
                     if let KeyCode::Char('r') = key.code {
                         self.trigger_s3_metrics_load(event_tx);
                     }
                 }
-                MetricsKind::Transfer => match key.code {
-                    KeyCode::Char('r') => self.trigger_transfer_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.transfer_metrics_time_range = self.transfer_metrics_time_range.prev();
-                        self.trigger_transfer_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.transfer_metrics_time_range = self.transfer_metrics_time_range.next();
-                        self.trigger_transfer_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::R53HealthCheck => match key.code {
-                    KeyCode::Char('r') => self.trigger_r53_health_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.r53_health_metrics_time_range =
-                            self.r53_health_metrics_time_range.prev();
-                        self.trigger_r53_health_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.r53_health_metrics_time_range =
-                            self.r53_health_metrics_time_range.next();
-                        self.trigger_r53_health_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
                 MetricsKind::Ses => match key.code {
                     KeyCode::Char('r') => self.trigger_ses_metrics_load(event_tx),
                     KeyCode::Char('[') => {
@@ -5449,54 +4935,6 @@ impl App {
                     }
                     _ => {}
                 },
-                MetricsKind::NatGw => match key.code {
-                    KeyCode::Char('r') => self.trigger_nat_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.nat_metrics_time_range = self.nat_metrics_time_range.prev();
-                        self.trigger_nat_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.nat_metrics_time_range = self.nat_metrics_time_range.next();
-                        self.trigger_nat_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Vpn => match key.code {
-                    KeyCode::Char('r') => self.trigger_vpn_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.vpn_metrics_time_range = self.vpn_metrics_time_range.prev();
-                        self.trigger_vpn_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.vpn_metrics_time_range = self.vpn_metrics_time_range.next();
-                        self.trigger_vpn_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Dx => match key.code {
-                    KeyCode::Char('r') => self.trigger_dx_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.dx_metrics_time_range = self.dx_metrics_time_range.prev();
-                        self.trigger_dx_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.dx_metrics_time_range = self.dx_metrics_time_range.next();
-                        self.trigger_dx_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::DxVif => match key.code {
-                    KeyCode::Char('r') => self.trigger_dx_vif_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.dx_metrics_time_range = self.dx_metrics_time_range.prev();
-                        self.trigger_dx_vif_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.dx_metrics_time_range = self.dx_metrics_time_range.next();
-                        self.trigger_dx_vif_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
                 MetricsKind::AgentCore => match key.code {
                     KeyCode::Char('r') => self.trigger_agentcore_metrics_load(event_tx),
                     KeyCode::Char('[') => {
@@ -5508,44 +4946,6 @@ impl App {
                         self.agentcore_metrics_time_range =
                             self.agentcore_metrics_time_range.next();
                         self.trigger_agentcore_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Ecr => match key.code {
-                    KeyCode::Char('r') => self.trigger_ecr_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.ecr_metrics_time_range = self.ecr_metrics_time_range.prev();
-                        self.trigger_ecr_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.ecr_metrics_time_range = self.ecr_metrics_time_range.next();
-                        self.trigger_ecr_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Ga => match key.code {
-                    KeyCode::Char('r') => self.trigger_ga_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.ga_metrics_time_range = self.ga_metrics_time_range.prev();
-                        self.trigger_ga_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.ga_metrics_time_range = self.ga_metrics_time_range.next();
-                        self.trigger_ga_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Workspaces => match key.code {
-                    KeyCode::Char('r') => self.trigger_workspace_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.workspace_metrics_time_range =
-                            self.workspace_metrics_time_range.prev();
-                        self.trigger_workspace_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.workspace_metrics_time_range =
-                            self.workspace_metrics_time_range.next();
-                        self.trigger_workspace_metrics_load(event_tx);
                     }
                     _ => {}
                 },
@@ -5563,34 +4963,6 @@ impl App {
                     }
                     _ => {}
                 },
-                MetricsKind::AthenaWg => match key.code {
-                    KeyCode::Char('r') => self.trigger_athena_wg_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.athena_wg_metrics_time_range =
-                            self.athena_wg_metrics_time_range.prev();
-                        self.trigger_athena_wg_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.athena_wg_metrics_time_range =
-                            self.athena_wg_metrics_time_range.next();
-                        self.trigger_athena_wg_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::GlueJob => match key.code {
-                    KeyCode::Char('r') => self.trigger_glue_job_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.glue_job_metrics_time_range =
-                            self.glue_job_metrics_time_range.prev();
-                        self.trigger_glue_job_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.glue_job_metrics_time_range =
-                            self.glue_job_metrics_time_range.next();
-                        self.trigger_glue_job_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
                 MetricsKind::VpcEndpoint => match key.code {
                     KeyCode::Char('r') => self.trigger_vpce_metrics_load(event_tx),
                     KeyCode::Char('[') => {
@@ -5603,70 +4975,6 @@ impl App {
                     }
                     _ => {}
                 },
-                MetricsKind::Tgw => match key.code {
-                    KeyCode::Char('r') => self.trigger_tgw_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.tgw_metrics_time_range = self.tgw_metrics_time_range.prev();
-                        self.trigger_tgw_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.tgw_metrics_time_range = self.tgw_metrics_time_range.next();
-                        self.trigger_tgw_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::LogGroup => match key.code {
-                    KeyCode::Char('r') => self.trigger_log_group_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.log_group_metrics_time_range =
-                            self.log_group_metrics_time_range.prev();
-                        self.trigger_log_group_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.log_group_metrics_time_range =
-                            self.log_group_metrics_time_range.next();
-                        self.trigger_log_group_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::EbRule => match key.code {
-                    KeyCode::Char('r') => self.trigger_eb_rule_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.eb_rule_metrics_time_range = self.eb_rule_metrics_time_range.prev();
-                        self.trigger_eb_rule_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.eb_rule_metrics_time_range = self.eb_rule_metrics_time_range.next();
-                        self.trigger_eb_rule_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::R53Zone => match key.code {
-                    KeyCode::Char('r') => self.trigger_r53_zone_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.r53_zone_metrics_time_range = self.r53_zone_metrics_time_range.prev();
-                        self.trigger_r53_zone_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.r53_zone_metrics_time_range = self.r53_zone_metrics_time_range.next();
-                        self.trigger_r53_zone_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::ResolverEndpoint => match key.code {
-                    KeyCode::Char('r') => self.trigger_resolver_ep_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.resolver_ep_metrics_time_range =
-                            self.resolver_ep_metrics_time_range.prev();
-                        self.trigger_resolver_ep_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.resolver_ep_metrics_time_range =
-                            self.resolver_ep_metrics_time_range.next();
-                        self.trigger_resolver_ep_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
                 MetricsKind::Dms => match key.code {
                     KeyCode::Char('r') => self.trigger_dms_metrics_load(event_tx),
                     KeyCode::Char('[') => {
@@ -5676,20 +4984,6 @@ impl App {
                     KeyCode::Char(']') => {
                         self.dms_metrics_time_range = self.dms_metrics_time_range.next();
                         self.trigger_dms_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::CodeBuild => match key.code {
-                    KeyCode::Char('r') => self.trigger_codebuild_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.codebuild_metrics_time_range =
-                            self.codebuild_metrics_time_range.prev();
-                        self.trigger_codebuild_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.codebuild_metrics_time_range =
-                            self.codebuild_metrics_time_range.next();
-                        self.trigger_codebuild_metrics_load(event_tx);
                     }
                     _ => {}
                 },
@@ -12156,28 +11450,6 @@ impl App {
         }
     }
 
-    fn trigger_r53_health_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(id) = self.selected_r53_health_check_id() {
-            let time_range = self.r53_health_metrics_time_range;
-            self.r53_health_metrics
-                .insert(id.clone(), R53HealthMetricsState::Loading);
-            // Route53 is a global namespace → us-east-1 CloudWatch (like CloudFront).
-            let cw = self.aws_clients.cloudwatch_us_east_1_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::route53::fetch_health_check_metrics(
-                    cw,
-                    id.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(Event::R53HealthCheckMetricsLoaded { id, data });
-                }
-            });
-        }
-    }
-
     /// Trigger a lazy-load of records for the currently selected zone if not yet loaded.
     pub(crate) fn trigger_r53_records_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if let Some(zone) = self.get_selected_resource()
@@ -13910,29 +13182,6 @@ impl App {
         }
     }
 
-    fn trigger_elasticache_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some((cache_id, _, metric_id)) = self.selected_elasticache() {
-            // Chart the primary node's CacheClusterId; fall back to the cache id.
-            let dim_id = metric_id.unwrap_or_else(|| cache_id.clone());
-            let time_range = self.elasticache_metrics_time_range;
-            self.elasticache_metrics
-                .insert(cache_id.clone(), ElastiCacheMetricsState::Loading);
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::elasticache::fetch_elasticache_metrics(
-                    cw, dim_id, time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::ElastiCacheMetricsLoaded {
-                        cache_id,
-                        data});
-                }
-            });
-        }
-    }
-
     fn is_selected_kinesis(&self) -> bool {
         self.get_selected_resource()
             .and_then(|r| {
@@ -13986,29 +13235,6 @@ impl App {
         }
     }
 
-    fn trigger_kinesis_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some((name, _)) = self.selected_kinesis() {
-            let time_range = self.kinesis_metrics_time_range;
-            self.kinesis_metrics
-                .insert(name.clone(), KinesisMetricsState::Loading);
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::kinesis::fetch_kinesis_metrics(
-                    cw,
-                    name.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::KinesisMetricsLoaded {
-                        stream_name: name,
-                        data});
-                }
-            });
-        }
-    }
-
     fn is_selected_firehose(&self) -> bool {
         self.get_selected_resource()
             .and_then(|r| {
@@ -14043,29 +13269,6 @@ impl App {
         }
     }
 
-    fn trigger_firehose_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(name) = self.selected_firehose() {
-            let time_range = self.firehose_metrics_time_range;
-            self.firehose_metrics
-                .insert(name.clone(), FirehoseMetricsState::Loading);
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::kinesis::fetch_firehose_metrics(
-                    cw,
-                    name.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::FirehoseMetricsLoaded {
-                        stream_name: name,
-                        data});
-                }
-            });
-        }
-    }
-
     // ── Redshift selection helpers + metric triggers ─────────────────────────
 
     fn is_selected_redshift_cluster(&self) -> bool {
@@ -14084,62 +13287,6 @@ impl App {
                     .downcast_ref::<crate::aws::services::redshift::RedshiftWorkgroup>()
             })
             .is_some()
-    }
-
-    fn trigger_redshift_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        let Some(id) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::redshift::RedshiftCluster>()
-                .map(|c| c.id.clone())
-        }) else {
-            return;
-        };
-        let time_range = self.redshift_metrics_time_range;
-        self.redshift_metrics
-            .insert(id.clone(), RedshiftMetricsState::Loading);
-        let cw = self.aws_clients.cloudwatch_client();
-        let tx = event_tx.clone();
-        tokio::spawn(async move {
-            if let Ok(data) = crate::aws::services::redshift::fetch_redshift_metrics(
-                cw,
-                id.clone(),
-                time_range,
-            )
-            .await
-            {
-                let _ = tx.send(crate::event::Event::RedshiftMetricsLoaded {
-                    cluster_id: id,
-                    data});
-            }
-        });
-    }
-
-    fn trigger_redshift_sl_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        let Some(name) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::redshift::RedshiftWorkgroup>()
-                .map(|w| w.name.clone())
-        }) else {
-            return;
-        };
-        let time_range = self.redshift_metrics_time_range;
-        self.redshift_sl_metrics
-            .insert(name.clone(), RedshiftSlMetricsState::Loading);
-        let cw = self.aws_clients.cloudwatch_client();
-        let tx = event_tx.clone();
-        tokio::spawn(async move {
-            if let Ok(data) = crate::aws::services::redshift::fetch_redshift_sl_metrics(
-                cw,
-                name.clone(),
-                time_range,
-            )
-            .await
-            {
-                let _ = tx.send(crate::event::Event::RedshiftSlMetricsLoaded {
-                    workgroup: name,
-                    data});
-            }
-        });
     }
 
     // ── FMS selection helpers + lazy loads ───────────────────────────────────
@@ -14356,112 +13503,6 @@ impl App {
                     .map_err(|e| format!("Tags unavailable: {}", e))
             },
         );
-    }
-
-    fn trigger_cloudfront_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(dist) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::cloudfront::CfDistribution>()
-        }) {
-            let distribution_id = dist.id.clone();
-            let time_range = self.cf_metrics_time_range;
-            self.cf_metrics
-                .insert(distribution_id.clone(), CfMetricsState::Loading);
-            // CloudFront metrics live in us-east-1 (global service).
-            let cw = self.aws_clients.cloudwatch_us_east_1_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::cloudfront::fetch_cloudfront_metrics(
-                    cw,
-                    distribution_id.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::CloudFrontMetricsLoaded {
-                        distribution_id,
-                        data});
-                }
-            });
-        }
-    }
-
-    fn trigger_sqs_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(q) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::messaging::SqsQueue>()
-        }) {
-            let queue_url = q.url.clone();
-            let queue_name = q.name.clone();
-            let time_range = self.sqs_metrics_time_range;
-            self.sqs_metrics
-                .insert(queue_url.clone(), SqsMetricsState::Loading);
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::messaging::fetch_sqs_metrics(
-                    cw,
-                    queue_name,
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::SqsMetricsLoaded { queue_url, data });
-                }
-            });
-        }
-    }
-
-    fn trigger_sns_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(t) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::messaging::SnsTopic>()
-        }) {
-            let topic_arn = t.arn.clone();
-            let topic_name = t.name.clone();
-            let time_range = self.sns_metrics_time_range;
-            self.sns_metrics
-                .insert(topic_arn.clone(), SnsMetricsState::Loading);
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::messaging::fetch_sns_metrics(
-                    cw,
-                    topic_name,
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::SnsMetricsLoaded { topic_arn, data });
-                }
-            });
-        }
-    }
-
-    fn trigger_sfn_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(sm) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::step_functions::SfnStateMachine>()
-        }) {
-            let state_machine_arn = sm.arn.clone();
-            let time_range = self.sfn_metrics_time_range;
-            self.sfn_metrics
-                .insert(state_machine_arn.clone(), SfnMetricsState::Loading);
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::step_functions::fetch_sfn_metrics(
-                    cw,
-                    state_machine_arn.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ =
-                        tx.send(crate::event::Event::SfnMetricsLoaded { state_machine_arn, data });
-                }
-            });
-        }
     }
 
     /// Trigger the lazy load for whichever Kinesis section is now active (used by
@@ -14874,111 +13915,6 @@ impl App {
         }
     }
 
-    fn trigger_nat_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(nat_id) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::vpc::NatGateway>()
-                .map(|n| n.nat_gateway_id.clone())
-        }) {
-            let time_range = self.nat_metrics_time_range;
-            self.nat_metrics.insert(
-                nat_id.clone(),
-                crate::aws::services::vpc::NatMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) =
-                    crate::aws::services::vpc::fetch_nat_metrics(cw, nat_id.clone(), time_range)
-                        .await
-                {
-                    let _ = tx.send(crate::event::Event::NatMetricsLoaded { nat_id, data });
-                }
-            });
-        }
-    }
-
-    fn trigger_vpn_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(vpn_id) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::vpc::VpnConnection>()
-                .map(|v| v.id.clone())
-        }) {
-            let time_range = self.vpn_metrics_time_range;
-            self.vpn_metrics.insert(
-                vpn_id.clone(),
-                crate::aws::services::vpc::VpnMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) =
-                    crate::aws::services::vpc::fetch_vpn_metrics(cw, vpn_id.clone(), time_range)
-                        .await
-                {
-                    let _ = tx.send(crate::event::Event::VpnMetricsLoaded { vpn_id, data });
-                }
-            });
-        }
-    }
-
-    fn trigger_dx_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(connection_id) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::direct_connect::DxConnection>()
-                .map(|c| c.id.clone())
-        }) {
-            let time_range = self.dx_metrics_time_range;
-            self.dx_metrics.insert(
-                connection_id.clone(),
-                crate::aws::services::direct_connect::DxMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::direct_connect::fetch_dx_metrics(
-                    cw,
-                    connection_id.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::DxMetricsLoaded {
-                        connection_id,
-                        data});
-                }
-            });
-        }
-    }
-
-    fn trigger_dx_vif_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some((vif_id, connection_id)) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::direct_connect::DxVirtualInterface>()
-                .map(|v| (v.id.clone(), v.connection_id.clone()))
-        }) {
-            let time_range = self.dx_metrics_time_range;
-            self.dx_vif_metrics.insert(
-                vif_id.clone(),
-                crate::aws::services::direct_connect::DxVifMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::direct_connect::fetch_dx_vif_metrics(
-                    cw,
-                    connection_id,
-                    vif_id.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::DxVifMetricsLoaded { vif_id, data });
-                }
-            });
-        }
-    }
-
     /// Lazy-load a DX gateway's VGW/TGW associations on first section visit.
     pub(crate) fn trigger_dx_gw_associations_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if let Some(gateway_id) = self.get_selected_resource().and_then(|r| {
@@ -15106,141 +14042,6 @@ impl App {
                         key,
                         data: Box::new(data),
                     });
-                }
-            });
-        }
-    }
-
-    fn trigger_ecr_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(repo) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::ecr::EcrRepository>()
-                .map(|repo| repo.name.clone())
-        }) {
-            let time_range = self.ecr_metrics_time_range;
-            self.ecr_metrics.insert(
-                repo.clone(),
-                crate::aws::services::ecr::EcrMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) =
-                    crate::aws::services::ecr::fetch_ecr_metrics(cw, repo.clone(), time_range)
-                        .await
-                {
-                    let _ = tx.send(crate::event::Event::EcrMetricsLoaded { repo, data });
-                }
-            });
-        }
-    }
-
-    fn trigger_ga_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(arn) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::global_accelerator::GaAccelerator>()
-                .map(|a| a.arn.clone())
-        }) {
-            let time_range = self.ga_metrics_time_range;
-            self.ga_metrics.insert(
-                arn.clone(),
-                crate::aws::services::global_accelerator::GaMetricsState::Loading,
-            );
-            // GA publishes metrics only in its us-west-2 home region.
-            let cw = self.aws_clients.cloudwatch_us_west_2_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::global_accelerator::fetch_ga_metrics(
-                    cw,
-                    arn.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::GaMetricsLoaded { arn, data });
-                }
-            });
-        }
-    }
-
-    fn trigger_workspace_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(workspace_id) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::workspaces::Workspace>()
-                .map(|w| w.id.clone())
-        }) {
-            let time_range = self.workspace_metrics_time_range;
-            self.workspace_metrics.insert(
-                workspace_id.clone(),
-                crate::aws::services::workspaces::WsMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::workspaces::fetch_workspace_metrics(
-                    cw,
-                    workspace_id.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::WorkspaceMetricsLoaded {
-                        workspace_id,
-                        data});
-                }
-            });
-        }
-    }
-
-    fn trigger_athena_wg_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(workgroup) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::athena::AthenaWorkgroup>()
-                .map(|w| w.name.clone())
-        }) {
-            let time_range = self.athena_wg_metrics_time_range;
-            self.athena_wg_metrics.insert(
-                workgroup.clone(),
-                crate::aws::services::athena::AthenaWgMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::athena::fetch_athena_wg_metrics(
-                    cw,
-                    workgroup.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::AthenaWgMetricsLoaded { workgroup, data });
-                }
-            });
-        }
-    }
-
-    fn trigger_glue_job_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(job_name) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::glue::GlueJob>()
-                .map(|j| j.name.clone())
-        }) {
-            let time_range = self.glue_job_metrics_time_range;
-            self.glue_job_metrics.insert(
-                job_name.clone(),
-                crate::aws::services::glue::GlueJobMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::glue::fetch_glue_job_metrics(
-                    cw,
-                    job_name.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::GlueJobMetricsLoaded { job_name, data });
                 }
             });
         }
@@ -15420,25 +14221,6 @@ impl App {
                 .await
                 {
                     let _ = tx.send(crate::event::Event::ElbMetricsLoaded { arn, data });
-                }
-            });
-        }
-    }
-
-    fn trigger_efs_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(id) = self.selected_efs_file_system_id() {
-            let time_range = self.efs_metrics_time_range;
-            self.efs_metrics
-                .insert(id.clone(), EfsMetricsState::Loading);
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) =
-                    crate::aws::services::efs::fetch_efs_metrics(cw, id.clone(), time_range).await
-                {
-                    let _ = tx.send(crate::event::Event::EfsMetricsLoaded {
-                        file_system_id: id,
-                        data});
                 }
             });
         }
@@ -17900,24 +16682,6 @@ impl App {
                         .map_err(|e| format!("Tags unavailable: {}", e))
                 },
             );
-        }
-    }
-
-    fn trigger_ddb_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(t) = self.selected_ddb_table() {
-            let table = t.name.clone();
-            let time_range = self.ddb_metrics_time_range;
-            self.ddb_metrics.insert(table.clone(), DdbMetricsState::Loading);
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) =
-                    crate::aws::services::dynamodb::fetch_ddb_metrics(cw, table.clone(), time_range)
-                        .await
-                {
-                    let _ = tx.send(crate::event::Event::DdbMetricsLoaded { table, data });
-                }
-            });
         }
     }
 
@@ -33719,29 +32483,131 @@ impl App {
 
     /// The spec-table metrics (`aws::metrics`) for the selection, when its
     /// kind is charted that way rather than by its own `MetricsKind`.
-    fn selected_metric_target(&self) -> Option<crate::aws::metrics::MetricTarget> {
-        use crate::aws::metrics::{MetricTarget, EC2_INSTANCE, LAMBDA_FUNCTION, RDS_DATABASE};
-        use crate::aws::services::{ec2::Ec2Instance, lambda::LambdaFunction, rds::{RdsCluster, RdsInstance}};
+    pub(crate) fn selected_metric_target(&self) -> Option<crate::aws::metrics::MetricTarget> {
+        use crate::aws::metrics::{self as m, MetricSpec, MetricTarget};
+        use crate::aws::services as s;
         let r = self.get_selected_resource()?;
         let any = r.as_any();
-        let (kind, namespace, dim, value, specs) = if let Some(i) = any.downcast_ref::<Ec2Instance>() {
-            ("EC2 instance", "AWS/EC2", "InstanceId", i.instance_id.clone(), EC2_INSTANCE)
-        } else if let Some(f) = any.downcast_ref::<LambdaFunction>() {
-            ("Lambda function", "AWS/Lambda", "FunctionName", f.function_name.clone(), LAMBDA_FUNCTION)
-        } else if let Some(db) = any.downcast_ref::<RdsInstance>() {
-            ("RDS instance", "AWS/RDS", "DBInstanceIdentifier", db.db_identifier.clone(), RDS_DATABASE)
-        } else {
-            // Aurora / Multi-AZ clusters roll up under the cluster id; some
-            // per-instance metrics (free storage) aren't published there.
-            let c = any.downcast_ref::<RdsCluster>()?;
-            ("RDS cluster", "AWS/RDS", "DBClusterIdentifier", c.cluster_identifier.clone(), RDS_DATABASE)
-        };
-        Some(MetricTarget {
+        let dim = |n: &str, v: &str| vec![(n.to_string(), v.to_string())];
+        let target = |kind: &str, namespace, dimensions, specs: &'static [MetricSpec]| MetricTarget {
             title: format!("{kind} · {}", r.name()),
             namespace,
-            dimensions: vec![(dim.to_string(), value)],
+            dimensions,
             specs,
-        })
+            home: None,
+            hint: None,
+        };
+        macro_rules! is {
+            ($t:ty) => {
+                any.downcast_ref::<$t>()
+            };
+        }
+        let t = if let Some(i) = is!(s::ec2::Ec2Instance) {
+            target("EC2 instance", "AWS/EC2", dim("InstanceId", &i.instance_id), m::EC2_INSTANCE)
+        } else if let Some(v) = is!(s::ec2::EbsVolume) {
+            target("EBS volume", "AWS/EBS", dim("VolumeId", &v.volume_id), m::EBS_VOLUME)
+        } else if let Some(f) = is!(s::lambda::LambdaFunction) {
+            target("Lambda function", "AWS/Lambda", dim("FunctionName", &f.function_name), m::LAMBDA_FUNCTION)
+        } else if let Some(db) = is!(s::rds::RdsInstance) {
+            target("RDS instance", "AWS/RDS", dim("DBInstanceIdentifier", &db.db_identifier), m::RDS_DATABASE)
+        } else if let Some(c) = is!(s::rds::RdsCluster) {
+            // Aurora / Multi-AZ clusters roll up under the cluster id; some
+            // per-instance metrics (free storage) aren't published there.
+            target("RDS cluster", "AWS/RDS", dim("DBClusterIdentifier", &c.cluster_identifier), m::RDS_DATABASE)
+        } else if let Some(t) = is!(s::dynamodb::DdbTable) {
+            target("DynamoDB table", "AWS/DynamoDB", dim("TableName", &t.name), m::DDB_TABLE)
+        } else if let Some(f) = is!(s::efs::EfsFileSystem) {
+            target("EFS file system", "AWS/EFS", dim("FileSystemId", &f.file_system_id), m::EFS_FILE_SYSTEM)
+        } else if let Some(c) = is!(s::elasticache::ElastiCacheCluster) {
+            // A replication group's metrics are per node: chart its primary.
+            let node = c.metric_cache_cluster_id.as_deref().unwrap_or(&c.id);
+            target("ElastiCache", "AWS/ElastiCache", dim("CacheClusterId", node), m::ELASTICACHE_NODE)
+        } else if let Some(k) = is!(s::kinesis::KinesisStream) {
+            target("Kinesis stream", "AWS/Kinesis", dim("StreamName", &k.name), m::KINESIS_STREAM)
+        } else if let Some(f) = is!(s::kinesis::FirehoseStream) {
+            target("Firehose stream", "AWS/Firehose", dim("DeliveryStreamName", &f.name), m::FIREHOSE_STREAM)
+        } else if let Some(c) = is!(s::redshift::RedshiftCluster) {
+            target("Redshift cluster", "AWS/Redshift", dim("ClusterIdentifier", &c.id), m::REDSHIFT_CLUSTER)
+        } else if let Some(w) = is!(s::redshift::RedshiftWorkgroup) {
+            target("Redshift workgroup", "AWS/Redshift-Serverless", dim("Workgroup", &w.name), m::REDSHIFT_WORKGROUP)
+        } else if let Some(q) = is!(s::messaging::SqsQueue) {
+            target("SQS queue", "AWS/SQS", dim("QueueName", &q.name), m::SQS_QUEUE)
+        } else if let Some(t) = is!(s::messaging::SnsTopic) {
+            target("SNS topic", "AWS/SNS", dim("TopicName", &t.name), m::SNS_TOPIC)
+        } else if let Some(sm) = is!(s::step_functions::SfnStateMachine) {
+            target("State machine", "AWS/States", dim("StateMachineArn", &sm.arn), m::SFN_STATE_MACHINE)
+        } else if let Some(model) = self.selected_bedrock_metric_target() {
+            target("Bedrock model", "AWS/Bedrock", dim("ModelId", &model), m::BEDROCK_MODEL)
+        } else if let Some(t) = is!(s::transfer::TransferServer) {
+            target("Transfer server", "AWS/Transfer", dim("ServerId", &t.server_id), m::TRANSFER_SERVER)
+        } else if let Some(n) = is!(s::vpc::NatGateway) {
+            target("NAT gateway", "AWS/NATGateway", dim("NatGatewayId", &n.nat_gateway_id), m::NAT_GATEWAY)
+        } else if let Some(v) = is!(s::vpc::VpnConnection) {
+            target("VPN connection", "AWS/VPN", dim("VpnId", &v.id), m::VPN_CONNECTION)
+        } else if let Some(c) = is!(s::direct_connect::DxConnection) {
+            target("DX connection", "AWS/DX", dim("ConnectionId", &c.id), m::DX_CONNECTION)
+        } else if let Some(v) = is!(s::direct_connect::DxVirtualInterface) {
+            // A LAG VIF's connection id is the LAG's, which is what AWS/DX expects.
+            let dims = [("VirtualInterfaceId", &v.id), ("ConnectionId", &v.connection_id)];
+            let dims = dims.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect();
+            target("DX virtual interface", "AWS/DX", dims, m::DX_VIRTUAL_INTERFACE)
+        } else if let Some(e) = is!(s::ecr::EcrRepository) {
+            target("ECR repository", "AWS/ECR", dim("RepositoryName", &e.name), m::ECR_REPOSITORY)
+        } else if let Some(w) = is!(s::workspaces::Workspace) {
+            target("WorkSpace", "AWS/WorkSpaces", dim("WorkspaceId", &w.id), m::WORKSPACE)
+        } else if let Some(w) = is!(s::athena::AthenaWorkgroup) {
+            target("Athena workgroup", "AWS/Athena", dim("WorkGroup", &w.name), m::ATHENA_WORKGROUP)
+        } else if let Some(j) = is!(s::glue::GlueJob) {
+            let dims = [("JobName", j.name.as_str()), ("JobRunId", "ALL"), ("Type", "count")];
+            MetricTarget {
+                hint: Some("Glue publishes these only for jobs with job metrics enabled (--enable-metrics)"),
+                ..target("Glue job", "Glue", dims.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect(), m::GLUE_JOB)
+            }
+        } else if let Some((tgw, attachment, _)) = self.selected_tgw_metric_target() {
+            let mut dims = dim("TransitGateway", &tgw);
+            let kind = match attachment {
+                Some(a) => {
+                    dims.push(("TransitGatewayAttachment".to_string(), a));
+                    "TGW attachment"
+                }
+                None => "Transit gateway",
+            };
+            target(kind, "AWS/TransitGateway", dims, m::TRANSIT_GATEWAY)
+        } else if let Some(g) = is!(s::cloudwatch::CwLogGroup) {
+            target("Log group", "AWS/Logs", dim("LogGroupName", &g.log_group_name), m::LOG_GROUP)
+        } else if let Some(rule) = is!(s::eventbridge::EbRule) {
+            target("EventBridge rule", "AWS/Events", dim("RuleName", &rule.name), m::EB_RULE)
+        } else if let Some(e) = is!(s::route53resolver::ResolverEndpoint) {
+            target("Resolver endpoint", "AWS/Route53Resolver", dim("EndpointId", &e.id), m::RESOLVER_ENDPOINT)
+        } else if let Some(p) = is!(s::code::CodeBuildProject) {
+            target("CodeBuild project", "AWS/CodeBuild", dim("ProjectName", &p.name), m::CODEBUILD_PROJECT)
+        } else if let Some(d) = is!(s::cloudfront::CfDistribution) {
+            let mut dims = dim("DistributionId", &d.id);
+            dims.push(("Region".to_string(), "Global".to_string()));
+            MetricTarget {
+                home: Some("us-east-1"),
+                ..target("CloudFront distribution", "AWS/CloudFront", dims, m::CLOUDFRONT_DISTRIBUTION)
+            }
+        } else if let Some(h) = is!(s::route53::R53HealthCheck) {
+            MetricTarget {
+                home: Some("us-east-1"),
+                ..target("Health check", "AWS/Route53", dim("HealthCheckId", &h.id), m::R53_HEALTH_CHECK)
+            }
+        } else if let Some((_, bare)) = self.selected_r53_public_zone() {
+            // The bare zone id, path prefix stripped.
+            MetricTarget {
+                home: Some("us-east-1"),
+                ..target("Hosted zone", "AWS/Route53", dim("HostedZoneId", &bare), m::R53_HOSTED_ZONE)
+            }
+        } else {
+            // Published only in us-west-2, keyed by the full ARN.
+            let a = is!(s::global_accelerator::GaAccelerator)?;
+            MetricTarget {
+                home: Some("us-west-2"),
+                ..target("Accelerator", "AWS/GlobalAccelerator", dim("Accelerator", &a.arn), m::GA_ACCELERATOR)
+            }
+        };
+        Some(t)
     }
 
     fn open_spec_metrics(
@@ -33769,7 +32635,7 @@ impl App {
         st.loading = true;
         self.spec_metrics_range = st.range;
         let (queries, range) = (st.queries.clone(), st.range);
-        let cw = self.aws_clients.cloudwatch_client();
+        let cw = spec_metrics_client(&self.aws_clients, st.target.home);
         let epoch = self.lazy.epoch();
         let tx = event_tx.clone();
         tokio::spawn(async move {
@@ -33792,7 +32658,7 @@ impl App {
         let Some(st) = self.spec_metrics.as_mut() else { return };
         st.picker = Some(MetricPicker { loading: true, ..Default::default() });
         let dims = st.target.dimensions.clone();
-        let cw = self.aws_clients.cloudwatch_client();
+        let cw = spec_metrics_client(&self.aws_clients, st.target.home);
         let epoch = self.lazy.epoch();
         let generation = self.spec_metrics_generation;
         let tx = event_tx.clone();
@@ -33889,9 +32755,6 @@ impl App {
         let kind = if let Some(target) = self.selected_metric_target() {
             self.open_spec_metrics(target, event_tx);
             Some(MetricsKind::Spec)
-        } else if self.is_selected_ebs_volume() {
-            self.trigger_ebs_metrics_load(event_tx);
-            Some(MetricsKind::Ebs)
         } else if self.is_selected_ecs_service() {
             self.trigger_ecs_metrics_load(event_tx);
             Some(MetricsKind::Ecs)
@@ -33926,12 +32789,6 @@ impl App {
         } else if self.is_selected_rest_api() || self.is_selected_http_api() {
             self.trigger_api_metrics_load(event_tx);
             Some(MetricsKind::Api)
-        } else if self.is_selected_ddb_table() {
-            self.trigger_ddb_metrics_load(event_tx);
-            Some(MetricsKind::Ddb)
-        } else if self.is_selected_efs_file_system() {
-            self.trigger_efs_metrics_load(event_tx);
-            Some(MetricsKind::Efs)
         } else if self.is_selected_load_balancer() {
             self.trigger_elb_metrics_load(event_tx);
             Some(MetricsKind::Elb)
@@ -33958,110 +32815,29 @@ impl App {
         } else if self.is_selected_fsx() {
             self.trigger_fsx_metrics_load(event_tx);
             Some(MetricsKind::Fsx)
-        } else if self.is_selected_elasticache() {
-            self.trigger_elasticache_metrics_load(event_tx);
-            Some(MetricsKind::ElastiCache)
         } else if self.is_selected_opensearch() {
             self.trigger_opensearch_metrics_load(event_tx);
             Some(MetricsKind::OpenSearch)
-        } else if self.is_selected_kinesis() {
-            self.trigger_kinesis_metrics_load(event_tx);
-            Some(MetricsKind::Kinesis)
-        } else if self.is_selected_firehose() {
-            self.trigger_firehose_metrics_load(event_tx);
-            Some(MetricsKind::Firehose)
-        } else if self.is_selected_redshift_cluster() {
-            self.trigger_redshift_metrics_load(event_tx);
-            Some(MetricsKind::Redshift)
-        } else if self.is_selected_redshift_workgroup() {
-            self.trigger_redshift_sl_metrics_load(event_tx);
-            Some(MetricsKind::RedshiftSl)
-        } else if self.is_selected_cf_distribution() {
-            self.trigger_cloudfront_metrics_load(event_tx);
-            Some(MetricsKind::CloudFront)
-        } else if self.is_selected_sqs_queue() {
-            self.trigger_sqs_metrics_load(event_tx);
-            Some(MetricsKind::Sqs)
-        } else if self.is_selected_sns_topic() {
-            self.trigger_sns_metrics_load(event_tx);
-            Some(MetricsKind::Sns)
-        } else if self.is_selected_sfn_state_machine() {
-            self.trigger_sfn_metrics_load(event_tx);
-            Some(MetricsKind::StepFunctions)
-        } else if self.selected_bedrock_metric_target().is_some() {
-            self.trigger_bedrock_metrics_load(event_tx);
-            Some(MetricsKind::BedrockModel)
         } else if self.selected_s3_metric_bucket().is_some() {
             self.trigger_s3_metrics_load(event_tx);
             Some(MetricsKind::S3)
-        } else if self.is_selected_transfer_server() {
-            self.trigger_transfer_metrics_load(event_tx);
-            Some(MetricsKind::Transfer)
-        } else if self.is_selected_r53_health_check() {
-            self.trigger_r53_health_metrics_load(event_tx);
-            Some(MetricsKind::R53HealthCheck)
         } else if self.is_selected_ses_resource() {
             self.trigger_ses_metrics_load(event_tx);
             Some(MetricsKind::Ses)
         } else if self.is_selected_msk() {
             self.trigger_msk_metrics_load(event_tx);
             Some(MetricsKind::Msk)
-        } else if self.is_selected_nat_gateway() {
-            self.trigger_nat_metrics_load(event_tx);
-            Some(MetricsKind::NatGw)
-        } else if self.is_selected_vpn_connection() {
-            self.trigger_vpn_metrics_load(event_tx);
-            Some(MetricsKind::Vpn)
-        } else if self.is_selected_dx_connection() {
-            self.trigger_dx_metrics_load(event_tx);
-            Some(MetricsKind::Dx)
-        } else if self.is_selected_dx_vif() {
-            self.trigger_dx_vif_metrics_load(event_tx);
-            Some(MetricsKind::DxVif)
         } else if self.selected_agentcore_metric_target().is_some() {
             self.trigger_agentcore_metrics_load(event_tx);
             Some(MetricsKind::AgentCore)
-        } else if self.is_selected_ecr_repo() {
-            self.trigger_ecr_metrics_load(event_tx);
-            Some(MetricsKind::Ecr)
-        } else if self.is_selected_ga_accelerator() {
-            self.trigger_ga_metrics_load(event_tx);
-            Some(MetricsKind::Ga)
-        } else if self.is_selected_workspace() {
-            self.trigger_workspace_metrics_load(event_tx);
-            Some(MetricsKind::Workspaces)
         } else if self.is_selected_cognito_user_pool() {
             self.trigger_cognito_metrics_load(event_tx);
             Some(MetricsKind::Cognito)
-        } else if self.is_selected_athena_workgroup() {
-            self.trigger_athena_wg_metrics_load(event_tx);
-            Some(MetricsKind::AthenaWg)
-        } else if self.is_selected_glue_job() {
-            self.trigger_glue_job_metrics_load(event_tx);
-            Some(MetricsKind::GlueJob)
         } else if self.is_selected_vpc_endpoint() {
             // Gateway endpoints publish no metrics — the trigger skips the
             // fetch and the pane explains instead of loading forever.
             self.trigger_vpce_metrics_load(event_tx);
             Some(MetricsKind::VpcEndpoint)
-        } else if self.is_selected_tgw() || self.is_selected_tgw_attachment() {
-            self.trigger_tgw_metrics_load(event_tx);
-            Some(MetricsKind::Tgw)
-        } else if self.is_selected_cw_log_group() {
-            self.trigger_log_group_metrics_load(event_tx);
-            Some(MetricsKind::LogGroup)
-        } else if self.is_selected_eb_rule() {
-            self.trigger_eb_rule_metrics_load(event_tx);
-            Some(MetricsKind::EbRule)
-        } else if self.selected_r53_public_zone().is_some() {
-            self.trigger_r53_zone_metrics_load(event_tx);
-            Some(MetricsKind::R53Zone)
-        } else if self.is_selected_resolver_endpoint() {
-            self.trigger_resolver_ep_metrics_load(event_tx);
-            Some(MetricsKind::ResolverEndpoint)
-        } else if self.is_selected_code_build_project() {
-            self.trigger_codebuild_metrics_load(event_tx);
-            Some(MetricsKind::CodeBuild)
         } else if self.selected_dms_metrics_target().is_some() {
             self.trigger_dms_metrics_load(event_tx);
             Some(MetricsKind::Dms)
@@ -34185,56 +32961,6 @@ impl App {
             return Some((a.tgw_id.clone(), Some(a.id.clone()), a.id.clone()));
         }
         None
-    }
-
-    fn trigger_tgw_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some((tgw_id, attachment_id, key)) = self.selected_tgw_metric_target() {
-            let time_range = self.tgw_metrics_time_range;
-            self.tgw_metrics.insert(
-                key.clone(),
-                crate::aws::services::transit_gateway::TgwMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::transit_gateway::fetch_tgw_metrics(
-                    cw,
-                    tgw_id,
-                    attachment_id,
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::TgwMetricsLoaded { id: key, data });
-                }
-            });
-        }
-    }
-
-    fn trigger_log_group_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(g) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::cloudwatch::CwLogGroup>()
-        }) {
-            let arn = g.arn.clone();
-            let group_name = g.log_group_name.clone();
-            let time_range = self.log_group_metrics_time_range;
-            self.log_group_metrics.insert(
-                arn.clone(),
-                crate::aws::services::cloudwatch::LogGroupMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::cloudwatch::fetch_log_group_metrics(
-                    cw, group_name, time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::LogGroupMetricsLoaded { arn, data });
-                }
-            });
-        }
     }
 
     /// Fetch the selected dashboard's body plus every time-series it charts.
@@ -34717,32 +33443,6 @@ impl App {
         }
     }
 
-    fn trigger_eb_rule_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(rule) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::eventbridge::EbRule>()
-        }) {
-            let arn = rule.arn.clone();
-            let rule_name = rule.name.clone();
-            let time_range = self.eb_rule_metrics_time_range;
-            self.eb_rule_metrics.insert(
-                arn.clone(),
-                crate::aws::services::eventbridge::EbRuleMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::eventbridge::fetch_eb_rule_metrics(
-                    cw, rule_name, time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::EbRuleMetricsLoaded { arn, data });
-                }
-            });
-        }
-    }
-
     /// The (full path id, bare id) of a `m`-able hosted zone — public zones
     /// only (DNSQueries isn't published for private zones).
     fn selected_r53_public_zone(&self) -> Option<(String, String)> {
@@ -34755,53 +33455,6 @@ impl App {
         }
         let bare = z.id.rsplit('/').next().unwrap_or(&z.id).to_string();
         Some((z.id.clone(), bare))
-    }
-
-    fn trigger_r53_zone_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some((id, bare)) = self.selected_r53_public_zone() {
-            let time_range = self.r53_zone_metrics_time_range;
-            self.r53_zone_metrics.insert(
-                id.clone(),
-                crate::aws::services::route53::R53ZoneMetricsState::Loading,
-            );
-            // Route53 is a global namespace → us-east-1 CloudWatch (like health checks).
-            let cw = self.aws_clients.cloudwatch_us_east_1_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) =
-                    crate::aws::services::route53::fetch_zone_metrics(cw, bare, time_range).await
-                {
-                    let _ = tx.send(crate::event::Event::R53ZoneMetricsLoaded { id, data });
-                }
-            });
-        }
-    }
-
-    fn trigger_resolver_ep_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(ep) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::route53resolver::ResolverEndpoint>()
-        }) {
-            let id = ep.id.clone();
-            let time_range = self.resolver_ep_metrics_time_range;
-            self.resolver_ep_metrics.insert(
-                id.clone(),
-                crate::aws::services::route53resolver::ResolverEpMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::route53resolver::fetch_resolver_ep_metrics(
-                    cw,
-                    id.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::ResolverEpMetricsLoaded { id, data });
-                }
-            });
-        }
     }
 
     pub(crate) fn trigger_xray_trace_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
@@ -35065,61 +33718,6 @@ impl App {
         );
     }
 
-    fn trigger_codebuild_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(p) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::code::CodeBuildProject>()
-        }) {
-            let arn = p.arn.clone();
-            let project_name = p.name.clone();
-            let time_range = self.codebuild_metrics_time_range;
-            self.codebuild_metrics.insert(
-                arn.clone(),
-                crate::aws::services::code::CodeBuildMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::code::fetch_codebuild_metrics(
-                    cw,
-                    project_name,
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::CodeBuildMetricsLoaded { arn, data });
-                }
-            });
-        }
-    }
-
-    fn trigger_transfer_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(server) = self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::transfer::TransferServer>())
-        {
-            let server_id = server.server_id.clone();
-            let time_range = self.transfer_metrics_time_range;
-            self.transfer_metrics.insert(
-                server_id.clone(),
-                crate::aws::services::transfer::TransferMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::transfer::fetch_transfer_metrics(
-                    cw,
-                    server_id.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::TransferMetricsLoaded { server_id, data });
-                }
-            });
-        }
-    }
-
     fn trigger_ses_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         let time_range = self.ses_metrics_time_range;
         self.ses_metrics.insert(
@@ -35133,61 +33731,6 @@ impl App {
                 let _ = tx.send(crate::event::Event::SesMetricsLoaded { data });
             }
         });
-    }
-
-    fn trigger_bedrock_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(model_id) = self.selected_bedrock_metric_target() {
-            let time_range = self.bedrock_metrics_time_range;
-            self.bedrock_metrics.insert(
-                model_id.clone(),
-                crate::aws::services::bedrock::BedrockMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::bedrock::fetch_bedrock_model_metrics(
-                    cw,
-                    model_id.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::BedrockMetricsLoaded { model_id, data });
-                }
-            });
-        }
-    }
-
-    fn trigger_ebs_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(vol) = self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::ec2::EbsVolume>())
-        {
-            let volume_id = vol.volume_id.clone();
-            let time_range = self.ebs_metrics_time_range;
-            self.ebs_metrics
-                .insert(volume_id.clone(), EbsMetricsState::Loading);
-            let cw_client = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                match crate::aws::services::ec2::fetch_ebs_metrics(
-                    cw_client,
-                    volume_id.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    Ok(data) => {
-                        let _ = tx.send(crate::event::Event::EbsMetricsLoaded { volume_id, data });
-                    }
-                    Err(e) => {
-                        let _ = tx.send(crate::event::Event::ResourceLoadError {
-                            service: crate::aws::service::ServiceType::EC2,
-                            error: format!("Failed to load EBS metrics: {}", e)});
-                    }
-                }
-            });
-        }
     }
 
     fn trigger_asg_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {

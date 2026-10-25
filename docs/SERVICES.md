@@ -614,7 +614,7 @@ the service you're touching.
   (`GetCustomModel` adds hyperparameters and training/validation metrics,
   #99). Prompts, Flows and Imported Models stay flat deliberately. Foundation Models + Inference Profiles support `m` metrics
   (`AWS/Bedrock`, dim `ModelId` = the model/profile id;
-  `MetricsKind::BedrockModel`). The three list APIs that return only thin
+  the `BEDROCK_MODEL` spec table in `src/aws/metrics.rs`). The three list APIs that return only thin
   summaries — **Guardrails**, **Knowledge Bases**, **Agents** — deepen via lazy
   `Get*` fetches on first focus.
   - **Guardrails** — 7-section split pane (Overview / Content / Topics / Words /

@@ -1,7 +1,6 @@
 use crate::aws::client::AwsClients;
 use crate::aws::resource::{native_state_label, Resource, ResourceState};
 use crate::aws::service::{AwsService, ServiceType};
-use crate::aws::services::ec2::MetricsTimeRange;
 use crate::error::Result;
 use crate::event::{Event, LoadProgress};
 use async_trait::async_trait;
@@ -536,99 +535,3 @@ pub async fn fetch_elasticache_tags(
 
 // ── CloudWatch metrics (`m` overlay) ──────────────────────────────────────────
 
-#[derive(Debug, Clone)]
-pub struct ElastiCacheMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub cpu: Vec<(f64, f64)>,
-    pub engine_cpu: Vec<(f64, f64)>,
-    pub memory_pct: Vec<(f64, f64)>,
-    pub connections: Vec<(f64, f64)>,
-    pub cache_hits: Vec<(f64, f64)>,
-    pub evictions: Vec<(f64, f64)>,
-    pub x_max: f64,
-}
-
-#[derive(Debug, Clone)]
-pub enum ElastiCacheMetricsState {
-    Loading,
-    Loaded(ElastiCacheMetricsData),
-}
-
-/// Pull `AWS/ElastiCache` metrics for one cache cluster node. CPU and memory are
-/// the operational signal; `EngineCPUUtilization` is Redis/Valkey's single-thread
-/// CPU (the real bottleneck), `DatabaseMemoryUsagePercentage` warns of eviction
-/// pressure, and `Evictions` confirms it.
-pub async fn fetch_elasticache_metrics(
-    cw: aws_sdk_cloudwatch::Client,
-    cache_cluster_id: String,
-    time_range: MetricsTimeRange,
-) -> Result<ElastiCacheMetricsData> {
-    use aws_sdk_cloudwatch::types::{Dimension, Statistic};
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start = now - time_range.duration_secs();
-    let period = time_range.period_secs();
-    let start_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(start);
-    let end_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(now);
-
-    let dim = || {
-        Dimension::builder()
-            .name("CacheClusterId")
-            .value(&cache_cluster_id)
-            .build()
-    };
-    let metric = |name: &'static str, stat: Statistic| {
-        cw.get_metric_statistics()
-            .namespace("AWS/ElastiCache")
-            .metric_name(name)
-            .dimensions(dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![stat]))
-            .send()
-    };
-
-    let (cpu, engine_cpu, mem, conns, hits, evict) = tokio::join!(
-        metric("CPUUtilization", Statistic::Average),
-        metric("EngineCPUUtilization", Statistic::Average),
-        metric("DatabaseMemoryUsagePercentage", Statistic::Average),
-        metric("CurrConnections", Statistic::Average),
-        metric("CacheHits", Statistic::Sum),
-        metric("Evictions", Statistic::Sum),
-    );
-
-    Ok(ElastiCacheMetricsData {
-        time_range,
-        cpu: parse_points(cpu, start, |dp| dp.average()),
-        engine_cpu: parse_points(engine_cpu, start, |dp| dp.average()),
-        memory_pct: parse_points(mem, start, |dp| dp.average()),
-        connections: parse_points(conns, start, |dp| dp.average()),
-        cache_hits: parse_points(hits, start, |dp| dp.sum()),
-        evictions: parse_points(evict, start, |dp| dp.sum()),
-        x_max: time_range.duration_secs() as f64,
-    })
-}
-
-fn parse_points<E>(
-    resp: std::result::Result<
-        aws_sdk_cloudwatch::operation::get_metric_statistics::GetMetricStatisticsOutput,
-        E,
-    >,
-    start: i64,
-    pick: impl Fn(&aws_sdk_cloudwatch::types::Datapoint) -> Option<f64>,
-) -> Vec<(f64, f64)> {
-    let dps = match resp {
-        Ok(r) => r.datapoints().to_vec(),
-        Err(_) => vec![],
-    };
-    let mut pts: Vec<(f64, f64)> = dps
-        .iter()
-        .filter_map(|dp| Some((dp.timestamp()?.secs() as f64 - start as f64, pick(dp)?)))
-        .collect();
-    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    pts
-}

@@ -175,6 +175,9 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
         "picked"
     };
     range.push(Span::styled(format!("   {} · {}", what, st.target.namespace), dim));
+    if let Some(home) = st.target.home {
+        range.push(Span::styled(format!(" in {home}"), dim));
+    }
     let failed = st.series.iter().filter(|s| s.error.is_some()).count();
     if failed > 0 && !st.loading {
         range.push(Span::styled(format!("  · {failed} unread"), Style::default().fg(theme::warning())));
@@ -313,6 +316,11 @@ fn render_series(app: &App, st: &SpecMetricsState, area: Rect, frame: &mut Frame
             }
         }
         lines.push(Line::from(spans));
+    }
+    // Nothing at all came back: say what has to be on for it to exist.
+    let all_empty = st.series.iter().all(|s| s.error.is_none() && s.points.is_empty());
+    if let Some(hint) = st.target.hint.filter(|_| all_empty && !st.loading) {
+        lines.push(Line::styled(format!("  ℹ {hint}"), Style::default().fg(theme::text_dim())));
     }
     frame.render_widget(Paragraph::new(lines), list_area);
     app.popup_hits.borrow_mut().record_rows(list_area, 0, st.series.len());

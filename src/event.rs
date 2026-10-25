@@ -3,7 +3,7 @@ use crate::aws::resource::Resource;
 use crate::aws::service::ServiceType;
 use crate::aws::services::cloudwatch::CwAlarmMetricsData;
 use crate::aws::services::asg::AsgMetricsData;
-use crate::aws::services::ec2::{EbsMetricsData, SsmInstanceStatus};
+use crate::aws::services::ec2::SsmInstanceStatus;
 use std::collections::HashMap;
 use crate::aws::services::ecs::{EcsMetricsData, EcsTaskMetricsData};
 use crossterm::event::{KeyEvent, MouseEvent};
@@ -132,10 +132,6 @@ pub enum Event {
     /// Drop the assumed member-account role and return to base credentials.
     OrgRoleExitRequested,
 
-    EbsMetricsLoaded {
-        volume_id: String,
-        data: EbsMetricsData,
-    },
 
     AsgMetricsLoaded {
         group_name: String,
@@ -281,17 +277,7 @@ pub enum Event {
         data: crate::aws::services::eks::EksMetricsData,
     },
 
-    /// EFS file system CloudWatch metrics (`m` overlay).
-    EfsMetricsLoaded {
-        file_system_id: String,
-        data: crate::aws::services::efs::EfsMetricsData,
-    },
 
-    /// ElastiCache cluster CloudWatch metrics (`m` overlay), keyed by cache id.
-    ElastiCacheMetricsLoaded {
-        cache_id: String,
-        data: crate::aws::services::elasticache::ElastiCacheMetricsData,
-    },
 
     /// OpenSearch domain CloudWatch metrics (`m` overlay), keyed by domain name.
     OpenSearchMetricsLoaded {
@@ -299,17 +285,7 @@ pub enum Event {
         data: crate::aws::services::opensearch::OpenSearchMetricsData,
     },
 
-    /// Kinesis stream CloudWatch metrics (`m` overlay), keyed by stream name.
-    KinesisMetricsLoaded {
-        stream_name: String,
-        data: crate::aws::services::kinesis::KinesisMetricsData,
-    },
 
-    /// Firehose delivery-stream CloudWatch metrics (`m` overlay), keyed by name.
-    FirehoseMetricsLoaded {
-        stream_name: String,
-        data: crate::aws::services::kinesis::FirehoseMetricsData,
-    },
 
     /// DMS task / replication instance CloudWatch metrics (`m` overlay),
     /// keyed by ARN.
@@ -317,31 +293,9 @@ pub enum Event {
         arn: String,
         data: crate::aws::services::dms::DmsMetricsData,
     },
-    /// Redshift cluster CloudWatch metrics (`m` overlay), keyed by cluster id.
-    RedshiftMetricsLoaded {
-        cluster_id: String,
-        data: crate::aws::services::redshift::RedshiftMetricsData,
-    },
 
-    /// Redshift Serverless workgroup CloudWatch metrics (`m` overlay), keyed
-    /// by workgroup name.
-    RedshiftSlMetricsLoaded {
-        workgroup: String,
-        data: crate::aws::services::redshift::RedshiftSlMetricsData,
-    },
 
-    /// CloudFront distribution CloudWatch metrics (`m` overlay), keyed by id.
-    CloudFrontMetricsLoaded {
-        distribution_id: String,
-        data: crate::aws::services::cloudfront::CfMetricsData,
-    },
 
-    /// Bedrock model / inference-profile CloudWatch metrics (`m` overlay),
-    /// keyed by resource id (the `ModelId` dimension).
-    BedrockMetricsLoaded {
-        model_id: String,
-        data: crate::aws::services::bedrock::BedrockMetricsData,
-    },
 
     /// S3 bucket daily storage metrics (`m` overlay), keyed by bucket name.
     S3MetricsLoaded {
@@ -349,35 +303,10 @@ pub enum Event {
         data: crate::aws::services::s3::S3MetricsData,
     },
 
-    /// Transfer Family server CloudWatch metrics (`m` overlay), keyed by server id.
-    TransferMetricsLoaded {
-        server_id: String,
-        data: crate::aws::services::transfer::TransferMetricsData,
-    },
 
-    /// NAT gateway CloudWatch metrics (`m` overlay), keyed by nat gateway id.
-    NatMetricsLoaded {
-        nat_id: String,
-        data: crate::aws::services::vpc::NatMetricsData,
-    },
 
-    /// VPN connection CloudWatch metrics (`m` overlay), keyed by vpn id.
-    VpnMetricsLoaded {
-        vpn_id: String,
-        data: crate::aws::services::vpc::VpnMetricsData,
-    },
 
-    /// Direct Connect connection CloudWatch metrics (`m` overlay), keyed by connection id.
-    DxMetricsLoaded {
-        connection_id: String,
-        data: crate::aws::services::direct_connect::DxMetricsData,
-    },
 
-    /// Direct Connect per-VIF traffic metrics (`m` overlay), keyed by VIF id.
-    DxVifMetricsLoaded {
-        vif_id: String,
-        data: crate::aws::services::direct_connect::DxVifMetricsData,
-    },
 
     /// VPC endpoint (PrivateLink) CloudWatch metrics (`m` overlay), keyed by endpoint id.
     VpceMetricsLoaded {
@@ -385,19 +314,7 @@ pub enum Event {
         data: crate::aws::services::vpc::VpceMetricsData,
     },
 
-    /// Transit gateway / attachment CloudWatch metrics (`m` overlay), keyed by
-    /// the selected resource's id (tgw- or tgw-attach-).
-    TgwMetricsLoaded {
-        id: String,
-        data: crate::aws::services::transit_gateway::TgwMetricsData,
-    },
 
-    /// Log-group ingestion metrics (`m` overlay), keyed by the group ARN
-    /// (`CwLogGroup::id()`).
-    LogGroupMetricsLoaded {
-        arn: String,
-        data: crate::aws::services::cloudwatch::LogGroupMetricsData,
-    },
 
     /// A charted CloudWatch dashboard (`m` overlay), keyed by dashboard name.
     /// Boxed — the payload carries every widget and every series.
@@ -414,30 +331,9 @@ pub enum Event {
         error: String,
     },
 
-    /// EventBridge rule CloudWatch metrics (`m` overlay), keyed by the rule ARN.
-    EbRuleMetricsLoaded {
-        arn: String,
-        data: crate::aws::services::eventbridge::EbRuleMetricsData,
-    },
 
-    /// Hosted-zone DNS query metrics (`m` overlay), keyed by the zone's full
-    /// path id (`/hostedzone/Z…`).
-    R53ZoneMetricsLoaded {
-        id: String,
-        data: crate::aws::services::route53::R53ZoneMetricsData,
-    },
 
-    /// Resolver endpoint query-volume metrics (`m` overlay), keyed by endpoint id.
-    ResolverEpMetricsLoaded {
-        id: String,
-        data: crate::aws::services::route53resolver::ResolverEpMetricsData,
-    },
 
-    /// CodeBuild project CloudWatch metrics (`m` overlay), keyed by the project ARN.
-    CodeBuildMetricsLoaded {
-        arn: String,
-        data: crate::aws::services::code::CodeBuildMetricsData,
-    },
 
     /// Bedrock AgentCore CloudWatch metrics (`m` overlay), keyed by the
     /// resource id (one map covers all five families).
@@ -446,23 +342,8 @@ pub enum Event {
         data: Box<crate::aws::services::agentcore::AgentCoreMetricsData>,
     },
 
-    /// ECR repository CloudWatch metrics (`m` overlay), keyed by repo name.
-    EcrMetricsLoaded {
-        repo: String,
-        data: crate::aws::services::ecr::EcrMetricsData,
-    },
 
-    /// Global Accelerator CloudWatch metrics (`m` overlay), keyed by accelerator ARN.
-    GaMetricsLoaded {
-        arn: String,
-        data: crate::aws::services::global_accelerator::GaMetricsData,
-    },
 
-    /// WorkSpaces CloudWatch metrics (`m` overlay), keyed by workspace id.
-    WorkspaceMetricsLoaded {
-        workspace_id: String,
-        data: crate::aws::services::workspaces::WsMetricsData,
-    },
 
     /// Cognito user-pool CloudWatch metrics (`m` overlay), keyed by pool id.
     CognitoMetricsLoaded {
@@ -470,43 +351,12 @@ pub enum Event {
         data: crate::aws::services::cognito::CognitoMetricsData,
     },
 
-    /// Athena per-workgroup CloudWatch metrics (`m` overlay), keyed by
-    /// workgroup name.
-    AthenaWgMetricsLoaded {
-        workgroup: String,
-        data: crate::aws::services::athena::AthenaWgMetricsData,
-    },
-
-    /// Glue per-job CloudWatch metrics (`m` overlay), keyed by job name.
-    GlueJobMetricsLoaded {
-        job_name: String,
-        data: crate::aws::services::glue::GlueJobMetricsData,
-    },
 
 
-    /// Route 53 health-check CloudWatch metrics (`m` overlay), keyed by check id.
-    R53HealthCheckMetricsLoaded {
-        id: String,
-        data: crate::aws::services::route53::R53HealthMetricsData,
-    },
 
-    /// SQS queue CloudWatch metrics (`m` overlay), keyed by queue url.
-    SqsMetricsLoaded {
-        queue_url: String,
-        data: crate::aws::services::messaging::SqsMetricsData,
-    },
 
-    /// SNS topic CloudWatch metrics (`m` overlay), keyed by topic ARN.
-    SnsMetricsLoaded {
-        topic_arn: String,
-        data: crate::aws::services::messaging::SnsMetricsData,
-    },
 
-    /// Step Functions state-machine CloudWatch metrics (`m` overlay), keyed by ARN.
-    SfnMetricsLoaded {
-        state_machine_arn: String,
-        data: crate::aws::services::step_functions::SfnMetricsData,
-    },
+
 
     /// FSx metrics, keyed by file-system id.
     FsxMetricsLoaded {
@@ -591,11 +441,6 @@ pub enum Event {
         services: Vec<(String, String)>,
     },
 
-    /// DynamoDB table CloudWatch metrics (`m` overlay).
-    DdbMetricsLoaded {
-        table: String,
-        data: crate::aws::services::dynamodb::DdbMetricsData,
-    },
 
     /// A page of DynamoDB items (item browser Scan/Query).
     /// One page of the AgentCore memory browser's current level.

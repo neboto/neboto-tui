@@ -3,7 +3,6 @@ use crate::aws::resource::{native_state_label, Resource, ResourceState};
 use crate::aws::service::{AwsService, ServiceType};
 use crate::error::Result;
 use crate::event::{Event, LoadProgress};
-use crate::aws::services::ec2::MetricsTimeRange;
 use async_trait::async_trait;
 use aws_sdk_efs::Client as EfsClient;
 use std::any::Any;
@@ -426,103 +425,6 @@ pub async fn fetch_efs_access_points(
 }
 
 // ── CloudWatch metrics (`m` overlay) ──────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct EfsMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub total_io: Vec<(f64, f64)>,
-    pub read_io: Vec<(f64, f64)>,
-    pub write_io: Vec<(f64, f64)>,
-    pub percent_io_limit: Vec<(f64, f64)>,
-    pub burst_credit: Vec<(f64, f64)>,
-    pub client_connections: Vec<(f64, f64)>,
-    pub x_max: f64,
-}
-
-#[derive(Debug, Clone)]
-pub enum EfsMetricsState {
-    Loading,
-    Loaded(EfsMetricsData),
-}
-
-/// Pull the EFS performance metrics from `AWS/EFS` for one file system.
-/// Throughput series are summed bytes/period; `PercentIOLimit` is the max
-/// saturation against the generalPurpose IOPS ceiling; `BurstCreditBalance`
-/// is the average remaining burst credit.
-pub async fn fetch_efs_metrics(
-    cw: aws_sdk_cloudwatch::Client,
-    file_system_id: String,
-    time_range: MetricsTimeRange,
-) -> Result<EfsMetricsData> {
-    use aws_sdk_cloudwatch::types::{Dimension, Statistic};
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start = now - time_range.duration_secs();
-    let period = time_range.period_secs();
-    let start_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(start);
-    let end_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(now);
-
-    let dim = || {
-        Dimension::builder()
-            .name("FileSystemId")
-            .value(&file_system_id)
-            .build()
-    };
-    let metric = |name: &'static str, stat: Statistic| {
-        cw.get_metric_statistics()
-            .namespace("AWS/EFS")
-            .metric_name(name)
-            .dimensions(dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![stat]))
-            .send()
-    };
-
-    let (total, read, write, pct, burst, conns) = tokio::join!(
-        metric("TotalIOBytes", Statistic::Sum),
-        metric("DataReadIOBytes", Statistic::Sum),
-        metric("DataWriteIOBytes", Statistic::Sum),
-        metric("PercentIOLimit", Statistic::Maximum),
-        metric("BurstCreditBalance", Statistic::Average),
-        metric("ClientConnections", Statistic::Sum),
-    );
-
-    Ok(EfsMetricsData {
-        time_range,
-        total_io: parse_points(total, start, |dp| dp.sum()),
-        read_io: parse_points(read, start, |dp| dp.sum()),
-        write_io: parse_points(write, start, |dp| dp.sum()),
-        percent_io_limit: parse_points(pct, start, |dp| dp.maximum()),
-        burst_credit: parse_points(burst, start, |dp| dp.average()),
-        client_connections: parse_points(conns, start, |dp| dp.sum()),
-        x_max: time_range.duration_secs() as f64,
-    })
-}
-
-fn parse_points<E>(
-    resp: std::result::Result<
-        aws_sdk_cloudwatch::operation::get_metric_statistics::GetMetricStatisticsOutput,
-        E,
-    >,
-    start: i64,
-    pick: impl Fn(&aws_sdk_cloudwatch::types::Datapoint) -> Option<f64>,
-) -> Vec<(f64, f64)> {
-    let dps = match resp {
-        Ok(r) => r.datapoints().to_vec(),
-        Err(_) => vec![],
-    };
-    let mut pts: Vec<(f64, f64)> = dps
-        .iter()
-        .filter_map(|dp| Some((dp.timestamp()?.secs() as f64 - start as f64, pick(dp)?)))
-        .collect();
-    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    pts
-}
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
 

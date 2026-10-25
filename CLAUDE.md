@@ -436,7 +436,7 @@ in `any_pane_overlay_active` (which gates the mouse).
   **gateway** endpoints (S3/DDB) publish nothing → the pane explains instead
   of fetching)/Transit Gateways + attachments (`AWS/TransitGateway` dim
   `TransitGateway`, attachments add `TransitGatewayAttachment`; one
-  `MetricsKind::Tgw` + one state map for both)/CW log groups (`AWS/Logs` dim
+  one spec table for both)/CW log groups (`AWS/Logs` dim
   `LogGroupName` — incoming events+bytes, the "is this group receiving
   anything" signal)/EventBridge rules (`AWS/Events` dim `RuleName` — matched/
   invoked/failed/DLQ/throttled)/Route 53 **public** hosted zones
@@ -449,10 +449,10 @@ in `any_pane_overlay_active` (which gates the mouse).
   instance's *name* and the task's ARN *resource id*; one `MetricsKind::Dms`
   with a flavor). Each is
   namespace +
-  dimension-set specific — see the `fetch_*_metrics` fn and `MetricsKind` arm for
-  a given service. **New kinds go through the spec table**
+  dimension-set specific — see its spec table in `src/aws/metrics.rs`, or a
+  hand-built kind's `fetch_*_metrics` fn and `MetricsKind` arm. **New kinds go through the spec table**
   (`src/aws/metrics.rs`, `MetricsKind::Spec`, rendered by
-  `spec_metrics.rs`; EC2, Lambda and RDS so far): a `&[MetricSpec]`
+  `spec_metrics.rs`; `selected_metric_target`'s arms are the kinds on it): a `&[MetricSpec]`
   (metric, label, stat, unit, `rate`, `group` for metrics that share a
   chart) and an arm in `selected_metric_target` give the row list, the
   chart, change markers, per-metric errors, the `a` picker (`ListMetrics`
@@ -1405,8 +1405,9 @@ Fixtures live in `src/demo/fixtures/<service>/` and are registered in
   by-id call rather than adding one fixture per id.
 - **Generated:** `FilterLogEvents` on a scripted group (`generate.rs`) is
   computed per request from a fixed clock, so a live tail keeps moving and a
-  search finds the same lines; so is `GetMetricData` for the spec-charted
-  namespaces (`METRIC_NAMESPACES`), so `m` draws moving series.
+  search finds the same lines; so is a `GetMetricData` made of plain
+  `MetricStat` queries (the spec-charted kinds), so `m` draws moving
+  series. Expression queries (SEARCH, math) still need fixtures.
 - **No fixture:** an unmatched operation returns a protocol-correct *empty*
   success, so the service lists empty and `resource_list.rs` says "Not in the
   demo dataset yet". Except restXml (S3, Route 53, CloudFront): an empty

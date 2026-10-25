@@ -2721,61 +2721,6 @@ pub async fn search_log_events(
 
 // ── Log-group CloudWatch metrics (`m`) — AWS/Logs, dim LogGroupName ───────────
 
-#[derive(Debug, Clone)]
-pub struct LogGroupMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub incoming_events: Vec<(f64, f64)>,
-    pub incoming_bytes: Vec<(f64, f64)>,
-    pub x_max: f64,
-}
-
-#[derive(Debug, Clone)]
-pub enum LogGroupMetricsState {
-    Loading,
-    Loaded(LogGroupMetricsData),
-}
-
-/// Ingestion volume for one log group — "is this group receiving anything"
-/// without opening a tail. Flat zero with a producer supposedly attached is
-/// the misconfigured-logging signal.
-pub async fn fetch_log_group_metrics(
-    cw: aws_sdk_cloudwatch::Client,
-    group_name: String,
-    time_range: MetricsTimeRange,
-) -> Result<LogGroupMetricsData> {
-    use aws_sdk_cloudwatch::types::{Dimension, Statistic};
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start = now - time_range.duration_secs();
-    let period = time_range.period_secs();
-    let start_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(start);
-    let end_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(now);
-
-    let metric = |name: &'static str| {
-        cw.get_metric_statistics()
-            .namespace("AWS/Logs")
-            .metric_name(name)
-            .dimensions(Dimension::builder().name("LogGroupName").value(&group_name).build())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Sum]))
-            .send()
-    };
-
-    let (events, bytes) = tokio::join!(metric("IncomingLogEvents"), metric("IncomingBytes"));
-
-    Ok(LogGroupMetricsData {
-        time_range,
-        incoming_events: crate::aws::services::ec2::parse_metric_datapoints(events, start),
-        incoming_bytes: crate::aws::services::ec2::parse_metric_datapoints(bytes, start),
-        x_max: time_range.duration_secs() as f64,
-    })
-}
-
 // ── CwMetricStream (Streams sub-tab) ─────────────────────────────────────────
 
 #[derive(Debug, Clone)]
