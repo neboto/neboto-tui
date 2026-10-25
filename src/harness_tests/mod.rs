@@ -60,6 +60,7 @@ mod mouse_first_run_test;
 mod mouse_modals_test;
 mod mouse_misc_test;
 mod mouse_pane_views_test;
+mod tgw_route_table_overview_test;
 mod timeline_test;
 mod list_ux_test;
 mod region_fanout_test;
