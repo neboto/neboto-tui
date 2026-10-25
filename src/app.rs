@@ -28657,10 +28657,22 @@ impl App {
                 .as_any()
                 .downcast_ref::<crate::aws::services::transit_gateway::TgwRouteTable>()
             {
+                // The Overview counts the attachments associated with this
+                // table from the already-loaded list — no extra fetch.
+                let associated: Vec<&crate::aws::services::transit_gateway::TgwAttachment> = self
+                    .resources
+                    .iter()
+                    .filter_map(|r| {
+                        r.as_any()
+                            .downcast_ref::<crate::aws::services::transit_gateway::TgwAttachment>()
+                    })
+                    .filter(|a| a.association_route_table_id.as_deref() == Some(rt.id.as_str()))
+                    .collect();
                 return crate::ui::widgets::details_pane::tgw_route_table_section_lines(
                     rt,
                     crate::aws::services::transit_gateway::TgwRouteTableDetailSection::from_index(self.detail_section_idx),
                     self.lazy.tgw_routes.get(&rt.id),
+                    &associated,
                 );
             }
             if let Some(ep) = resource
