@@ -2535,6 +2535,9 @@ pub struct App {
     pub spec_metrics_range: MetricsTimeRange,
     // Bumped per fetch, so a superseded one (reopen, range, `r`) is dropped.
     pub spec_metrics_generation: u64,
+    /// The metrics view `W` was opened from (its kind, the spec view's
+    /// state, the resource id), so closing the lens goes back to it.
+    pub metrics_behind_lens: Option<(MetricsKind, Option<crate::ui::widgets::spec_metrics::SpecMetricsState>, String)>,
 
 
 
@@ -3258,6 +3261,7 @@ impl App {
             spec_metrics: None,
             spec_metrics_range: MetricsTimeRange::OneHour,
             spec_metrics_generation: 0,
+            metrics_behind_lens: None,
             lambda_code_downloading: None,
             invoice_pdf_downloading: None,
             rds_view: RdsView::Instances,
@@ -4566,9 +4570,11 @@ impl App {
                 // The markers' legend offers `W`: the timeline behind them
                 // becomes the lens (its fetch is already done, or still
                 // landing — the sink prefers the lens), else a fresh one.
+                // The charts wait behind it: closing the lens comes back.
                 KeyCode::Char('W') => {
-                    self.metrics_in_pane = None;
-                    self.spec_metrics = None;
+                    let id = self.get_selected_resource().map(|r| r.id().to_string());
+                    let spec = self.spec_metrics.take();
+                    self.metrics_behind_lens = self.metrics_in_pane.take().zip(id).map(|(k, id)| (k, spec, id));
                     match self.chart_timeline.take() {
                         Some(tl) => self.trail_in_pane = Some(tl),
                         None => self.open_trail_lens(event_tx),
@@ -18105,8 +18111,33 @@ impl App {
         self.seed_trail_lens(event_tx);
     }
 
-    fn close_trail_lens(&mut self) {
-        self.trail_in_pane = None;
+    fn close_trail_lens(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let lens = self.trail_in_pane.take();
+        // Opened from the charts (`W` there): back to them, as left.
+        if let Some((kind, spec, id)) = self.metrics_behind_lens.take() {
+            if self.get_selected_resource().is_some_and(|r| r.id() == id) {
+                self.metrics_in_pane = Some(kind);
+                self.spec_metrics = spec;
+                // The lens's timeline goes back behind the markers, unless
+                // `a` let read events in — the charts mark changes only.
+                match lens.filter(|l| self.chart_markers && !l.include_reads) {
+                    Some(l) => self.chart_timeline = Some(l),
+                    None => self.seed_chart_markers(event_tx),
+                }
+                // An answer that landed while the lens was up found no view
+                // to fill; ask again rather than spin.
+                if let Some(st) = &self.spec_metrics {
+                    let picker_loading = st.picker.as_ref().is_some_and(|p| p.loading);
+                    if st.loading {
+                        self.fetch_spec_metrics(event_tx);
+                    }
+                    if picker_loading {
+                        self.open_spec_metric_picker(event_tx);
+                    }
+                }
+                return;
+            }
+        }
         self.layout_mode = LayoutMode::Split;
     }
 
@@ -18650,7 +18681,7 @@ impl App {
         let viewport = 20usize;
 
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('W') => self.close_trail_lens(),
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('W') => self.close_trail_lens(event_tx),
             KeyCode::Char('j') | KeyCode::Down => {
                 if let Some(st) = self.trail_in_pane.as_mut() {
                     st.scroll_down(1);

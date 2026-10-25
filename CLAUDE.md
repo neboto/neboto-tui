@@ -389,7 +389,8 @@ in `any_pane_overlay_active` (which gates the mouse).
   when the renderer asks for it (`marker_caption`, the spec view), else on
   the pane's border with the `c`/`W` keys (the hand-built kinds). While any
   in-pane view is open the status bar shows no keys — each view draws its
-  own and owns the keymap (`:` is off inside them). `W` from the charts hands their timeline to the lens. `m` runs the same fan-out as `W` once per open, into
+  own and owns the keymap (`:` is off inside them). `W` from the charts hands their timeline to the lens and parks the
+  view (`metrics_behind_lens`); closing the lens restores it as left. `m` runs the same fan-out as `W` once per open, into
   `App.chart_timeline` (`TimelineTarget::Markers` — never alive beside
   `trail_in_pane`, they share `trail_generation`), and the chart builders
   read a render-scoped context (`marker_lines`): **a chart drawn outside

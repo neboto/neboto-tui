@@ -199,7 +199,8 @@ async fn every_spec_target_has_a_mock_that_charts() {
 
 /// `5` reaches back 30 days (a stopped instance's last week of data), the
 /// change markers' timeline widens with it, and `W` — which the markers'
-/// legend offers — hands that timeline to the lens instead of doing nothing.
+/// legend offers — hands that timeline to the lens instead of doing nothing;
+/// closing the lens goes back to the charts.
 #[tokio::test]
 async fn thirty_days_widens_the_markers_and_w_opens_their_timeline() {
     let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
@@ -229,6 +230,35 @@ async fn thirty_days_widens_the_markers_and_w_opens_their_timeline() {
     let lens = app.trail_in_pane.as_ref().expect("W opens the timeline");
     assert_eq!(lens.range, TrailRange::D30, "the markers' own timeline, not a refetch");
     assert!(app.chart_timeline.is_none());
+
+    // Esc goes back to the charts as they were left — the range, the
+    // picked stat, the cursor — and the timeline back behind the markers.
+    let generation = app.spec_metrics_generation;
+    press(&mut app, &tx, KeyCode::Esc).await;
+    assert!(app.trail_in_pane.is_none());
+    assert_eq!(app.metrics_in_pane, Some(MetricsKind::Spec));
+    let st = app.spec_metrics.as_ref().expect("the view comes back");
+    assert_eq!(st.range, crate::aws::services::ec2::MetricsTimeRange::OneHour);
+    assert_eq!(app.chart_timeline.as_ref().map(|t| t.range), Some(TrailRange::D30));
+    // That `]` fetch never landed (the lens was up): it's asked again.
+    assert!(app.spec_metrics_generation > generation, "a fetch lost behind the lens is redone");
+    settle(&mut app, &tx, &mut rx).await;
+    assert!(app.spec_metrics.as_ref().unwrap().series.iter().all(|s| s.points.len() == 60));
+
+    // A settled view comes back without a refetch.
+    app.handle_event(Event::Key(shift_w), &tx).await.unwrap();
+    let generation = app.spec_metrics_generation;
+    press(&mut app, &tx, KeyCode::Esc).await;
+    assert_eq!(app.metrics_in_pane, Some(MetricsKind::Spec));
+    assert_eq!(app.spec_metrics_generation, generation);
+
+    // Esc again closes the charts as usual; a later W/Esc from the
+    // detail pane has nothing to go back to.
+    press(&mut app, &tx, KeyCode::Esc).await;
+    assert!(app.metrics_in_pane.is_none());
+    app.handle_event(Event::Key(shift_w), &tx).await.unwrap();
+    press(&mut app, &tx, KeyCode::Esc).await;
+    assert!(app.trail_in_pane.is_none() && app.metrics_in_pane.is_none());
 }
 
 /// The change legend rides the chart it explains (its bottom border), the
