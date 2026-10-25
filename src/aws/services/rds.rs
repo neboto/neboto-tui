@@ -2,11 +2,9 @@ use crate::aws::client::AwsClients;
 use crate::aws::resource::sg_refs;
 use crate::aws::resource::{native_state_label, Resource, ResourceState};
 use crate::aws::service::{AwsService, ServiceType};
-use crate::aws::services::ec2::MetricsTimeRange;
 use crate::error::Result;
 use crate::event::{Event, LoadProgress};
 use async_trait::async_trait;
-use aws_sdk_cloudwatch::types::Datapoint;
 use aws_sdk_rds::Client as RdsClient;
 use std::any::Any;
 use std::collections::HashMap;
@@ -2513,148 +2511,6 @@ pub async fn fetch_rds_events(
     events.reverse();
     events.truncate(MAX_RDS_EVENTS);
     Ok(events)
-}
-
-// ── RDS metrics (CloudWatch) ──────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct RdsMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub cpu: Vec<(f64, f64)>,          // % average
-    pub connections: Vec<(f64, f64)>,  // count average
-    pub read_iops: Vec<(f64, f64)>,    // ops/sec average
-    pub write_iops: Vec<(f64, f64)>,   // ops/sec average
-    pub free_storage: Vec<(f64, f64)>, // bytes average (display as GB)
-    pub free_memory: Vec<(f64, f64)>,  // bytes average (display as GB)
-    pub x_max: f64,
-}
-
-#[derive(Debug, Clone)]
-pub enum RdsMetricsState {
-    Loading,
-    Loaded(RdsMetricsData),
-}
-
-fn parse_dp_avg(datapoints: &[Datapoint], start_secs: i64) -> Vec<(f64, f64)> {
-    let mut pts: Vec<(f64, f64)> = datapoints
-        .iter()
-        .filter_map(|dp| {
-            let t = (dp.timestamp()?.secs() - start_secs) as f64;
-            Some((t, dp.average().unwrap_or(0.0)))
-        })
-        .collect();
-    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    pts
-}
-
-pub async fn fetch_rds_metrics(
-    cw_client: aws_sdk_cloudwatch::Client,
-    identifier: String,
-    dimension_name: &str,
-    time_range: MetricsTimeRange,
-) -> Result<RdsMetricsData> {
-    use aws_sdk_cloudwatch::types::{Dimension, Statistic};
-
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    let start_secs = now_secs - time_range.duration_secs();
-    let period = time_range.period_secs();
-
-    let start_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(start_secs);
-    let end_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(now_secs);
-
-    // Instances key on DBInstanceIdentifier; Aurora/Multi-AZ clusters roll up
-    // under DBClusterIdentifier (some per-instance metrics may be empty there).
-    let make_dim = || {
-        Dimension::builder()
-            .name(dimension_name)
-            .value(&identifier)
-            .build()
-    };
-
-    let (cpu_r, conn_r, read_r, write_r, store_r, mem_r) = tokio::join!(
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/RDS")
-            .metric_name("CPUUtilization")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Average]))
-            .send(),
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/RDS")
-            .metric_name("DatabaseConnections")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Average]))
-            .send(),
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/RDS")
-            .metric_name("ReadIOPS")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Average]))
-            .send(),
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/RDS")
-            .metric_name("WriteIOPS")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Average]))
-            .send(),
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/RDS")
-            .metric_name("FreeStorageSpace")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Average]))
-            .send(),
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/RDS")
-            .metric_name("FreeableMemory")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Average]))
-            .send(),
-    );
-
-    let cpu_dp = match cpu_r { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-    let conn_dp = match conn_r { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-    let read_dp = match read_r { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-    let write_dp = match write_r { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-    let store_dp = match store_r { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-    let mem_dp = match mem_r { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-
-    Ok(RdsMetricsData {
-        time_range,
-        cpu: parse_dp_avg(&cpu_dp, start_secs),
-        connections: parse_dp_avg(&conn_dp, start_secs),
-        read_iops: parse_dp_avg(&read_dp, start_secs),
-        write_iops: parse_dp_avg(&write_dp, start_secs),
-        free_storage: parse_dp_avg(&store_dp, start_secs),
-        free_memory: parse_dp_avg(&mem_dp, start_secs),
-        x_max: time_range.duration_secs() as f64,
-    })
 }
 
 #[cfg(test)]

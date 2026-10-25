@@ -1,4 +1,5 @@
-//! Responses computed per request instead of stored: log events.
+//! Responses computed per request instead of stored: log events and
+//! metric series.
 //!
 //! A stored `FilterLogEvents` body can't drive a live tail — the tail asks
 //! for everything after its cursor, and a fixed body either repeats or never
@@ -17,6 +18,7 @@ const MAX_EVENTS: usize = 1000;
 pub fn respond(req: &DemoRequest, now_ms: i64) -> Option<String> {
     match (req.service.as_str(), req.operation.as_str()) {
         ("logs", "FilterLogEvents") => filter_log_events(&req.body, now_ms),
+        ("monitoring", "GetMetricData") => get_metric_data(&req.body, now_ms / 1000),
         _ => None,
     }
 }
@@ -82,6 +84,89 @@ fn filter_log_events(body: &str, now_ms: i64) -> Option<String> {
         events.drain(..events.len() - MAX_EVENTS);
     }
     Some(serde_json::json!({ "events": events, "searchedLogStreams": [] }).to_string())
+}
+
+/// The namespaces whose `MetricStat` queries get a generated series — the
+/// spec-charted kinds (`aws::metrics`). Anything else (a dashboard's
+/// expressions, SEARCH queries) falls through to the fixtures.
+const METRIC_NAMESPACES: &[&str] = &["AWS/EC2", "AWS/Lambda", "AWS/RDS"];
+
+/// Each query's series as a fixed function of (metric, resource, time): a
+/// slow wave around a per-metric level plus repeatable jitter, so a refetch
+/// shows the same history with a new point at the end. `orders-api`'s
+/// errors climb over the last 40 minutes, the story its alarm tells.
+fn get_metric_data(body: &str, now: i64) -> Option<String> {
+    let req: serde_json::Value = serde_json::from_str(body).ok()?;
+    let ts = |k: &str| req.get(k).and_then(|v| v.get("$timestamp").or(Some(v))).and_then(|v| v.as_f64());
+    let (start, end) = (ts("StartTime")? as i64, (ts("EndTime")? as i64).min(now));
+    let queries = req.get("MetricDataQueries")?.as_array()?;
+    let mut results = Vec::new();
+    for q in queries {
+        let stat = q.get("MetricStat")?;
+        let metric = stat.get("Metric")?;
+        let namespace = metric.get("Namespace")?.as_str()?;
+        if !METRIC_NAMESPACES.contains(&namespace) {
+            return None;
+        }
+        let name = metric.get("MetricName")?.as_str()?;
+        let resource: String = metric
+            .get("Dimensions")
+            .and_then(|d| d.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|d| d.get("Value")?.as_str())
+            .collect();
+        let period = stat.get("Period").and_then(|p| p.as_i64()).unwrap_or(60).max(1);
+        let seed = resource.bytes().chain(name.bytes()).fold(0i64, |h, b| h.wrapping_mul(31).wrapping_add(b as i64));
+        let (mut times, mut values) = (Vec::new(), Vec::new());
+        let mut t = start.div_euclid(period) * period + period;
+        while t <= end {
+            times.push(serde_json::json!({ "$timestamp": t }));
+            values.push(serde_json::json!(metric_value(name, &resource, seed, t, period, now)));
+            t += period;
+        }
+        results.push(serde_json::json!({
+            "Id": q.get("Id")?,
+            "Label": name,
+            "Timestamps": times,
+            "Values": values,
+            "StatusCode": "Complete",
+        }));
+    }
+    Some(serde_json::json!({ "MetricDataResults": results, "Messages": [] }).to_string())
+}
+
+fn metric_value(name: &str, resource: &str, seed: i64, t: i64, period: i64, now: i64) -> f64 {
+    let wave = ((t as f64) / 5_400.0 + (seed % 97) as f64).sin();
+    let jitter = (mix(seed.wrapping_add(t)) % 1000) as f64 / 1000.0 - 0.5;
+    let per = period as f64 / 60.0;
+    // (level, swing, jitter) per metric; per-period sums scale with the period.
+    let (level, swing, noise) = match name {
+        "CPUUtilization" => (32.0, 14.0, 8.0),
+        "NetworkIn" => (180_000.0 * per, 60_000.0 * per, 40_000.0 * per),
+        "NetworkOut" => (420_000.0 * per, 150_000.0 * per, 90_000.0 * per),
+        "StatusCheckFailed" => (0.0, 0.0, 0.0),
+        "Invocations" => (90.0 * per, 35.0 * per, 20.0 * per),
+        "Errors" if resource == "orders-api" && now - t < 2_400 => (9.0 * per, 3.0 * per, 3.0 * per),
+        "Errors" => (0.4 * per, 0.4 * per, 0.6 * per),
+        "Throttles" => (0.0, 0.0, 0.0),
+        "Duration" => (180.0, 40.0, 50.0),
+        "ConcurrentExecutions" => (4.0, 2.0, 2.0),
+        "DatabaseConnections" => (42.0, 8.0, 4.0),
+        "ReadIOPS" => (310.0, 120.0, 60.0),
+        "WriteIOPS" => (140.0, 50.0, 30.0),
+        "ReadLatency" => (0.0016, 0.0004, 0.0004),
+        "WriteLatency" => (0.0031, 0.0008, 0.0006),
+        "FreeableMemory" => (2.1e9, 1.2e8, 4.0e7),
+        "FreeStorageSpace" => (52.0e9 + (now - t) as f64 * 2_000.0, 0.0, 1.0e6),
+        _ => (10.0, 4.0, 2.0),
+    };
+    let v = (level + swing * wave + noise * jitter).max(0.0);
+    if name.ends_with("IOPS") || name.contains("Latency") || name == "CPUUtilization" || name == "Duration" {
+        v
+    } else {
+        v.round()
+    }
 }
 
 /// `"ERROR" timeout` → `["ERROR", "timeout"]`. A JSON (`{ … }`) or
@@ -240,5 +325,29 @@ mod tests {
     fn unknown_groups_fall_through_to_fixtures() {
         let b = serde_json::json!({"logGroupName": "/nope", "startTime": 0}).to_string();
         assert!(filter_log_events(&b, 1).is_none());
+    }
+
+    #[test]
+    fn metric_data_answers_each_query_and_repeats() {
+        let now = 1_790_000_000;
+        let body = serde_json::json!({
+            "StartTime": {"$timestamp": now - 3_600}, "EndTime": {"$timestamp": now},
+            "MetricDataQueries": [
+                {"Id": "q0", "MetricStat": {"Metric": {"Namespace": "AWS/Lambda", "MetricName": "Errors",
+                    "Dimensions": [{"Name": "FunctionName", "Value": "orders-api"}]}, "Period": 60, "Stat": "Sum"}},
+                {"Id": "q1", "MetricStat": {"Metric": {"Namespace": "AWS/EC2", "MetricName": "CPUUtilization",
+                    "Dimensions": [{"Name": "InstanceId", "Value": "i-1"}]}, "Period": 60, "Stat": "Average"}},
+            ]
+        })
+        .to_string();
+        let out: serde_json::Value = serde_json::from_str(&get_metric_data(&body, now).unwrap()).unwrap();
+        let r = out["MetricDataResults"].as_array().unwrap();
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0]["Values"].as_array().unwrap().len(), 60, "one point a period");
+        let errors: Vec<f64> = r[0]["Values"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        assert!(errors[50..].iter().sum::<f64>() > errors[..10].iter().sum::<f64>(), "orders-api errors climb");
+        assert_eq!(get_metric_data(&body, now), get_metric_data(&body, now), "repeatable");
+        let other = body.replace("AWS/EC2", "AWS/Kafka");
+        assert!(get_metric_data(&other, now).is_none(), "other namespaces fall through");
     }
 }

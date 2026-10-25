@@ -3,11 +3,9 @@ use crate::aws::resource::Resource;
 use crate::aws::service::ServiceType;
 use crate::aws::services::cloudwatch::CwAlarmMetricsData;
 use crate::aws::services::asg::AsgMetricsData;
-use crate::aws::services::ec2::{Ec2MetricsData, EbsMetricsData, SsmInstanceStatus};
+use crate::aws::services::ec2::{EbsMetricsData, SsmInstanceStatus};
 use std::collections::HashMap;
 use crate::aws::services::ecs::{EcsMetricsData, EcsTaskMetricsData};
-use crate::aws::services::lambda::LambdaMetricsData;
-use crate::aws::services::rds::RdsMetricsData;
 use crossterm::event::{KeyEvent, MouseEvent};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -134,11 +132,6 @@ pub enum Event {
     /// Drop the assumed member-account role and return to base credentials.
     OrgRoleExitRequested,
 
-    Ec2MetricsLoaded {
-        instance_id: String,
-        data: Ec2MetricsData,
-    },
-
     EbsMetricsLoaded {
         volume_id: String,
         data: EbsMetricsData,
@@ -147,11 +140,6 @@ pub enum Event {
     AsgMetricsLoaded {
         group_name: String,
         data: AsgMetricsData,
-    },
-
-    LambdaMetricsLoaded {
-        function_name: String,
-        data: LambdaMetricsData,
     },
 
     /// `d` on the Code section: deployment package downloaded + extracted.
@@ -174,11 +162,6 @@ pub enum Event {
     EcsTaskMetricsLoaded {
         task_key: String,
         data: EcsTaskMetricsData,
-    },
-
-    RdsMetricsLoaded {
-        db_identifier: String,
-        data: RdsMetricsData,
     },
 
     AccountInfoLoaded {

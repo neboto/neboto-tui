@@ -2384,21 +2384,6 @@ impl MetricsTimeRange {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Ec2MetricsData {
-    pub time_range: MetricsTimeRange,
-    pub cpu: Vec<(f64, f64)>,     // (secs_from_start, percent)
-    pub net_in: Vec<(f64, f64)>,  // (secs_from_start, bytes/sec)
-    pub net_out: Vec<(f64, f64)>, // (secs_from_start, bytes/sec)
-    pub x_max: f64,
-}
-
-#[derive(Debug, Clone)]
-pub enum Ec2MetricsState {
-    Loading,
-    Loaded(Ec2MetricsData),
-}
-
 fn parse_datapoints(
     datapoints: &[aws_sdk_cloudwatch::types::Datapoint],
     start_secs: i64,
@@ -2414,77 +2399,6 @@ fn parse_datapoints(
         .collect();
     pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     pts
-}
-
-pub async fn fetch_ec2_metrics(
-    cw_client: aws_sdk_cloudwatch::Client,
-    instance_id: String,
-    time_range: MetricsTimeRange,
-) -> Result<Ec2MetricsData> {
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    let start_secs = now_secs - time_range.duration_secs();
-    let period = time_range.period_secs();
-
-    let start_dt = CwDateTime::from_secs(start_secs);
-    let end_dt = CwDateTime::from_secs(now_secs);
-
-    let make_dim = || {
-        aws_sdk_cloudwatch::types::Dimension::builder()
-            .name("InstanceId")
-            .value(&instance_id)
-            .build()
-    };
-
-    let (cpu_resp, net_in_resp, net_out_resp) = tokio::join!(
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/EC2")
-            .metric_name("CPUUtilization")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![aws_sdk_cloudwatch::types::Statistic::Average]))
-            .send(),
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/EC2")
-            .metric_name("NetworkIn")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![aws_sdk_cloudwatch::types::Statistic::Average]))
-            .send(),
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/EC2")
-            .metric_name("NetworkOut")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![aws_sdk_cloudwatch::types::Statistic::Average]))
-            .send(),
-    );
-
-    let period_f = period as f64;
-
-    let cpu_dp = match cpu_resp { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-    let net_in_dp = match net_in_resp { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-    let net_out_dp = match net_out_resp { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-
-    Ok(Ec2MetricsData {
-        time_range,
-        cpu: parse_datapoints(&cpu_dp, start_secs, 1.0),
-        net_in: parse_datapoints(&net_in_dp, start_secs, period_f),
-        net_out: parse_datapoints(&net_out_dp, start_secs, period_f),
-        x_max: time_range.duration_secs() as f64,
-    })
 }
 
 #[derive(Debug, Clone)]

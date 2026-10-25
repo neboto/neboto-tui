@@ -2,6 +2,7 @@ pub mod cache;
 pub mod cli_actions;
 pub mod client;
 pub mod document;
+pub mod metrics;
 pub mod pagination;
 pub mod region;
 pub mod resource;

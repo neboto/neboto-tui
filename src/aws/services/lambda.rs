@@ -2,11 +2,9 @@ use crate::aws::client::AwsClients;
 use crate::aws::resource::sg_refs;
 use crate::aws::resource::{Resource, ResourceState};
 use crate::aws::service::{AwsService, ServiceType};
-use crate::aws::services::ec2::MetricsTimeRange;
 use crate::error::Result;
 use crate::event::{Event, LoadProgress};
 use async_trait::async_trait;
-use aws_sdk_cloudwatch::types::Datapoint;
 use aws_sdk_lambda::Client as LambdaClient;
 use std::any::Any;
 use std::collections::HashMap;
@@ -553,156 +551,6 @@ pub fn layer_usage<'a>(
         }
     }
     by_version.into_iter().rev().collect()
-}
-
-// ── Lambda metrics (CloudWatch) ───────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct LambdaMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub invocations: Vec<(f64, f64)>, // (secs_from_start, sum per period)
-    pub duration: Vec<(f64, f64)>,    // (secs_from_start, avg ms)
-    pub errors: Vec<(f64, f64)>,      // (secs_from_start, sum per period)
-    pub throttles: Vec<(f64, f64)>,   // (secs_from_start, sum per period)
-    pub concurrent: Vec<(f64, f64)>,  // (secs_from_start, max count)
-    pub x_max: f64,
-}
-
-#[derive(Debug, Clone)]
-pub enum LambdaMetricsState {
-    Loading,
-    Loaded(LambdaMetricsData),
-}
-
-fn parse_sum(datapoints: &[Datapoint], start_secs: i64) -> Vec<(f64, f64)> {
-    let mut pts: Vec<(f64, f64)> = datapoints
-        .iter()
-        .filter_map(|dp| {
-            let t = (dp.timestamp()?.secs() - start_secs) as f64;
-            Some((t, dp.sum().unwrap_or(0.0)))
-        })
-        .collect();
-    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    pts
-}
-
-fn parse_avg(datapoints: &[Datapoint], start_secs: i64) -> Vec<(f64, f64)> {
-    let mut pts: Vec<(f64, f64)> = datapoints
-        .iter()
-        .filter_map(|dp| {
-            let t = (dp.timestamp()?.secs() - start_secs) as f64;
-            Some((t, dp.average().unwrap_or(0.0)))
-        })
-        .collect();
-    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    pts
-}
-
-fn parse_max(datapoints: &[Datapoint], start_secs: i64) -> Vec<(f64, f64)> {
-    let mut pts: Vec<(f64, f64)> = datapoints
-        .iter()
-        .filter_map(|dp| {
-            let t = (dp.timestamp()?.secs() - start_secs) as f64;
-            Some((t, dp.maximum().unwrap_or(0.0)))
-        })
-        .collect();
-    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    pts
-}
-
-pub async fn fetch_lambda_metrics(
-    cw_client: aws_sdk_cloudwatch::Client,
-    function_name: String,
-    time_range: MetricsTimeRange,
-) -> Result<LambdaMetricsData> {
-    use aws_sdk_cloudwatch::types::{Dimension, Statistic};
-
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    let start_secs = now_secs - time_range.duration_secs();
-    let period = time_range.period_secs();
-
-    let start_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(start_secs);
-    let end_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(now_secs);
-
-    let make_dim = || {
-        Dimension::builder()
-            .name("FunctionName")
-            .value(&function_name)
-            .build()
-    };
-
-    let (inv_r, dur_r, err_r, thr_r, con_r) = tokio::join!(
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/Lambda")
-            .metric_name("Invocations")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Sum]))
-            .send(),
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/Lambda")
-            .metric_name("Duration")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Average]))
-            .send(),
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/Lambda")
-            .metric_name("Errors")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Sum]))
-            .send(),
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/Lambda")
-            .metric_name("Throttles")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Sum]))
-            .send(),
-        cw_client
-            .get_metric_statistics()
-            .namespace("AWS/Lambda")
-            .metric_name("ConcurrentExecutions")
-            .dimensions(make_dim())
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Maximum]))
-            .send(),
-    );
-
-    let inv_dp = match inv_r { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-    let dur_dp = match dur_r { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-    let err_dp = match err_r { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-    let thr_dp = match thr_r { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-    let con_dp = match con_r { Ok(r) => r.datapoints().to_vec(), Err(_) => vec![] };
-
-    Ok(LambdaMetricsData {
-        time_range,
-        invocations: parse_sum(&inv_dp, start_secs),
-        duration: parse_avg(&dur_dp, start_secs),
-        errors: parse_sum(&err_dp, start_secs),
-        throttles: parse_sum(&thr_dp, start_secs),
-        concurrent: parse_max(&con_dp, start_secs),
-        x_max: time_range.duration_secs() as f64,
-    })
 }
 
 // ── Lambda event source mappings (Triggers section) ───────────────────────────
