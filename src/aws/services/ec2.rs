@@ -2292,33 +2292,6 @@ impl Resource for NetworkInterface {
 
 // ── EC2 metrics (CloudWatch) ──────────────────────────────────────────────────
 
-/// Parse one `GetMetricStatistics` response into sorted `(t-offset, value)`
-/// points, reading whichever single statistic the query asked for
-/// (Sum / Maximum / Average). Shared by the simple per-dimension fetchers.
-pub fn parse_metric_datapoints(
-    resp: std::result::Result<
-        aws_sdk_cloudwatch::operation::get_metric_statistics::GetMetricStatisticsOutput,
-        aws_sdk_cloudwatch::error::SdkError<
-            aws_sdk_cloudwatch::operation::get_metric_statistics::GetMetricStatisticsError,
-        >,
-    >,
-    start: i64,
-) -> Vec<(f64, f64)> {
-    let mut pts: Vec<(f64, f64)> = match resp {
-        Ok(r) => r
-            .datapoints()
-            .iter()
-            .filter_map(|dp| {
-                let v = dp.sum().or(dp.maximum()).or(dp.average())?;
-                Some((dp.timestamp()?.secs() as f64 - start as f64, v))
-            })
-            .collect(),
-        Err(_) => vec![],
-    };
-    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    pts
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MetricsTimeRange {
     OneHour,

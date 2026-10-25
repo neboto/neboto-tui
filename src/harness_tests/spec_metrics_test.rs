@@ -165,11 +165,11 @@ async fn every_spec_kind_in_the_demo_charts_cleanly() {
 async fn every_spec_target_has_a_mock_that_charts() {
     let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let mut seen: std::collections::BTreeMap<&'static str, Option<&'static str>> = Default::default();
+    let mut seen: std::collections::BTreeMap<String, Option<&'static str>> = Default::default();
     for (svc, label, r) in all_mocks() {
         select_mock(&mut app, svc, r);
         let Some(target) = app.selected_metric_target() else { continue };
-        seen.insert(target.namespace, target.home);
+        seen.insert(target.namespace.clone(), target.home);
         assert!(target.dimensions.first().is_some_and(|(_, v)| !v.is_empty()), "{label}: no primary dimension");
         press(&mut app, &tx, KeyCode::Char('m')).await;
         settle(&mut app, &tx, &mut rx).await;
@@ -178,14 +178,16 @@ async fn every_spec_target_has_a_mock_that_charts() {
         assert!(bad.is_empty() && st.series.iter().all(|s| !s.points.is_empty()), "{label}: {bad:?}");
         press(&mut app, &tx, KeyCode::Esc).await;
     }
+    // AWS/Bedrock is the one arm left out: foundation models and inference
+    // profiles are flat panes, so the harness has no mock for them.
     for ns in [
         "AWS/EC2", "AWS/EBS", "AWS/Lambda", "AWS/RDS", "AWS/DynamoDB", "AWS/EFS", "AWS/ElastiCache",
         "AWS/Kinesis", "AWS/Firehose", "AWS/Redshift", "AWS/Redshift-Serverless", "AWS/SQS", "AWS/SNS",
         "AWS/States", "AWS/Transfer", "AWS/NATGateway", "AWS/VPN", "AWS/DX", "AWS/ECR",
         "AWS/WorkSpaces", "AWS/Athena", "Glue", "AWS/TransitGateway", "AWS/Logs", "AWS/Events",
         "AWS/Route53Resolver", "AWS/CodeBuild", "AWS/CloudFront", "AWS/Route53", "AWS/GlobalAccelerator",
-    // AWS/Bedrock is the one arm left out: foundation models and inference
-    // profiles are flat panes, so the harness has no mock for them.
+        "AWS/ECS", "AWS/AutoScaling", "ContainerInsights", "AWS/ApiGateway", "AWS/ApplicationELB", "AWS/ES",
+        "AWS/DMS", "ECS/ContainerInsights",
     ] {
         assert!(seen.contains_key(ns), "no mock reaches the {ns} spec arm: {seen:?}");
     }

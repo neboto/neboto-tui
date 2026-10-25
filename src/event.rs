@@ -2,10 +2,8 @@ use crate::aws::region::Region;
 use crate::aws::resource::Resource;
 use crate::aws::service::ServiceType;
 use crate::aws::services::cloudwatch::CwAlarmMetricsData;
-use crate::aws::services::asg::AsgMetricsData;
 use crate::aws::services::ec2::SsmInstanceStatus;
 use std::collections::HashMap;
-use crate::aws::services::ecs::{EcsMetricsData, EcsTaskMetricsData};
 use crossterm::event::{KeyEvent, MouseEvent};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -133,10 +131,6 @@ pub enum Event {
     OrgRoleExitRequested,
 
 
-    AsgMetricsLoaded {
-        group_name: String,
-        data: AsgMetricsData,
-    },
 
     /// `d` on the Code section: deployment package downloaded + extracted.
     LambdaCodeDownloaded {
@@ -150,15 +144,7 @@ pub enum Event {
         result: std::result::Result<(String, u64), String>, // (path, bytes)
     },
 
-    EcsMetricsLoaded {
-        service_key: String,
-        data: EcsMetricsData,
-    },
 
-    EcsTaskMetricsLoaded {
-        task_key: String,
-        data: EcsTaskMetricsData,
-    },
 
     AccountInfoLoaded {
         account_id: String,
@@ -271,28 +257,12 @@ pub enum Event {
         enrollment: crate::aws::services::computeoptimizer::CoEnrollment,
     },
 
-    /// Fired when an EKS cluster's Container Insights metrics are fetched.
-    EksMetricsLoaded {
-        cluster: String,
-        data: crate::aws::services::eks::EksMetricsData,
-    },
 
 
 
-    /// OpenSearch domain CloudWatch metrics (`m` overlay), keyed by domain name.
-    OpenSearchMetricsLoaded {
-        domain: String,
-        data: crate::aws::services::opensearch::OpenSearchMetricsData,
-    },
 
 
 
-    /// DMS task / replication instance CloudWatch metrics (`m` overlay),
-    /// keyed by ARN.
-    DmsMetricsLoaded {
-        arn: String,
-        data: crate::aws::services::dms::DmsMetricsData,
-    },
 
 
 
@@ -367,11 +337,6 @@ pub enum Event {
         volume_id: String,
         data: crate::aws::services::fsx::FsxMetricsData,
     },
-    /// ELB load balancer / target group CloudWatch metrics (`m` overlay), keyed by ARN.
-    ElbMetricsLoaded {
-        arn: String,
-        data: crate::aws::services::elb::ElbMetricsData,
-    },
 
     /// The live tail resolved its log group + streams (for async-resolved
     /// sources: ECS task / Network Firewall / CodeBuild). Stored on the pane so
@@ -430,11 +395,6 @@ pub enum Event {
         nacls: Result<Vec<crate::aws::services::vpc::NetworkAcl>, String>,
     },
 
-    /// Fired when an API Gateway API's CloudWatch metrics have been fetched.
-    ApiMetricsLoaded {
-        api_id: String,
-        data: crate::aws::services::api_gateway::ApiMetricsData,
-    },
 
     /// Fired when the Service Quotas service list (for the picker) is fetched.
     QuotaServicesLoaded {

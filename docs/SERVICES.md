@@ -354,7 +354,7 @@ the service you're touching.
   - **Metrics** (`m`) — namespace `AWS/Bedrock-AgentCore`, one
     `MetricsKind::AgentCore` with an `AgentCoreMetricsFlavor` (Runtime /
     Gateway / Memory / Browser / CodeInterpreter), mirroring
-    `ApiMetricsFlavor`. **Why `SEARCH` and not `GetMetricStatistics`**: AWS
+    API Gateway's per-protocol spec tables. **Why `SEARCH` and not `GetMetricStatistics`**: AWS
     documents a different dimension set per family (gateway:
     `Operation`/`Protocol`/`Method`/`Resource`/`Name`; runtime usage:
     `Service`, `Service,Resource`, `Service,Resource,Name`) and the runtime

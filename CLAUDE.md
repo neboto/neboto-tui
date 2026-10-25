@@ -400,7 +400,7 @@ in `any_pane_overlay_active` (which gates the mouse).
   untriggered, and closing the overlay then shows a spinner for a fetch that
   never started, forever (the contains-guard blocks any retry).
   Covers EC2/EBS/Lambda/ECS (service + per-task)/RDS/ASG/CW-alarm/Cost/WAF/
-  API-GW (**flavor-aware** `ApiMetricsFlavor`: REST = `ApiName` dim,
+  API-GW (**flavor-aware**, one spec table per protocol: REST = `ApiName` dim,
   `4XXError`/`5XXError` + cache hit/miss; HTTP = `ApiId` dim, lowercase
   `4xx`/`5xx` + `DataProcessed`; WebSocket = `ApiId`,
   Connect/Message/Client/Execution/Integration counts — the three protocols
@@ -446,8 +446,7 @@ in `any_pane_overlay_active` (which gates the mouse).
   `EndpointId`, regional — both direction volumes fetched, the wrong one is
   just empty)/CodeBuild projects (`AWS/CodeBuild` dim `ProjectName`)/DMS tasks +
   replication instances (`AWS/DMS` — a task needs **two** dims, the
-  instance's *name* and the task's ARN *resource id*; one `MetricsKind::Dms`
-  with a flavor). Each is
+  instance's *name* and the task's ARN *resource id*; a spec table each). Each is
   namespace +
   dimension-set specific — see its spec table in `src/aws/metrics.rs`, or a
   hand-built kind's `fetch_*_metrics` fn and `MetricsKind` arm. **New kinds go through the spec table**

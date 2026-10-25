@@ -326,8 +326,6 @@ impl ApiGatewayView {
     }
 }
 
-/// API Gateway metrics overlay load state.
-pub use crate::aws::services::api_gateway::ApiMetricsState;
 
 /// Sub-tab view for the Direct Connect service.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -558,26 +556,16 @@ pub enum MetricsKind {
     /// Charted from a spec table (`aws::metrics`, `App.spec_metrics`):
     /// EC2 instances, Lambda functions, RDS instances and clusters.
     Spec,
-    Ecs,
-    EcsTask,
-    Asg,
     CwAlarm,
     Cost,
     Waf,
-    Api,
-    Elb,
-    ElbTarget,
     Nfw,
-    Eks,
-    CwMetric,
     Fsx,
     FsxVolume,
-    OpenSearch,
     S3,
     Ses,
     Msk,
     Cognito,
-    Dms,
     VpcEndpoint,
     CwDashboard,
     AgentCore}
@@ -642,8 +630,6 @@ impl CloudFrontView {
 
 
 
-/// Load state for lazily-fetched OpenSearch `m` metrics.
-pub use crate::aws::services::opensearch::OpenSearchMetricsState;
 
 /// Load state for lazily-fetched MSK `m` metrics.
 pub use crate::aws::services::msk::MskMetricsState;
@@ -1034,8 +1020,6 @@ impl SesView {
 
 
 
-/// CloudWatch metrics state for an ELB load balancer / target group (`m` overlay).
-pub use crate::aws::services::elb::ElbMetricsState;
 
 
 
@@ -1053,8 +1037,6 @@ pub use crate::aws::services::inspector::InspSeverityScope;
 
 /// EC2 metrics types (CloudWatch-backed).
 pub use crate::aws::services::ec2::MetricsTimeRange;
-pub use crate::aws::services::ecs::EcsMetricsState;
-pub use crate::aws::services::ecs::EcsTaskMetricsState;
 
 /// Sub-tab view for RDS resources
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1097,8 +1079,6 @@ impl ElbView {
 
 
 
-/// CloudWatch metrics overlay state for an Auto Scaling group.
-pub use crate::aws::services::asg::AsgMetricsState;
 
 
 
@@ -2261,9 +2241,6 @@ pub struct App {
 
     // API Gateway: sub-tab view, split-pane sections, lazy per-API child data
     pub apigw_view: ApiGatewayView,
-    // API Gateway metrics overlay (`m`), keyed by api id
-    pub apigw_metrics: HashMap<String, ApiMetricsState>,
-    pub apigw_metrics_time_range: MetricsTimeRange,
 
     // Service Quotas: the scoped service code (variant cache) + picker list
     pub quota_service_code: String,
@@ -2381,14 +2358,9 @@ pub struct App {
 
     // Global Accelerator detail section state (keyed by accelerator arn)
 
-    // EKS detail section state (children keyed by cluster name)
-    pub eks_metrics: HashMap<String, crate::aws::services::eks::EksMetricsState>,
 
 
 
-    // OpenSearch detail section state (tags + metrics keyed by domain name)
-    pub opensearch_metrics: HashMap<String, OpenSearchMetricsState>,
-    pub opensearch_metrics_time_range: MetricsTimeRange,
 
     // MSK detail section state (config + metrics keyed by cluster ARN)
     pub msk_metrics: HashMap<String, MskMetricsState>,
@@ -2455,9 +2427,6 @@ pub struct App {
     pub xray_window: crate::aws::services::xray::XRayWindow,
     pub beanstalk_view: BeanstalkView,
     pub dms_view: DmsView,
-    /// DMS task / replication instance `m` metrics, keyed by ARN.
-    pub dms_metrics: HashMap<String, crate::aws::services::dms::DmsMetricsState>,
-    pub dms_metrics_time_range: MetricsTimeRange,
 
 
     // Athena sub-tab view + per-type detail sections
@@ -2568,10 +2537,6 @@ pub struct App {
     pub spec_metrics_generation: u64,
 
 
-    // Auto Scaling group metrics overlay
-    pub asg_metrics_time_range: MetricsTimeRange,
-    // Keyed by ASG name; re-fetched on time-range change
-    pub asg_metrics: HashMap<String, AsgMetricsState>,
 
     // Function name currently downloading its package (gates re-trigger + status).
     pub lambda_code_downloading: Option<String>,
@@ -2579,24 +2544,13 @@ pub struct App {
     // Invoice id currently downloading its PDF (gates re-trigger + status).
     pub invoice_pdf_downloading: Option<String>,
 
-    // ECS service metrics overlay
-    pub ecs_metrics_time_range: MetricsTimeRange,
-    // Keyed by "cluster/service"; re-fetched on time-range change
-    pub ecs_metrics: HashMap<String, EcsMetricsState>,
 
-    // ECS per-task / per-container metrics overlay (enhanced observability)
-    pub ecs_task_metrics_time_range: MetricsTimeRange,
-    // Keyed by task ARN; re-fetched on time-range change
-    pub ecs_task_metrics: HashMap<String, EcsTaskMetricsState>,
 
     // RDS sub-tab and detail section
     pub rds_view: RdsView,
 
     // ELB sub-tab and detail section state
     pub elb_view: ElbView,
-    // CloudWatch metrics (`m`) for a load balancer / target group, keyed by ARN
-    pub elb_metrics: HashMap<String, ElbMetricsState>,
-    pub elb_metrics_time_range: MetricsTimeRange,
 
     // Auto Scaling group detail section state
 
@@ -3168,8 +3122,6 @@ impl App {
             resolver_view: ResolverView::Endpoints,
             dx_view: DxView::Connections,
             apigw_view: ApiGatewayView::RestApis,
-            apigw_metrics: HashMap::new(),
-            apigw_metrics_time_range: MetricsTimeRange::OneHour,
             quota_service_code: "ec2".to_string(),
             quota_services: Vec::new(),
             ddb_browser: crate::ui::widgets::ddb_item_browser::DdbBrowserState::new(),
@@ -3216,10 +3168,7 @@ impl App {
             hidden_noise_count: 0,
             noise_in_view: false,
 
-            eks_metrics: HashMap::new(),
 
-            opensearch_metrics: HashMap::new(),
-            opensearch_metrics_time_range: MetricsTimeRange::OneHour,
 
             msk_metrics: HashMap::new(),
             msk_metrics_time_range: MetricsTimeRange::OneHour,
@@ -3254,8 +3203,6 @@ impl App {
             xray_window: crate::aws::services::xray::XRayWindow::default(),
             beanstalk_view: BeanstalkView::Environments,
             dms_view: DmsView::Tasks,
-            dms_metrics: HashMap::new(),
-            dms_metrics_time_range: MetricsTimeRange::OneHour,
 
             athena_view: AthenaView::Workgroups,
             fms_view: FmsView::Policies,
@@ -3311,18 +3258,10 @@ impl App {
             spec_metrics: None,
             spec_metrics_range: MetricsTimeRange::OneHour,
             spec_metrics_generation: 0,
-            asg_metrics_time_range: MetricsTimeRange::OneHour,
-            asg_metrics: HashMap::new(),
             lambda_code_downloading: None,
             invoice_pdf_downloading: None,
-            ecs_metrics_time_range: MetricsTimeRange::OneHour,
-            ecs_metrics: HashMap::new(),
-            ecs_task_metrics_time_range: MetricsTimeRange::OneHour,
-            ecs_task_metrics: HashMap::new(),
             rds_view: RdsView::Instances,
             elb_view: ElbView::LoadBalancers,
-            elb_metrics: HashMap::new(),
-            elb_metrics_time_range: MetricsTimeRange::OneHour,
             msg_view: MsgView::Queues,
             s3_metrics: HashMap::new(),
             ssm_view: SsmView::Parameters,
@@ -3448,16 +3387,6 @@ impl App {
             Event::OrgRoleExitRequested => {
                 self.exit_org_role(event_tx).await;
             }
-            Event::EksMetricsLoaded { cluster, data } => {
-                self.eks_metrics.insert(
-                    cluster,
-                    crate::aws::services::eks::EksMetricsState::Loaded(data),
-                );
-            }
-            Event::OpenSearchMetricsLoaded { domain, data } => {
-                self.opensearch_metrics
-                    .insert(domain, OpenSearchMetricsState::Loaded(data));
-            }
             Event::FmsAdminLoaded { info } => {
                 self.fms_admin = Some(info);
             }
@@ -3501,10 +3430,6 @@ impl App {
                     crate::aws::services::cloudwatch::CwDashboardMetricsState::Error(error),
                 );
             }
-            Event::DmsMetricsLoaded { arn, data } => {
-                self.dms_metrics
-                    .insert(arn, crate::aws::services::dms::DmsMetricsState::Loaded(data));
-            }
             Event::AgentCoreMetricsLoaded { key, data } => {
                 self.agentcore_metrics.insert(
                     key,
@@ -3539,9 +3464,6 @@ impl App {
                     volume_id,
                     crate::aws::services::fsx::FsxMetricsState::Loaded(data),
                 );
-            }
-            Event::ElbMetricsLoaded { arn, data } => {
-                self.elb_metrics.insert(arn, ElbMetricsState::Loaded(data));
             }
             Event::LogTailResolved {
                 generation,
@@ -3626,10 +3548,6 @@ impl App {
                         }
                     }
                 }
-            }
-            Event::ApiMetricsLoaded { api_id, data } => {
-                self.apigw_metrics
-                    .insert(api_id, ApiMetricsState::Loaded(Box::new(data)));
             }
             Event::QuotaServicesLoaded { services } => {
                 self.quota_services = services.clone();
@@ -3819,10 +3737,6 @@ impl App {
                     self.success_message_time = Some(Instant::now());
                 }
             }
-            Event::AsgMetricsLoaded { group_name, data } => {
-                self.asg_metrics
-                    .insert(group_name, AsgMetricsState::Loaded(data));
-            }
             Event::LambdaCodeDownloaded { function_name, result } => {
                 if self.lambda_code_downloading.as_deref() == Some(function_name.as_str()) {
                     self.lambda_code_downloading = None;
@@ -3860,14 +3774,6 @@ impl App {
                         self.error_message = Some(format!("Download failed: {e}"));
                     }
                 }
-            }
-            Event::EcsMetricsLoaded { service_key, data } => {
-                self.ecs_metrics
-                    .insert(service_key, EcsMetricsState::Loaded(data));
-            }
-            Event::EcsTaskMetricsLoaded { task_key, data } => {
-                self.ecs_task_metrics
-                    .insert(task_key, EcsTaskMetricsState::Loaded(data));
             }
             Event::AccountInfoLoaded {
                 account_id,
@@ -4679,44 +4585,6 @@ impl App {
             }
             match kind {
                 MetricsKind::Spec => self.handle_spec_metrics_key(key, event_tx),
-                MetricsKind::Ecs => match key.code {
-                    KeyCode::Char('r') => self.trigger_ecs_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.ecs_metrics_time_range = self.ecs_metrics_time_range.prev();
-                        self.trigger_ecs_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.ecs_metrics_time_range = self.ecs_metrics_time_range.next();
-                        self.trigger_ecs_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::EcsTask => match key.code {
-                    KeyCode::Char('r') => self.trigger_ecs_task_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.ecs_task_metrics_time_range =
-                            self.ecs_task_metrics_time_range.prev();
-                        self.trigger_ecs_task_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.ecs_task_metrics_time_range =
-                            self.ecs_task_metrics_time_range.next();
-                        self.trigger_ecs_task_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Asg => match key.code {
-                    KeyCode::Char('r') => self.trigger_asg_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.asg_metrics_time_range = self.asg_metrics_time_range.prev();
-                        self.trigger_asg_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.asg_metrics_time_range = self.asg_metrics_time_range.next();
-                        self.trigger_asg_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
                 // The one `m` overlay that scrolls a laid-out grid rather than a
                 // fixed set of charts — a dashboard is taller than any pane.
                 MetricsKind::CwDashboard => {
@@ -4767,7 +4635,7 @@ impl App {
                         _ => {}
                     }
                 }
-                MetricsKind::CwAlarm | MetricsKind::CwMetric => match key.code {
+                MetricsKind::CwAlarm => match key.code {
                     KeyCode::Char('r') => self.trigger_cw_alarm_metrics_load(event_tx),
                     KeyCode::Char('[') => {
                         self.cw_alarm_metrics_time_range = self.cw_alarm_metrics_time_range.prev();
@@ -4776,32 +4644,6 @@ impl App {
                     KeyCode::Char(']') => {
                         self.cw_alarm_metrics_time_range = self.cw_alarm_metrics_time_range.next();
                         self.trigger_cw_alarm_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Api => match key.code {
-                    KeyCode::Char('r') => self.trigger_api_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.apigw_metrics_time_range = self.apigw_metrics_time_range.prev();
-                        self.trigger_api_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.apigw_metrics_time_range = self.apigw_metrics_time_range.next();
-                        self.trigger_api_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::OpenSearch => match key.code {
-                    KeyCode::Char('r') => self.trigger_opensearch_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.opensearch_metrics_time_range =
-                            self.opensearch_metrics_time_range.prev();
-                        self.trigger_opensearch_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.opensearch_metrics_time_range =
-                            self.opensearch_metrics_time_range.next();
-                        self.trigger_opensearch_metrics_load(event_tx);
                     }
                     _ => {}
                 },
@@ -4846,18 +4688,6 @@ impl App {
                     }
                     _ => {}
                 },
-                MetricsKind::Elb | MetricsKind::ElbTarget => match key.code {
-                    KeyCode::Char('r') => self.trigger_elb_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.elb_metrics_time_range = self.elb_metrics_time_range.prev();
-                        self.trigger_elb_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.elb_metrics_time_range = self.elb_metrics_time_range.next();
-                        self.trigger_elb_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
                 MetricsKind::Waf => match key.code {
                     KeyCode::Char('r') => {
                         self.waf_metrics.clear();
@@ -4885,23 +4715,6 @@ impl App {
                     KeyCode::Char(']') => {
                         self.ec2_metrics_time_range = self.ec2_metrics_time_range.next();
                         self.trigger_nfw_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Eks => match key.code {
-                    KeyCode::Char('r') => {
-                        self.eks_metrics.clear();
-                        self.trigger_eks_metrics_load(event_tx);
-                    }
-                    KeyCode::Char('[') => {
-                        self.ec2_metrics_time_range = self.ec2_metrics_time_range.prev();
-                        self.eks_metrics.clear();
-                        self.trigger_eks_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.ec2_metrics_time_range = self.ec2_metrics_time_range.next();
-                        self.eks_metrics.clear();
-                        self.trigger_eks_metrics_load(event_tx);
                     }
                     _ => {}
                 },
@@ -4972,18 +4785,6 @@ impl App {
                     KeyCode::Char(']') => {
                         self.vpce_metrics_time_range = self.vpce_metrics_time_range.next();
                         self.trigger_vpce_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Dms => match key.code {
-                    KeyCode::Char('r') => self.trigger_dms_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.dms_metrics_time_range = self.dms_metrics_time_range.prev();
-                        self.trigger_dms_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.dms_metrics_time_range = self.dms_metrics_time_range.next();
-                        self.trigger_dms_metrics_load(event_tx);
                     }
                     _ => {}
                 },
@@ -13071,29 +12872,6 @@ impl App {
         }
     }
 
-    fn trigger_eks_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(cluster) = self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::eks::EksCluster>())
-        {
-            let name = cluster.name.clone();
-            let time_range = self.ec2_metrics_time_range;
-            self.eks_metrics.insert(
-                name.clone(),
-                crate::aws::services::eks::EksMetricsState::Loading,
-            );
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) =
-                    crate::aws::services::eks::fetch_eks_metrics(cw, name.clone(), time_range).await
-                {
-                    let _ = tx.send(crate::event::Event::EksMetricsLoaded { cluster: name, data });
-                }
-            });
-        }
-    }
-
     /// Trigger the lazy load for whichever EKS section is now active (used by
     fn is_selected_efs_file_system(&self) -> bool {
         self.get_selected_resource()
@@ -13540,31 +13318,6 @@ impl App {
                         .map_err(|e| format!("Tags unavailable: {}", e))
                 },
             );
-        }
-    }
-
-    fn trigger_opensearch_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some((domain, _, client_id)) = self.selected_opensearch() {
-            if client_id.is_empty() {
-                return;
-            }
-            let time_range = self.opensearch_metrics_time_range;
-            self.opensearch_metrics
-                .insert(domain.clone(), OpenSearchMetricsState::Loading);
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::opensearch::fetch_opensearch_metrics(
-                    cw,
-                    domain.clone(),
-                    client_id,
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::OpenSearchMetricsLoaded { domain, data });
-                }
-            });
         }
     }
 
@@ -14173,58 +13926,6 @@ impl App {
         }
     }
 
-    /// Trigger the lazy Users load when the active section needs it (used by the
-    /// Load CloudWatch metrics for the selected load balancer *or* target group.
-    /// Both are keyed by ARN in `elb_metrics`; the fetch picks the namespace and
-    /// dimensions from the resource type (ALB/NLB for a LB; TG protocol + its
-    /// LB ARN for a target group).
-    fn trigger_elb_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        use crate::aws::services::elb::{LoadBalancer, TargetGroup};
-        let time_range = self.elb_metrics_time_range;
-        let cw = self.aws_clients.cloudwatch_client();
-
-        if let Some(lb) = self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<LoadBalancer>())
-        {
-            let (arn, lb_type) = (lb.arn.clone(), lb.lb_type.clone());
-            self.elb_metrics.insert(arn.clone(), ElbMetricsState::Loading);
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::elb::fetch_lb_metrics(
-                    cw,
-                    arn.clone(),
-                    lb_type,
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::ElbMetricsLoaded { arn, data });
-                }
-            });
-        } else if let Some(tg) = self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<TargetGroup>())
-        {
-            let (arn, lb_arns, protocol) =
-                (tg.arn.clone(), tg.load_balancer_arns.clone(), tg.protocol.clone());
-            self.elb_metrics.insert(arn.clone(), ElbMetricsState::Loading);
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) = crate::aws::services::elb::fetch_tg_metrics(
-                    cw,
-                    arn.clone(),
-                    lb_arns,
-                    protocol,
-                    time_range,
-                )
-                .await
-                {
-                    let _ = tx.send(crate::event::Event::ElbMetricsLoaded { arn, data });
-                }
-            });
-        }
-    }
 
     /// The selected FSx file-system id, if any.
     fn selected_fsx_id(&self) -> Option<String> {
@@ -16581,59 +16282,6 @@ impl App {
                         .map_err(|e| format!("Domain mappings unavailable: {}", e))
                 },
             );
-        }
-    }
-
-    /// Trigger the `AWS/ApiGateway` metrics fetch for the selected REST or HTTP
-    /// API. REST APIs are dimensioned by `ApiName`, HTTP APIs by `ApiId`.
-    fn trigger_api_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        use crate::aws::services::api_gateway::ApiMetricsFlavor;
-        let dims = self.get_selected_resource().and_then(|r| {
-            if let Some(api) = r
-                .as_any()
-                .downcast_ref::<crate::aws::services::api_gateway::RestApi>()
-            {
-                Some((
-                    api.id.clone(),
-                    "ApiName".to_string(),
-                    api.name.clone(),
-                    ApiMetricsFlavor::Rest,
-                ))
-            } else {
-                r.as_any()
-                    .downcast_ref::<crate::aws::services::api_gateway::HttpApi>()
-                    .map(|api| {
-                        let flavor = if api.protocol == "WEBSOCKET" {
-                            ApiMetricsFlavor::WebSocket
-                        } else {
-                            ApiMetricsFlavor::Http
-                        };
-                        (api.id.clone(), "ApiId".to_string(), api.id.clone(), flavor)
-                    })
-            }
-        });
-        if let Some((api_id, dim_name, dim_value, flavor)) = dims {
-            let time_range = self.apigw_metrics_time_range;
-            self.apigw_metrics
-                .insert(api_id.clone(), ApiMetricsState::Loading);
-            let cw_client = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                match crate::aws::services::api_gateway::fetch_api_metrics(
-                    cw_client, dim_name, dim_value, flavor, time_range,
-                )
-                .await
-                {
-                    Ok(data) => {
-                        let _ = tx.send(crate::event::Event::ApiMetricsLoaded { api_id, data });
-                    }
-                    Err(e) => {
-                        let _ = tx.send(crate::event::Event::ResourceLoadError {
-                            service: crate::aws::service::ServiceType::ApiGateway,
-                            error: format!("Failed to load API metrics: {}", e)});
-                    }
-                }
-            });
         }
     }
 
@@ -23964,45 +23612,6 @@ impl App {
                     }
                 }
             });
-        } else if let Some(metric) = self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::cloudwatch::CwMetric>())
-        {
-            // Metric explorer: chart the raw metric (Average, no threshold line).
-            let key = metric.id.clone();
-            let namespace = metric.namespace.clone();
-            let metric_name = metric.metric_name.clone();
-            let dimensions = metric.dimensions.clone();
-            let time_range = self.cw_alarm_metrics_time_range;
-            self.cw_alarm_metrics
-                .insert(key.clone(), CwAlarmMetricsState::Loading);
-            let client = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                match crate::aws::services::cloudwatch::fetch_alarm_metrics(
-                    client,
-                    namespace,
-                    metric_name,
-                    dimensions,
-                    "Average".to_string(),
-                    60,
-                    0.0,
-                    time_range,
-                )
-                .await
-                {
-                    Ok(data) => {
-                        let _ = tx.send(crate::event::Event::CwAlarmMetricsLoaded {
-                            alarm_arn: key,
-                            data});
-                    }
-                    Err(e) => {
-                        let _ = tx.send(crate::event::Event::ResourceLoadError {
-                            service: crate::aws::service::ServiceType::CloudWatch,
-                            error: format!("Failed to load metric: {}", e)});
-                    }
-                }
-            });
         }
     }
 
@@ -29251,93 +28860,6 @@ impl App {
         None
     }
 
-    /// Show raw content viewer for the selected resource (generic for all resource types)
-    fn trigger_ecs_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(svc) = self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::ecs::EcsServiceInfo>())
-        {
-            let cluster_name = svc.cluster_name.clone();
-            let service_name = svc.service_name.clone();
-            let service_key = format!("{}/{}", cluster_name, service_name);
-            let time_range = self.ecs_metrics_time_range;
-            self.ecs_metrics
-                .insert(service_key.clone(), EcsMetricsState::Loading);
-            let cw_client = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                match crate::aws::services::ecs::fetch_ecs_metrics(
-                    cw_client,
-                    cluster_name,
-                    service_name,
-                    time_range,
-                )
-                .await
-                {
-                    Ok(data) => {
-                        let _ = tx.send(crate::event::Event::EcsMetricsLoaded {
-                            service_key,
-                            data});
-                    }
-                    Err(e) => {
-                        let _ = tx.send(crate::event::Event::ResourceLoadError {
-                            service: crate::aws::service::ServiceType::ECS,
-                            error: format!("Failed to load ECS metrics: {}", e)});
-                    }
-                }
-            });
-        }
-    }
-
-    fn trigger_ecs_task_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(task) = self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::ecs::EcsTask>())
-        {
-            let cluster_name = task.cluster_name.clone();
-            // `task_definition` is `family:revision`; the metric dimension wants
-            // the family alone.
-            let task_def_family = task
-                .task_definition
-                .split(':')
-                .next()
-                .unwrap_or(&task.task_definition)
-                .to_string();
-            let task_id = task.task_id.clone();
-            let task_key = task.task_arn.clone();
-            let container_names: Vec<String> =
-                task.containers.iter().map(|c| c.name.clone()).collect();
-            let time_range = self.ecs_task_metrics_time_range;
-            self.ecs_task_metrics
-                .insert(task_key.clone(), EcsTaskMetricsState::Loading);
-            let cw_client = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                match crate::aws::services::ecs::fetch_ecs_task_metrics(
-                    cw_client,
-                    cluster_name,
-                    task_def_family,
-                    task_id,
-                    container_names,
-                    time_range,
-                )
-                .await
-                {
-                    Ok(data) => {
-                        let _ = tx.send(crate::event::Event::EcsTaskMetricsLoaded {
-                            task_key,
-                            data});
-                    }
-                    Err(e) => {
-                        let _ = tx.send(crate::event::Event::ResourceLoadError {
-                            service: crate::aws::service::ServiceType::ECS,
-                            error: format!("Failed to load ECS task metrics: {}", e)});
-                    }
-                }
-            });
-        }
-    }
-
     /// Lazy Code section: `GetFunction` metadata for the selected function,
     /// keyed by ARN. Idempotent once Loading/Loaded.
     /// Lazy Config section: reserved + provisioned concurrency and the
@@ -32489,13 +32011,14 @@ impl App {
         let r = self.get_selected_resource()?;
         let any = r.as_any();
         let dim = |n: &str, v: &str| vec![(n.to_string(), v.to_string())];
-        let target = |kind: &str, namespace, dimensions, specs: &'static [MetricSpec]| MetricTarget {
+        let target = |kind: &str, namespace: &str, dimensions, specs: &'static [MetricSpec]| MetricTarget {
             title: format!("{kind} · {}", r.name()),
-            namespace,
+            namespace: namespace.to_string(),
             dimensions,
             specs,
             home: None,
             hint: None,
+            extra: Vec::new(),
         };
         macro_rules! is {
             ($t:ty) => {
@@ -32598,6 +32121,114 @@ impl App {
             MetricTarget {
                 home: Some("us-east-1"),
                 ..target("Hosted zone", "AWS/Route53", dim("HostedZoneId", &bare), m::R53_HOSTED_ZONE)
+            }
+        } else if let Some(svc) = is!(s::ecs::EcsServiceInfo) {
+            let dims = vec![
+                ("ClusterName".to_string(), svc.cluster_name.clone()),
+                ("ServiceName".to_string(), svc.service_name.clone()),
+            ];
+            MetricTarget {
+                hint: Some("Nothing published yet; task counts need Container Insights on the cluster"),
+                ..target("ECS service", "AWS/ECS", dims, m::ECS_SERVICE)
+            }
+        } else if let Some(task) = is!(s::ecs::EcsTask) {
+            // `task_definition` is `family:revision`; the dimension wants the family.
+            let family = task.task_definition.split(':').next().unwrap_or(&task.task_definition);
+            let dims = vec![
+                ("ClusterName".to_string(), task.cluster_name.clone()),
+                ("TaskDefinitionFamily".to_string(), family.to_string()),
+                ("TaskId".to_string(), task.task_id.clone()),
+            ];
+            // Each container's CPU and memory, one line each on a shared chart.
+            let extra = task
+                .containers
+                .iter()
+                .flat_map(|c| {
+                    let mut d = dims.clone();
+                    d.push(("ContainerName".to_string(), c.name.clone()));
+                    [("ContainerCpuUtilization", "CPU", "container cpu"), ("ContainerMemoryUtilization", "memory", "container memory")]
+                        .map(|(metric, what, group)| m::MetricQuery {
+                            namespace: "ECS/ContainerInsights".to_string(),
+                            metric: metric.to_string(),
+                            dimensions: d.clone(),
+                            label: format!("{} {what}", c.name),
+                            stat: m::Stat::Average,
+                            unit: m::Unit::Percent,
+                            rate: false,
+                            group: Some(group.to_string()),
+                        })
+                })
+                .collect();
+            MetricTarget {
+                hint: Some("Task metrics need Container Insights with enhanced observability on the cluster"),
+                extra,
+                ..target("ECS task", "ECS/ContainerInsights", dims, m::ECS_TASK)
+            }
+        } else if let Some(g) = is!(s::asg::AsgGroup) {
+            MetricTarget {
+                hint: Some("Enable group metrics collection on the group (Monitoring → Group metrics)"),
+                ..target("Auto Scaling group", "AWS/AutoScaling", dim("AutoScalingGroupName", &g.name), m::ASG_GROUP)
+            }
+        } else if let Some(c) = is!(s::eks::EksCluster) {
+            MetricTarget {
+                hint: Some("These come from Container Insights: enable it on the cluster"),
+                ..target("EKS cluster", "ContainerInsights", dim("ClusterName", &c.name), m::EKS_CLUSTER)
+            }
+        } else if let Some(api) = is!(s::api_gateway::RestApi) {
+            target("REST API", "AWS/ApiGateway", dim("ApiName", &api.name), m::API_REST)
+        } else if let Some(api) = is!(s::api_gateway::HttpApi) {
+            let (kind, specs) =
+                if api.protocol == "WEBSOCKET" { ("WebSocket API", m::API_WEBSOCKET) } else { ("HTTP API", m::API_HTTP) };
+            target(kind, "AWS/ApiGateway", dim("ApiId", &api.id), specs)
+        } else if let Some(lb) = is!(s::elb::LoadBalancer) {
+            let value = s::elb::lb_metric_dimension(&lb.arn)?;
+            let (kind, namespace, specs) = match lb.lb_type.as_str() {
+                "network" => ("Network LB", "AWS/NetworkELB", m::NLB),
+                "gateway" => ("Gateway LB", "AWS/GatewayELB", m::GWLB),
+                _ => ("Application LB", "AWS/ApplicationELB", m::ALB),
+            };
+            target(kind, namespace, dim("LoadBalancer", &value), specs)
+        } else if let Some(tg) = is!(s::elb::TargetGroup) {
+            let mut dims = dim("TargetGroup", &s::elb::tg_metric_dimension(&tg.arn)?);
+            if let Some(lb) = tg.load_balancer_arns.first().and_then(|a| s::elb::lb_metric_dimension(a)) {
+                dims.push(("LoadBalancer".to_string(), lb));
+            }
+            let (namespace, specs) = match tg.protocol.as_str() {
+                "HTTP" | "HTTPS" => ("AWS/ApplicationELB", m::ALB_TARGET_GROUP),
+                "GENEVE" => ("AWS/GatewayELB", m::TARGET_GROUP),
+                _ => ("AWS/NetworkELB", m::TARGET_GROUP),
+            };
+            target("Target group", namespace, dims, specs)
+        } else if let Some(d) = is!(s::opensearch::OpenSearchDomain) {
+            let dims = vec![
+                ("ClientId".to_string(), d.client_id.clone()),
+                ("DomainName".to_string(), d.domain_name.clone()),
+            ];
+            target("OpenSearch domain", "AWS/ES", dims, m::OPENSEARCH_DOMAIN)
+        } else if let Some((_, flavor, instance, task)) = self.selected_dms_metrics_target() {
+            let mut dims = dim("ReplicationInstanceIdentifier", &instance);
+            match (flavor, task) {
+                (s::dms::DmsMetricsFlavor::Task, Some(task)) => {
+                    dims.insert(0, ("ReplicationTaskIdentifier".to_string(), task));
+                    target("DMS task", "AWS/DMS", dims, m::DMS_TASK)
+                }
+                _ => target("DMS instance", "AWS/DMS", dims, m::DMS_INSTANCE),
+            }
+        } else if let Some(metric) = is!(s::cloudwatch::CwMetric) {
+            // The row *is* the metric: chart it as it was listed.
+            let query = m::MetricQuery {
+                namespace: metric.namespace.clone(),
+                metric: metric.metric_name.clone(),
+                dimensions: metric.dimensions.clone(),
+                label: metric.metric_name.clone(),
+                stat: m::Stat::Average,
+                unit: m::Unit::Raw,
+                rate: false,
+                group: None,
+            };
+            MetricTarget {
+                extra: vec![query],
+                ..target("Metric", &metric.namespace, metric.dimensions.clone(), &[])
             }
         } else {
             // Published only in us-west-2, keyed by the full ARN.
@@ -32755,20 +32386,10 @@ impl App {
         let kind = if let Some(target) = self.selected_metric_target() {
             self.open_spec_metrics(target, event_tx);
             Some(MetricsKind::Spec)
-        } else if self.is_selected_ecs_service() {
-            self.trigger_ecs_metrics_load(event_tx);
-            Some(MetricsKind::Ecs)
-        } else if self.is_selected_ecs_task() {
-            self.trigger_ecs_task_metrics_load(event_tx);
-            Some(MetricsKind::EcsTask)
         } else if self.is_selected_cw_alarm() {
             self.cw_alarm_metrics_time_range = self.default_alarm_metrics_range();
             self.trigger_cw_alarm_metrics_load(event_tx);
             Some(MetricsKind::CwAlarm)
-        } else if self.is_selected_cw_metric() {
-            self.cw_alarm_metrics_time_range = self.default_alarm_metrics_range();
-            self.trigger_cw_alarm_metrics_load(event_tx);
-            Some(MetricsKind::CwMetric)
         } else if self.is_selected_cw_dashboard() {
             self.cw_dashboard_scroll = 0;
             self.cw_dashboard_cursor = None;
@@ -32777,30 +32398,15 @@ impl App {
             self.cw_dashboard_range_from_body = true;
             self.trigger_cw_dashboard_metrics_load(event_tx);
             Some(MetricsKind::CwDashboard)
-        } else if self.is_selected_asg_group() {
-            self.trigger_asg_metrics_load(event_tx);
-            Some(MetricsKind::Asg)
         } else if self.is_selected_cost_item() {
             // Daily series is already loaded with the row — no fetch.
             Some(MetricsKind::Cost)
         } else if self.is_selected_waf_web_acl() {
             self.trigger_waf_metrics_load(event_tx);
             Some(MetricsKind::Waf)
-        } else if self.is_selected_rest_api() || self.is_selected_http_api() {
-            self.trigger_api_metrics_load(event_tx);
-            Some(MetricsKind::Api)
-        } else if self.is_selected_load_balancer() {
-            self.trigger_elb_metrics_load(event_tx);
-            Some(MetricsKind::Elb)
-        } else if self.is_selected_target_group() {
-            self.trigger_elb_metrics_load(event_tx);
-            Some(MetricsKind::ElbTarget)
         } else if self.is_selected_nfw_firewall() {
             self.trigger_nfw_metrics_load(event_tx);
             Some(MetricsKind::Nfw)
-        } else if self.is_selected_eks_cluster() {
-            self.trigger_eks_metrics_load(event_tx);
-            Some(MetricsKind::Eks)
         } else if let Some(vol) = self
             .get_selected_resource()
             .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::fsx::FsxVolume>())
@@ -32815,9 +32421,6 @@ impl App {
         } else if self.is_selected_fsx() {
             self.trigger_fsx_metrics_load(event_tx);
             Some(MetricsKind::Fsx)
-        } else if self.is_selected_opensearch() {
-            self.trigger_opensearch_metrics_load(event_tx);
-            Some(MetricsKind::OpenSearch)
         } else if self.selected_s3_metric_bucket().is_some() {
             self.trigger_s3_metrics_load(event_tx);
             Some(MetricsKind::S3)
@@ -32838,9 +32441,6 @@ impl App {
             // fetch and the pane explains instead of loading forever.
             self.trigger_vpce_metrics_load(event_tx);
             Some(MetricsKind::VpcEndpoint)
-        } else if self.selected_dms_metrics_target().is_some() {
-            self.trigger_dms_metrics_load(event_tx);
-            Some(MetricsKind::Dms)
         } else {
             None
         };
@@ -33613,30 +33213,6 @@ impl App {
         Some((t.log_group()?, t.log_stream(), t.identifier.clone()))
     }
 
-    fn trigger_dms_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        let Some((arn, flavor, instance_id, task_id)) = self.selected_dms_metrics_target() else {
-            return;
-        };
-        let time_range = self.dms_metrics_time_range;
-        self.dms_metrics
-            .insert(arn.clone(), crate::aws::services::dms::DmsMetricsState::Loading);
-        let cw = self.aws_clients.cloudwatch_client();
-        let tx = event_tx.clone();
-        tokio::spawn(async move {
-            if let Ok(data) = crate::aws::services::dms::fetch_dms_metrics(
-                cw,
-                flavor,
-                instance_id,
-                task_id,
-                time_range,
-            )
-            .await
-            {
-                let _ = tx.send(crate::event::Event::DmsMetricsLoaded { arn, data });
-            }
-        });
-    }
-
     fn selected_dms_task_arn(&self) -> Option<String> {
         self.get_selected_resource()?
             .as_any()
@@ -33733,37 +33309,6 @@ impl App {
         });
     }
 
-    fn trigger_asg_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(asg) = self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::asg::AsgGroup>())
-        {
-            let group_name = asg.name.clone();
-            let time_range = self.asg_metrics_time_range;
-            self.asg_metrics
-                .insert(group_name.clone(), AsgMetricsState::Loading);
-            let cw_client = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                match crate::aws::services::asg::fetch_asg_metrics(
-                    cw_client,
-                    group_name.clone(),
-                    time_range,
-                )
-                .await
-                {
-                    Ok(data) => {
-                        let _ = tx.send(crate::event::Event::AsgMetricsLoaded { group_name, data });
-                    }
-                    Err(e) => {
-                        let _ = tx.send(crate::event::Event::ResourceLoadError {
-                            service: crate::aws::service::ServiceType::Asg,
-                            error: format!("Failed to load ASG metrics: {}", e)});
-                    }
-                }
-            });
-        }
-    }
 }
 
 #[cfg(test)]
