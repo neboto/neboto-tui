@@ -218,6 +218,21 @@ Vpc and DxLag panes fill their Subnets/Gateways/Connections sections by
 fetches). Deliberately still flat: `ElasticIp` (the flat view is complete),
 `CognitoUser` (would need a lazy `AdminGetUser`).
 
+**Section 1 is the Overview** (label and variant `Overview`), in this order:
+the resource's own id and identity rows — always, even where the header
+repeats them, since `y` copies the cursor row and the header can't be
+copied; then a short block answering what people open the resource for (a
+security group's Exposure, a NACL's Effect, a target group's Health); then
+previews of the main tabs, capped at 8 rows with a `· N more — <digit>
+<Tab>` note. Every block that can grow carries a cap. A preview reuses its
+tab's row formatter (`sg_rule_line`) so the two can't drift, and an Overview
+that needs a lazy fetch shares the tab's on-enter hook. The one-row header
+drops what doesn't fit; the Overview is where those facts live. Name
+section 1 otherwise only when the resource *is* one document (an SCP's
+`Document`, a dashboard's `JSON`, Cost's `Breakdown`); older panes opening
+elsewhere are candidates for an Overview, not precedents. Reference:
+`sg_overview_rows` (`details_pane/ec2.rs`).
+
 **How it works (section descriptors, ADR 0002):** every split pane declares
 its sections **once** with the `sections!` macro in its service file
 (emitting the renderer's `*DetailSection` enum + a `SectionDescriptor`
@@ -879,7 +894,8 @@ and the approaches you rejected are the part nobody can recover from your code.
    the service silently never loads after a region/profile switch.
 6. Multi-resource: add a view enum + `resource_type_filter()`, a `*_tabs.rs`
    widget, a sub-tab key block, and `show_sub_tabs = true`.
-7. Split pane: declare the section table with the `sections!` macro in the
+7. Split pane: declare the section table, starting with `Overview` (see
+   "Section 1 is the Overview" above), with the `sections!` macro in the
    service file (emits the `*DetailSection` enum + a `SectionDescriptor`
    static from one list — see `src/sections.rs` and
    `docs/adr/0002-section-descriptor-table.md`), return it from

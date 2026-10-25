@@ -184,7 +184,7 @@ the service you're touching.
   SNS) still have no reverse lookup — API Gateway has no "find routes by
   backend ARN" API, so that direction would need the same account-wide scan
   this rejects for EventBridge; the empty-state hint says so.
-  **Config section — Concurrency + Async Invocation.** The dead-letter queue
+  **Overview section — Concurrency + Async Invocation.** The dead-letter queue
   arrives on `ListFunctions` (`FunctionConfiguration::dead_letter_config`), so
   it is an eager field and renders even while the rest is loading. Everything
   else is one lazy fetch (`fetch_lambda_concurrency`,
@@ -813,7 +813,7 @@ the service you're touching.
   instances+clusters core.
   Snapshots unify `DescribeDBSnapshots` + `DescribeDBClusterSnapshots`
   (self-owned) into one `RdsSnapshot` (**automated/awsbackup snapshots are
-  `is_noise()`** so `a` hides the daily churn). The instance pane is Config /
+  `is_noise()`** so `a` hides the daily churn). The instance pane is Overview /
   Storage / Network / **Perf Insights** (key 4, lazy `pi:GetResourceMetrics` —
   `db.load.avg` grouped by `db.wait_event`, only when PI is enabled; uses
   `dbi_resource_id`, not the DB id; PI has its own regional client
@@ -828,8 +828,8 @@ the service you're touching.
   newest-first capped `MAX_RDS_LOG_FILES=100`; **`e` on a "Log File" row**
   downloads its tail via `DownloadDBLogFilePortion` into `$EDITOR` — distinct
   from `t`, which tails the *CloudWatch export* when enabled) / Tags. The
-  cluster pane mirrors it (Config / Endpoints / Members / Backups /
-  Maintenance / Events / Tags): Config adds serverless-v2 ACU range, storage
+  cluster pane mirrors it (Overview / Endpoints / Members / Backups /
+  Maintenance / Events / Tags): Overview adds serverless-v2 ACU range, storage
   and replication; Members shows writer/reader roles (writer first). A
   non-empty pending-modifications list puts a ⚠ count in both headers.
   **Param Groups** unify instance + cluster groups (like snapshots;
@@ -859,7 +859,7 @@ the service you're touching.
 - **RDS blue/green** (#106) — not a sub-tab: one `DescribeBlueGreenDeployments`
   runs **before** the instance pages (so each streamed batch already carries
   it), keyed by both the source and the target ARN, and lands as a
-  "Blue/Green Deployment" group on the instance or cluster Config section:
+  "Blue/Green Deployment" group on the instance or cluster Overview section:
   which side this is, status, and the other side's ARN (jumpable via the
   `rds` ARN classifier). A failure warns and the rows carry nothing. A
   deployment whose green side has been deleted after switchover keeps only

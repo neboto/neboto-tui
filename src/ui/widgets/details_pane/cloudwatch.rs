@@ -84,7 +84,7 @@ pub fn cw_alarm_section_lines(
     history_state: Option<&crate::lazy::Lazy<Vec<crate::aws::services::cloudwatch::CwAlarmHistoryItem>>>,
 ) -> Vec<(String, String)> {
     match section {
-        CwAlarmDetailSection::Config => cw_config_lines(alarm),
+        CwAlarmDetailSection::Overview => cw_config_lines(alarm),
         CwAlarmDetailSection::Actions => cw_actions_lines(alarm),
         CwAlarmDetailSection::History => cw_history_lines(history_state),
     }
