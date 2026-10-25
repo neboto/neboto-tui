@@ -221,6 +221,10 @@ impl R53HostedZone {
 crate::sections! {
     pub enum R53ZoneDetailSection,
     pub static R53_ZONE_SECTIONS = [
+        // The detail bundle (name servers, DNSSEC, query logging, VPCs,
+        // record limit) plus a records preview — the Records fetch is
+        // skipped for zones too big to page on a drill-in.
+        Overview "Overview" => crate::app::App::trigger_r53_zone_overview_load,
         Records "Records" => crate::app::App::trigger_r53_records_load,
         Sharing "Sharing" => crate::app::App::trigger_r53_zone_detail_load,
         Info "Info" => crate::app::App::trigger_r53_zone_detail_load,

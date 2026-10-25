@@ -1399,7 +1399,7 @@ const DETAIL_PAGE_STEP: usize = 10;
 const MAX_TIMELINE_ALARMS: usize = 5;
 /// Route 53 Records sub-tab budgets (see `trigger_r53_all_records_load`):
 /// zones with more records than this are skipped by the cross-zone list…
-const MAX_R53_TAB_ZONE_RECORDS: i64 = 3_000;
+pub(crate) const MAX_R53_TAB_ZONE_RECORDS: i64 = 3_000;
 /// …and so are zones beyond this many per trigger.
 const MAX_R53_TAB_ZONES: usize = 100;
 
@@ -12392,13 +12392,29 @@ impl App {
         self.update_search();
     }
 
+    /// The zone Overview's hook: the detail bundle its summary reads, plus
+    /// the records its preview shows — except for a zone over
+    /// `MAX_R53_TAB_ZONE_RECORDS` (the count is free, from `ListHostedZones`),
+    /// whose paging at Route 53's 5 req/s waits for the Records tab.
+    pub(crate) fn trigger_r53_zone_overview_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        self.trigger_r53_zone_detail_load(event_tx);
+        let small = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::route53::R53HostedZone>())
+            .is_some_and(|z| z.record_count <= MAX_R53_TAB_ZONE_RECORDS);
+        if small {
+            self.trigger_r53_records_load(event_tx);
+        }
+    }
+
     /// Lazy-load a hosted zone's VPC associations + pending authorizations +
-    /// tags on first view of the Sharing or Tags section, keyed by zone id.
+    /// tags on first view of the Overview, Sharing, Info or Tags section,
+    /// keyed by zone id.
     pub(crate) fn trigger_r53_zone_detail_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         use crate::aws::services::route53::R53ZoneDetailSection::*;
         if !matches!(
             crate::aws::services::route53::R53ZoneDetailSection::from_index(self.detail_section_idx),
-            Sharing | Info | Tags
+            Overview | Sharing | Info | Tags
         ) {
             return;
         }
@@ -23810,6 +23826,17 @@ impl App {
                     }),
                 }
             }
+            // The zone Overview's query-log group, when it's in this region
+            // (the row then holds the bare group name; Info's row and an
+            // other-region group carry more text and don't match).
+            "Query Logging" => {
+                let (group, region) = self.r53_zone_query_log()?;
+                (group == value && region == self.current_region.as_str()).then_some(JumpTarget {
+                    service: ServiceType::CloudWatch,
+                    view: JumpView::Cw(CwView::LogGroups),
+                    id: group,
+                })
+            }
             // A zone pane's Records section row (`  TYPE relname`): open the
             // record's own pane on the Records tab, where every value sits on
             // its own untruncated line. Resolved against the zone's loaded
@@ -23907,7 +23934,9 @@ impl App {
 
     /// A row naming the resource on screen (a pane's own `Group ID` /
     /// `Volume ID` row): `⏎` would only re-land on it, so the generic id
-    /// classifier offers no jump there.
+    /// classifier offers no jump there. Callers test both the target's id
+    /// and the row's value: an ARN classifier reduces a target group's own
+    /// ARN to its name, which no longer equals the resource's id.
     pub(crate) fn names_selected_resource(&self, id: &str) -> bool {
         self.get_selected_resource().is_some_and(|r| r.id() == id)
     }
@@ -23970,7 +23999,7 @@ impl App {
                     .or_else(|| self.appsync_row_jump_target(k, v))
                     .or_else(|| {
                         crate::ui::widgets::details_pane::resource_jump_target(k, v, current)
-                            .filter(|t| !self.names_selected_resource(&t.id))
+                            .filter(|t| !self.names_selected_resource(&t.id) && !self.names_selected_resource(v.trim()))
                     })
             });
         let target = match target {
@@ -27017,6 +27046,7 @@ impl App {
                     crate::aws::services::route53::R53ZoneDetailSection::from_index(self.detail_section_idx),
                     records_state,
                     sharing_state,
+                    self.current_region.as_str(),
                 );
             }
             if let Some(hc) = resource
@@ -28655,10 +28685,22 @@ impl App {
                 .as_any()
                 .downcast_ref::<crate::aws::services::transit_gateway::TgwRouteTable>()
             {
+                // The Overview counts the attachments associated with this
+                // table from the already-loaded list — no extra fetch.
+                let associated: Vec<&crate::aws::services::transit_gateway::TgwAttachment> = self
+                    .resources
+                    .iter()
+                    .filter_map(|r| {
+                        r.as_any()
+                            .downcast_ref::<crate::aws::services::transit_gateway::TgwAttachment>()
+                    })
+                    .filter(|a| a.association_route_table_id.as_deref() == Some(rt.id.as_str()))
+                    .collect();
                 return crate::ui::widgets::details_pane::tgw_route_table_section_lines(
                     rt,
                     crate::aws::services::transit_gateway::TgwRouteTableDetailSection::from_index(self.detail_section_idx),
                     self.lazy.tgw_routes.get(&rt.id),
+                    &associated,
                 );
             }
             if let Some(ep) = resource

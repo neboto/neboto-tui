@@ -45,6 +45,12 @@ async fn app_with_records(
     }
     // Fires the Records trigger (a dead-endpoint fetch we never await) …
     app.reset_detail_section_to_default(&tx);
+    let records_idx = crate::aws::services::route53::R53_ZONE_SECTIONS
+        .sections
+        .iter()
+        .position(|s| s.label == "Records")
+        .unwrap();
+    app.set_detail_section(records_idx, &tx);
     // … and delivers the rows the way the apply-closure would.
     app.lazy.r53_zone_records.apply(
         ZONE_ID.to_string(),

@@ -448,6 +448,8 @@ impl TargetGroup {
 crate::sections! {
     pub enum TargetGroupDetailSection,
     pub static TARGET_GROUP_SECTIONS = [
+        // Overview's health summary reads the same lazy fetch as Health.
+        Overview "Overview" => crate::app::App::trigger_target_health_load,
         Health "Health" => crate::app::App::trigger_target_health_load,
         Config "Config",
         Attributes "Attributes" => crate::app::App::trigger_target_group_attributes_load,

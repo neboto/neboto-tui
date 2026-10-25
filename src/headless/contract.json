@@ -1037,6 +1037,7 @@
       "Tags"
     ],
     "NetworkAcl": [
+      "Overview",
       "Inbound",
       "Outbound",
       "Associations",
@@ -1115,6 +1116,7 @@
       "Tags"
     ],
     "R53 Hosted Zone": [
+      "Overview",
       "Records",
       "Sharing",
       "Info",
@@ -1213,6 +1215,7 @@
       "Tags"
     ],
     "RouteTable": [
+      "Overview",
       "Routes",
       "Associations",
       "Tags"
@@ -1428,10 +1431,12 @@
       "Tags"
     ],
     "TGW Route Table": [
+      "Overview",
       "Routes",
       "Tags"
     ],
     "Target Group": [
+      "Overview",
       "Health",
       "Config",
       "Attributes",

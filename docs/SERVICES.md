@@ -939,7 +939,16 @@ the service you're touching.
   namespace (dim `HealthCheckId`) queried in us-east-1 like CloudFront.
   Disabled checks show a dimmed state; calculated/alarm checks report no
   per-region status. `R53HostedZone` split pane:
-  Records / **Sharing** / **Info** / Tags. Sharing, Info and Tags share one
+  **Overview** / Records / **Sharing** / **Info** / Tags. Overview is the
+  zone's id/name/type/comment, a summary off the detail bundle (records vs.
+  the limit, DNSSEC, query logging, name servers or VPC associations, `⚠`
+  rows only for DNSSEC needing action or ≥90% of the record limit), then
+  the first 8 records in the Records tab's row format. Its hook fetches the
+  bundle and the records — except for a zone over
+  `MAX_R53_TAB_ZONE_RECORDS`, whose paging (5 req/s) waits for the Records
+  tab. The query-log group row is `⏎`-jumpable only when the group's region
+  (us-east-1 in practice) is the current one: a jump can't switch region.
+  Overview, Sharing, Info and Tags share one
   lazy bundle (`fetch_zone_detail`, `lazy.r53_zone_detail` keyed by zone id
   — the same bundling Resolver endpoints/rules use): `GetHostedZone` for
   **every** zone now (name servers off the delegation set; VPC associations
