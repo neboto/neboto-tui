@@ -309,7 +309,7 @@ impl TransitGateway {
 crate::sections! {
     pub enum TgwDetailSection,
     pub static TGW_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Attachments "Attachments",
         RouteTables "Route Tables",
         Tags "Tags",
@@ -546,6 +546,7 @@ impl TgwRouteTable {
 crate::sections! {
     pub enum TgwRouteTableDetailSection,
     pub static TGW_ROUTE_TABLE_SECTIONS = [
+        Overview "Overview" => crate::app::App::trigger_tgw_routes_load,
         Routes "Routes" => crate::app::App::trigger_tgw_routes_load,
         Tags "Tags",
     ]

@@ -70,7 +70,7 @@ pub fn eks_cluster_section_lines(
     insights: Option<&Lazy<Vec<crate::aws::services::eks::EksInsight>>>,
 ) -> Vec<(String, String)> {
     match section {
-        EksClusterDetailSection::Details => {
+        EksClusterDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), cluster.name.clone()),
                 ("Status".to_string(), cluster.status.clone()),

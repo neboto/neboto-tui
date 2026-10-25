@@ -547,7 +547,7 @@ impl CodeCommitRepo {
 crate::sections! {
     pub enum CodeCommitRepoDetailSection,
     pub static CODE_COMMIT_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_cc_extras_load,
+        Overview "Overview" => crate::app::App::trigger_cc_extras_load,
         Branches "Branches" => crate::app::App::trigger_cc_branches_load,
         Commits "Commits" => crate::app::App::trigger_cc_commits_load,
         // Open PRs are sibling rows (zero fetch); the hook lazily fetches
@@ -798,7 +798,7 @@ impl CodeBuildProject {
 crate::sections! {
     pub enum CodeBuildDetailSection,
     pub static CODE_BUILD_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Buildspec "Buildspec" => crate::app::App::trigger_code_build_buildspec_load,
         Builds "Builds" => crate::app::App::trigger_code_build_builds_load,
         Environment "Environment",

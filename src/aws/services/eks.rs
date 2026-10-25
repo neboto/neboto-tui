@@ -285,7 +285,7 @@ impl EksCluster {
 crate::sections! {
     pub enum EksClusterDetailSection,
     pub static EKS_CLUSTER_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Networking "Networking",
         Compute "Compute" => crate::app::App::trigger_eks_nodegroups_load,
         Fargate "Fargate" => crate::app::App::trigger_eks_fargate_load,

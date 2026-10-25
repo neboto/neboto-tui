@@ -206,7 +206,7 @@ impl KmsKey {
 crate::sections! {
     pub enum KmsKeyDetailSection,
     pub static KMS_KEY_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_kms_rotation_load,
+        Overview "Overview" => crate::app::App::trigger_kms_rotation_load,
         Policy "Policy" => crate::app::App::trigger_kms_policy_load,
         Grants "Grants" => crate::app::App::trigger_kms_grants_load,
         Tags "Tags" => crate::app::App::trigger_kms_tags_load,

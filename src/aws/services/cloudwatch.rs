@@ -2054,7 +2054,7 @@ impl CwLogGroup {
 crate::sections! {
     pub enum CwLogGroupDetailSection,
     pub static CW_LOG_GROUP_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Streams "Streams" => crate::app::App::trigger_cw_log_streams_load,
         Filters "Filters" => crate::app::App::trigger_cw_log_group_filters_load,
     ]
@@ -2811,7 +2811,7 @@ impl CwMetricStream {
 crate::sections! {
     pub enum CwMetricStreamDetailSection,
     pub static CW_METRIC_STREAM_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Filters "Filters" => crate::app::App::trigger_cw_metric_stream_load,
     ]
 }
@@ -3184,7 +3184,7 @@ impl CwInsightRule {
 crate::sections! {
     pub enum CwInsightRuleDetailSection,
     pub static CW_INSIGHT_RULE_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Definition "Definition",
     ]
 }
@@ -3331,7 +3331,7 @@ impl CwAccountPolicy {
 crate::sections! {
     pub enum CwAccountPolicyDetailSection,
     pub static CW_ACCOUNT_POLICY_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Document "Document",
     ]
 }

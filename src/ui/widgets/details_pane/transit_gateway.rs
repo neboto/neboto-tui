@@ -1,4 +1,5 @@
 use super::*;
+use crate::aws::services::transit_gateway::TgwRoute;
 
 // ── Transit Gateway split panes ────────────────────────────────────────────────
 
@@ -72,7 +73,7 @@ pub(super) fn render_tgw_route_table_split(
     frame: &mut Frame,
 ) {
     let focused = app.details_focused;
-    let footer = detail_footer(app, focused, 2, "");
+    let footer = detail_footer(app, focused, 3, "");
     let mut block = theme::pane_block("TGW Route Table", focused);
     block = block.title_bottom(
         Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
@@ -124,7 +125,7 @@ pub fn tgw_section_lines(
     route_tables: &[(String, String)],                 // id, state
 ) -> Vec<(String, String)> {
     match section {
-        TgwDetailSection::Details => {
+        TgwDetailSection::Overview => {
             let mut rows = vec![
                 ("ID".to_string(), tgw.id.clone()),
                 ("ARN".to_string(), tgw.arn.clone()),
@@ -201,13 +202,136 @@ pub fn tgw_section_lines(
     }
 }
 
+/// Routes, and blackhole routes, the Overview lists before pointing at
+/// the Routes tab that has them all.
+const TGW_RT_OVERVIEW_ROUTES: usize = 8;
+const TGW_RT_OVERVIEW_BLACKHOLES: usize = 3;
+
+fn tgw_routes_table_header() -> (String, String) {
+    (format!("  {:<20}  {:<11}  {:<11}  {}", "CIDR", "State", "Type", "Target"), String::new())
+}
+
+/// Where a route sends traffic: the attached resource when there is one,
+/// else the attachment (a blackhole route has neither).
+fn tgw_route_target(r: &TgwRoute) -> String {
+    if !r.resource_id.is_empty() {
+        format!("{} ({})", r.resource_id, r.resource_type)
+    } else if !r.attachment_id.is_empty() {
+        r.attachment_id.clone()
+    } else {
+        "—".to_string()
+    }
+}
+
+/// One route as a fixed-width table line (a plain content line), shared by
+/// the Routes tab and the Overview so the two can't drift.
+fn tgw_route_line(r: &TgwRoute) -> (String, String) {
+    (
+        format!("  {:<20}  {:<11}  {:<11}  {}", r.cidr, r.state, r.route_type, tgw_route_target(r)),
+        String::new(),
+    )
+}
+
+fn tgw_route_table_overview_rows(
+    rt: &TgwRouteTable,
+    routes: Option<&crate::lazy::Lazy<Vec<TgwRoute>>>,
+    associated: &[&crate::aws::services::transit_gateway::TgwAttachment],
+) -> Vec<(String, String)> {
+    let or_dash = |s: &str| if s.is_empty() { "—".to_string() } else { s.to_string() };
+    // The header repeats the id and gateway, but only a body row can be
+    // copied with `y` from here. tgw- values are Enter-jumpable.
+    let mut rows = vec![("Route Table ID".to_string(), rt.id.clone())];
+    if let Some(name) = rt.tags.get("Name").filter(|n| !n.is_empty()) {
+        rows.push(("Name".to_string(), name.clone()));
+    }
+    rows.push(("Transit Gateway".to_string(), or_dash(&rt.tgw_id)));
+    rows.push(("State".to_string(), or_dash(&rt.state)));
+    if let Some(ct) = &rt.creation_time {
+        rows.push(("Created".to_string(), ct.clone()));
+    }
+
+    rows.push((String::new(), String::new()));
+    rows.push(("Routing".to_string(), String::new()));
+    let yes_no = |on: bool, yes: &str| if on { format!("✓ yes — {yes}") } else { "no".to_string() };
+    rows.push(("Default Association".to_string(), yes_no(rt.default_association, "new attachments associate here")));
+    rows.push(("Default Propagation".to_string(), yes_no(rt.default_propagation, "new attachments propagate here")));
+    rows.push((
+        "Associations".to_string(),
+        if associated.is_empty() {
+            "none — no attachment routes by this table".to_string()
+        } else {
+            let mut kinds: Vec<(String, usize)> = Vec::new();
+            for a in associated {
+                let k = if a.resource_kind.is_empty() { "other" } else { a.resource_kind.as_str() };
+                match kinds.iter_mut().find(|(kind, _)| kind == k) {
+                    Some((_, n)) => *n += 1,
+                    None => kinds.push((k.to_string(), 1)),
+                }
+            }
+            let kinds: Vec<String> = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect();
+            let plural = if associated.len() == 1 { "" } else { "s" };
+            format!("{} attachment{plural} ({})", associated.len(), kinds.join(" · "))
+        },
+    ));
+
+    let routes = match routes {
+        None | Some(crate::lazy::Lazy::Loading) => {
+            rows.push(("Routes".to_string(), "Loading…".to_string()));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Error(e)) => {
+            rows.extend(error_rows(e));
+            return rows;
+        }
+        Some(crate::lazy::Lazy::Loaded(routes)) => routes,
+    };
+    let statics = routes.iter().filter(|r| r.route_type == "static").count();
+    rows.push((
+        "Routes".to_string(),
+        format!("{} ({statics} static · {} propagated)", routes.len(), routes.len() - statics),
+    ));
+    rows.push((
+        "Default Route".to_string(),
+        match routes.iter().find(|r| r.cidr == "0.0.0.0/0") {
+            Some(r) if r.state == "blackhole" => "0.0.0.0/0 → blackhole".to_string(),
+            Some(r) => format!("0.0.0.0/0 → {}", tgw_route_target(r)),
+            None => "none — traffic matching no route is dropped".to_string(),
+        },
+    ));
+    let blackholes: Vec<&TgwRoute> = routes.iter().filter(|r| r.state == "blackhole").collect();
+    for r in blackholes.iter().take(TGW_RT_OVERVIEW_BLACKHOLES) {
+        rows.push((format!("  ⚠ {} is a blackhole — traffic to it is dropped", r.cidr), String::new()));
+    }
+    if blackholes.len() > TGW_RT_OVERVIEW_BLACKHOLES {
+        rows.push((
+            String::new(),
+            format!("· {} more blackhole routes — 2 Routes", blackholes.len() - TGW_RT_OVERVIEW_BLACKHOLES),
+        ));
+    }
+
+    rows.push((String::new(), String::new()));
+    rows.push((format!("Routes ({})", routes.len()), String::new()));
+    if routes.is_empty() {
+        rows.push((String::new(), "No routes".to_string()));
+        return rows;
+    }
+    rows.push(tgw_routes_table_header());
+    rows.extend(routes.iter().take(TGW_RT_OVERVIEW_ROUTES).map(tgw_route_line));
+    if routes.len() > TGW_RT_OVERVIEW_ROUTES {
+        rows.push((String::new(), format!("· {} more — 2 Routes", routes.len() - TGW_RT_OVERVIEW_ROUTES)));
+    }
+    rows
+}
+
 /// Body lines for a TGW route table. Routes are lazy (SearchTransitGatewayRoutes).
 pub fn tgw_route_table_section_lines(
     rt: &TgwRouteTable,
     section: TgwRouteTableDetailSection,
-    routes: Option<&crate::lazy::Lazy<Vec<crate::aws::services::transit_gateway::TgwRoute>>>,
+    routes: Option<&crate::lazy::Lazy<Vec<TgwRoute>>>,
+    associated: &[&crate::aws::services::transit_gateway::TgwAttachment],
 ) -> Vec<(String, String)> {
     match section {
+        TgwRouteTableDetailSection::Overview => tgw_route_table_overview_rows(rt, routes, associated),
         TgwRouteTableDetailSection::Routes => match routes {
             None | Some(crate::lazy::Lazy::Loading) => {
                 vec![("".to_string(), "Loading routes…".to_string())]
@@ -215,28 +339,11 @@ pub fn tgw_route_table_section_lines(
             Some(crate::lazy::Lazy::Error(e)) => error_rows(e),
             Some(crate::lazy::Lazy::Loaded(routes)) => {
                 let mut rows = vec![(format!("Routes ({})", routes.len()), String::new())];
-                rows.push((String::new(), String::new()));
                 if routes.is_empty() {
-                    rows.push(("  No active routes".to_string(), String::new()));
+                    rows.push((String::new(), "No routes".to_string()));
                 } else {
-                    rows.push((
-                        format!("  {:<20}  {:<11}  {:<11}  {}", "CIDR", "State", "Type", "Target"),
-                        String::new(),
-                    ));
-                    for r in routes {
-                        let target = if r.resource_id.is_empty() {
-                            r.attachment_id.clone()
-                        } else {
-                            format!("{} ({})", r.resource_id, r.resource_type)
-                        };
-                        rows.push((
-                            format!(
-                                "  {:<20}  {:<11}  {:<11}  {}",
-                                r.cidr, r.state, r.route_type, target
-                            ),
-                            String::new(),
-                        ));
-                    }
+                    rows.push(tgw_routes_table_header());
+                    rows.extend(routes.iter().map(tgw_route_line));
                 }
                 rows
             }

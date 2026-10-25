@@ -273,7 +273,7 @@ pub struct ConfigRule {
 crate::sections! {
     pub enum ConfigRuleDetailSection,
     pub static CONFIG_RULE_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         NonCompliant "Non-Compliant" => crate::app::App::trigger_config_eval_load,
         Parameters "Parameters",
     ]

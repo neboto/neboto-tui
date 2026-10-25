@@ -345,7 +345,7 @@ impl DdbTable {
 crate::sections! {
     pub enum DdbTableDetailSection,
     pub static DDB_TABLE_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_ddb_ttl_load,
+        Overview "Overview" => crate::app::App::trigger_ddb_ttl_load,
         Indexes "Indexes",
         Capacity "Capacity",
         Tags "Tags" => crate::app::App::trigger_ddb_tags_load,

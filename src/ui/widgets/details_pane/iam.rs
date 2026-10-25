@@ -77,7 +77,7 @@ pub fn access_analyzer_section_lines(
     section: AccessAnalyzerDetailSection,
 ) -> Vec<(String, String)> {
     match section {
-        AccessAnalyzerDetailSection::Details => {
+        AccessAnalyzerDetailSection::Overview => {
             let mut rows: Vec<(String, String)> = Vec::new();
             rows.push(("Finding".to_string(), "".to_string()));
             rows.push(("".to_string(), "".to_string()));

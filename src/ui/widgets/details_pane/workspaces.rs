@@ -101,7 +101,7 @@ pub fn workspace_section_lines(
     tags: Option<&Lazy<std::collections::HashMap<String, String>>>,
 ) -> Vec<(String, String)> {
     match section {
-        WorkspaceDetailSection::Details => workspace_details_lines(ws),
+        WorkspaceDetailSection::Overview => workspace_details_lines(ws),
         WorkspaceDetailSection::Connection => workspace_connection_lines(connection),
         WorkspaceDetailSection::Tags => workspace_tags_lines(tags),
     }

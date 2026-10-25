@@ -78,7 +78,7 @@ pub fn config_rule_section_lines(
     eval_state: Option<&crate::lazy::Lazy<Vec<crate::aws::services::awsconfig::ConfigEvalResult>>>,
 ) -> Vec<(String, String)> {
     match section {
-        ConfigRuleDetailSection::Details => config_rule_details_lines(rule),
+        ConfigRuleDetailSection::Overview => config_rule_details_lines(rule),
         ConfigRuleDetailSection::NonCompliant => config_rule_noncompliant_lines(eval_state),
         ConfigRuleDetailSection::Parameters => config_rule_parameters_lines(rule),
     }

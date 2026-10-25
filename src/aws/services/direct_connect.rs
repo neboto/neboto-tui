@@ -271,7 +271,7 @@ impl DxConnection {
 crate::sections! {
     pub enum DxConnectionDetailSection,
     pub static DX_CONNECTION_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         VirtualInterfaces "Virtual Interfaces",
         Tags "Tags",
     ]
@@ -460,7 +460,7 @@ impl DxVirtualInterface {
 crate::sections! {
     pub enum DxVifDetailSection,
     pub static DX_VIF_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Bgp "BGP",
         Tags "Tags",
     ]

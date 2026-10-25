@@ -8,7 +8,7 @@ pub fn health_section_lines(
     details_state: Option<&crate::lazy::Lazy<crate::aws::services::health::HealthEventDetails>>,
 ) -> Vec<(String, String)> {
     match section {
-        HealthEventDetailSection::Details => vec![
+        HealthEventDetailSection::Overview => vec![
             ("Service".to_string(), evt.service.clone()),
             ("Event Type".to_string(), evt.event_type_code.clone()),
             ("Category".to_string(), evt.category.clone()),

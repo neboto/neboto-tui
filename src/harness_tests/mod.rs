@@ -42,11 +42,14 @@ mod xray_test;
 mod cost_anomalies_test;
 mod cost_tag_grouping_test;
 mod r53_records_test;
+mod r53_zone_overview_test;
 mod r53_zone_tags_test;
 mod detail_wrap_test;
 mod detail_pane_polish_test;
 mod tags_error_test;
+mod target_group_overview_test;
 mod r53_test_answer_test;
+mod route_table_overview_test;
 mod state_filter_test;
 mod subtab_keys_test;
 mod all_search_nav_test;
@@ -59,6 +62,7 @@ mod mouse_first_run_test;
 mod mouse_modals_test;
 mod mouse_misc_test;
 mod mouse_pane_views_test;
+mod tgw_route_table_overview_test;
 mod timeline_test;
 mod list_ux_test;
 mod region_fanout_test;
@@ -1132,7 +1136,7 @@ async fn cc_repo_pr_row_enter_jumps_to_the_pr() {
     // classifier rejects them — closed PRs have no row on the sub-tab.
     assert!(app.cc_repo_pr_row_jump_target("  #42 (MERGED)", "x").is_none());
     // Outside the Pull Requests section the same shape doesn't fire.
-    app.detail_section_idx = code::CodeCommitRepoDetailSection::Details as usize;
+    app.detail_section_idx = code::CodeCommitRepoDetailSection::Overview as usize;
     assert!(app.cc_repo_pr_row_jump_target("  #42", "x").is_none());
 }
 

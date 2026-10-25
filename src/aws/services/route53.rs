@@ -221,6 +221,10 @@ impl R53HostedZone {
 crate::sections! {
     pub enum R53ZoneDetailSection,
     pub static R53_ZONE_SECTIONS = [
+        // The detail bundle (name servers, DNSSEC, query logging, VPCs,
+        // record limit) plus a records preview — the Records fetch is
+        // skipped for zones too big to page on a drill-in.
+        Overview "Overview" => crate::app::App::trigger_r53_zone_overview_load,
         Records "Records" => crate::app::App::trigger_r53_records_load,
         Sharing "Sharing" => crate::app::App::trigger_r53_zone_detail_load,
         Info "Info" => crate::app::App::trigger_r53_zone_detail_load,
@@ -794,9 +798,7 @@ pub enum DnsTarget {
 crate::sections! {
     pub enum R53RecordDetailSection,
     pub static R53_RECORD_SECTIONS = [
-        // "Details", not "Overview": it's what the flat pane's one section
-        // was called, and `neboto get` scripts key on section names.
-        Details "Details",
+        Overview "Overview",
         // No on-enter hook: `x` runs the test, so a Tab press or the flat
         // view's trigger sweep never fires one (the AgentCore Agent Card
         // precedent), and each `x` is a fresh sample of a weighted set.

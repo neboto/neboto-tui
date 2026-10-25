@@ -584,7 +584,7 @@ pub fn cw_log_group_section_lines(
             }
             Some(crate::lazy::Lazy::Error(e)) => error_rows(e),
         },
-        CwLogGroupDetailSection::Details => {
+        CwLogGroupDetailSection::Overview => {
             let mut rows: Vec<(String, String)> = Vec::new();
             rows.push(("Log Group".to_string(), "".to_string()));
             rows.push(("".to_string(), "".to_string()));
@@ -860,7 +860,7 @@ pub fn cw_metric_stream_section_lines(
 ) -> Vec<(String, String)> {
     use crate::aws::services::cloudwatch::CwMetricStreamDetailSection as S;
     match section {
-        S::Details => {
+        S::Overview => {
             let mut rows: Vec<(String, String)> = vec![
                 ("Stream".to_string(), "".to_string()),
                 ("".to_string(), "".to_string()),
@@ -975,7 +975,7 @@ pub fn cw_insight_rule_section_lines(
 ) -> Vec<(String, String)> {
     use crate::aws::services::cloudwatch::CwInsightRuleDetailSection as S;
     match section {
-        S::Details => {
+        S::Overview => {
             let mut rows: Vec<(String, String)> = Vec::new();
             rows.push(("Rule".to_string(), "".to_string()));
             rows.push(("".to_string(), "".to_string()));
@@ -1024,7 +1024,7 @@ pub fn cw_account_policy_section_lines(
 ) -> Vec<(String, String)> {
     use crate::aws::services::cloudwatch::CwAccountPolicyDetailSection as S;
     match section {
-        S::Details => {
+        S::Overview => {
             let mut rows: Vec<(String, String)> = vec![
                 ("Policy".to_string(), "".to_string()),
                 ("".to_string(), "".to_string()),

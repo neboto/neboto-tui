@@ -46,7 +46,7 @@ pub fn s3files_fs_section_lines(
 ) -> Vec<(String, String)> {
     use crate::aws::services::s3files::S3FsDetailSection as S;
     match section {
-        S::Details => {
+        S::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), fs.name.clone()),
                 ("ID".to_string(), fs.id.clone()),

@@ -831,7 +831,7 @@ pub fn decompose_finding_type(t: &str) -> Vec<(String, String)> {
 crate::sections! {
     pub enum GdFindingDetailSection,
     pub static GD_FINDING_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Resource "Resource",
         Actor "Actor",
         Sequence "Sequence",

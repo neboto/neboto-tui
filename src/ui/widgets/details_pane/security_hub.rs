@@ -560,7 +560,7 @@ pub fn sh_finding_section_lines(
     history: Option<&Lazy<Vec<crate::aws::services::security_hub::ShHistoryRecord>>>,
 ) -> Vec<(String, String)> {
     match section {
-        ShFindingDetailSection::Details => sh_finding_details_lines(finding),
+        ShFindingDetailSection::Overview => sh_finding_details_lines(finding),
         ShFindingDetailSection::Resources => sh_finding_resources_lines(finding),
         ShFindingDetailSection::Compliance => sh_finding_compliance_lines(finding),
         ShFindingDetailSection::Vulnerabilities => {

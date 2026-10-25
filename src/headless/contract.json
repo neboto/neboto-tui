@@ -239,19 +239,19 @@
   ],
   "sections": {
     "ACM Certificate": [
-      "Details",
+      "Overview",
       "Domains",
       "Validation",
       "Tags"
     ],
     "AMI": [
-      "Details",
+      "Overview",
       "Block Devices",
       "Permissions",
       "Tags"
     ],
     "API Custom Domain": [
-      "Details",
+      "Overview",
       "Mappings",
       "Tags"
     ],
@@ -261,7 +261,7 @@
       "Keys"
     ],
     "Access Analyzer Finding": [
-      "Details",
+      "Overview",
       "Access"
     ],
     "AgentCore API Key Provider": [
@@ -421,7 +421,7 @@
       "Tags"
     ],
     "Backup Vault": [
-      "Details",
+      "Overview",
       "Recovery Points",
       "Tags"
     ],
@@ -481,7 +481,7 @@
       "Template"
     ],
     "CFN Export": [
-      "Details",
+      "Overview",
       "Imports"
     ],
     "CFN Stack": [
@@ -503,7 +503,7 @@
       "Tags"
     ],
     "CW Account Policy": [
-      "Details",
+      "Overview",
       "Document"
     ],
     "CW Alarm": [
@@ -518,23 +518,23 @@
       "JSON"
     ],
     "CW Insight Rule": [
-      "Details",
+      "Overview",
       "Definition"
     ],
     "CW Log Group": [
-      "Details",
+      "Overview",
       "Streams",
       "Filters"
     ],
     "CW Metric Stream": [
-      "Details",
+      "Overview",
       "Filters"
     ],
     "Catalog Control": [
       "Details"
     ],
     "CloudFront Distribution": [
-      "Details",
+      "Overview",
       "Origins",
       "Behaviors",
       "Errors",
@@ -564,14 +564,14 @@
       "Packages"
     ],
     "CodeBuild Project": [
-      "Details",
+      "Overview",
       "Buildspec",
       "Builds",
       "Environment",
       "Tags"
     ],
     "CodeCommit Repository": [
-      "Details",
+      "Overview",
       "Branches",
       "Commits",
       "Pull Requests",
@@ -589,7 +589,7 @@
       "Tags"
     ],
     "Cognito User Pool": [
-      "Details",
+      "Overview",
       "App Clients",
       "Policies",
       "Tags",
@@ -600,7 +600,7 @@
       "Resources"
     ],
     "Config Rule": [
-      "Details",
+      "Overview",
       "Non-Compliant",
       "Parameters"
     ],
@@ -649,7 +649,7 @@
       "Tags"
     ],
     "DX Connection": [
-      "Details",
+      "Overview",
       "Virtual Interfaces",
       "Tags"
     ],
@@ -664,29 +664,29 @@
       "Tags"
     ],
     "DX Virtual Interface": [
-      "Details",
+      "Overview",
       "BGP",
       "Tags"
     ],
     "DynamoDB Table": [
-      "Details",
+      "Overview",
       "Indexes",
       "Capacity",
       "Tags"
     ],
     "EBS Snapshot": [
-      "Details",
+      "Overview",
       "Tags"
     ],
     "EBS Volume": [
-      "Details",
+      "Overview",
       "Attachments",
       "Snapshots",
       "Tags",
       "Optimizer"
     ],
     "EC2 Instance": [
-      "Details",
+      "Overview",
       "Security",
       "Networking",
       "Load Balancing",
@@ -702,7 +702,7 @@
       "Used By"
     ],
     "ECR Repository": [
-      "Details",
+      "Overview",
       "Images",
       "Lifecycle",
       "Tags"
@@ -729,13 +729,13 @@
       "Tags"
     ],
     "EFS File System": [
-      "Details",
+      "Overview",
       "Mount Targets",
       "Access Points",
       "Tags"
     ],
     "EKS Cluster": [
-      "Details",
+      "Overview",
       "Networking",
       "Compute",
       "Fargate",
@@ -745,7 +745,7 @@
       "Tags"
     ],
     "ElastiCache Cluster": [
-      "Details",
+      "Overview",
       "Nodes",
       "Network",
       "Tags"
@@ -787,7 +787,7 @@
       "Members"
     ],
     "FSx File System": [
-      "Details",
+      "Overview",
       "Volumes",
       "Backups",
       "Network",
@@ -806,7 +806,7 @@
       "Tags"
     ],
     "Firewall": [
-      "Details",
+      "Overview",
       "Subnets",
       "Policy",
       "Logging",
@@ -818,7 +818,7 @@
       "Tags"
     ],
     "Global Accelerator": [
-      "Details",
+      "Overview",
       "Listeners",
       "Endpoint Groups",
       "Tags"
@@ -858,7 +858,7 @@
       "Tags"
     ],
     "GuardDuty Finding": [
-      "Details",
+      "Overview",
       "Resource",
       "Actor",
       "Sequence",
@@ -894,7 +894,7 @@
       "Tags"
     ],
     "Health Event": [
-      "Details",
+      "Overview",
       "Description",
       "Affected"
     ],
@@ -943,7 +943,7 @@
       "Auth"
     ],
     "IC Group": [
-      "Details",
+      "Overview",
       "Members",
       "Access"
     ],
@@ -954,7 +954,7 @@
       "Summary"
     ],
     "IC User": [
-      "Details",
+      "Overview",
       "Groups",
       "Access"
     ],
@@ -963,7 +963,7 @@
       "Tags"
     ],
     "Inspector Finding": [
-      "Details",
+      "Overview",
       "Vulnerability",
       "Resource",
       "Remediation"
@@ -972,13 +972,13 @@
       "Details"
     ],
     "KMS Key": [
-      "Details",
+      "Overview",
       "Policy",
       "Grants",
       "Tags"
     ],
     "Kinesis Stream": [
-      "Details",
+      "Overview",
       "Consumers",
       "Tags"
     ],
@@ -1002,13 +1002,13 @@
       "Tags"
     ],
     "Launch Template": [
-      "Details",
+      "Overview",
       "Versions",
       "Data",
       "Tags"
     ],
     "Load Balancer": [
-      "Details",
+      "Overview",
       "Listeners",
       "Attributes",
       "Tags"
@@ -1037,22 +1037,23 @@
       "Tags"
     ],
     "NetworkAcl": [
+      "Overview",
       "Inbound",
       "Outbound",
       "Associations",
       "Tags"
     ],
     "OAM Link": [
-      "Details",
+      "Overview",
       "Configuration"
     ],
     "OAM Sink": [
-      "Details",
+      "Overview",
       "Policy",
       "Attached Links"
     ],
     "OpenSearch Domain": [
-      "Details",
+      "Overview",
       "Cluster",
       "Network",
       "Security",
@@ -1064,7 +1065,7 @@
       "Handshakes"
     ],
     "Organizations Account": [
-      "Details",
+      "Overview",
       "OU Path",
       "Policies"
     ],
@@ -1083,7 +1084,7 @@
       "Tags"
     ],
     "Permission Set": [
-      "Details",
+      "Overview",
       "Policies",
       "Assignments",
       "Tags"
@@ -1115,17 +1116,18 @@
       "Tags"
     ],
     "R53 Hosted Zone": [
+      "Overview",
       "Records",
       "Sharing",
       "Info",
       "Tags"
     ],
     "R53 Record": [
-      "Details",
+      "Overview",
       "Test answer"
     ],
     "RAM Resource Share": [
-      "Details",
+      "Overview",
       "Resources",
       "Principals",
       "Tags"
@@ -1189,19 +1191,19 @@
       "Network"
     ],
     "Resolver Endpoint": [
-      "Details",
+      "Overview",
       "IP Addresses",
       "Rules",
       "Tags"
     ],
     "Resolver Rule": [
-      "Details",
+      "Overview",
       "Targets",
       "Associations",
       "Tags"
     ],
     "Resource Group": [
-      "Details",
+      "Overview",
       "Query",
       "Resources",
       "Tags"
@@ -1213,12 +1215,13 @@
       "Tags"
     ],
     "RouteTable": [
+      "Overview",
       "Routes",
       "Associations",
       "Tags"
     ],
     "S3 File System": [
-      "Details",
+      "Overview",
       "Mount Targets",
       "Access Points",
       "Sync",
@@ -1226,20 +1229,20 @@
       "Tags"
     ],
     "S3 Table": [
-      "Details",
+      "Overview",
       "Maintenance",
       "Policy",
       "Tags"
     ],
     "S3 Table Bucket": [
-      "Details",
+      "Overview",
       "Namespaces",
       "Maintenance",
       "Policy",
       "Tags"
     ],
     "SC Portfolio": [
-      "Details",
+      "Overview",
       "Products",
       "Principals",
       "Constraints",
@@ -1247,13 +1250,13 @@
       "Tags"
     ],
     "SC Product": [
-      "Details",
+      "Overview",
       "Versions",
       "Portfolios",
       "Tags"
     ],
     "SC Provisioned Product": [
-      "Details",
+      "Overview",
       "Outputs",
       "History",
       "Tags"
@@ -1296,7 +1299,7 @@
       "Invocations"
     ],
     "SSM Document": [
-      "Details",
+      "Overview",
       "Content",
       "Tags"
     ],
@@ -1317,7 +1320,7 @@
       "Detail"
     ],
     "SSM Parameter": [
-      "Details",
+      "Overview",
       "Value",
       "History",
       "Tags"
@@ -1331,7 +1334,7 @@
       "Target"
     ],
     "Secret": [
-      "Details",
+      "Overview",
       "Rotation",
       "Replication",
       "Tags"
@@ -1363,7 +1366,7 @@
       "Details"
     ],
     "Security Hub Finding": [
-      "Details",
+      "Overview",
       "Resources",
       "Compliance",
       "Vulns",
@@ -1400,7 +1403,7 @@
       "Tags"
     ],
     "State Machine": [
-      "Details",
+      "Overview",
       "Definition",
       "Executions",
       "Tags"
@@ -1412,7 +1415,7 @@
       "History"
     ],
     "Subnet": [
-      "Details",
+      "Overview",
       "Network",
       "Routes",
       "Tags"
@@ -1428,10 +1431,12 @@
       "Tags"
     ],
     "TGW Route Table": [
+      "Overview",
       "Routes",
       "Tags"
     ],
     "Target Group": [
+      "Overview",
       "Health",
       "Config",
       "Attributes",
@@ -1444,12 +1449,12 @@
       "Tags"
     ],
     "Transfer Server": [
-      "Details",
+      "Overview",
       "Users",
       "Tags"
     ],
     "Transit Gateway": [
-      "Details",
+      "Overview",
       "Attachments",
       "Route Tables",
       "Tags"
@@ -1466,7 +1471,7 @@
       "Tags"
     ],
     "VPC Endpoint": [
-      "Details",
+      "Overview",
       "Network",
       "Policy",
       "Tags"
@@ -1478,17 +1483,17 @@
       "Tags"
     ],
     "WAF IP Set": [
-      "Details",
+      "Overview",
       "Addresses",
       "Tags"
     ],
     "WAF Rule Group": [
-      "Details",
+      "Overview",
       "Rules",
       "Tags"
     ],
     "WAF Web ACL": [
-      "Details",
+      "Overview",
       "Rules",
       "Associated",
       "Logging",
@@ -1496,7 +1501,7 @@
       "Insights"
     ],
     "WorkSpace": [
-      "Details",
+      "Overview",
       "Connection",
       "Tags"
     ],

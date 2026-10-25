@@ -1096,7 +1096,7 @@ impl Ec2Instance {
 crate::sections! {
     pub enum Ec2InstanceDetailSection,
     pub static EC2_INSTANCE_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_ec2_credit_spec_load,
+        Overview "Overview" => crate::app::App::trigger_ec2_credit_spec_load,
         Security "Security" => crate::app::App::trigger_ec2_instance_profile_roles_load,
         Networking "Networking",
         LoadBalancing "Load Balancing" => crate::app::App::trigger_ec2_instance_lb_load,
@@ -1863,7 +1863,7 @@ impl EbsVolume {
 crate::sections! {
     pub enum EbsVolumeDetailSection,
     pub static EBS_VOLUME_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Attachments "Attachments",
         Snapshots "Snapshots" => crate::app::App::trigger_ebs_snapshots_load,
         Tags "Tags",
@@ -2765,7 +2765,7 @@ impl EbsSnapshot {
 crate::sections! {
     pub enum SnapshotDetailSection,
     pub static EBS_SNAPSHOT_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Tags "Tags",
     ]
 }
@@ -3002,7 +3002,7 @@ impl Ami {
 crate::sections! {
     pub enum AmiDetailSection,
     pub static AMI_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         BlockDevices "Block Devices",
         Permissions "Permissions" => crate::app::App::trigger_ami_permissions_load,
         Tags "Tags",
@@ -3169,7 +3169,7 @@ impl LaunchTemplate {
 crate::sections! {
     pub enum LaunchTemplateDetailSection,
     pub static LAUNCH_TEMPLATE_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         // Versions and Data both render from the lazy versions fetch.
         Versions "Versions" => crate::app::App::trigger_lt_versions_load,
         Data "Data" => crate::app::App::trigger_lt_versions_load,

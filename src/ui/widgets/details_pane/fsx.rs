@@ -12,7 +12,7 @@ pub fn fsx_section_lines(
     match section {
         FsxDetailSection::Volumes => fsx_volumes_lines(volumes),
         FsxDetailSection::Backups => fsx_backups_lines(backups),
-        FsxDetailSection::Details => {
+        FsxDetailSection::Overview => {
             let mut rows = vec![
                 ("File System ID".to_string(), fs.file_system_id.clone()),
                 ("ARN".to_string(), fs.arn.clone()),

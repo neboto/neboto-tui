@@ -98,7 +98,7 @@ pub fn kms_key_section_lines(
     tags: Option<&Lazy<std::collections::HashMap<String, String>>>,
 ) -> Vec<(String, String)> {
     match section {
-        KmsKeyDetailSection::Details => kms_details_lines(key, rotation),
+        KmsKeyDetailSection::Overview => kms_details_lines(key, rotation),
         KmsKeyDetailSection::Policy => kms_policy_lines(policy),
         KmsKeyDetailSection::Grants => kms_grants_lines(grants),
         KmsKeyDetailSection::Tags => kms_tags_lines(tags),

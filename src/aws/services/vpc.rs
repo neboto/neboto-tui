@@ -782,7 +782,7 @@ impl Subnet {
 crate::sections! {
     pub enum SubnetDetailSection,
     pub static SUBNET_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Network "Network",
         Routes "Routes",
         Tags "Tags",
@@ -1018,6 +1018,7 @@ impl RouteTable {
 crate::sections! {
     pub enum RouteTableDetailSection,
     pub static ROUTE_TABLE_SECTIONS = [
+        Overview "Overview",
         Routes "Routes",
         Associations "Associations",
         Tags "Tags",
@@ -1768,6 +1769,7 @@ impl NetworkAcl {
 crate::sections! {
     pub enum NetworkAclDetailSection,
     pub static NETWORK_ACL_SECTIONS = [
+        Overview "Overview",
         Inbound "Inbound",
         Outbound "Outbound",
         Associations "Associations",
@@ -1985,7 +1987,7 @@ impl VpcEndpoint {
 crate::sections! {
     pub enum VpcEndpointDetailSection,
     pub static VPC_ENDPOINT_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Network "Network",
         Policy "Policy",
         Tags "Tags",

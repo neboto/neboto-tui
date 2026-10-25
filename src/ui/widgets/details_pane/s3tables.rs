@@ -83,7 +83,7 @@ pub fn s3tables_bucket_section_lines(
 ) -> Vec<(String, String)> {
     use crate::aws::services::s3tables::S3TableBucketDetailSection as S;
     match section {
-        S::Details => {
+        S::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), tb.name.clone()),
                 ("Type".to_string(), tb.bucket_type.clone()),
@@ -196,7 +196,7 @@ pub fn s3tables_table_section_lines(
 ) -> Vec<(String, String)> {
     use crate::aws::services::s3tables::S3TableDetailSection as S;
     match section {
-        S::Details => {
+        S::Overview => {
             let mut rows = vec![
                 ("Table".to_string(), t.table_name.clone()),
                 ("Namespace".to_string(), t.namespace.clone()),

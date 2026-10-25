@@ -75,7 +75,7 @@ pub fn resource_group_section_lines(
     tags_state: Option<&Lazy<std::collections::HashMap<String, String>>>,
 ) -> Vec<(String, String)> {
     match section {
-        ResourceGroupDetailSection::Details => rg_details_lines(rg, query_state),
+        ResourceGroupDetailSection::Overview => rg_details_lines(rg, query_state),
         ResourceGroupDetailSection::Query => rg_query_lines(query_state),
         ResourceGroupDetailSection::Resources => rg_resources_lines(resources_state),
         ResourceGroupDetailSection::Tags => rg_tags_lines(tags_state),

@@ -64,7 +64,7 @@ pub fn ecr_repo_section_lines(
     let running_users: usize = running.iter().map(|u| u.tasks).sum();
     use crate::aws::services::ecr::DigestStatus;
     match section {
-        EcrRepoDetailSection::Details => {
+        EcrRepoDetailSection::Overview => {
             // Mutable tags are only a live risk once something runs a digest
             // from here: re-pushing a tag then strands that digest untagged.
             let mutability = if repo.tags_mutable() && running_users > 0 {

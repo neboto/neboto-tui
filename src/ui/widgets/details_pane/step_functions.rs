@@ -78,7 +78,7 @@ pub fn sfn_section_lines(
     executions: &[&crate::aws::services::step_functions::SfnExecution],
 ) -> Vec<(String, String)> {
     match section {
-        SfnDetailSection::Details => sfn_details_lines(sm, details_state),
+        SfnDetailSection::Overview => sfn_details_lines(sm, details_state),
         SfnDetailSection::Definition => sfn_definition_lines(details_state),
         SfnDetailSection::Executions => sfn_executions_lines(sm, executions),
         SfnDetailSection::Tags => sfn_tags_lines(details_state),
