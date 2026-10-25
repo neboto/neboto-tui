@@ -94,29 +94,37 @@ pub(super) fn render_subnet_section_tabs(app: &App, area: Rect, frame: &mut Fram
 /// Render a list of route-table entries as a fixed-width Destination / Target
 /// / State / Origin table. Shared by the Route Table pane and the Subnet's
 /// Routes section. Built-in (local) routes sort first.
-pub(super) fn route_rows(routes: &[RouteEntry]) -> Vec<(String, String)> {
-    let mut rows = vec![];
-    if routes.is_empty() {
-        rows.push(("  (none)".to_string(), "".to_string()));
-        return rows;
-    }
-    let mut sorted = routes.to_vec();
+/// Routes in the order every route table renders them: the built-in
+/// `local` route first, then the rest as AWS returned them.
+fn sorted_routes(routes: &[RouteEntry]) -> Vec<&RouteEntry> {
+    let mut sorted: Vec<&RouteEntry> = routes.iter().collect();
     sorted.sort_by_key(|r| if r.origin == "Built-in" { 0 } else { 1 });
-    rows.push((
-        format!("  {:<26}  {:<26}  {:<12}  {}", "Destination", "Target", "State", "Origin"),
-        "".to_string(),
-    ));
+    sorted
+}
+
+fn route_table_header() -> (String, String) {
+    (format!("  {:<26}  {:<26}  {:<12}  {}", "Destination", "Target", "State", "Origin"), String::new())
+}
+
+/// One route as a fixed-width table line (a plain content line; the
+/// target's id stays Enter-jumpable).
+fn route_line(route: &RouteEntry) -> (String, String) {
+    (
+        format!("  {:<26}  {:<26}  {:<12}  {}", route.destination, route.target, route.state, route.origin),
+        String::new(),
+    )
+}
+
+pub(super) fn route_rows(routes: &[RouteEntry]) -> Vec<(String, String)> {
+    if routes.is_empty() {
+        return vec![(String::new(), "No routes".to_string())];
+    }
+    let mut rows = vec![route_table_header()];
     rows.push((
         format!("  {:<26}  {:<26}  {:<12}  {}", "──────────────────────────", "──────────────────────────", "────────────", "────────────"),
         "".to_string(),
     ));
-    for route in &sorted {
-        rows.push((
-            format!("  {:<26}  {:<26}  {:<12}  {}",
-                route.destination, route.target, route.state, route.origin),
-            "".to_string(),
-        ));
-    }
+    rows.extend(sorted_routes(routes).into_iter().map(route_line));
     rows
 }
 
@@ -233,7 +241,7 @@ pub fn subnet_section_lines(
 
 pub(super) fn render_route_table_split(app: &App, rt: &RouteTable, area: Rect, frame: &mut Frame) {
     let focused = app.details_focused;
-    let footer = detail_footer(app, focused, 3, "");
+    let footer = detail_footer(app, focused, 4, "");
 
     let mut block = theme::pane_block("Route Table", focused);
     block = block.title_bottom(
@@ -268,7 +276,6 @@ pub(super) fn render_route_table_split(app: &App, rt: &RouteTable, area: Rect, f
 
 pub(super) fn build_route_table_header_lines(rt: &RouteTable) -> Vec<Line<'static>> {
     let name = rt.tags.get("Name").map(|s| s.as_str()).unwrap_or(&rt.route_table_id);
-    let subnet_assoc_count = rt.associations.iter().filter(|a| a.subnet_id.is_some()).count();
 
     let mut lines: Vec<Line<'static>> = vec![Line::raw("")];
 
@@ -295,10 +302,127 @@ pub(super) fn build_route_table_header_lines(rt: &RouteTable) -> Vec<Line<'stati
 
     lines.push(Line::raw(""));
     lines.push(header_kv("VPC", &rt.vpc_id));
-    lines.push(header_kv("Routes", &rt.routes.len().to_string()));
-    lines.push(header_kv("Associations", &subnet_assoc_count.to_string()));
     lines.push(Line::raw(""));
     lines
+}
+
+/// Routes, and subnets, the Overview lists before pointing at the tab
+/// that has them all.
+const ROUTE_TABLE_OVERVIEW_ROWS: usize = 8;
+/// Blackhole routes the Overview warns about one by one.
+const ROUTE_TABLE_BLACKHOLE_ROWS: usize = 3;
+
+/// What a default route (`0.0.0.0/0` / `::/0`) sends traffic to, in a
+/// line — whether subnets on this table are public, private or neither.
+fn default_route_effect(route: Option<&RouteEntry>, ipv6: bool) -> String {
+    let Some(r) = route else {
+        return if ipv6 {
+            "none — no IPv6 internet route".to_string()
+        } else {
+            "none — isolated: no internet route".to_string()
+        };
+    };
+    if r.state == "blackhole" {
+        return format!("⚠ {} — blackhole, the target is gone", r.target);
+    }
+    let t = r.target.as_str();
+    let what = if t.starts_with("igw-") {
+        "public: direct internet access"
+    } else if t.starts_with("eigw-") {
+        "outbound only (egress-only internet gateway)"
+    } else if t.starts_with("nat-") {
+        "private: outbound only, via NAT"
+    } else if t.starts_with("tgw-") {
+        "via transit gateway"
+    } else if t.starts_with("pcx-") {
+        "via VPC peering"
+    } else if t.starts_with("vgw-") {
+        "via VPN gateway"
+    } else if t.starts_with("vpce-") {
+        "via gateway load balancer endpoint"
+    } else if t.starts_with("eni-") || t.starts_with("i-") {
+        "via an appliance (instance / ENI)"
+    } else {
+        return t.to_string();
+    };
+    format!("{t} — {what}")
+}
+
+fn route_table_overview_rows(rt: &RouteTable) -> Vec<(String, String)> {
+    let mut rows = vec![
+        ("Route Table ID".to_string(), rt.route_table_id.clone()),
+        ("VPC".to_string(), if rt.vpc_id.is_empty() { "—".to_string() } else { rt.vpc_id.clone() }),
+        (
+            "Main".to_string(),
+            if rt.is_main {
+                "✓ yes — subnets with no table of their own use it".to_string()
+            } else {
+                "no".to_string()
+            },
+        ),
+    ];
+
+    // Routing: where the internet-bound traffic goes, then what's broken.
+    let default = |dest: &str| rt.routes.iter().find(|r| r.destination == dest);
+    rows.push((String::new(), String::new()));
+    rows.push(("Routing".to_string(), String::new()));
+    rows.push(("IPv4 default".to_string(), default_route_effect(default("0.0.0.0/0"), false)));
+    let has_ipv6 = rt.routes.iter().any(|r| r.destination.contains(':'));
+    if has_ipv6 {
+        rows.push(("IPv6 default".to_string(), default_route_effect(default("::/0"), true)));
+    }
+    // AWS caps propagating VGWs per table at 5, so no cap needed here.
+    for v in &rt.propagating_vgws {
+        rows.push(("Propagates from".to_string(), v.clone()));
+    }
+    let blackholes: Vec<&RouteEntry> = rt.routes.iter().filter(|r| r.state == "blackhole").collect();
+    for r in blackholes.iter().take(ROUTE_TABLE_BLACKHOLE_ROWS) {
+        rows.push((format!("  ⚠ blackhole  {} → {} (target gone)", r.destination, r.target), String::new()));
+    }
+    if blackholes.len() > ROUTE_TABLE_BLACKHOLE_ROWS {
+        let more = blackholes.len() - ROUTE_TABLE_BLACKHOLE_ROWS;
+        rows.push((
+            String::new(),
+            format!("· {more} more blackhole route{} — 2 Routes", if more == 1 { "" } else { "s" }),
+        ));
+    }
+
+    rows.push((String::new(), String::new()));
+    rows.push((
+        format!("Routes ({})", rt.routes.len()),
+        String::new(),
+    ));
+    if rt.routes.is_empty() {
+        rows.push((String::new(), "No routes".to_string()));
+    } else {
+        rows.push(route_table_header());
+        rows.extend(sorted_routes(&rt.routes).into_iter().take(ROUTE_TABLE_OVERVIEW_ROWS).map(route_line));
+        if rt.routes.len() > ROUTE_TABLE_OVERVIEW_ROWS {
+            rows.push((String::new(), format!("· {} more — 2 Routes", rt.routes.len() - ROUTE_TABLE_OVERVIEW_ROWS)));
+        }
+    }
+
+    // subnet-/igw-/vgw- ids are Enter-jumpable via the generic resource_jump_target.
+    let subnets: Vec<&String> = rt.associations.iter().filter_map(|a| a.subnet_id.as_ref()).collect();
+    let gateways: Vec<&String> = rt.associations.iter().filter_map(|a| a.gateway_id.as_ref()).collect();
+    rows.push((String::new(), String::new()));
+    rows.push((format!("Subnets ({})", subnets.len()), String::new()));
+    if rt.is_main {
+        rows.push((String::new(), "Also every subnet with no explicit association".to_string()));
+    } else if subnets.is_empty() {
+        rows.push((String::new(), "Not associated with any subnet".to_string()));
+    }
+    rows.extend(subnets.iter().take(ROUTE_TABLE_OVERVIEW_ROWS).map(|s| (format!("  {s}"), String::new())));
+    if subnets.len() > ROUTE_TABLE_OVERVIEW_ROWS {
+        rows.push((String::new(), format!("· {} more — 3 Associations", subnets.len() - ROUTE_TABLE_OVERVIEW_ROWS)));
+    }
+    // Edge associations: one per IGW/VGW at most, so a handful at worst.
+    if !gateways.is_empty() {
+        rows.push((String::new(), String::new()));
+        rows.push(("Edge Associations".to_string(), String::new()));
+        rows.extend(gateways.iter().map(|g| ("Gateway".to_string(), g.to_string())));
+    }
+    rows
 }
 
 pub(super) fn render_route_table_section_tabs(app: &App, area: Rect, frame: &mut Frame) {
@@ -310,6 +434,7 @@ pub fn route_table_section_lines(
     section: RouteTableDetailSection,
 ) -> Vec<(String, String)> {
     match section {
+        RouteTableDetailSection::Overview => route_table_overview_rows(rt),
         RouteTableDetailSection::Routes => {
             let mut rows = route_rows(&rt.routes);
             if !rt.propagating_vgws.is_empty() {
@@ -327,10 +452,12 @@ pub fn route_table_section_lines(
             let subnet_assocs: Vec<_> =
                 rt.associations.iter().filter(|a| a.subnet_id.is_some()).collect();
             if rt.is_main {
-                rows.push(("  (main)  Implicitly associated with all subnets without an explicit association".to_string(), "".to_string()));
+                rows.push((String::new(), "Main table — implicitly associated with every subnet that has no explicit association".to_string()));
             }
-            if subnet_assocs.is_empty() && !rt.is_main {
-                rows.push(("  (none)".to_string(), "".to_string()));
+            if subnet_assocs.is_empty() {
+                if !rt.is_main {
+                    rows.push((String::new(), "Not associated with any subnet".to_string()));
+                }
             } else {
                 rows.push((
                     format!("  {:<26}  {}", "Subnet ID", "State"),

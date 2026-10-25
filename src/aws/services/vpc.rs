@@ -1018,6 +1018,7 @@ impl RouteTable {
 crate::sections! {
     pub enum RouteTableDetailSection,
     pub static ROUTE_TABLE_SECTIONS = [
+        Overview "Overview",
         Routes "Routes",
         Associations "Associations",
         Tags "Tags",
