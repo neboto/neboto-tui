@@ -510,7 +510,7 @@ impl SsmParameter {
 crate::sections! {
     pub enum SsmParameterDetailSection,
     pub static SSM_PARAMETER_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Value "Value",
         History "History" => crate::app::App::trigger_ssm_param_detail_load,
         Tags "Tags" => crate::app::App::trigger_ssm_param_detail_load,
@@ -655,7 +655,7 @@ impl SsmDocument {
 crate::sections! {
     pub enum SsmDocumentDetailSection,
     pub static SSM_DOCUMENT_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Content "Content" => crate::app::App::trigger_ssm_document_content_load,
         Tags "Tags",
     ]

@@ -74,7 +74,7 @@ pub fn opensearch_section_lines(
         }
     };
     match section {
-        OpenSearchDetailSection::Details => {
+        OpenSearchDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), d.domain_name.clone()),
                 ("Domain ID".to_string(), d.domain_id.clone()),

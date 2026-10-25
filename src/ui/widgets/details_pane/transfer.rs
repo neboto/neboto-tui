@@ -74,7 +74,7 @@ pub fn transfer_server_section_lines(
     users: Option<&Lazy<Vec<crate::aws::services::transfer::TransferUser>>>,
 ) -> Vec<(String, String)> {
     match section {
-        TransferServerDetailSection::Details => {
+        TransferServerDetailSection::Overview => {
             let mut rows = vec![
                 ("Server ID".to_string(), srv.server_id.clone()),
                 ("State".to_string(), srv.state.clone()),

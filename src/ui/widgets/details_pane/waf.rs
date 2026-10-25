@@ -69,7 +69,7 @@ pub fn waf_web_acl_section_lines(
     insights: Option<&Lazy<Box<WafInsights>>>,
 ) -> Vec<(String, String)> {
     match section {
-        WafWebAclDetailSection::Details => waf_details_lines(acl),
+        WafWebAclDetailSection::Overview => waf_details_lines(acl),
         WafWebAclDetailSection::Traffic => waf_traffic_lines(metrics),
         WafWebAclDetailSection::Insights => waf_insights_lines(insights),
         WafWebAclDetailSection::Rules => {
@@ -261,7 +261,7 @@ pub fn waf_ip_set_section_lines(
     state: Option<&crate::lazy::Lazy<Box<crate::aws::services::waf::WafIpSetDetail>>>,
 ) -> Vec<(String, String)> {
     match section {
-        WafIpSetDetailSection::Details => {
+        WafIpSetDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), s.name.clone()),
                 ("ID".to_string(), s.id.clone()),
@@ -313,7 +313,7 @@ pub fn waf_rule_group_section_lines(
     state: Option<&crate::lazy::Lazy<Box<crate::aws::services::waf::WafRuleGroupDetail>>>,
 ) -> Vec<(String, String)> {
     match section {
-        WafRuleGroupDetailSection::Details => {
+        WafRuleGroupDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), s.name.clone()),
                 ("ID".to_string(), s.id.clone()),

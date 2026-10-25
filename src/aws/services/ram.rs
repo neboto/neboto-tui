@@ -165,7 +165,7 @@ impl RamResourceShare {
 crate::sections! {
     pub enum RamResourceShareDetailSection,
     pub static RAM_SHARE_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Resources "Resources" => crate::app::App::trigger_ram_resources_load,
         Principals "Principals" => crate::app::App::trigger_ram_principals_load,
         Tags "Tags",

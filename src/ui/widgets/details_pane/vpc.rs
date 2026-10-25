@@ -134,7 +134,7 @@ pub fn subnet_section_lines(
     route_table: Option<&RouteTable>,
 ) -> Vec<(String, String)> {
     match section {
-        SubnetDetailSection::Details => {
+        SubnetDetailSection::Overview => {
             let mut rows = vec![
                 ("  Subnet ID".to_string(), subnet.subnet_id.clone()),
                 ("  VPC ID".to_string(), subnet.vpc_id.clone()),
@@ -810,7 +810,7 @@ pub fn vpc_endpoint_section_lines(
         rows
     };
     match section {
-        VpcEndpointDetailSection::Details => {
+        VpcEndpointDetailSection::Overview => {
             let mut rows = vec![
                 ("Service".to_string(), ep.service_name.clone()),
                 ("Type".to_string(), ep.kind.clone()),

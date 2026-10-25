@@ -240,7 +240,7 @@ impl ResolverEndpoint {
 crate::sections! {
     pub enum ResolverEndpointDetailSection,
     pub static RESOLVER_ENDPOINT_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_resolver_endpoint_load,
+        Overview "Overview" => crate::app::App::trigger_resolver_endpoint_load,
         IpAddresses "IP Addresses" => crate::app::App::trigger_resolver_endpoint_load,
         Rules "Rules",
         Tags "Tags" => crate::app::App::trigger_resolver_endpoint_load,
@@ -494,7 +494,7 @@ impl ResolverRule {
 crate::sections! {
     pub enum ResolverRuleDetailSection,
     pub static RESOLVER_RULE_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_resolver_rule_load,
+        Overview "Overview" => crate::app::App::trigger_resolver_rule_load,
         Targets "Targets" => crate::app::App::trigger_resolver_rule_load,
         Associations "Associations" => crate::app::App::trigger_resolver_rule_load,
         Tags "Tags" => crate::app::App::trigger_resolver_rule_load,

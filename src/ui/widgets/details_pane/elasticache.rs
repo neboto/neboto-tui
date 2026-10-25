@@ -71,7 +71,7 @@ pub fn elasticache_section_lines(
     tags: Option<&Lazy<Vec<(String, String)>>>,
 ) -> Vec<(String, String)> {
     match section {
-        ElastiCacheDetailSection::Details => {
+        ElastiCacheDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), c.name.clone()),
                 ("Cache ID".to_string(), c.id.clone()),

@@ -126,7 +126,7 @@ pub struct ResourceGroup {
 crate::sections! {
     pub enum ResourceGroupDetailSection,
     pub static RESOURCE_GROUP_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_resource_group_query_load,
+        Overview "Overview" => crate::app::App::trigger_resource_group_query_load,
         Query "Query" => crate::app::App::trigger_resource_group_query_load,
         Resources "Resources" => crate::app::App::trigger_resource_group_resources_load,
         Tags "Tags" => crate::app::App::trigger_resource_group_tags_load,

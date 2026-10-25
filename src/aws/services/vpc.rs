@@ -782,7 +782,7 @@ impl Subnet {
 crate::sections! {
     pub enum SubnetDetailSection,
     pub static SUBNET_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Network "Network",
         Routes "Routes",
         Tags "Tags",
@@ -1987,7 +1987,7 @@ impl VpcEndpoint {
 crate::sections! {
     pub enum VpcEndpointDetailSection,
     pub static VPC_ENDPOINT_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Network "Network",
         Policy "Policy",
         Tags "Tags",

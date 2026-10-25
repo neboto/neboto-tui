@@ -527,7 +527,7 @@ pub fn gd_finding_section_lines(
     section: GdFindingDetailSection,
 ) -> Vec<(String, String)> {
     match section {
-        GdFindingDetailSection::Details => {
+        GdFindingDetailSection::Overview => {
             let mut rows = vec![
                 ("Title".to_string(), finding.title.clone()),
                 ("Type".to_string(), finding.finding_type.clone()),

@@ -174,7 +174,7 @@ impl S3FileSystem {
 crate::sections! {
     pub enum S3FsDetailSection,
     pub static S3FS_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_s3files_details_load,
+        Overview "Overview" => crate::app::App::trigger_s3files_details_load,
         MountTargets "Mount Targets" => crate::app::App::trigger_s3files_mount_targets_load,
         AccessPoints "Access Points" => crate::app::App::trigger_s3files_access_points_load,
         Sync "Sync" => crate::app::App::trigger_s3files_sync_load,

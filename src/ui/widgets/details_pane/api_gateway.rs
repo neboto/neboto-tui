@@ -513,7 +513,7 @@ pub fn api_domain_section_lines(
     details: Option<&crate::lazy::Lazy<Vec<crate::aws::services::api_gateway::DomainMapping>>>,
 ) -> Vec<(String, String)> {
     match section {
-        ApiDomainDetailSection::Details => {
+        ApiDomainDetailSection::Overview => {
             let mut rows = vec![
                 ("Domain".to_string(), domain.domain_name.clone()),
                 ("Endpoint Type".to_string(), domain.endpoint_type.clone()),

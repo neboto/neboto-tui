@@ -280,7 +280,7 @@ impl Workspace {
 crate::sections! {
     pub enum WorkspaceDetailSection,
     pub static WORKSPACE_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Connection "Connection" => crate::app::App::trigger_workspace_connection_load,
         Tags "Tags" => crate::app::App::trigger_workspace_tags_load,
     ]

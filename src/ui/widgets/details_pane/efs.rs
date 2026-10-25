@@ -68,7 +68,7 @@ pub fn efs_fs_section_lines(
 ) -> Vec<(String, String)> {
     use crate::aws::services::efs::fmt_bytes;
     match section {
-        EfsFileSystemDetailSection::Details => {
+        EfsFileSystemDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), fs.fs_name.clone()),
                 ("File System ID".to_string(), fs.file_system_id.clone()),

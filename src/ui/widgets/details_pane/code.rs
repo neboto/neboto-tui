@@ -33,7 +33,7 @@ pub fn code_commit_repo_section_lines(
     let readme_state = st.readme;
     let prs = &st.prs;
     match section {
-        CodeCommitRepoDetailSection::Details => {
+        CodeCommitRepoDetailSection::Overview => {
             let mut rows = vec![
                 ("Name".to_string(), repo.name.clone()),
                 ("ARN".to_string(), repo.arn.clone()),
@@ -675,7 +675,7 @@ pub fn code_build_section_lines(
     buildspec_state: Option<&Lazy<crate::aws::services::code::BuildspecResult>>,
 ) -> Vec<(String, String)> {
     match section {
-        CodeBuildDetailSection::Details => code_build_details_lines(proj),
+        CodeBuildDetailSection::Overview => code_build_details_lines(proj),
         CodeBuildDetailSection::Buildspec => code_build_buildspec_lines(proj, buildspec_state),
         CodeBuildDetailSection::Builds => code_build_builds_lines(builds_state),
         CodeBuildDetailSection::Environment => code_build_env_lines(proj),

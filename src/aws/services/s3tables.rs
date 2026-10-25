@@ -222,7 +222,7 @@ impl S3TableBucket {
 crate::sections! {
     pub enum S3TableBucketDetailSection,
     pub static S3TABLE_BUCKET_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_s3tables_bucket_extras_load,
+        Overview "Overview" => crate::app::App::trigger_s3tables_bucket_extras_load,
         Namespaces "Namespaces" => crate::app::App::trigger_s3tables_namespaces_load,
         Maintenance "Maintenance" => crate::app::App::trigger_s3tables_bucket_maintenance_load,
         Policy "Policy" => crate::app::App::trigger_s3tables_bucket_policy_load,
@@ -348,7 +348,7 @@ impl S3Table {
 crate::sections! {
     pub enum S3TableDetailSection,
     pub static S3TABLE_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_s3tables_table_extras_load,
+        Overview "Overview" => crate::app::App::trigger_s3tables_table_extras_load,
         Maintenance "Maintenance" => crate::app::App::trigger_s3tables_table_maintenance_load,
         Policy "Policy" => crate::app::App::trigger_s3tables_table_policy_load,
         Tags "Tags" => crate::app::App::trigger_s3tables_table_extras_load,

@@ -575,7 +575,7 @@ impl CognitoUserPool {
 crate::sections! {
     pub enum CognitoUserPoolDetailSection,
     pub static COGNITO_USER_POOL_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         AppClients "App Clients" => crate::app::App::trigger_cognito_clients_load,
         Policies "Policies",
         Tags "Tags",

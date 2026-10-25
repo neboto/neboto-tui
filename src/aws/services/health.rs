@@ -219,7 +219,7 @@ impl HealthEvent {
 crate::sections! {
     pub enum HealthEventDetailSection,
     pub static HEALTH_EVENT_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Description "Description" => crate::app::App::trigger_health_event_details_load,
         AffectedEntities "Affected" => crate::app::App::trigger_health_event_details_load,
     ]

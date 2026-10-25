@@ -150,7 +150,7 @@ impl GaAccelerator {
 crate::sections! {
     pub enum GaAcceleratorDetailSection,
     pub static GA_ACCELERATOR_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Listeners "Listeners" => crate::app::App::trigger_ga_listeners_load,
         EndpointGroups "Endpoint Groups" => crate::app::App::trigger_ga_endpoint_groups_load,
         Tags "Tags" => crate::app::App::trigger_ga_tags_load,

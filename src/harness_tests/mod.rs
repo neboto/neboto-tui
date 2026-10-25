@@ -1136,7 +1136,7 @@ async fn cc_repo_pr_row_enter_jumps_to_the_pr() {
     // classifier rejects them — closed PRs have no row on the sub-tab.
     assert!(app.cc_repo_pr_row_jump_target("  #42 (MERGED)", "x").is_none());
     // Outside the Pull Requests section the same shape doesn't fire.
-    app.detail_section_idx = code::CodeCommitRepoDetailSection::Details as usize;
+    app.detail_section_idx = code::CodeCommitRepoDetailSection::Overview as usize;
     assert!(app.cc_repo_pr_row_jump_target("  #42", "x").is_none());
 }
 

@@ -512,7 +512,7 @@ pub fn org_assume_error(role: &str, account_id: &str, err: &str) -> String {
 crate::sections! {
     pub enum OrgAccountDetailSection,
     pub static ORG_ACCOUNT_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         OuPath "OU Path" => crate::app::App::trigger_org_account_details_load,
         Policies "Policies" => crate::app::App::trigger_org_account_details_load,
     ]

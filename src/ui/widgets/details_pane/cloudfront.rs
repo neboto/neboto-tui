@@ -106,7 +106,7 @@ pub fn cf_distribution_section_lines(
     invalidations_state: Option<&Lazy<CfInvalidationsData>>,
 ) -> Vec<(String, String)> {
     match section {
-        CfDistributionDetailSection::Details => cf_details_lines(dist),
+        CfDistributionDetailSection::Overview => cf_details_lines(dist),
         CfDistributionDetailSection::Origins => cf_origins_lines(dist),
         CfDistributionDetailSection::Behaviors => cf_behaviors_lines(dist),
         CfDistributionDetailSection::Errors => cf_errors_lines(dist),

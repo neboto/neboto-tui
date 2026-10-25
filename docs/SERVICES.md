@@ -1613,7 +1613,7 @@ the service you're touching.
   behaviors fall back to raw ids); distributions stream next, then the policy
   rows, then Functions + OACs as error-tolerant batches.
   - **Distributions** — parsed eagerly from the `DistributionSummary` (no extra
-    describe), 7-section split pane Details / Origins / Behaviors / **Errors**
+    describe), 7-section split pane Overview / Origins / Behaviors / **Errors**
     (custom error responses) / Restrictions / **Invalidations** / Tags(lazy).
     Invalidations is a lazy `ListInvalidations` (newest-first, capped
     `MAX_INVALIDATIONS=20` with a "latest N of M" header; each row's paths come
@@ -2103,7 +2103,7 @@ the service you're touching.
   An `http_endpoint = disabled` instance shows only that row (the token
   setting is moot). CPU options / lifecycle / tenancy / placement group /
   capacity reservation ride the same response into Launch Config (#193).
-- **ALB → WAF** (#106) — the LB Details section's on-enter hook
+- **ALB → WAF** (#106) — the LB Overview section's on-enter hook
   (`trigger_lb_web_acl_load`) runs `wafv2:GetWebACLForResource` for
   **application** LBs only (NLB/GWLB can't carry an ACL), always on the
   regional wafv2 client: an ALB's ACL is REGIONAL whatever `App.waf_scope`
@@ -2152,12 +2152,12 @@ the service you're touching.
   `DescribeFastSnapshotRestores` ahead of the Snapshots phase, joined by
   snapshot id onto `EbsSnapshot.fast_restore` (`disabled` entries are
   dropped — AWS keeps them for a while after, but they no longer bill). It's
-  a ⚠ on the Details section because FSR bills per AZ-hour whether or not
+  a ⚠ on the Overview section because FSR bills per AZ-hour whether or not
   anything restores from the snapshot, which is the forgotten-cost case.
   `fast_restore` is an `Option`: a failed call is `None` and renders
   **unknown**, never "off" — a cost flag must not read "fine" exactly when
   it couldn't check. `disabling` AZs are listed but not counted as "on".
-- **EC2 CPU credits** (#106) — the instance Details section's on-enter hook
+- **EC2 CPU credits** (#106) — the instance Overview section's on-enter hook
   fetches `DescribeInstanceCreditSpecifications` for **T-family only**
   (`ec2::shows_cpu_credits`: `is_burstable` — t2+, not `t1`, which predates
   credits, nor `trn` — and not terminated; a no-op for everything else, so
@@ -2271,7 +2271,7 @@ the service you're touching.
   configured roles `s` opens the role picker (`org_role_selector.rs`,
   last-used preselected); with one it fires directly. **Discoverability**
   (#86): `supports_org_assume()` puts `s assume role` in both panes' status
-  bars, and the account's Details section ends in a dim `· press s to
+  bars, and the account's Overview section ends in a dim `· press s to
   assume <role> …` row (names the picker + last-used role when several are
   configured) so the unfocused preview says it too. Both gate on
   `org_assume_eligible`, which mirrors `trigger_org_role_switch`'s two
@@ -2513,7 +2513,7 @@ the service you're touching.
   `is_noise()` instead and `a` folds them away. That makes the per-detector
   `MAX_FINDINGS=1000` cap load-bearing — a suppression rule can leave tens of
   thousands behind `ListFindings` — and hitting it warns.
-  `GdFinding` sections: **Details** (+ the finding type decomposed by
+  `GdFinding` sections: **Overview** (+ the finding type decomposed by
   `decompose_finding_type` into ThreatPurpose / ResourceAffected /
   ThreatFamily / DetectionMechanism / Artifact — the type string is a
   structured identifier, not a name; plus `resourceRole` TARGET-vs-ACTOR,

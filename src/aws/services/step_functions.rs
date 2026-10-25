@@ -217,7 +217,7 @@ impl SfnStateMachine {
 crate::sections! {
     pub enum SfnDetailSection,
     pub static SFN_SECTIONS = [
-        Details "Details" => crate::app::App::trigger_sfn_details_load,
+        Overview "Overview" => crate::app::App::trigger_sfn_details_load,
         Definition "Definition" => crate::app::App::trigger_sfn_details_load,
         Executions "Executions",
         Tags "Tags" => crate::app::App::trigger_sfn_details_load,

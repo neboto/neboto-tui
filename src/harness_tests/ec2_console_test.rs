@@ -148,7 +148,7 @@ async fn e_falls_through_to_the_snapshot_while_console_is_empty_or_on_other_sect
     assert!(app.editor_override_content().is_none());
 
     let mut app = app_with_console(Ok(Some(sample_output()))).await;
-    app.detail_section_idx = Ec2InstanceDetailSection::Details as usize;
+    app.detail_section_idx = Ec2InstanceDetailSection::Overview as usize;
     assert!(app.editor_override_content().is_none());
 }
 

@@ -72,7 +72,7 @@ pub fn insp_finding_section_lines(
     section: InspFindingDetailSection,
 ) -> Vec<(String, String)> {
     match section {
-        InspFindingDetailSection::Details => {
+        InspFindingDetailSection::Overview => {
             let mut rows = vec![
                 ("Title".to_string(), finding.title.clone()),
                 ("Type".to_string(), finding.finding_type.clone()),

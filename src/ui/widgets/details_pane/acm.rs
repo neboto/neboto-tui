@@ -132,7 +132,7 @@ pub fn acm_cert_section_lines(
     details_state: Option<&crate::lazy::Lazy<crate::aws::services::acm::AcmCertDetails>>,
 ) -> Vec<(String, String)> {
     match section {
-        AcmCertDetailSection::Details => acm_details_lines(cert, details_state),
+        AcmCertDetailSection::Overview => acm_details_lines(cert, details_state),
         AcmCertDetailSection::Domains => acm_domains_lines(cert, details_state),
         AcmCertDetailSection::Validation => acm_validation_lines(details_state),
         AcmCertDetailSection::Tags => acm_tags_lines(details_state),

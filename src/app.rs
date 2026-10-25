@@ -21948,7 +21948,7 @@ impl App {
         value: &str,
     ) -> Option<crate::app::JumpTarget> {
         if !self.is_selected_cfn_export()
-            || crate::aws::services::cloudformation::CfnExportDetailSection::from_index(self.detail_section_idx) != CfnExportDetailSection::Details
+            || crate::aws::services::cloudformation::CfnExportDetailSection::from_index(self.detail_section_idx) != CfnExportDetailSection::Overview
             || key.trim() != "Exporting stack"
             || value.is_empty()
         {
@@ -31712,7 +31712,7 @@ impl App {
     /// Lazy-load an IP set's addresses + tags on first view of the Addresses or
     /// Tags section, keyed by IP set id.
     pub(crate) fn trigger_waf_ip_set_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if crate::aws::services::waf::WafIpSetDetailSection::from_index(self.detail_section_idx) == WafIpSetDetailSection::Details {
+        if crate::aws::services::waf::WafIpSetDetailSection::from_index(self.detail_section_idx) == WafIpSetDetailSection::Overview {
             return;
         }
         if let Some(s) = self
@@ -31743,7 +31743,7 @@ impl App {
     /// Lazy-load a rule group's rules + tags on first view of the Rules or Tags
     /// section, keyed by rule group id.
     pub(crate) fn trigger_waf_rule_group_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if crate::aws::services::waf::WafRuleGroupDetailSection::from_index(self.detail_section_idx) == WafRuleGroupDetailSection::Details {
+        if crate::aws::services::waf::WafRuleGroupDetailSection::from_index(self.detail_section_idx) == WafRuleGroupDetailSection::Overview {
             return;
         }
         if let Some(s) = self.get_selected_resource().and_then(|r| {
@@ -31783,7 +31783,7 @@ impl App {
     /// Lazy-load a Resolver endpoint's per-AZ IP addresses + tags on first view
     /// of the IpAddresses or Tags section, keyed by endpoint id.
     pub(crate) fn trigger_resolver_endpoint_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if crate::aws::services::route53resolver::ResolverEndpointDetailSection::from_index(self.detail_section_idx) == ResolverEndpointDetailSection::Details {
+        if crate::aws::services::route53resolver::ResolverEndpointDetailSection::from_index(self.detail_section_idx) == ResolverEndpointDetailSection::Overview {
             return;
         }
         if let Some(e) = self.get_selected_resource().and_then(|r| {

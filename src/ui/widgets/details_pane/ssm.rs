@@ -78,7 +78,7 @@ pub fn ssm_parameter_section_lines(
     detail: Option<&Lazy<SsmParamDetail>>,
 ) -> Vec<(String, String)> {
     match section {
-        SsmParameterDetailSection::Details => ssm_param_details_lines(param),
+        SsmParameterDetailSection::Overview => ssm_param_details_lines(param),
         SsmParameterDetailSection::Value => ssm_param_value_lines(param),
         SsmParameterDetailSection::History => ssm_param_history_lines(param, detail),
         SsmParameterDetailSection::Tags => ssm_param_tags_lines(detail),
@@ -309,7 +309,7 @@ pub fn ssm_document_section_lines(
     content: Option<&Lazy<SsmDocContent>>,
 ) -> Vec<(String, String)> {
     match section {
-        SsmDocumentDetailSection::Details => ssm_doc_details_lines(doc),
+        SsmDocumentDetailSection::Overview => ssm_doc_details_lines(doc),
         SsmDocumentDetailSection::Content => ssm_doc_content_lines(content),
         SsmDocumentDetailSection::Tags => ssm_doc_tags_lines(doc),
     }

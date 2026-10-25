@@ -315,7 +315,7 @@ impl FsxFileSystem {
 crate::sections! {
     pub enum FsxDetailSection,
     pub static FSX_FS_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Volumes "Volumes" => crate::app::App::trigger_fsx_volumes_load,
         Backups "Backups" => crate::app::App::trigger_fsx_backups_load,
         Network "Network",

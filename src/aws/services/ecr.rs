@@ -937,7 +937,7 @@ impl EcrRepository {
 crate::sections! {
     pub enum EcrRepoDetailSection,
     pub static ECR_REPO_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         // Filtered from the Images tab's rows already loaded — no fetch.
         Images "Images",
         LifecyclePolicy "Lifecycle" => crate::app::App::trigger_ecr_lifecycle_load,

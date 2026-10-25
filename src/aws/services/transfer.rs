@@ -221,7 +221,7 @@ impl TransferServer {
 crate::sections! {
     pub enum TransferServerDetailSection,
     pub static TRANSFER_SERVER_SECTIONS = [
-        Details "Details",
+        Overview "Overview",
         Users "Users" => crate::app::App::trigger_transfer_users_load,
         Tags "Tags",
     ]
