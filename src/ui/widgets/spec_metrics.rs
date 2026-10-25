@@ -85,7 +85,16 @@ impl SpecMetricsState {
 
     /// Every row, as text (the `e` editor view).
     pub fn as_text(&self) -> String {
-        let mut out = format!("Metrics — {} — last {}\n\n", self.target.title, self.range.label());
+        let mut out = format!("Metrics — {} — last {}\n", self.target.title, self.range.label());
+        let dims: Vec<String> = self.target.dimensions.iter().map(|(n, v)| format!("{n}={v}")).collect();
+        out.push_str(&self.target.namespace);
+        if !dims.is_empty() {
+            out.push_str(&format!(" · {}", dims.join(", ")));
+        }
+        if let Some(home) = self.target.home {
+            out.push_str(&format!(" · in {home}"));
+        }
+        out.push_str("\n\n");
         for s in &self.series {
             out.push_str(&s.summary());
             out.push('\n');
@@ -167,14 +176,15 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
         range.push(Span::styled(chip, style));
     }
     range.push(Span::styled(" ]", Style::default().fg(theme::warning())));
-    let what = if st.picker.is_some() {
-        "all metrics"
-    } else if st.curated {
-        "default set"
-    } else {
-        "picked"
-    };
-    range.push(Span::styled(format!("   {} · {}", what, st.target.namespace), dim));
+    // Which set is charted needs no word: a picked metric's footer offers
+    // `d default set`, and the `a` list is plainly a list.
+    range.push(Span::styled(format!("   {}", st.target.namespace), dim));
+    // A metric row's title is only the metric's name: its dimensions are
+    // what say which instance or queue it is. A resource's title says so.
+    if st.target.specs.is_empty() && !st.target.dimensions.is_empty() {
+        let dims: Vec<String> = st.target.dimensions.iter().map(|(n, v)| format!("{n}={v}")).collect();
+        range.push(Span::styled(format!(" · {}", dims.join(", ")), dim));
+    }
     if let Some(home) = st.target.home {
         range.push(Span::styled(format!(" in {home}"), dim));
     }
@@ -202,9 +212,16 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
     } else {
         // `d` only means something once a picked metric replaced the set.
         let back: &[(&str, &str)] = if st.curated { &[] } else { &[("d", "default set")] };
-        [&[("[/]", "range"), ("s", "stat"), ("a", "all metrics")][..], back, &[("y", "copy"), ("e", "edit"), ("Esc", "close")]]
+        let changes: &[(&str, &str)] =
+            if app.metrics_supports_markers() { &[("c", "changes"), ("W", "timeline")] } else { &[] };
+        [&[("[/]", "range"), ("s", "stat"), ("a", "all")][..], back, changes, &[("y", "copy"), ("e", "edit"), ("Esc", "close")]]
             .concat()
     };
+    // A narrow pane drops hints from the end, but `Esc` stays the last.
+    let mut hints = hints;
+    while hints.len() > 2 && theme::hint_line(&hints).width() + 2 > chunks[2].width as usize {
+        hints.remove(hints.len() - 2);
+    }
     let mut footer = theme::hint_line(&hints);
     footer.spans.insert(0, Span::raw("  "));
     frame.render_widget(Paragraph::new(footer), chunks[2]);
@@ -319,7 +336,17 @@ fn render_series(app: &App, st: &SpecMetricsState, area: Rect, frame: &mut Frame
     }
     // Nothing at all came back: say what has to be on for it to exist.
     let all_empty = st.series.iter().all(|s| s.error.is_none() && s.points.is_empty());
-    if let Some(hint) = st.target.hint.filter(|_| all_empty && !st.loading) {
+    if all_empty && !st.loading {
+        // A stopped instance or an idle queue publishes nothing, so a short
+        // window can be empty while last week's data is still there.
+        let longest = RANGES[RANGES.len() - 1];
+        let hint = match st.target.hint {
+            Some(h) => h.to_string(),
+            None if st.range != longest => {
+                format!("Nothing published in the last {} — {} for the last {}", st.range.label(), RANGES.len(), longest.label())
+            }
+            None => format!("Nothing published in the last {}", longest.label()),
+        };
         lines.push(Line::styled(format!("  ℹ {hint}"), Style::default().fg(theme::text_dim())));
     }
     frame.render_widget(Paragraph::new(lines), list_area);
@@ -366,13 +393,18 @@ fn render_chart(st: &SpecMetricsState, drawn: &[(usize, &MetricSeries)], area: R
     }
     let sel = drawn.iter().find(|(i, _)| *i == st.selected).map(|(_, s)| *s).unwrap_or(drawn[0].1);
     let title = format!(" {} · {} ({}) ", sel.query.label, sel.query.metric, sel.query.stat.short());
+    let mut block = Block::default()
+        .title(Span::styled(title, Style::default().fg(series_color(st.selected)).add_modifier(Modifier::BOLD)))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::text_dim()));
+    // The change markers' legend on the chart they're drawn on.
+    if let Some(mut caption) = super::metrics_overlay::marker_caption(area.width.saturating_sub(4)) {
+        caption.spans.insert(0, Span::raw(" "));
+        caption.spans.push(Span::raw(" "));
+        block = block.title_bottom(caption);
+    }
     let chart = Chart::new(datasets)
-        .block(
-            Block::default()
-                .title(Span::styled(title, Style::default().fg(series_color(st.selected)).add_modifier(Modifier::BOLD)))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme::text_dim())),
-        )
+        .block(block)
         .x_axis(Axis::default().bounds([0.0, x_max]).labels(vec![
             Span::styled(st.range.start_label(), Style::default().fg(theme::text_dim())),
             Span::styled("now", Style::default().fg(theme::text_dim())),

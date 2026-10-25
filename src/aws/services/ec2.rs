@@ -2292,39 +2292,15 @@ impl Resource for NetworkInterface {
 
 // ── EC2 metrics (CloudWatch) ──────────────────────────────────────────────────
 
-/// Parse one `GetMetricStatistics` response into sorted `(t-offset, value)`
-/// points, reading whichever single statistic the query asked for
-/// (Sum / Maximum / Average). Shared by the simple per-dimension fetchers.
-pub fn parse_metric_datapoints(
-    resp: std::result::Result<
-        aws_sdk_cloudwatch::operation::get_metric_statistics::GetMetricStatisticsOutput,
-        aws_sdk_cloudwatch::error::SdkError<
-            aws_sdk_cloudwatch::operation::get_metric_statistics::GetMetricStatisticsError,
-        >,
-    >,
-    start: i64,
-) -> Vec<(f64, f64)> {
-    let mut pts: Vec<(f64, f64)> = match resp {
-        Ok(r) => r
-            .datapoints()
-            .iter()
-            .filter_map(|dp| {
-                let v = dp.sum().or(dp.maximum()).or(dp.average())?;
-                Some((dp.timestamp()?.secs() as f64 - start as f64, v))
-            })
-            .collect(),
-        Err(_) => vec![],
-    };
-    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    pts
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MetricsTimeRange {
     OneHour,
     SixHours,
     TwentyFourHours,
     SevenDays,
+    /// The spec view's longest range only; the hand-built kinds' `[`/`]`
+    /// never step onto it.
+    ThirtyDays,
 }
 
 impl MetricsTimeRange {
@@ -2334,6 +2310,7 @@ impl MetricsTimeRange {
             Self::SixHours => 21_600,
             Self::TwentyFourHours => 86_400,
             Self::SevenDays => 604_800,
+            Self::ThirtyDays => 2_592_000,
         }
     }
 
@@ -2343,6 +2320,7 @@ impl MetricsTimeRange {
             Self::SixHours => 300,
             Self::TwentyFourHours => 3_600,
             Self::SevenDays => 3_600,
+            Self::ThirtyDays => 3 * 3_600,
         }
     }
 
@@ -2352,6 +2330,7 @@ impl MetricsTimeRange {
             Self::SixHours => "6h",
             Self::TwentyFourHours => "24h",
             Self::SevenDays => "7d",
+            Self::ThirtyDays => "30d",
         }
     }
 
@@ -2361,6 +2340,7 @@ impl MetricsTimeRange {
             Self::SixHours => "6h ago",
             Self::TwentyFourHours => "24h ago",
             Self::SevenDays => "7d ago",
+            Self::ThirtyDays => "30d ago",
         }
     }
 
@@ -2369,7 +2349,7 @@ impl MetricsTimeRange {
             Self::OneHour => Self::SixHours,
             Self::SixHours => Self::TwentyFourHours,
             Self::TwentyFourHours => Self::SevenDays,
-            Self::SevenDays => Self::OneHour,
+            Self::SevenDays | Self::ThirtyDays => Self::OneHour,
         }
     }
 
@@ -2379,6 +2359,7 @@ impl MetricsTimeRange {
             Self::SixHours => Self::OneHour,
             Self::TwentyFourHours => Self::SixHours,
             Self::SevenDays => Self::TwentyFourHours,
+            Self::ThirtyDays => Self::SevenDays,
         }
     }
 }

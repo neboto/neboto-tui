@@ -1,11 +1,6 @@
 use crate::app::{
-    ApiMetricsState, App, AsgMetricsState, CwAlarmMetricsState,
-    EcsMetricsState, ElbMetricsState, MetricsKind,
-    OpenSearchMetricsState, EcsTaskMetricsState,
+    App, CwAlarmMetricsState, MetricsKind,
 };
-use crate::aws::services::api_gateway::ApiMetricsData;
-use crate::aws::services::asg::AsgMetricsData;
-use crate::aws::services::opensearch::OpenSearchMetricsData;
 use crate::aws::services::fsx::{FsxMetricsData, FsxMetricsState};
 use crate::aws::services::s3::{S3MetricsData, S3MetricsState};
 use crate::aws::services::ses::{SesMetricsData, SesMetricsState, SES_METRICS_KEY};
@@ -17,7 +12,6 @@ use crate::aws::services::cloudwatch::{
     CwAnnotation, CwDashboardMetricsData, CwDashboardMetricsState, CwDashboardWidget,
 };
 use crate::aws::services::cognito::{CognitoMetricsData, CognitoMetricsState};
-use crate::aws::services::elb::ElbMetricsData;
 use crate::ui::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -38,10 +32,28 @@ use ratatui::Frame;
 struct MarkerCtx {
     /// When the chart's fetch window ends: x is seconds from `end − x_max`.
     window_end: i64,
-    /// (epoch secs, failed) per timeline row, newest first.
-    events: Vec<(i64, bool)>,
+    /// One per timeline row, newest first.
+    events: Vec<Change>,
     /// Indices into `events` some chart actually drew, for the legend.
     drawn: std::collections::BTreeSet<usize>,
+    loading: bool,
+    range: crate::aws::services::cloudtrail::TrailRange,
+    /// A renderer drew the legend on its own chart ([`marker_caption`]), so
+    /// the pane border stays plain.
+    claimed: bool,
+    /// The CloudTrail lookup stopped at its cap here: no event before it
+    /// was read (`TrailLensState::trail_cut`).
+    cut: Option<i64>,
+    /// The earliest start of any chart drawn, to tell whether one reaches
+    /// back past `cut`.
+    earliest: Option<i64>,
+}
+
+/// A timeline row, as much of it as the markers use.
+struct Change {
+    ts: i64,
+    failed: bool,
+    what: String,
 }
 
 thread_local! {
@@ -58,12 +70,13 @@ pub(super) fn marker_lines(x_max: f64, y_lo: f64, y_hi: f64) -> Vec<MarkerLine> 
         let mut m = m.borrow_mut();
         let Some(ctx) = m.as_mut() else { return Vec::new() };
         let start = ctx.window_end as f64 - x_max;
+        ctx.earliest = Some(ctx.earliest.map_or(start as i64, |e| e.min(start as i64)));
         let mut lines = Vec::new();
-        for (i, &(ts, failed)) in ctx.events.iter().enumerate() {
-            let x = ts as f64 - start;
+        for (i, c) in ctx.events.iter().enumerate() {
+            let x = c.ts as f64 - start;
             if (0.0..=x_max).contains(&x) {
                 ctx.drawn.insert(i);
-                lines.push(([(x, y_lo), (x, y_hi)], failed));
+                lines.push(([(x, y_lo), (x, y_hi)], c.failed));
             }
         }
         lines
@@ -114,266 +127,143 @@ pub fn render_metrics_in_pane(app: &App, kind: MetricsKind, area: Rect, frame: &
     MARKERS.with(|m| {
         *m.borrow_mut() = Some(MarkerCtx {
             window_end: app.metrics_window_end,
-            events: tl.rows.iter().map(|r| (r.ts_secs, r.failed)).collect(),
+            events: tl
+                .rows
+                .iter()
+                .map(|r| Change { ts: r.ts_secs, failed: r.failed, what: r.what.clone() })
+                .collect(),
             drawn: Default::default(),
+            loading: tl.is_loading(),
+            range: tl.range,
+            claimed: false,
+            cut: tl.trail_cut,
+            earliest: None,
         })
     });
     render_metrics_kind(app, kind, area, frame);
-    let drawn = MARKERS.with(|m| m.borrow_mut().take().map(|c| c.drawn).unwrap_or_default());
-    // On the pane's bottom border, like the ownership ribbon (which the
-    // metrics view hides), so the charts keep every row.
-    if area.width > 8 && area.height > 2 {
+    let Some(ctx) = MARKERS.with(|m| m.borrow_mut().take()) else { return };
+    // A hand-built kind with several charts: on the pane's bottom border,
+    // like the ownership ribbon (which the metrics view hides), with the
+    // keys, since those kinds' own hints don't name them.
+    if !ctx.claimed && area.width > 8 && area.height > 2 {
         let row = Rect { x: area.x + 2, y: area.bottom() - 1, width: area.width - 4, height: 1 };
-        let legend = marker_legend(tl, &drawn, app.metrics_window_end, row.width);
+        let mut legend = marker_legend(&ctx, row.width);
+        legend.spans.insert(0, Span::styled(" ┊ ", Style::default().fg(theme::text_dim())));
+        legend.spans.extend(marker_keys());
         let width = legend.width().min(row.width as usize) as u16;
         frame.render_widget(Paragraph::new(legend), Rect { width, ..row });
     }
 }
 
-/// The legend: the drawn events newest first, as many as fit, then how
-/// many didn't and where to read them all.
-fn marker_legend(
-    tl: &crate::ui::widgets::trail_lens::TrailLensState,
-    drawn: &std::collections::BTreeSet<usize>,
-    window_end: i64,
-    width: u16,
-) -> Line<'static> {
+/// The legend for a renderer to draw on its own chart, from what the
+/// charts drawn so far placed (call it after drawing them). Claims the
+/// legend, so the pane border stays plain. None outside a marker context.
+pub(super) fn marker_caption(width: u16) -> Option<Line<'static>> {
+    MARKERS.with(|m| {
+        let mut m = m.borrow_mut();
+        let ctx = m.as_mut()?;
+        ctx.claimed = true;
+        Some(marker_legend(ctx, width))
+    })
+}
+
+fn marker_keys() -> Vec<Span<'static>> {
     let dim = Style::default().fg(theme::text_dim());
     let key = Style::default().fg(theme::warning());
-    let mut spans = vec![Span::styled(" ┊ ", dim)];
-    let tail: Vec<Span<'static>> = vec![
+    vec![
         Span::styled("   c", key),
         Span::styled(" hide · ", dim),
         Span::styled("W", key),
         Span::styled(" timeline", dim),
-    ];
-    let tail_w: usize = tail.iter().map(|s| s.width()).sum();
-    if drawn.is_empty() {
-        let msg = if tl.is_loading() {
+    ]
+}
+
+/// The legend: how many changes the charts drew, then one entry per kind
+/// of change (newest first, `×N` when it repeats — a nightly scheduler's
+/// StopInstances is one entry, not seven), as many as fit in `width`. The
+/// lines say when; `W` lists every event.
+fn marker_legend(ctx: &MarkerCtx, width: u16) -> Line<'static> {
+    let dim = Style::default().fg(theme::text_dim());
+    let mut spans = Vec::new();
+    // The lookup stopped short of the chart's start: the drawn changes are
+    // only the newest, and the stretch before `cut` is unknown, not quiet.
+    let cut = ctx.cut.filter(|&c| ctx.earliest.is_some_and(|e| e < c));
+    if ctx.drawn.is_empty() {
+        let msg = if ctx.loading {
             "loading changes…".to_string()
+        } else if let Some(c) = cut {
+            let at = crate::aws::services::cloudwatch::fmt_epoch_secs(c);
+            format!("no changes since {} (CloudTrail read no further)", &at[5..])
         } else {
-            format!("no changes in this window ({} in the last {})", tl.rows.len(), tl.range.label())
+            format!("no changes in this window ({} in the last {})", ctx.events.len(), ctx.range.label())
         };
         spans.push(Span::styled(msg, dim));
-        spans.extend(tail);
         return Line::from(spans);
     }
-    let budget = (width as usize).saturating_sub(4 + tail_w + 10);
-    let tail: Vec<Span<'static>> = tail.into_iter().chain([Span::styled(" ", dim)]).collect();
+    // (what, count, any failed), in order of each kind's newest event.
+    let mut kinds: Vec<(&str, usize, bool)> = Vec::new();
+    for &i in &ctx.drawn {
+        let c = &ctx.events[i];
+        match kinds.iter_mut().find(|k| k.0 == c.what) {
+            Some(k) => {
+                k.1 += 1;
+                k.2 |= c.failed;
+            }
+            None => kinds.push((&c.what, 1, c.failed)),
+        }
+    }
+    let n = ctx.drawn.len();
+    let plus = if cut.is_some() { "+" } else { "" };
+    spans.push(Span::styled(format!("{n}{plus} change{}  ", if n == 1 && plus.is_empty() { "" } else { "s" }), dim));
+    let more_w = 10;
+    let budget = (width as usize).saturating_sub(spans.iter().map(|s| s.width()).sum::<usize>() + more_w);
     let mut used = 0;
     let mut shown = 0;
-    for &i in drawn {
-        let row = &tl.rows[i];
-        let stamp = crate::aws::services::cloudwatch::fmt_epoch_secs(row.ts_secs);
-        // Time of day within the last day, else the date too (`10-21 14:02`).
-        let from = if window_end - row.ts_secs > 86_400 { 5 } else { 11 };
-        let what: String = if row.what.chars().count() > 40 {
-            row.what.chars().take(39).chain(['…']).collect()
-        } else {
-            row.what.clone()
-        };
-        let text = format!("{} {what}", stamp.get(from..).unwrap_or(&stamp));
-        let w = text.chars().count() + 3;
+    for &(what, count, failed) in &kinds {
+        let what: String = if what.chars().count() > 40 { what.chars().take(39).chain(['…']).collect() } else { what.to_string() };
+        let times = if count > 1 { format!(" ×{count}") } else { String::new() };
+        let w = what.chars().count() + times.chars().count() + 3;
         if shown > 0 && used + w > budget {
             break;
         }
         if shown > 0 {
             spans.push(Span::styled(" · ", dim));
         }
-        let style = if row.failed { Style::default().fg(theme::error()) } else { Style::default().fg(theme::text_primary()) };
-        spans.push(Span::styled(text, style));
+        let style = if failed { Style::default().fg(theme::error()) } else { Style::default().fg(theme::text_primary()) };
+        spans.push(Span::styled(what, style));
+        spans.push(Span::styled(times, dim));
         used += w;
         shown += 1;
     }
-    if shown < drawn.len() {
-        spans.push(Span::styled(format!("  +{} more", drawn.len() - shown), dim));
+    if shown < kinds.len() {
+        spans.push(Span::styled(format!("  +{} more", kinds.len() - shown), dim));
     }
-    if tl.is_loading() {
+    if ctx.loading {
         spans.push(Span::styled("  loading…", dim));
     }
-    spans.extend(tail);
     Line::from(spans)
 }
 
 fn render_metrics_kind(app: &App, kind: MetricsKind, area: Rect, frame: &mut Frame) {
     match kind {
         MetricsKind::Spec => super::spec_metrics::render_spec_metrics(app, area, frame),
-        MetricsKind::Ecs => render_ecs_metrics_overlay(app, area, frame),
-        MetricsKind::EcsTask => render_ecs_task_metrics_overlay(app, area, frame),
-        MetricsKind::Asg => render_asg_metrics_overlay(app, area, frame),
         MetricsKind::CwAlarm => render_cw_alarm_metrics_overlay(app, area, frame),
-        MetricsKind::CwMetric => render_cw_metric_metrics_overlay(app, area, frame),
         MetricsKind::CwDashboard => render_cw_dashboard_metrics_overlay(app, area, frame),
         MetricsKind::Cost => render_cost_metrics_overlay(app, area, frame),
         MetricsKind::Waf => render_waf_metrics_overlay(app, area, frame),
-        MetricsKind::Api => render_api_metrics_overlay(app, area, frame),
-        MetricsKind::OpenSearch => render_opensearch_metrics_overlay(app, area, frame),
         MetricsKind::Fsx => render_fsx_metrics_overlay(app, area, frame),
         MetricsKind::FsxVolume => render_fsx_volume_metrics_overlay(app, area, frame),
-        MetricsKind::Elb | MetricsKind::ElbTarget => render_elb_metrics_overlay(app, area, frame),
         MetricsKind::Nfw => render_nfw_metrics_overlay(app, area, frame),
-        MetricsKind::Eks => render_eks_metrics_overlay(app, area, frame),
         MetricsKind::S3 => render_s3_metrics_overlay(app, area, frame),
         MetricsKind::Ses => render_ses_metrics_overlay(app, area, frame),
         MetricsKind::Msk => render_msk_metrics_overlay(app, area, frame),
         MetricsKind::AgentCore => render_agentcore_metrics_overlay(app, area, frame),
         MetricsKind::Cognito => render_cognito_metrics_overlay(app, area, frame),
         MetricsKind::VpcEndpoint => render_vpce_metrics_overlay(app, area, frame),
-        MetricsKind::Dms => render_dms_metrics_overlay(app, area, frame),
     }
 }
 
 // ── ECS service metrics overlay ───────────────────────────────────────────────
-
-pub fn render_ecs_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
-
-    let (service_name, cluster_name, service_key) = app
-        .get_selected_resource()
-        .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::ecs::EcsServiceInfo>())
-        .map(|s| {
-            (
-                s.service_name.clone(),
-                s.cluster_name.clone(),
-                format!("{}/{}", s.cluster_name, s.service_name),
-            )
-        })
-        .unwrap_or_else(|| ("Unknown".to_string(), String::new(), String::new()));
-
-    let subtitle = if cluster_name.is_empty() {
-        String::new()
-    } else {
-        format!(" [{}]", cluster_name)
-    };
-
-    let block = Block::default()
-        .title(Line::from(vec![
-            Span::styled(" ECS Metrics — ", Style::default().fg(theme::text_dim())),
-            Span::styled(
-                service_name,
-                Style::default()
-                    .fg(theme::aws_orange())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(subtitle, Style::default().fg(theme::text_dim())),
-            Span::styled(" ", Style::default()),
-        ]))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::border_dim()));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-
-    // Time range row
-    let time_line = Line::from(vec![
-        Span::styled("  Range ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled(" prev ", Style::default().fg(theme::text_dim())),
-        Span::styled(
-            format!(" {} ", app.ecs_metrics_time_range.label()),
-            Style::default()
-                .fg(crate::ui::theme::text_primary())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" next ", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-    ]);
-    frame.render_widget(Paragraph::new(time_line), chunks[0]);
-
-    // Footer (ECS overlay)
-    let footer = Line::from(vec![
-        Span::styled("  Esc", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("m", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  close    ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  time range    ", Style::default().fg(theme::text_dim())),
-        Span::styled("r", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  refresh    ", Style::default().fg(theme::text_dim())),
-        Span::styled("Z", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  full-width", Style::default().fg(theme::text_dim())),
-    ]);
-    frame.render_widget(Paragraph::new(footer), chunks[2]);
-
-    match app.ecs_metrics.get(&service_key) {
-        None | Some(EcsMetricsState::Loading) => {
-            let loading = Paragraph::new(Line::from(vec![Span::styled(
-                format!("  {} Loading metrics…", theme::spinner(app.tick_count)),
-                Style::default().fg(theme::warning()),
-            )]));
-            frame.render_widget(loading, chunks[1]);
-        }
-        Some(EcsMetricsState::Loaded(data)) => {
-            let chart_rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Ratio(1, 2),
-                    Constraint::Ratio(1, 2),
-                ])
-                .split(chunks[1]);
-
-            // Top half: CPU and Memory side-by-side
-            let top_cols = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-                .split(chart_rows[0]);
-
-            render_percent_chart(
-                "CPU Utilization (%)",
-                &data.cpu,
-                data.x_max,
-                data.time_range.start_label(),
-                crate::ui::theme::success(),
-                top_cols[0],
-                frame,
-            );
-            render_percent_chart(
-                "Memory Utilization (%)",
-                &data.memory,
-                data.x_max,
-                data.time_range.start_label(),
-                crate::ui::theme::accent(),
-                top_cols[1],
-                frame,
-            );
-
-            // Bottom half: Running and Pending tasks side-by-side
-            let bot_cols = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-                .split(chart_rows[1]);
-
-            render_count_chart(
-                "Running Tasks",
-                &data.running,
-                data.x_max,
-                data.time_range.start_label(),
-                Color::Blue,
-                bot_cols[0],
-                frame,
-            );
-            render_count_chart(
-                "Pending Tasks",
-                &data.pending,
-                data.x_max,
-                data.time_range.start_label(),
-                crate::ui::theme::warning(),
-                bot_cols[1],
-                frame,
-            );
-        }
-    }
-}
 
 fn render_percent_chart(
     title: &str,
@@ -436,67 +326,6 @@ fn render_percent_chart(
     frame.render_widget(chart, area);
 }
 
-fn render_count_chart(
-    title: &str,
-    data: &[(f64, f64)],
-    x_max: f64,
-    start_label: &'static str,
-    color: Color,
-    area: Rect,
-    frame: &mut Frame,
-) {
-    let y_max = data
-        .iter()
-        .map(|(_, y)| *y)
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
-    let y_max = (y_max * 1.2).ceil();
-
-    let mid_label = format!("{:.0}", y_max / 2.0);
-    let top_label = format!("{:.0}", y_max);
-    let title_str = format!(" {} ", title);
-
-    let dataset = Dataset::default()
-        .name(title)
-        .data(data)
-        .marker(symbols::Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(color));
-
-    let marks = marker_lines(x_max, 0.0, y_max);
-    let mut datasets = marker_datasets(&marks);
-    datasets.push(dataset);
-    let chart = Chart::new(datasets)
-        .block(
-            Block::default()
-                .title(Span::styled(
-                    title_str,
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(crate::ui::theme::text_dim())),
-        )
-        .x_axis(
-            Axis::default()
-                .bounds([0.0, x_max])
-                .labels(vec![
-                    Span::styled(start_label, Style::default().fg(theme::text_dim())),
-                    Span::styled("now", Style::default().fg(theme::text_dim())),
-                ]),
-        )
-        .y_axis(
-            Axis::default()
-                .bounds([0.0, y_max])
-                .labels(vec![
-                    Span::styled("0", Style::default().fg(theme::text_dim())),
-                    Span::styled(mid_label, Style::default().fg(theme::text_dim())),
-                    Span::styled(top_label, Style::default().fg(theme::text_dim())),
-                ]),
-        );
-
-    frame.render_widget(chart, area);
-}
-
 // ── ECS per-task / per-container metrics overlay ─────────────────────────────
 
 /// One named, coloured line series for a multi-series chart.
@@ -516,234 +345,6 @@ fn container_colors() -> [Color; 8] {
         Color::LightGreen,
         Color::LightMagenta,
     ]
-}
-
-pub fn render_ecs_task_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
-    use crate::aws::services::ecs::EcsTask;
-
-    let (name, task_arn) = app
-        .get_selected_resource()
-        .and_then(|r| r.as_any().downcast_ref::<EcsTask>())
-        .map(|t| (t.display_name.clone(), t.task_arn.clone()))
-        .unwrap_or_else(|| ("Unknown".to_string(), String::new()));
-
-    let chunks = render_metrics_chrome(
-        "ECS Task Metrics — ",
-        &name,
-        app.ecs_task_metrics_time_range.label(),
-        area,
-        frame,
-    );
-
-    match app.ecs_task_metrics.get(&task_arn) {
-        None | Some(EcsTaskMetricsState::Loading) => {
-            frame.render_widget(
-                Paragraph::new(Line::styled(
-                    format!("  {} Loading metrics…", theme::spinner(app.tick_count)),
-                    Style::default().fg(theme::warning()),
-                )),
-                chunks[1],
-            );
-        }
-        Some(EcsTaskMetricsState::Loaded(data)) if data.empty => {
-            let lines = vec![
-                Line::from(""),
-                Line::styled(
-                    "  No per-task metrics found for this task.",
-                    Style::default().fg(theme::text_dim()),
-                ),
-                Line::from(""),
-                Line::styled(
-                    "  Per-task and per-container metrics require Container Insights",
-                    Style::default().fg(theme::text_dim()),
-                ),
-                Line::styled(
-                    "  with enhanced observability enabled on the cluster. Standard",
-                    Style::default().fg(theme::text_dim()),
-                ),
-                Line::styled(
-                    "  Container Insights only publishes cluster/service-level metrics.",
-                    Style::default().fg(theme::text_dim()),
-                ),
-                Line::from(""),
-                Line::styled(
-                    "  Namespace: ECS/ContainerInsights │ ClusterName+TaskDefinitionFamily+TaskId",
-                    Style::default().fg(theme::border_dim()),
-                ),
-            ];
-            frame.render_widget(Paragraph::new(lines), chunks[1]);
-        }
-        Some(EcsTaskMetricsState::Loaded(data)) => render_ecs_task_charts(data, chunks[1], frame),
-    }
-}
-
-fn render_ecs_task_charts(
-    data: &crate::aws::services::ecs::EcsTaskMetricsData,
-    area: Rect,
-    frame: &mut Frame,
-) {
-    let start_label = data.time_range.start_label();
-    let x_max = data.x_max;
-
-    // Top half: task totals (CPU% / Mem% / Network / Storage). Bottom half:
-    // per-container CPU% and Memory% (one line per container).
-    let halves = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-        .split(area);
-
-    let top = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Ratio(1, 4),
-            Constraint::Ratio(1, 4),
-            Constraint::Ratio(1, 4),
-            Constraint::Ratio(1, 4),
-        ])
-        .split(halves[0]);
-
-    render_percent_chart("Task CPU (%)", &data.cpu, x_max, start_label, crate::ui::theme::success(), top[0], frame);
-    render_percent_chart("Task Memory (%)", &data.memory, x_max, start_label, crate::ui::theme::accent(), top[1], frame);
-    render_multi_chart(
-        "Network (bytes/s)",
-        &[("rx", &data.net_rx, Color::Blue), ("tx", &data.net_tx, crate::ui::theme::heading())],
-        x_max,
-        start_label,
-        false,
-        top[2],
-        frame,
-    );
-    render_multi_chart(
-        "Storage (bytes)",
-        &[
-            ("read", &data.storage_read, crate::ui::theme::warning()),
-            ("write", &data.storage_write, Color::LightRed),
-        ],
-        x_max,
-        start_label,
-        false,
-        top[3],
-        frame,
-    );
-
-    // Bottom: per-container CPU% and Memory%, each a multi-series chart.
-    let bottom = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-        .split(halves[1]);
-
-    let container_palette = container_colors();
-    let cpu_series: Vec<ChartSeries> = data
-        .containers
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            (
-                c.name.as_str(),
-                c.cpu.as_slice(),
-                container_palette[i % container_palette.len()],
-            )
-        })
-        .collect();
-    let mem_series: Vec<ChartSeries> = data
-        .containers
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            (
-                c.name.as_str(),
-                c.memory.as_slice(),
-                container_palette[i % container_palette.len()],
-            )
-        })
-        .collect();
-
-    render_multi_chart("Container CPU (%)", &cpu_series, x_max, start_label, true, bottom[0], frame);
-    render_multi_chart("Container Memory (%)", &mem_series, x_max, start_label, true, bottom[1], frame);
-}
-
-/// A line chart with several named series (each drawn in its own colour; the
-/// series names form the built-in legend). `percent` caps the y-axis at 100 and
-/// labels ticks with `%`; otherwise the axis auto-scales to the peak.
-fn render_multi_chart(
-    title: &str,
-    series: &[ChartSeries],
-    x_max: f64,
-    start_label: &'static str,
-    percent: bool,
-    area: Rect,
-    frame: &mut Frame,
-) {
-    let peak = series
-        .iter()
-        .flat_map(|(_, d, _)| d.iter().map(|(_, y)| *y))
-        .fold(0.0_f64, f64::max);
-    let y_max = if percent {
-        (peak * 1.2).clamp(5.0, 100.0)
-    } else {
-        peak.max(1.0) * 1.2
-    };
-
-    let fmt = |v: f64| {
-        if percent {
-            format!("{:.0}%", v)
-        } else if v >= 1_000_000.0 {
-            format!("{:.1}M", v / 1_000_000.0)
-        } else if v >= 1_000.0 {
-            format!("{:.1}k", v / 1_000.0)
-        } else if v >= 10.0 {
-            format!("{:.0}", v)
-        } else {
-            format!("{:.1}", v)
-        }
-    };
-    let mid_label = fmt(y_max / 2.0);
-    let top_label = fmt(y_max);
-
-    let datasets: Vec<Dataset> = series
-        .iter()
-        .filter(|(_, d, _)| !d.is_empty())
-        .map(|(name, d, color)| {
-            Dataset::default()
-                .name(*name)
-                .data(d)
-                .marker(symbols::Marker::Braille)
-                .graph_type(GraphType::Line)
-                .style(Style::default().fg(*color))
-        })
-        .collect();
-
-    let marks = marker_lines(x_max, 0.0, y_max);
-    let datasets: Vec<Dataset> = marker_datasets(&marks).into_iter().chain(datasets).collect();
-    let chart = Chart::new(datasets)
-        .block(
-            Block::default()
-                .title(Span::styled(
-                    format!(" {} ", title),
-                    Style::default().fg(crate::ui::theme::text_primary()).add_modifier(Modifier::BOLD),
-                ))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(crate::ui::theme::text_dim())),
-        )
-        .x_axis(
-            Axis::default()
-                .bounds([0.0, x_max])
-                .labels(vec![
-                    Span::styled(start_label, Style::default().fg(theme::text_dim())),
-                    Span::styled("now", Style::default().fg(theme::text_dim())),
-                ]),
-        )
-        .y_axis(
-            Axis::default()
-                .bounds([0.0, y_max])
-                .labels(vec![
-                    Span::styled("0", Style::default().fg(theme::text_dim())),
-                    Span::styled(mid_label, Style::default().fg(theme::text_dim())),
-                    Span::styled(top_label, Style::default().fg(theme::text_dim())),
-                ]),
-        );
-
-    frame.render_widget(chart, area);
 }
 
 // ── DynamoDB metrics overlay ──────────────────────────────────────────────────
@@ -985,24 +586,6 @@ fn grid_3x2(area: Rect) -> Vec<Rect> {
     cells
 }
 
-/// 2 rows × 2 columns — for the 4-chart overlays (DX virtual interface).
-fn grid_2x2(area: Rect) -> Vec<Rect> {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-        .split(area);
-    let mut cells = Vec::with_capacity(4);
-    for row in rows.iter() {
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-            .split(*row);
-        cells.push(cols[0]);
-        cells.push(cols[1]);
-    }
-    cells
-}
-
 /// 4 rows × 2 columns — for the 7–8-chart overlays (DX connection).
 fn grid_4x2(area: Rect) -> Vec<Rect> {
     let rows = Layout::default()
@@ -1029,166 +612,6 @@ fn grid_4x2(area: Rect) -> Vec<Rect> {
 // ── CloudFront metrics overlay ────────────────────────────────────────────────
 
 // ── OpenSearch metrics overlay ────────────────────────────────────────────────
-
-pub fn render_opensearch_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
-    let name = app
-        .get_selected_resource()
-        .map(|r| r.name().to_string())
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    let block = Block::default()
-        .title(Line::from(vec![
-            Span::styled(" OpenSearch Metrics — ", Style::default().fg(theme::text_dim())),
-            Span::styled(
-                name,
-                Style::default()
-                    .fg(theme::aws_orange())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default()),
-        ]))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::border_dim()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-
-    let time_line = Line::from(vec![
-        Span::styled("  Range ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled(" prev ", Style::default().fg(theme::text_dim())),
-        Span::styled(
-            format!(" {} ", app.opensearch_metrics_time_range.label()),
-            Style::default().fg(crate::ui::theme::text_primary()).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" next ", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-    ]);
-    frame.render_widget(Paragraph::new(time_line), chunks[0]);
-
-    let footer = Line::from(vec![
-        Span::styled("  Esc", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("m", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  close    ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  time range    ", Style::default().fg(theme::text_dim())),
-        Span::styled("r", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  refresh    ", Style::default().fg(theme::text_dim())),
-        Span::styled("Z", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  full-width", Style::default().fg(theme::text_dim())),
-    ]);
-    frame.render_widget(Paragraph::new(footer), chunks[2]);
-
-    let id = app
-        .get_selected_resource()
-        .map(|r| r.id().to_string())
-        .unwrap_or_default();
-    match app.opensearch_metrics.get(&id) {
-        None | Some(OpenSearchMetricsState::Loading) => {
-            frame.render_widget(
-                Paragraph::new(Line::styled(
-                    "  Loading metrics…",
-                    Style::default().fg(theme::text_dim()),
-                )),
-                chunks[1],
-            );
-        }
-        Some(OpenSearchMetricsState::Loaded(data)) => {
-            render_opensearch_charts(data, chunks[1], frame)
-        }
-    }
-}
-
-fn render_opensearch_charts(data: &OpenSearchMetricsData, area: Rect, frame: &mut Frame) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-        ])
-        .split(area);
-    let start_label = data.time_range.start_label();
-    let x_max = data.x_max;
-
-    let split = |area: Rect| {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-            .split(area)
-    };
-
-    let top = split(rows[0]);
-    render_percent_chart(
-        "CPU Utilization (%)",
-        &data.cpu,
-        x_max,
-        start_label,
-        crate::ui::theme::success(),
-        top[0],
-        frame,
-    );
-    render_percent_chart(
-        "JVM Memory Pressure (%)",
-        &data.jvm_memory_pressure,
-        x_max,
-        start_label,
-        crate::ui::theme::warning(),
-        top[1],
-        frame,
-    );
-
-    let mid = split(rows[1]);
-    render_value_chart(
-        "Free Storage Space (MB)",
-        &data.free_storage,
-        x_max,
-        start_label,
-        crate::ui::theme::accent(),
-        mid[0],
-        frame,
-    );
-    render_value_chart(
-        "Cluster Status: red",
-        &data.cluster_status_red,
-        x_max,
-        start_label,
-        crate::ui::theme::error(),
-        mid[1],
-        frame,
-    );
-
-    let bot = split(rows[2]);
-    render_value_chart(
-        "Search Rate (/min)",
-        &data.search_rate,
-        x_max,
-        start_label,
-        Color::Blue,
-        bot[0],
-        frame,
-    );
-    render_value_chart(
-        "Indexing Rate (/min)",
-        &data.indexing_rate,
-        x_max,
-        start_label,
-        crate::ui::theme::heading(),
-        bot[1],
-        frame,
-    );
-}
 
 // ── FSx storage metrics overlay ───────────────────────────────────────────────
 
@@ -1475,265 +898,7 @@ fn fmt_bytes_f(bytes: f64) -> String {
 
 // ── ELB (load balancer / target group) metrics overlay ────────────────────────
 
-pub fn render_elb_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
-    let name = app
-        .get_selected_resource()
-        .map(|r| r.name().to_string())
-        .unwrap_or_else(|| "Unknown".to_string());
-    let arn = app
-        .get_selected_resource()
-        .map(|r| r.id().to_string())
-        .unwrap_or_default();
-
-    let subject = match app.elb_metrics.get(&arn) {
-        Some(ElbMetricsState::Loaded(d)) => d.subject.clone(),
-        _ => "ELB".to_string(),
-    };
-
-    let block = Block::default()
-        .title(Line::from(vec![
-            Span::styled(
-                format!(" {} Metrics — ", subject),
-                Style::default().fg(theme::text_dim()),
-            ),
-            Span::styled(
-                name,
-                Style::default()
-                    .fg(theme::aws_orange())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default()),
-        ]))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::border_dim()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-
-    let time_line = Line::from(vec![
-        Span::styled("  Range ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled(" prev ", Style::default().fg(theme::text_dim())),
-        Span::styled(
-            format!(" {} ", app.elb_metrics_time_range.label()),
-            Style::default().fg(crate::ui::theme::text_primary()).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" next ", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-    ]);
-    frame.render_widget(Paragraph::new(time_line), chunks[0]);
-
-    let footer = Line::from(vec![
-        Span::styled("  Esc", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("m", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  close    ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  time range    ", Style::default().fg(theme::text_dim())),
-        Span::styled("r", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  refresh    ", Style::default().fg(theme::text_dim())),
-        Span::styled("Z", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  full-width", Style::default().fg(theme::text_dim())),
-    ]);
-    frame.render_widget(Paragraph::new(footer), chunks[2]);
-
-    match app.elb_metrics.get(&arn) {
-        None | Some(ElbMetricsState::Loading) => {
-            frame.render_widget(
-                Paragraph::new(Line::styled(
-                    "  Loading metrics…",
-                    Style::default().fg(theme::text_dim()),
-                )),
-                chunks[1],
-            );
-        }
-        Some(ElbMetricsState::Loaded(data)) => render_elb_charts(data, chunks[1], frame),
-    }
-}
-
-/// Render an ELB metrics result as a 2-column grid of value charts (rows scale
-/// to the series count, so ALB's 6 metrics and NLB's 4 both lay out cleanly).
-fn render_elb_charts(data: &ElbMetricsData, area: Rect, frame: &mut Frame) {
-    if data.series.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::styled(
-                "  No metric data in this window.",
-                Style::default().fg(theme::text_dim()),
-            )),
-            area,
-        );
-        return;
-    }
-    let start_label = data.time_range.start_label();
-    let x_max = data.x_max;
-    let palette = [
-        crate::ui::theme::success(),
-        crate::ui::theme::accent(),
-        crate::ui::theme::error(),
-        crate::ui::theme::warning(),
-        crate::ui::theme::heading(),
-        Color::Blue,
-    ];
-
-    let row_count = data.series.len().div_ceil(2);
-    let row_constraints: Vec<Constraint> =
-        (0..row_count).map(|_| Constraint::Ratio(1, row_count as u32)).collect();
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(row_constraints)
-        .split(area);
-
-    for (i, series) in data.series.iter().enumerate() {
-        let row = &rows[i / 2];
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-            .split(*row);
-        let cell = cols[i % 2];
-        render_value_chart(
-            &series.title,
-            &series.points,
-            x_max,
-            start_label,
-            palette[i % palette.len()],
-            cell,
-            frame,
-        );
-    }
-}
-
 // ── API Gateway metrics overlay ───────────────────────────────────────────────
-
-pub fn render_api_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
-
-    let name = app
-        .get_selected_resource()
-        .map(|r| r.name().to_string())
-        .unwrap_or_else(|| "Unknown".to_string());
-    let api_id = app
-        .get_selected_resource()
-        .map(|r| r.id().to_string())
-        .unwrap_or_default();
-
-    let block = Block::default()
-        .title(Line::from(vec![
-            Span::styled(" API Gateway Metrics — ", Style::default().fg(theme::text_dim())),
-            Span::styled(
-                name,
-                Style::default()
-                    .fg(theme::aws_orange())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default()),
-        ]))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::border_dim()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-
-    let time_line = Line::from(vec![
-        Span::styled("  Range ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled(" prev ", Style::default().fg(theme::text_dim())),
-        Span::styled(
-            format!(" {} ", app.apigw_metrics_time_range.label()),
-            Style::default()
-                .fg(crate::ui::theme::text_primary())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" next ", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-    ]);
-    frame.render_widget(Paragraph::new(time_line), chunks[0]);
-
-    let footer = Line::from(vec![
-        Span::styled("  Esc", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("m", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  close    ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  time range    ", Style::default().fg(theme::text_dim())),
-        Span::styled("r", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  refresh    ", Style::default().fg(theme::text_dim())),
-        Span::styled("Z", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  full-width", Style::default().fg(theme::text_dim())),
-    ]);
-    frame.render_widget(Paragraph::new(footer), chunks[2]);
-
-    match app.apigw_metrics.get(&api_id) {
-        None | Some(ApiMetricsState::Loading) => {
-            let msg = Paragraph::new(Line::from(Span::styled(
-                "  Loading metrics…",
-                Style::default().fg(theme::text_dim()),
-            )));
-            frame.render_widget(msg, chunks[1]);
-        }
-        Some(ApiMetricsState::Loaded(data)) => render_api_charts(data, chunks[1], frame),
-    }
-}
-
-fn render_api_charts(data: &ApiMetricsData, area: Rect, frame: &mut Frame) {
-    use crate::aws::services::api_gateway::ApiMetricsFlavor;
-
-    let start_label = data.time_range.start_label();
-    let x_max = data.x_max;
-
-    match data.flavor {
-        // REST: 4×2 — requests + errors, latencies, cache hit/miss.
-        ApiMetricsFlavor::Rest => {
-            let cells = grid_4x2(area);
-            render_value_chart("Requests (Count)", &data.count, x_max, start_label, crate::ui::theme::accent(), cells[0], frame);
-            render_value_chart("4XX Errors", &data.error_4xx, x_max, start_label, crate::ui::theme::warning(), cells[1], frame);
-            render_value_chart("5XX Errors", &data.error_5xx, x_max, start_label, crate::ui::theme::error(), cells[2], frame);
-            render_value_chart("Latency (ms)", &data.latency, x_max, start_label, crate::ui::theme::success(), cells[3], frame);
-            render_value_chart("Integration Latency (ms)", &data.integration, x_max, start_label, Color::Blue, cells[4], frame);
-            render_value_chart("Cache Hits (needs stage cache)", &data.cache_hit, x_max, start_label, crate::ui::theme::heading(), cells[5], frame);
-            render_value_chart("Cache Misses", &data.cache_miss, x_max, start_label, Color::LightMagenta, cells[6], frame);
-        }
-        // HTTP: 3×2 — requests + errors, latencies, data processed.
-        ApiMetricsFlavor::Http => {
-            let cells = grid_3x2(area);
-            render_value_chart("Requests (Count)", &data.count, x_max, start_label, crate::ui::theme::accent(), cells[0], frame);
-            render_value_chart("Data Processed (bytes)", &data.data_processed, x_max, start_label, crate::ui::theme::heading(), cells[1], frame);
-            render_value_chart("4xx Errors", &data.error_4xx, x_max, start_label, crate::ui::theme::warning(), cells[2], frame);
-            render_value_chart("5xx Errors", &data.error_5xx, x_max, start_label, crate::ui::theme::error(), cells[3], frame);
-            render_value_chart("Latency (ms)", &data.latency, x_max, start_label, crate::ui::theme::success(), cells[4], frame);
-            render_value_chart("Integration Latency (ms)", &data.integration, x_max, start_label, Color::Blue, cells[5], frame);
-        }
-        // WebSocket: 3×2 — connections + messages, client/execution errors,
-        // integration errors + latency. (No Latency metric for WS.)
-        ApiMetricsFlavor::WebSocket => {
-            let cells = grid_3x2(area);
-            render_value_chart("Connections (ConnectCount)", &data.count, x_max, start_label, crate::ui::theme::accent(), cells[0], frame);
-            render_value_chart("Messages (MessageCount)", &data.message_count, x_max, start_label, crate::ui::theme::heading(), cells[1], frame);
-            render_value_chart("Client Errors", &data.error_4xx, x_max, start_label, crate::ui::theme::warning(), cells[2], frame);
-            render_value_chart("Execution Errors", &data.error_5xx, x_max, start_label, crate::ui::theme::error(), cells[3], frame);
-            render_value_chart("Integration Errors", &data.integration_errors, x_max, start_label, Color::LightRed, cells[4], frame);
-            render_value_chart("Integration Latency (ms)", &data.integration, x_max, start_label, Color::Blue, cells[5], frame);
-        }
-    }
-}
 
 // ── CloudWatch alarm metric overlay ───────────────────────────────────────────
 
@@ -1847,111 +1012,6 @@ pub fn render_cw_alarm_metrics_overlay(app: &App, area: Rect, frame: &mut Frame)
                 &data.points,
                 data.x_max,
                 Some(data.threshold),
-                data.time_range.start_label(),
-                chunks[1],
-                frame,
-            );
-        }
-    }
-}
-
-/// Metric-explorer chart: a raw CloudWatch metric (`m` on a CW Metric row),
-/// reusing the alarm-metric fetch/state but with no threshold line.
-pub fn render_cw_metric_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
-    use crate::aws::services::cloudwatch::CwMetric;
-
-    let (key, metric_name, namespace, dims) = app
-        .get_selected_resource()
-        .and_then(|r| r.as_any().downcast_ref::<CwMetric>())
-        .map(|m| {
-            (
-                m.id.clone(),
-                m.metric_name.clone(),
-                m.namespace.clone(),
-                m.dims_label(),
-            )
-        })
-        .unwrap_or_else(|| ("".into(), String::new(), String::new(), String::new()));
-
-    let block = Block::default()
-        .title(Line::from(vec![
-            Span::styled(" Metric — ", Style::default().fg(theme::text_dim())),
-            Span::styled(
-                format!("{} / {}", namespace, metric_name),
-                Style::default().fg(theme::aws_orange()).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                if dims.is_empty() { String::new() } else { format!("  [{}]", dims) },
-                Style::default().fg(theme::text_dim()),
-            ),
-        ]))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::border_dim()));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
-        .split(inner);
-
-    let time_line = Line::from(vec![
-        Span::styled("  Range ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled(" prev ", Style::default().fg(theme::text_dim())),
-        Span::styled(
-            format!(" {} ", app.cw_alarm_metrics_time_range.label()),
-            Style::default().fg(crate::ui::theme::text_primary()).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" next ", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("    statistic ", Style::default().fg(theme::text_dim())),
-        Span::styled("Average", Style::default().fg(theme::accent())),
-    ]);
-    frame.render_widget(Paragraph::new(time_line), chunks[0]);
-
-    let footer = Line::from(vec![
-        Span::styled("  Esc", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("m", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  close    ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  time range    ", Style::default().fg(theme::text_dim())),
-        Span::styled("r", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  refresh    ", Style::default().fg(theme::text_dim())),
-        Span::styled("Z", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  full-width", Style::default().fg(theme::text_dim())),
-    ]);
-    frame.render_widget(Paragraph::new(footer), chunks[2]);
-
-    match app.cw_alarm_metrics.get(&key) {
-        None | Some(CwAlarmMetricsState::Loading) => {
-            let loading = Paragraph::new(Line::from(vec![Span::styled(
-                format!("  {} Loading metric…", theme::spinner(app.tick_count)),
-                Style::default().fg(theme::warning()),
-            )]));
-            frame.render_widget(loading, chunks[1]);
-        }
-        Some(CwAlarmMetricsState::Loaded(data)) => {
-            if data.points.is_empty() {
-                let empty = Paragraph::new(Line::from(vec![Span::styled(
-                    format!(
-                        "  No datapoints for {}/{} in this range — try widening with ].",
-                        namespace, metric_name
-                    ),
-                    Style::default().fg(theme::text_dim()),
-                )]));
-                frame.render_widget(empty, chunks[1]);
-                return;
-            }
-            render_threshold_chart(
-                &metric_name,
-                &data.points,
-                data.x_max,
-                None,
                 data.time_range.start_label(),
                 chunks[1],
                 frame,
@@ -3158,113 +2218,6 @@ fn render_dashboard_sparkline(
 
 // ── Auto Scaling group metrics overlay ────────────────────────────────────────
 
-pub fn render_asg_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
-    use crate::aws::services::asg::AsgGroup;
-
-
-    let (name, group_name) = app
-        .get_selected_resource()
-        .and_then(|r| r.as_any().downcast_ref::<AsgGroup>())
-        .map(|g| (g.name.clone(), g.name.clone()))
-        .unwrap_or_else(|| ("Unknown".into(), String::new()));
-
-    let block = Block::default()
-        .title(Line::from(vec![
-            Span::styled(" ASG Metrics — ", Style::default().fg(theme::text_dim())),
-            Span::styled(
-                name,
-                Style::default().fg(theme::aws_orange()).add_modifier(Modifier::BOLD),
-            ),
-        ]))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::border_dim()));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
-        .split(inner);
-
-    let time_line = Line::from(vec![
-        Span::styled("  Range ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled(" prev ", Style::default().fg(theme::text_dim())),
-        Span::styled(
-            format!(" {} ", app.asg_metrics_time_range.label()),
-            Style::default().fg(crate::ui::theme::text_primary()).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" next ", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-    ]);
-    frame.render_widget(Paragraph::new(time_line), chunks[0]);
-
-    let footer = Line::from(vec![
-        Span::styled("  Esc", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("m", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  close    ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  time range    ", Style::default().fg(theme::text_dim())),
-        Span::styled("r", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  refresh    ", Style::default().fg(theme::text_dim())),
-        Span::styled("Z", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  full-width", Style::default().fg(theme::text_dim())),
-    ]);
-    frame.render_widget(Paragraph::new(footer), chunks[2]);
-
-    match app.asg_metrics.get(&group_name) {
-        None | Some(AsgMetricsState::Loading) => {
-            let loading = Paragraph::new(Line::from(vec![Span::styled(
-                format!("  {} Loading metrics…", theme::spinner(app.tick_count)),
-                Style::default().fg(theme::warning()),
-            )]));
-            frame.render_widget(loading, chunks[1]);
-        }
-        Some(AsgMetricsState::Loaded(data)) => {
-            let empty = data.desired.is_empty()
-                && data.in_service.is_empty()
-                && data.total.is_empty()
-                && data.pending.is_empty();
-            if empty {
-                let msg = Paragraph::new(Line::from(vec![Span::styled(
-                    "  No datapoints — enable group metrics collection on the ASG (Monitoring → Group metrics).",
-                    Style::default().fg(theme::text_dim()),
-                )]));
-                frame.render_widget(msg, chunks[1]);
-                return;
-            }
-            render_asg_charts(data, chunks[1], frame);
-        }
-    }
-}
-
-fn render_asg_charts(data: &AsgMetricsData, area: Rect, frame: &mut Frame) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-        .split(area);
-    let start_label = data.time_range.start_label();
-    let x_max = data.x_max;
-
-    let row1 = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-        .split(rows[0]);
-    render_value_chart("Desired Capacity", &data.desired, x_max, start_label, crate::ui::theme::success(), row1[0], frame);
-    render_value_chart("In-Service Instances", &data.in_service, x_max, start_label, crate::ui::theme::accent(), row1[1], frame);
-
-    let row2 = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-        .split(rows[1]);
-    render_value_chart("Total Instances", &data.total, x_max, start_label, Color::Blue, row2[0], frame);
-    render_value_chart("Pending Instances", &data.pending, x_max, start_label, crate::ui::theme::warning(), row2[1], frame);
-}
-
 /// Daily-spend chart for the selected cost row. The series is already loaded
 /// with the row (no fetch), so this just charts `item.daily`.
 pub fn render_cost_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
@@ -3758,161 +2711,6 @@ pub fn render_nfw_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
     frame.render_widget(Paragraph::new(footer), chunks[2]);
 }
 
-pub fn render_eks_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
-    use crate::aws::services::eks::EksMetricsState;
-
-    let cluster_name = app
-        .get_selected_resource()
-        .map(|r| r.name().to_string())
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    let block = Block::default()
-        .title(Line::from(vec![
-            Span::styled(" EKS Metrics — ", Style::default().fg(theme::text_dim())),
-            Span::styled(
-                &cluster_name,
-                Style::default()
-                    .fg(theme::aws_orange())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default()),
-        ]))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::border_dim()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-
-    let time_line = Line::from(vec![
-        Span::styled("  Range ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled(" prev ", Style::default().fg(theme::text_dim())),
-        Span::styled(
-            format!(" {} ", app.ec2_metrics_time_range.label()),
-            Style::default()
-                .fg(crate::ui::theme::text_primary())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" next ", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled(
-            "   r refresh   Z full-width   Esc close",
-            Style::default().fg(theme::text_dim()),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(time_line), chunks[0]);
-
-    match app.eks_metrics.get(&cluster_name) {
-        None | Some(EksMetricsState::Loading) => {
-            frame.render_widget(
-                Paragraph::new(Line::styled(
-                    "  Loading metrics…",
-                    Style::default().fg(theme::text_dim()),
-                )),
-                chunks[1],
-            );
-        }
-        Some(EksMetricsState::Loaded(data)) if data.is_empty() => {
-            let note = Paragraph::new(vec![
-                Line::raw(""),
-                Line::from(Span::styled(
-                    "  No Container Insights metrics for this cluster.",
-                    Style::default().fg(theme::warning()),
-                )),
-                Line::raw(""),
-                Line::from(Span::styled(
-                    "  Enable Container Insights on the cluster to chart node/pod",
-                    Style::default().fg(theme::text_dim()),
-                )),
-                Line::from(Span::styled(
-                    "  counts and CPU/memory utilization here.",
-                    Style::default().fg(theme::text_dim()),
-                )),
-            ]);
-            frame.render_widget(note, chunks[1]);
-        }
-        Some(EksMetricsState::Loaded(data)) => {
-            let rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Ratio(1, 3), Constraint::Ratio(1, 3), Constraint::Ratio(1, 3)])
-                .split(chunks[1]);
-            let start_label = data.time_range.start_label();
-            let x_max = data.x_max;
-            let split = |area: Rect| {
-                Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-                    .split(area)
-            };
-
-            let top = split(rows[0]);
-            render_value_chart(
-                "Node Count",
-                &data.node_count,
-                x_max,
-                start_label,
-                crate::ui::theme::success(),
-                top[0],
-                frame,
-            );
-            render_value_chart(
-                "Failed Nodes",
-                &data.failed_node_count,
-                x_max,
-                start_label,
-                crate::ui::theme::error(),
-                top[1],
-                frame,
-            );
-
-            let mid = split(rows[1]);
-            render_value_chart(
-                "Running Pods",
-                &data.running_pod_count,
-                x_max,
-                start_label,
-                crate::ui::theme::accent(),
-                mid[0],
-                frame,
-            );
-            render_percent_chart(
-                "Node CPU %",
-                &data.node_cpu_util,
-                x_max,
-                start_label,
-                crate::ui::theme::warning(),
-                mid[1],
-                frame,
-            );
-
-            let bot = split(rows[2]);
-            render_percent_chart(
-                "Node Memory %",
-                &data.node_mem_util,
-                x_max,
-                start_label,
-                crate::ui::theme::heading(),
-                bot[0],
-                frame,
-            );
-        }
-    }
-
-    let footer = Line::from(vec![Span::styled(
-        "  Namespace: ContainerInsights │ ClusterName dimension",
-        Style::default().fg(theme::text_dim()),
-    )]);
-    frame.render_widget(Paragraph::new(footer), chunks[2]);
-}
-
 // ── U14 metrics-gap overlays (NAT GW / VPN / DX / ECR / GA / WorkSpaces / Cognito)
 
 /// Lay `area` out as 3 full-width rows — for the 3-chart overlays.
@@ -4038,57 +2836,6 @@ fn render_vpce_charts(data: &VpceMetricsData, area: Rect, frame: &mut Frame) {
     render_value_chart("New Connections", &data.new_connections, x_max, start_label, Color::Blue, cells[2], frame);
     render_value_chart("Packets Dropped", &data.packets_dropped, x_max, start_label, crate::ui::theme::error(), cells[3], frame);
     render_value_chart("RST Packets Received", &data.rst_packets, x_max, start_label, crate::ui::theme::warning(), cells[4], frame);
-}
-
-/// DMS task (CDC latency / throughput) or replication instance (CPU / memory
-/// / storage / swap) — one overlay, four charts, titles carried by the data.
-pub fn render_dms_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
-    use crate::aws::services::dms::{DmsMetricsFlavor, DmsMetricsState};
-    let Some(resource) = app.get_selected_resource() else {
-        return;
-    };
-    let (name, id) = (resource.name().to_string(), resource.id().to_string());
-    let heading = if resource.resource_type() == "DMS Task" {
-        " DMS Task Metrics — "
-    } else {
-        " DMS Instance Metrics — "
-    };
-    let chunks = render_metrics_chrome(heading, &name, app.dms_metrics_time_range.label(), area, frame);
-
-    match app.dms_metrics.get(&id) {
-        None | Some(DmsMetricsState::Loading) => {
-            frame.render_widget(
-                Paragraph::new(Line::styled(
-                    "  Loading metrics…",
-                    Style::default().fg(theme::text_dim()),
-                )),
-                chunks[1],
-            );
-        }
-        Some(DmsMetricsState::Loaded(data)) => {
-            let start_label = data.time_range.start_label();
-            let cells = grid_2x2(chunks[1]);
-            let colors = match data.flavor {
-                // Latency charts in warning colour: rising CDC latency is the
-                // "why is my replica behind" signal.
-                DmsMetricsFlavor::Task => [
-                    crate::ui::theme::warning(),
-                    crate::ui::theme::warning(),
-                    crate::ui::theme::accent(),
-                    crate::ui::theme::success(),
-                ],
-                DmsMetricsFlavor::Instance => [
-                    crate::ui::theme::accent(),
-                    crate::ui::theme::success(),
-                    crate::ui::theme::heading(),
-                    crate::ui::theme::warning(),
-                ],
-            };
-            for (i, (title, series)) in data.series.iter().enumerate().take(4) {
-                render_value_chart(title, series, data.x_max, start_label, colors[i], cells[i], frame);
-            }
-        }
-    }
 }
 
 /// AgentCore's five families share one namespace and one overlay; the flavor
@@ -4260,7 +3007,16 @@ mod tests {
         let _scope = MarkerScope;
         if let Some(events) = events {
             MARKERS.with(|m| {
-                *m.borrow_mut() = Some(MarkerCtx { window_end: END, events, drawn: Default::default() })
+                *m.borrow_mut() = Some(MarkerCtx {
+                    window_end: END,
+                    events: events.into_iter().map(|(ts, failed)| Change { ts, failed, what: String::new() }).collect(),
+                    drawn: Default::default(),
+                    loading: false,
+                    range: Default::default(),
+                    claimed: false,
+                    cut: None,
+                    earliest: None,
+                })
             });
         }
         let backend = ratatui::backend::TestBackend::new(80, 16);
@@ -4289,42 +3045,42 @@ mod tests {
     }
 
     #[test]
-    fn the_legend_names_drawn_changes_newest_first_and_counts_the_rest() {
-        use crate::timeline::{TimelineRow, TimelineSource};
-        let row = |ts: i64, what: &str, failed: bool| TimelineRow {
-            ts_secs: ts,
-            time: String::new(),
-            source: TimelineSource::Trail,
-            what: what.to_string(),
-            who: String::new(),
-            detail: String::new(),
-            error: String::new(),
-            failed,
-            json: String::new(),
-        };
-        let end = 1_800_000_000;
-        let tl = crate::ui::widgets::trail_lens::TrailLensState {
-            rows: vec![
-                row(end - 600, "UpdateService", false),
-                row(end - 2 * 86_400, "AttachRolePolicy", true),
-                row(end - 3 * 86_400, "PutRolePolicy", false),
+    fn the_legend_counts_each_kind_of_change_once() {
+        let change = |what: &str, failed: bool| Change { ts: 0, failed, what: what.to_string() };
+        let ctx = |drawn: &[usize]| MarkerCtx {
+            window_end: 0,
+            events: vec![
+                change("StopInstances", false),
+                change("StopInstances", false),
+                change("AttachRolePolicy", true),
+                change("StopInstances", false),
+                change("PutRolePolicy", false),
             ],
-            ..Default::default()
+            drawn: drawn.iter().copied().collect(),
+            loading: false,
+            range: Default::default(),
+            claimed: false,
+            cut: None,
+            earliest: None,
         };
         let text = |l: Line| l.spans.iter().map(|s| s.content.to_string()).collect::<String>();
 
-        let wide = text(marker_legend(&tl, &[0, 1].into(), end, 200));
-        assert!(wide.contains(" UpdateService · "), "{wide}");
-        assert!(wide.contains("AttachRolePolicy"), "{wide}");
-        let dated = crate::aws::services::cloudwatch::fmt_epoch_secs(end - 2 * 86_400);
-        assert!(wide.contains(&format!("{} AttachRolePolicy", &dated[5..])), "an older change shows its date: {wide}");
-        assert!(!wide.contains("PutRolePolicy"), "undrawn changes stay out: {wide}");
+        let wide = text(marker_legend(&ctx(&[0, 1, 2, 3]), 200));
+        assert_eq!(wide, "4 changes  StopInstances ×3 · AttachRolePolicy");
 
-        let narrow = text(marker_legend(&tl, &[0, 1].into(), end, 60));
-        assert!(narrow.contains("UpdateService") && narrow.contains("+1 more"), "{narrow}");
+        let narrow = text(marker_legend(&ctx(&[0, 1, 2, 3]), 40));
+        assert!(narrow.contains("StopInstances ×3") && narrow.contains("+1 more"), "{narrow}");
 
-        let none = text(marker_legend(&tl, &Default::default(), end, 120));
-        assert!(none.contains("no changes in this window (3 in the last 7d)"), "{none}");
+        let none = text(marker_legend(&ctx(&[]), 120));
+        assert_eq!(none, "no changes in this window (5 in the last 7d)");
+
+        // The lookup stopped at its cap: a chart reaching back past that
+        // point counts with a `+`, or says how far back it knows nothing.
+        let capped = |drawn: &[usize], earliest: i64| MarkerCtx { cut: Some(1_000), earliest: Some(earliest), ..ctx(drawn) };
+        assert!(text(marker_legend(&capped(&[0, 1, 2, 3], 500), 200)).starts_with("4+ changes  "));
+        assert!(text(marker_legend(&capped(&[0, 1, 2, 3], 1_500), 200)).starts_with("4 changes  "), "window inside what was read");
+        let quiet = text(marker_legend(&capped(&[], 500), 200));
+        assert!(quiet.starts_with("no changes since ") && quiet.ends_with("(CloudTrail read no further)"), "{quiet}");
     }
 
     /// Side-by-side widgets must share a column edge. Computing each rect from

@@ -384,8 +384,13 @@ in `any_pane_overlay_active` (which gates the mouse).
 - **Metrics** (`m`): one `App.metrics_in_pane: Option<MetricsKind>` +
   `open_metrics_in_pane` + `render_metrics_in_pane` (`metrics_overlay.rs`).
   **Change markers** (#245, `c` toggles, on by default): the `W` timeline's
-  events drawn as vertical lines on every time-series chart, legend on the
-  pane's bottom border. `m` runs the same fan-out as `W` once per open, into
+  events drawn as vertical lines on every time-series chart. The legend
+  (one entry per event name, `×N`) goes on the chart's own bottom border
+  when the renderer asks for it (`marker_caption`, the spec view), else on
+  the pane's border with the `c`/`W` keys (the hand-built kinds). While any
+  in-pane view is open the status bar shows no keys — each view draws its
+  own and owns the keymap (`:` is off inside them). `W` from the charts hands their timeline to the lens and parks the
+  view (`metrics_behind_lens`); closing the lens restores it as left. `m` runs the same fan-out as `W` once per open, into
   `App.chart_timeline` (`TimelineTarget::Markers` — never alive beside
   `trail_in_pane`, they share `trail_generation`), and the chart builders
   read a render-scoped context (`marker_lines`): **a chart drawn outside
@@ -400,7 +405,7 @@ in `any_pane_overlay_active` (which gates the mouse).
   untriggered, and closing the overlay then shows a spinner for a fetch that
   never started, forever (the contains-guard blocks any retry).
   Covers EC2/EBS/Lambda/ECS (service + per-task)/RDS/ASG/CW-alarm/Cost/WAF/
-  API-GW (**flavor-aware** `ApiMetricsFlavor`: REST = `ApiName` dim,
+  API-GW (**flavor-aware**, one spec table per protocol: REST = `ApiName` dim,
   `4XXError`/`5XXError` + cache hit/miss; HTTP = `ApiId` dim, lowercase
   `4xx`/`5xx` + `DataProcessed`; WebSocket = `ApiId`,
   Connect/Message/Client/Execution/Integration counts — the three protocols
@@ -446,8 +451,7 @@ in `any_pane_overlay_active` (which gates the mouse).
   `EndpointId`, regional — both direction volumes fetched, the wrong one is
   just empty)/CodeBuild projects (`AWS/CodeBuild` dim `ProjectName`)/DMS tasks +
   replication instances (`AWS/DMS` — a task needs **two** dims, the
-  instance's *name* and the task's ARN *resource id*; one `MetricsKind::Dms`
-  with a flavor). Each is
+  instance's *name* and the task's ARN *resource id*; a spec table each). Each is
   namespace +
   dimension-set specific — see its spec table in `src/aws/metrics.rs`, or a
   hand-built kind's `fetch_*_metrics` fn and `MetricsKind` arm. **New kinds go through the spec table**
@@ -558,7 +562,9 @@ in `any_pane_overlay_active` (which gates the mouse).
   `src/timeline.rs`) — "what changed around this resource?", six sources
   merged newest-first, each row wearing a colored badge. **CT**: one-shot
   `cloudtrail::fetch_trail_events` (`LookupEvents` filtered by
-  `ResourceName`, throttled 2 TPS so no polling, cap ~50; identifiers from
+  `ResourceName`, throttled 2 TPS so no polling, cap ~50 — a capped lookup reports
+  where it stopped (`TrailLookup::cut` → `trail_cut`), so the lens reads `N+`
+  and the chart legend `N+ changes` instead of passing it off as quiet; identifiers from
   `Resource::trail_lookup_keys()`, default `[id]`; IAM types add the
   friendly name). **ALM**: alarms matched by walking the **warm CloudWatch
   cache** (any dimension value == resource id *or* name — namespaces

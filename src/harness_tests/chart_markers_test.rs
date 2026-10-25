@@ -24,7 +24,7 @@ async fn m_seeds_markers_and_c_toggles_them() {
     select_mock(&mut app, svc, r);
 
     press(&mut app, &tx, 'm').await;
-    assert_eq!(app.metrics_in_pane, Some(MetricsKind::Ecs));
+    assert_eq!(app.metrics_in_pane, Some(MetricsKind::Spec));
     assert!(app.metrics_window_end > 0, "the fetch window's end is recorded on open");
     let tl = app.chart_timeline.as_ref().expect("m seeds the markers' timeline");
     assert!(tl.pending.contains(&TimelineSource::Trail), "{:?}", tl.pending);

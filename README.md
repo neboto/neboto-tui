@@ -338,8 +338,9 @@ and `neboto services` prints every prefix.
 | **Developer Tools** | CodeSuite `@code` (CodeCommit, CodeBuild, CodePipeline) |
 | **Cost Management** | Cost Explorer `@cost` · Budgets `@budgets` · Invoices `@invoices` |
 
-Per-service depth — which sub-tabs exist, which detail sections are lazy, which
-metrics namespace `m` uses — lives in `src/aws/services/<service>.rs`, with the
+Per-service depth — which sub-tabs exist, which detail sections are lazy —
+lives in `src/aws/services/<service>.rs` (what `m` charts: the spec tables in
+`src/aws/metrics.rs`), with the
 non-obvious parts (API quirks, caps and their reasons, approaches that were
 tried and failed) in [`docs/SERVICES.md`](./docs/SERVICES.md). It is
 deliberately not duplicated here; that is how a README rots.

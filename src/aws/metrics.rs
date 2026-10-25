@@ -64,6 +64,8 @@ pub enum Unit {
     Percent,
     Bytes,
     BytesPerSec,
+    /// Published in MiB (OpenSearch's free storage); reads like `Bytes`.
+    Megabytes,
     /// Decimal bits: `1.2 Gbps`, as network links are sold.
     BitsPerSec,
     Count,
@@ -85,10 +87,13 @@ pub struct MetricSpec {
     /// Metrics sharing a group draw on one chart when either is selected
     /// (in beside out), each still its own row.
     pub group: Option<&'static str>,
+    /// A namespace other than the target's, for a set that spans two (an
+    /// ECS service's task counts live in Container Insights).
+    pub namespace: Option<&'static str>,
 }
 
 const fn m(metric: &'static str, label: &'static str, stat: Stat, unit: Unit) -> MetricSpec {
-    MetricSpec { metric, label, stat, unit, rate: false, group: None }
+    MetricSpec { metric, label, stat, unit, rate: false, group: None, namespace: None }
 }
 
 impl MetricSpec {
@@ -98,6 +103,10 @@ impl MetricSpec {
 
     const fn group(self, group: &'static str) -> Self {
         MetricSpec { group: Some(group), ..self }
+    }
+
+    const fn ns(self, namespace: &'static str) -> Self {
+        MetricSpec { namespace: Some(namespace), ..self }
     }
 }
 
@@ -375,12 +384,136 @@ pub const GA_ACCELERATOR: &[MetricSpec] = &[
     m("ProcessedBytesOut", "Bytes out", Sum, Unit::BytesPerSec).rate().group("bytes"),
 ];
 
+/// CPU and memory from `AWS/ECS` (no Container Insights needed); the task
+/// counts only exist in Container Insights.
+pub const ECS_SERVICE: &[MetricSpec] = &[
+    m("CPUUtilization", "CPU", Avg, Unit::Percent),
+    m("MemoryUtilization", "Memory", Avg, Unit::Percent),
+    m("RunningTaskCount", "Running tasks", Avg, Unit::Count).group("tasks").ns("ECS/ContainerInsights"),
+    m("PendingTaskCount", "Pending tasks", Avg, Unit::Count).group("tasks").ns("ECS/ContainerInsights"),
+];
+
+/// Task level; each container's CPU and memory follow as runtime rows.
+pub const ECS_TASK: &[MetricSpec] = &[
+    m("TaskCpuUtilization", "CPU", Avg, Unit::Percent),
+    m("TaskMemoryUtilization", "Memory", Avg, Unit::Percent),
+    m("NetworkRxBytes", "Network in", Avg, Unit::BytesPerSec).group("net"),
+    m("NetworkTxBytes", "Network out", Avg, Unit::BytesPerSec).group("net"),
+    m("StorageReadBytes", "Storage read", Avg, Unit::Bytes).group("storage"),
+    m("StorageWriteBytes", "Storage write", Avg, Unit::Bytes).group("storage"),
+];
+
+pub const ASG_GROUP: &[MetricSpec] = &[
+    m("GroupDesiredCapacity", "Desired", Avg, Unit::Count).group("capacity"),
+    m("GroupInServiceInstances", "In service", Avg, Unit::Count).group("capacity"),
+    m("GroupTotalInstances", "Total", Avg, Unit::Count).group("capacity"),
+    m("GroupPendingInstances", "Pending", Avg, Unit::Count).group("capacity"),
+];
+
+pub const EKS_CLUSTER: &[MetricSpec] = &[
+    m("cluster_node_count", "Nodes", Avg, Unit::Count).group("nodes"),
+    m("cluster_failed_node_count", "Failed nodes", Max, Unit::Count).group("nodes"),
+    m("cluster_running_pod_count", "Running pods", Avg, Unit::Count),
+    m("node_cpu_utilization", "Node CPU", Avg, Unit::Percent).group("usage"),
+    m("node_memory_utilization", "Node memory", Avg, Unit::Percent).group("usage"),
+];
+
+/// REST APIs key on the API's *name*; HTTP and WebSocket on its id.
+pub const API_REST: &[MetricSpec] = &[
+    m("Count", "Requests", Sum, Unit::Count),
+    m("4XXError", "4xx", Sum, Unit::Count).group("errors"),
+    m("5XXError", "5xx", Sum, Unit::Count).group("errors"),
+    m("Latency", "Latency", Avg, Unit::Millis).group("latency"),
+    m("IntegrationLatency", "Integration latency", Avg, Unit::Millis).group("latency"),
+    m("CacheHitCount", "Cache hits", Sum, Unit::Count).group("cache"),
+    m("CacheMissCount", "Cache misses", Sum, Unit::Count).group("cache"),
+];
+
+/// HTTP APIs use lowercase `4xx` / `5xx`.
+pub const API_HTTP: &[MetricSpec] = &[
+    m("Count", "Requests", Sum, Unit::Count),
+    m("4xx", "4xx", Sum, Unit::Count).group("errors"),
+    m("5xx", "5xx", Sum, Unit::Count).group("errors"),
+    m("Latency", "Latency", Avg, Unit::Millis).group("latency"),
+    m("IntegrationLatency", "Integration latency", Avg, Unit::Millis).group("latency"),
+    m("DataProcessed", "Data processed", Sum, Unit::Bytes),
+];
+
+/// WebSocket APIs publish no `Latency`.
+pub const API_WEBSOCKET: &[MetricSpec] = &[
+    m("ConnectCount", "Connects", Sum, Unit::Count),
+    m("MessageCount", "Messages", Sum, Unit::Count),
+    m("ClientError", "Client errors", Sum, Unit::Count).group("errors"),
+    m("ExecutionError", "Execution errors", Sum, Unit::Count).group("errors"),
+    m("IntegrationError", "Integration errors", Sum, Unit::Count).group("errors"),
+    m("IntegrationLatency", "Integration latency", Avg, Unit::Millis),
+];
+
+pub const ALB: &[MetricSpec] = &[
+    m("RequestCount", "Requests", Sum, Unit::Count),
+    m("TargetResponseTime", "Target response time", Avg, Unit::Seconds),
+    m("HTTPCode_Target_5XX_Count", "Target 5xx", Sum, Unit::Count).group("5xx"),
+    m("HTTPCode_ELB_5XX_Count", "ELB 5xx", Sum, Unit::Count).group("5xx"),
+    m("HTTPCode_Target_4XX_Count", "Target 4xx", Sum, Unit::Count),
+    m("ActiveConnectionCount", "Active connections", Sum, Unit::Count),
+];
+
+pub const NLB: &[MetricSpec] = &[
+    m("ActiveFlowCount", "Active flows", Avg, Unit::Count),
+    m("NewFlowCount", "New flows", Sum, Unit::Count),
+    m("ProcessedBytes", "Processed", Sum, Unit::BytesPerSec).rate(),
+    m("TCP_Target_Reset_Count", "Target resets", Sum, Unit::Count),
+];
+
+/// A gateway load balancer publishes no TCP resets.
+pub const GWLB: &[MetricSpec] = &[
+    m("ActiveFlowCount", "Active flows", Avg, Unit::Count),
+    m("NewFlowCount", "New flows", Sum, Unit::Count),
+    m("ProcessedBytes", "Processed", Sum, Unit::BytesPerSec).rate(),
+];
+
+pub const ALB_TARGET_GROUP: &[MetricSpec] = &[
+    m("HealthyHostCount", "Healthy hosts", Avg, Unit::Count).group("hosts"),
+    m("UnHealthyHostCount", "Unhealthy hosts", Max, Unit::Count).group("hosts"),
+    m("RequestCountPerTarget", "Requests per target", Sum, Unit::Count),
+    m("TargetResponseTime", "Target response time", Avg, Unit::Seconds),
+];
+
+pub const TARGET_GROUP: &[MetricSpec] = &[
+    m("HealthyHostCount", "Healthy hosts", Avg, Unit::Count).group("hosts"),
+    m("UnHealthyHostCount", "Unhealthy hosts", Max, Unit::Count).group("hosts"),
+];
+
+/// Free storage is published in MiB, and its Minimum is the node closest to full.
+pub const OPENSEARCH_DOMAIN: &[MetricSpec] = &[
+    m("CPUUtilization", "CPU", Avg, Unit::Percent),
+    m("JVMMemoryPressure", "JVM memory pressure", Max, Unit::Percent),
+    m("FreeStorageSpace", "Free storage", Min, Unit::Megabytes),
+    m("ClusterStatus.red", "Status red (1 = red)", Max, Unit::Raw),
+    m("SearchRate", "Search rate (/min)", Avg, Unit::Raw).group("rates"),
+    m("IndexingRate", "Indexing rate (/min)", Avg, Unit::Raw).group("rates"),
+];
+
+pub const DMS_INSTANCE: &[MetricSpec] = &[
+    m("CPUUtilization", "CPU", Avg, Unit::Percent),
+    m("FreeableMemory", "Freeable memory", Avg, Unit::Bytes),
+    m("FreeStorageSpace", "Free storage", Avg, Unit::Bytes),
+    m("SwapUsage", "Swap", Avg, Unit::Bytes),
+];
+
+pub const DMS_TASK: &[MetricSpec] = &[
+    m("CDCLatencySource", "Source latency", Avg, Unit::Seconds).group("latency"),
+    m("CDCLatencyTarget", "Target latency", Avg, Unit::Seconds).group("latency"),
+    m("CDCIncomingChanges", "Incoming changes", Max, Unit::Count),
+    m("FullLoadThroughputRowsTarget", "Full-load rows", Avg, Unit::PerSec),
+];
+
 /// What `m` charts for one resource: where its metrics live and its curated set.
 #[derive(Debug, Clone)]
 pub struct MetricTarget {
     /// `EC2 instance · web-1`, the view's title.
     pub title: String,
-    pub namespace: &'static str,
+    pub namespace: String,
     pub dimensions: Vec<(String, String)>,
     pub specs: &'static [MetricSpec],
     /// The region CloudWatch publishes these in when it isn't the current
@@ -390,6 +523,9 @@ pub struct MetricTarget {
     /// Said in place of the rows when every metric came back empty: what
     /// has to be switched on for them to exist (Glue job metrics, …).
     pub hint: Option<&'static str>,
+    /// Queries only known at runtime, after the spec rows: one per container
+    /// of an ECS task, or the whole set for a CloudWatch metric row.
+    pub extra: Vec<MetricQuery>,
 }
 
 impl MetricTarget {
@@ -397,7 +533,7 @@ impl MetricTarget {
         self.specs
             .iter()
             .map(|s| MetricQuery {
-                namespace: self.namespace.to_string(),
+                namespace: s.namespace.map_or_else(|| self.namespace.clone(), str::to_string),
                 metric: s.metric.to_string(),
                 dimensions: self.dimensions.clone(),
                 label: s.label.to_string(),
@@ -406,6 +542,7 @@ impl MetricTarget {
                 rate: s.rate,
                 group: s.group.map(str::to_string),
             })
+            .chain(self.extra.iter().cloned())
             .collect()
     }
 }
@@ -670,6 +807,7 @@ pub fn fmt_value(v: f64, unit: Unit) -> String {
     match unit {
         Unit::Percent => format!("{v:.1}%"),
         Unit::Bytes => bytes(v),
+        Unit::Megabytes => bytes(v * 1_048_576.0),
         Unit::BytesPerSec => format!("{}/s", bytes(v)),
         Unit::BitsPerSec => {
             let (d, u) = [(1e9, "Gbps"), (1e6, "Mbps"), (1e3, "kbps")]
@@ -694,16 +832,24 @@ pub fn range_from_digit(c: char) -> Option<MetricsTimeRange> {
         '2' => MetricsTimeRange::SixHours,
         '3' => MetricsTimeRange::TwentyFourHours,
         '4' => MetricsTimeRange::SevenDays,
+        '5' => MetricsTimeRange::ThirtyDays,
         _ => return None,
     })
 }
 
-pub const RANGES: [MetricsTimeRange; 4] = [
+pub const RANGES: [MetricsTimeRange; 5] = [
     MetricsTimeRange::OneHour,
     MetricsTimeRange::SixHours,
     MetricsTimeRange::TwentyFourHours,
     MetricsTimeRange::SevenDays,
+    MetricsTimeRange::ThirtyDays,
 ];
+
+/// The range `step` places along `RANGES` from `r`, wrapping.
+pub fn step_range(r: MetricsTimeRange, step: isize) -> MetricsTimeRange {
+    let i = RANGES.iter().position(|x| *x == r).unwrap_or(0) as isize;
+    RANGES[(i + step).rem_euclid(RANGES.len() as isize) as usize]
+}
 
 #[cfg(test)]
 mod tests {
@@ -724,11 +870,12 @@ mod tests {
     fn a_target_resolves_its_specs_against_the_resource() {
         let t = MetricTarget {
             title: "EC2 instance · web".into(),
-            namespace: "AWS/EC2",
+            namespace: "AWS/EC2".into(),
             dimensions: vec![("InstanceId".into(), "i-1".into())],
             specs: EC2_INSTANCE,
             home: None,
             hint: None,
+            extra: Vec::new(),
         };
         let q = t.curated_queries();
         assert_eq!(q.len(), EC2_INSTANCE.len());

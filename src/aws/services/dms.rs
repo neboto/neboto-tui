@@ -2,7 +2,6 @@ use crate::aws::cli_actions::{CliAction, CliTier};
 use crate::aws::client::AwsClients;
 use crate::aws::resource::{native_state_label, shell_quote, Resource, ResourceState};
 use crate::aws::service::{AwsService, ServiceType};
-use crate::aws::services::ec2::MetricsTimeRange;
 use crate::error::Result;
 use crate::event::{Event, LoadProgress};
 use async_trait::async_trait;
@@ -1503,106 +1502,6 @@ pub async fn fetch_task_assessments(
 pub enum DmsMetricsFlavor {
     Task,
     Instance,
-}
-
-#[derive(Debug, Clone)]
-pub struct DmsMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub flavor: DmsMetricsFlavor,
-    /// Four `(title, series)` charts, laid out 2×2.
-    pub series: Vec<(&'static str, Vec<(f64, f64)>)>,
-    pub x_max: f64,
-}
-
-#[derive(Debug, Clone)]
-pub enum DmsMetricsState {
-    Loading,
-    Loaded(DmsMetricsData),
-}
-
-/// Pull `AWS/DMS` metrics. A task is keyed by **two** dimensions —
-/// `ReplicationInstanceIdentifier` (the instance's name) and
-/// `ReplicationTaskIdentifier` (the task's opaque **resource id**, the ARN
-/// suffix, not its user-facing identifier). An instance takes the first only.
-pub async fn fetch_dms_metrics(
-    cw: aws_sdk_cloudwatch::Client,
-    flavor: DmsMetricsFlavor,
-    instance_id: String,
-    task_resource_id: Option<String>,
-    time_range: MetricsTimeRange,
-) -> Result<DmsMetricsData> {
-    use aws_sdk_cloudwatch::types::{Dimension, Statistic};
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start = now - time_range.duration_secs();
-    let period = time_range.period_secs();
-    let start_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(start);
-    let end_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(now);
-
-    let dims = || {
-        let mut d = vec![Dimension::builder()
-            .name("ReplicationInstanceIdentifier")
-            .value(&instance_id)
-            .build()];
-        if let Some(t) = &task_resource_id {
-            d.push(Dimension::builder().name("ReplicationTaskIdentifier").value(t).build());
-        }
-        d
-    };
-    let metric = |name: &'static str, stat: Statistic| {
-        cw.get_metric_statistics()
-            .namespace("AWS/DMS")
-            .metric_name(name)
-            .set_dimensions(Some(dims()))
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![stat]))
-            .send()
-    };
-    let parse = crate::aws::services::ec2::parse_metric_datapoints;
-    let mb = |v: Vec<(f64, f64)>| v.into_iter().map(|(x, y)| (x, y / 1_048_576.0)).collect();
-
-    let series = match flavor {
-        DmsMetricsFlavor::Task => {
-            let (src, tgt, incoming, full_load) = tokio::join!(
-                metric("CDCLatencySource", Statistic::Average),
-                metric("CDCLatencyTarget", Statistic::Average),
-                metric("CDCIncomingChanges", Statistic::Maximum),
-                metric("FullLoadThroughputRowsTarget", Statistic::Average),
-            );
-            vec![
-                ("CDC Latency Source (s)", parse(src, start)),
-                ("CDC Latency Target (s)", parse(tgt, start)),
-                ("CDC Incoming Changes", parse(incoming, start)),
-                ("Full Load Rows/s (target)", parse(full_load, start)),
-            ]
-        }
-        DmsMetricsFlavor::Instance => {
-            let (cpu, mem, storage, swap) = tokio::join!(
-                metric("CPUUtilization", Statistic::Average),
-                metric("FreeableMemory", Statistic::Average),
-                metric("FreeStorageSpace", Statistic::Average),
-                metric("SwapUsage", Statistic::Average),
-            );
-            vec![
-                ("CPU %", parse(cpu, start)),
-                ("Freeable Memory (MB)", mb(parse(mem, start))),
-                ("Free Storage (MB)", mb(parse(storage, start))),
-                ("Swap Usage (MB)", mb(parse(swap, start))),
-            ]
-        }
-    };
-
-    Ok(DmsMetricsData {
-        time_range,
-        flavor,
-        series,
-        x_max: time_range.duration_secs() as f64,
-    })
 }
 
 #[cfg(test)]
