@@ -23907,7 +23907,9 @@ impl App {
 
     /// A row naming the resource on screen (a pane's own `Group ID` /
     /// `Volume ID` row): `⏎` would only re-land on it, so the generic id
-    /// classifier offers no jump there.
+    /// classifier offers no jump there. Callers test both the target's id
+    /// and the row's value: an ARN classifier reduces a target group's own
+    /// ARN to its name, which no longer equals the resource's id.
     pub(crate) fn names_selected_resource(&self, id: &str) -> bool {
         self.get_selected_resource().is_some_and(|r| r.id() == id)
     }
@@ -23970,7 +23972,7 @@ impl App {
                     .or_else(|| self.appsync_row_jump_target(k, v))
                     .or_else(|| {
                         crate::ui::widgets::details_pane::resource_jump_target(k, v, current)
-                            .filter(|t| !self.names_selected_resource(&t.id))
+                            .filter(|t| !self.names_selected_resource(&t.id) && !self.names_selected_resource(v.trim()))
                     })
             });
         let target = match target {
