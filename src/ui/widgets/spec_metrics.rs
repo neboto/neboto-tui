@@ -85,7 +85,16 @@ impl SpecMetricsState {
 
     /// Every row, as text (the `e` editor view).
     pub fn as_text(&self) -> String {
-        let mut out = format!("Metrics — {} — last {}\n\n", self.target.title, self.range.label());
+        let mut out = format!("Metrics — {} — last {}\n", self.target.title, self.range.label());
+        let dims: Vec<String> = self.target.dimensions.iter().map(|(n, v)| format!("{n}={v}")).collect();
+        out.push_str(&self.target.namespace);
+        if !dims.is_empty() {
+            out.push_str(&format!(" · {}", dims.join(", ")));
+        }
+        if let Some(home) = self.target.home {
+            out.push_str(&format!(" · in {home}"));
+        }
+        out.push_str("\n\n");
         for s in &self.series {
             out.push_str(&s.summary());
             out.push('\n');
@@ -140,7 +149,7 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
         .split(inner);
 
     // ── Range: each chip presses its digit ──
@@ -169,15 +178,15 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
     range.push(Span::styled(" ]", Style::default().fg(theme::warning())));
     let what = if st.picker.is_some() {
         "all metrics"
-    } else if st.curated {
-        "default set"
-    } else {
+    } else if !st.curated {
         "picked"
+    } else if st.target.specs.is_empty() {
+        // A CloudWatch metric row: the row is the one metric.
+        "this metric"
+    } else {
+        "default set"
     };
-    range.push(Span::styled(format!("   {} · {}", what, st.target.namespace), dim));
-    if let Some(home) = st.target.home {
-        range.push(Span::styled(format!(" in {home}"), dim));
-    }
+    range.push(Span::styled(format!("   {what}"), dim));
     let failed = st.series.iter().filter(|s| s.error.is_some()).count();
     if failed > 0 && !st.loading {
         range.push(Span::styled(format!("  · {failed} unread"), Style::default().fg(theme::warning())));
@@ -190,10 +199,27 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
     }
     frame.render_widget(Paragraph::new(Line::from(range)), row);
 
+    // ── What is queried: namespace, dimensions, region ──
+    // The title names the resource; this is what CloudWatch is asked for,
+    // which for a metric row (or a TGW attachment, a DMS task) is the only
+    // place its dimensions show.
+    let dims: Vec<String> = st.target.dimensions.iter().map(|(n, v)| format!("{n}={v}")).collect();
+    let mut source = vec![
+        Span::styled("  ", dim),
+        Span::styled(st.target.namespace.clone(), Style::default().fg(theme::text_muted())),
+    ];
+    if !dims.is_empty() {
+        source.push(Span::styled(format!(" · {}", dims.join(", ")), dim));
+    }
+    if let Some(home) = st.target.home {
+        source.push(Span::styled(format!(" · in {home}"), dim));
+    }
+    frame.render_widget(Paragraph::new(Line::from(source)), chunks[1]);
+
     // ── Body ──
     match &st.picker {
-        Some(p) => render_picker(app, p, chunks[1], frame),
-        None => render_series(app, st, chunks[1], frame),
+        Some(p) => render_picker(app, p, chunks[2], frame),
+        None => render_series(app, st, chunks[2], frame),
     }
 
     // ── Footer ──
@@ -209,12 +235,12 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
     };
     // A narrow pane drops hints from the end, but `Esc` stays the last.
     let mut hints = hints;
-    while hints.len() > 2 && theme::hint_line(&hints).width() + 2 > chunks[2].width as usize {
+    while hints.len() > 2 && theme::hint_line(&hints).width() + 2 > chunks[3].width as usize {
         hints.remove(hints.len() - 2);
     }
     let mut footer = theme::hint_line(&hints);
     footer.spans.insert(0, Span::raw("  "));
-    frame.render_widget(Paragraph::new(footer), chunks[2]);
+    frame.render_widget(Paragraph::new(footer), chunks[3]);
 }
 
 fn render_picker(app: &App, p: &MetricPicker, area: Rect, frame: &mut Frame) {

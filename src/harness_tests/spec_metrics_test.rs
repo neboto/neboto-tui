@@ -58,7 +58,8 @@ async fn m_on_a_function_charts_its_curated_set() {
 
     let screen = screen_of(&app);
     assert!(screen.contains("Metrics — Lambda function · orders-api"), "{screen}");
-    assert!(screen.contains(" 1 1h ") && screen.contains("default set · AWS/Lambda"), "{screen}");
+    assert!(screen.contains(" 1 1h ") && screen.contains("default set"), "{screen}");
+    assert!(screen.contains("AWS/Lambda · FunctionName=orders-api"), "what is queried: {screen}");
     assert!(screen.contains("▸ Invocations") && screen.contains("(sum)"), "{screen}");
     assert!(screen.contains("Duration") && screen.contains(" ms"), "{screen}");
     // Invocations shares its chart with errors and throttles: a legend.
@@ -301,4 +302,28 @@ async fn the_change_legend_sits_on_the_chart_and_the_status_bar_steps_back() {
     assert!(screen.contains("Esc close"), "the footer keeps Esc when it's tight: {screen}");
     let status = lines.last().unwrap();
     assert!(!status.contains("metrics") && !status.contains("back") && !status.contains("help"), "{status}");
+}
+
+/// A CloudWatch metric row charts itself, and the view says exactly what it
+/// asked CloudWatch for: a metric name alone doesn't say which instance.
+#[tokio::test]
+async fn a_metric_row_shows_its_namespace_and_dimensions() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let metric = crate::aws::services::cloudwatch::CwMetric {
+        id: "AWS/EC2/CPUUtilization/i-0abc".to_string(),
+        namespace: "AWS/EC2".to_string(),
+        metric_name: "CPUUtilization".to_string(),
+        dimensions: vec![("InstanceId".to_string(), "i-0abc".to_string())],
+        tags: Default::default(),
+    };
+    select_mock(&mut app, ServiceType::CloudWatch, Box::new(metric));
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    assert_eq!(app.metrics_in_pane, Some(MetricsKind::Spec));
+    settle(&mut app, &tx, &mut rx).await;
+    let screen = screen_of(&app);
+    assert!(screen.contains("Metrics — CloudWatch metric · CPUUtilization"), "{screen}");
+    assert!(screen.contains("this metric"), "{screen}");
+    assert!(screen.contains("AWS/EC2 · InstanceId=i-0abc"), "{screen}");
+    assert!(app.spec_metrics.as_ref().unwrap().as_text().contains("AWS/EC2 · InstanceId=i-0abc"));
 }

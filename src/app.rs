@@ -32291,7 +32291,7 @@ impl App {
             };
             MetricTarget {
                 extra: vec![query],
-                ..target("Metric", &metric.namespace, metric.dimensions.clone(), &[])
+                ..target("CloudWatch metric", &metric.namespace, metric.dimensions.clone(), &[])
             }
         } else {
             // Published only in us-west-2, keyed by the full ARN.
