@@ -214,7 +214,8 @@ async fn back_and_forward_cross_region_switches() {
     assert_eq!(app.current_region, away);
     app.selected_index = Some(0);
     assert_eq!(selected(&app).as_deref(), Some("i-0away"));
-    assert_eq!(app.nav_back_hint().as_deref(), Some(&*format!("EC2 i-0home · {home}")));
+    let back = &app.nav_history[app.nav_back_index().expect("somewhere to go back to")];
+    assert_eq!((back.selected_id.as_deref(), back.other_region(app.current_region)), (Some("i-0home"), Some(home)));
 
     // ⌫: back to the home region, on the row we left.
     press(&mut app, &tx, key(KeyCode::Backspace)).await;
@@ -222,7 +223,8 @@ async fn back_and_forward_cross_region_switches() {
     assert_eq!(app.current_region, home);
     assert_eq!(selected(&app).as_deref(), Some("i-0home"));
     assert_eq!(app.pending_jump, None);
-    assert_eq!(app.nav_forward_hint().as_deref(), Some("EC2 i-0away · ap-southeast-2"));
+    let fwd = &app.nav_history[app.nav_forward_index().expect("somewhere to go forward to")];
+    assert_eq!((fwd.selected_id.as_deref(), fwd.other_region(app.current_region)), (Some("i-0away"), Some(away)));
 
     // ⌃F: forward to where we went.
     press(&mut app, &tx, crossterm::event::KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL)).await;

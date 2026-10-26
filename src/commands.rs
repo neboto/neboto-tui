@@ -268,7 +268,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(Mouse, "click", "select · tabs · hints · badges"),
     cmd(Mouse, "double-click", "⏎ (open · follow · confirm)"),
     cmd(Mouse, "click → · title bar", "follow link · full width"),
-    cmd(Mouse, "click ⌫ back · ⌃F fwd", "back · forward through history"),
+    cmd(Mouse, "click ← · → (strip)", "back · forward through history"),
     cmd(Mouse, "click ↑ vX.Y.Z", "copy the upgrade command"),
     cmd(Mouse, "wheel · drag", "scroll · select rows"),
     cmd(Mouse, "right-click", "back · close a popup or view"),

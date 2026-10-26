@@ -347,18 +347,16 @@ pub fn render_details_pane(app: &App, area: Rect, frame: &mut Frame) {
 
 /// Footer hints dropped first when the footer is wider than the pane, by
 /// key: the flat toggle, search, the trail and the section range. What's
-/// left after these goes from the front, so `⌫ back to …` and `h` stay.
+/// left after these goes from the front, so `h` stays.
 const FOOTER_DROP_ORDER: [&str; 4] = ["\\", "/", "W", "1–"];
 
 /// Repaint the footer `detail_footer` built this frame on the pane's bottom
 /// border: each key in the accent colour, as the status bar's hints are,
 /// fitted to the room the ownership ribbon (`reserve` columns) leaves, and
-/// every hint a click target (a one-key hint presses its key; `⌫ back to …`
-/// and `⌃F forward to …` walk history). One hook, so ~130 renderers keep
+/// every one-key hint a click target that presses its key. One hook, so ~130 renderers keep
 /// passing a plain string and none draws its own.
 fn render_detail_footer(app: &App, area: Rect, frame: &mut Frame, reserve: usize) {
     use crate::app::ClickAction;
-    use crossterm::event::KeyCode;
     use unicode_width::UnicodeWidthStr;
     let Some(footer) = app.detail_footer_text.take() else {
         return;
@@ -402,13 +400,7 @@ fn render_detail_footer(app: &App, area: Rect, frame: &mut Frame, reserve: usize
         }
         let (key, label) = part.split_once(' ').unwrap_or((part, ""));
         spans.extend(theme::hint(key, label));
-        let action = if part.starts_with("⌫ ") {
-            Some(ClickAction::Press(KeyCode::Backspace))
-        } else if part.starts_with("⌃F ") {
-            Some(ClickAction::NavForward)
-        } else {
-            crate::hint_click_key(key).map(ClickAction::Press)
-        };
+        let action = crate::hint_click_key(key).map(ClickAction::Press);
         let pw = part.width() as u16;
         if let Some(action) = action {
             app.push_click_region(Rect { x, y, width: pw, height: 1 }, action);
@@ -4470,10 +4462,9 @@ fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
 /// carries every *universal* action — `e editor`, `y copy`, `r refresh` — and
 /// the conditional `m metrics` / `t tail` (gated by `supports_metrics_overlay`
 /// / `supports_log_tail`). The footer therefore auto-includes only the section
-/// count, detail-pane `/ search`, and `h back` (plus a "⏎ go to resource" hint
-/// when the row references another resource, and `⌫ back to <where>` when
-/// there's history to go back through — `h` then reads `h list`, since it
-/// returns to the list rather than to the resource you jumped from), and
+/// count, detail-pane `/ search`, and `h list` (plus a "⏎ go to resource" hint
+/// when the row references another resource; history back / forward is the
+/// service strip's `← →`), and
 /// `extras` should carry **only
 /// genuinely pane-specific** affordances whose key isn't already global — e.g.
 /// `o objects` (S3), `i items` (DynamoDB), `d download` (Lambda code), `f
@@ -4514,11 +4505,8 @@ fn detail_footer(app: &App, focused: bool, sections: usize, extras: &str) -> Str
     if app.supports_trail_lens() {
         parts.push("W trail");
     }
-    let back = app.nav_back_hint().map(|to| format!("⌫ back to {to}"));
-    let forward = app.nav_forward_hint().map(|to| format!("⌃F forward to {to}"));
-    parts.extend(back.as_deref());
-    parts.extend(forward.as_deref());
-    parts.push(if back.is_some() || forward.is_some() { "h list" } else { "h back" });
+    // History is the service strip's `← →`; `h` only ever goes to the list.
+    parts.push("h list");
     let footer = format!(" {} ", parts.join(" · "));
     app.detail_footer_text.replace(Some(footer.clone()));
     footer
