@@ -23,6 +23,8 @@ the AWS SDK for Rust).
 | Macros (`,`) and keycast (`--show-keys`) | [`docs/MACROS.md`](docs/MACROS.md) |
 | Headless `neboto ls` / `get` and its output contract | [`docs/HEADLESS.md`](docs/HEADLESS.md) |
 | Demo mode fixtures (`--demo`) | [`src/demo/CLAUDE.md`](src/demo/CLAUDE.md) |
+| Flat detail view / detail wrap / export internals | [`docs/DETAIL-PANE.md`](docs/DETAIL-PANE.md) |
+| Every config option | [`docs/CONFIG.md`](docs/CONFIG.md) |
 
 A note on counts: descriptive numbers ("~60 types do X") rot silently here —
 three of them had drifted 25–170% before anyone noticed. Prefer a grep the
@@ -187,16 +189,8 @@ Variations on the pattern:
   (`waf_scope`), RAM (`ram_owner` SELF/OTHER via `t`), Service Quotas
   (`quota_service_code`, `c` picker), X-Ray (`xray_window`, `[`/`]` in
   the list pane), CloudTrail (`ct_query`, `f` filter
-  modal). **Cost specifics**: the drill-down (Breakdown/Regions/Forecast) is
-  fetched over the **active period's window** and the `cost_drilldown` map is
-  keyed by `App::cost_drilldown_key` (period + row key) — never the bare row
-  key. The Forecast section is always the *current-month* forecast (labeled
-  so); its MTD baseline comes from `CostDrilldown.mtd_spent` (breakdown sum
-  for MTD, a fourth best-effort CE call otherwise). The 3-month period has no
-  comparable prior window, so `CostLineItem.mom_delta_pct` (last two complete
-  months, derived from the daily series — no extra CE calls) drives the trend
-  arrows/dots and a "By month" table in Trend; the tab row shows a
-  right-aligned `Σ` grand total with the aggregate trend.
+  modal). Cost's drill-down / period / forecast
+  keying rules live in `docs/SERVICES.md` (**Cost drill-down & periods**).
 - **S3** is single-resource (buckets) with a `Bucket | ▸ Objects` mode toggle;
   the bucket's setting views are in-pane detail sections (Overview / Security /
   Operations / Website / Advanced / Metadata / Tags). `ListBuckets` is
@@ -259,39 +253,14 @@ by construction. The render path:
    (drill-in fires section 0's hook) — hooks must be idempotent (LazyMap's
    contains-guard makes that free).
 
-**Flat detail view** (`\`, config `detail_flat`): a sticky toggle that swaps
-the tabbed view for **all sections concatenated in one scroll**, each headed by
-a `━━ Name ━━━…` row (accent-bold; counts as a group header for `[[`/`]]` and
-the body filter). Zero per-service code — do NOT add per-type flat handling:
-`flat_detail_tick` (main loop, pre-draw) rebuilds the body from
-`detail_sections_snapshot()` and a gate in `get_detail_lines()` serves it, so
-every body consumer (scroll/copy/visual/search/jump) works unchanged. On focus
-it fires one **trigger sweep** (reset to default section +
-`cycle_detail_section_next` once around) to start every lazy fetch, and keeps
-`detail_section_idx` synced to the cursor's section by the same generic
-cycling. Digits/`Tab`/chip clicks become header jump
-anchors (`flat_jump_to_section`). Snapshot/section code must call
+**Flat detail view** (`\`, config `detail_flat`) and **detail wrap**
+(`Ctrl-W`, config `detail_wrap`) — mechanics in
+[`docs/DETAIL-PANE.md`](docs/DETAIL-PANE.md). The rules: zero per-service
+code — do NOT add per-type flat handling; snapshot/section code must call
 `section_detail_lines()`, never `get_detail_lines()` (recursion into the flat
-cache).
-
-**Detail wrap** (`Ctrl-W`, config `detail_wrap`): render-only — long rows
-continue on hanging-indent screen rows under the value column. All three
-body renderers go through `layout_detail_body` (`details_pane/mod.rs`), which
-takes the per-renderer row styling as a closure, scrolls in **screen** rows
-bottom-up from the cursor (the log tail's trick; never `Paragraph::wrap`),
-wraps by display width, and records the screen-row → logical-row map
-(`App.detail_body_rows`) that mouse clicks/drags and `→` arrow regions use.
-It also keeps last frame's top row while the cursor stays on screen (so `k`
-moves the cursor, not the view) and marks `/` matches in place.
-**Footer**: renderers pass `detail_footer(…)`'s plain string to the block
-as before; `render_details_pane` then repaints it (`render_detail_footer`,
-from `App.detail_footer_text`) — keys coloured, fitted beside the
-ownership ribbon, each hint a click target. A footer built any other way
-gets none of that.
-Everything that indexes the body (`j`/`k`, copy, visual, `/`, `[[`) stays
-on logical rows. A new body renderer must use the helper, or wrap silently
-doesn't apply to it. `w` stays watch mode; in the `/` search box `Ctrl-W`
-deletes a word.
+cache); a new body renderer must go through `layout_detail_body` and pass
+`detail_footer(…)`'s string to its block, or wrap, click mapping and the
+coloured footer silently don't apply to it.
 
 **`style_detail_row` conventions** (the `(key, value)` tuples
 `*_section_lines` return):
@@ -885,62 +854,17 @@ and the approaches you rejected are the part nobody can recover from your code.
   `ddb_item_browser.rs`, `memory_browser.rs`, `log_tail.rs` (rich views);
   `*_tabs.rs` (one per multi-resource service); the `*_selector.rs` modals
   (`S`/`R`/`P`/`c` pickers); `splash.rs` (welcome screen).
-- **`src/export.rs`**: `X` export (detail) / `Ctrl-X` (list) → JSON + CSV +
-  Markdown (the formats config `export_formats` enables), via
-  `detail_sections_snapshot()`. A single-resource `X` waits for every lazy
-  section like the selection deep export does (`pending_deep_export` with
-  `single`; `Esc` cancels) — never an export of only the sections you
-  opened — and all three of its files come from those sections (JSON =
-  `detail_json`, CSV = long `ID,Section,Key,Value`). "Still loading" means
-  a whole placeholder section **or** any single `Loading…` row
-  (`any_section_unloaded`; `neboto get` waits on the same test). The list
-  Markdown and CSV share `list_columns`. Also `detail_json()` — the sections-as-JSON
-  serializer behind the default `e` editor view. Files land in the working
-  directory, or config `export_dir`; `NEBOTO_EXPORT_DIR` overrides both (the
-  test harness sets it to a temp dir). The detail Markdown synthesizes
-  a `## Tags` section when no captured section is named "Tags" (exact
-  case-insensitive match — `contains` would hit "Stages").
-- **`src/config.rs`**: TOML `Config` (`$NEBOTO_CONFIG` → XDG → `~/.neboto.toml`):
-  `default_service`/`default_region`/`default_profile`, `show_banner`,
-  `endpoint_url`, `watch`/`watch_interval` (start in watch mode / its cadence),
-  `detail_flat` (start in the flat all-section detail view),
-  `log_wrap` (start log tail/search panes with long lines wrapped),
-  `detail_wrap` (start the detail body with long values wrapped — `Ctrl-W`),
-  `show_keys` (keycast: each key and what it did, in a corner box),
-  `export_formats` (which of `json`/`csv`/`md` exports write, default all
-  three — `export::ExportFormats`; bad values warn at startup, never fatal) +
-  `export_dir` (`~/` expanded, created on demand; `NEBOTO_EXPORT_DIR` wins),
-  `theme` (presets: `dark` default, `light`, `solarized-dark/-light`,
-  `gruvbox-dark/-light`, `dracula`, `nord`, `catppuccin-mocha/-latte` —
-  `theme::PRESET_NAMES`; separators optional, `mocha`/`latte` also resolve) +
-  `[theme_colors]` (per-color overrides by palette field name, `#rrggbb` or
-  ANSI names; bad keys/values warn at startup, never fatal),
-  `org_access_role`/`org_access_roles` (member-account switch role name(s),
-  default `OrganizationAccountAccessRole`; a list opens the role picker),
-  `controltower_audit_account` (+ optional `controltower_audit_role`,
-  defaulting to the member-switch role) — the account holding the Control
-  Tower Config aggregator, so the Compliance tab works from the management
-  account; **quote it**, a bare 12-digit id is a TOML integer and the whole
-  file then fails to parse,
-  `owner_tags` (owner-ish tag keys for the ownership ribbon, default
-  `["owner", "team"]`, case-insensitive) + `managed_by_tags` (ManagedBy-marker
-  keys, default `["managedby", "managed-by", "managed_by"]`) +
-  `ownership_ribbon` (default true; `false` hides the ribbon, timeline
-  unaffected),
-  `update_check` (default true: a once-a-day anonymous GET of the latest
-  GitHub Release, `src/update_check.rs` — the **only non-AWS request**, so it
-  stays silent on failure, never runs in tests / headless / `--demo` / CI
-  (`App::spawn_update_check` is called from `main.rs`'s TUI startup only),
-  and shows as a clickable `↑ vX.Y.Z` service-strip chip),
-  `cache_ttl` (base cache freshness in seconds, default 300) +
-  `[cache_ttls]` (per-service overrides keyed by any `@`-search prefix;
-  unknown prefixes are ignored),
-  `pinned_services` (prefixes seeded into `visited_services` so their strip
-  chips show before they load; unknown prefixes warn at startup),
-  `regions` (your working set: `ls --regions` fans out over it, and the `R`
-  picker lists it first and counts the current service in each; unknown
-  codes warn at startup).
-  No `default_service` ⇒ welcome splash, nothing loads.
+- **`src/export.rs`**: `X` (detail) / `Ctrl-X` (list) export via
+  `detail_sections_snapshot()`, plus `detail_json()` behind the default `e`
+  view. Waiting/loading rules and where files land:
+  [`docs/DETAIL-PANE.md`](docs/DETAIL-PANE.md#export).
+- **`src/config.rs`**: TOML `Config` (`$NEBOTO_CONFIG` → XDG → `~/.neboto.toml`);
+  every option is listed in [`docs/CONFIG.md`](docs/CONFIG.md). Bad values
+  warn at startup, never fatal. `controltower_audit_account` must be
+  **quoted** — a bare 12-digit id is a TOML integer and the whole file then
+  fails to parse. `update_check` is the **only non-AWS request**: silent on
+  failure, never in tests / headless / `--demo` / CI. No `default_service` ⇒
+  welcome splash, nothing loads.
 - **`src/cli.rs`**: clap `Cli` (parsed in `main` before the runtime).
   `-s/--service`, `-r/--region`, `-p/--profile`, `--endpoint-url`,
   `--banner`/`--no-banner`, `-w/--watch`, `--theme`, `--show-keys`,

@@ -2831,6 +2831,17 @@ the service you're touching.
   (`JumpView::Dx`/`JumpView::Tgw`). Gateways have **no CloudWatch metrics** —
   traffic lives on the VIFs (`m` on a VIF) and the physical connection.
 
+- **Cost drill-down & periods** (`@cost`, `cost.rs`; moved from CLAUDE.md) — the
+  drill-down (Breakdown/Regions/Forecast) is fetched over the **active period's
+  window** and the `cost_drilldown` map is keyed by `App::cost_drilldown_key`
+  (period + row key) — never the bare row key. The Forecast section is always
+  the *current-month* forecast (labeled so); its MTD baseline comes from
+  `CostDrilldown.mtd_spent` (breakdown sum for MTD, a fourth best-effort CE call
+  otherwise). The 3-month period has no comparable prior window, so
+  `CostLineItem.mom_delta_pct` (last two complete months, derived from the daily
+  series — no extra CE calls) drives the trend arrows/dots and a "By month"
+  table in Trend; the tab row shows a right-aligned `Σ` grand total with the
+  aggregate trend.
 - **Cost anomalies** (`@cost`, key `7`, `cost.rs` `CostAnomaly`) — a third
   *view* on Cost's toggle row, not a second service (the Budgets precedent
   below split out because it needed a whole tab strip, which anomalies
