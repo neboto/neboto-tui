@@ -19,6 +19,12 @@ the AWS SDK for Rust).
 | Why a design is the way it is | [`docs/adr/`](docs/adr) |
 | What's still unbuilt | GitHub Issues: `gh issue list --label area:<platform\|new-service\|service-depth\|ux\|security\|testing>`. Rejected ideas are closed `wontfix` issues linking an ADR. Not a doc: if someone could close it, it's an issue |
 | How a release is cut / how users install | [`docs/RELEASING.md`](docs/RELEASING.md) — the workflow, `install.sh` and the binstall table share the archive name |
+| Adding or editing an in-pane view (`m`/`o`/`i`/`t`/`W`/`U`/`N`), a metrics kind, a tail source | [`docs/RICH-VIEWS.md`](docs/RICH-VIEWS.md) |
+| Macros (`,`) and keycast (`--show-keys`) | [`docs/MACROS.md`](docs/MACROS.md) |
+| Headless `neboto ls` / `get` and its output contract | [`docs/HEADLESS.md`](docs/HEADLESS.md) |
+| Demo mode fixtures (`--demo`) | [`src/demo/CLAUDE.md`](src/demo/CLAUDE.md) |
+| Flat detail view / detail wrap / export internals | [`docs/DETAIL-PANE.md`](docs/DETAIL-PANE.md) |
+| Every config option | [`docs/CONFIG.md`](docs/CONFIG.md) |
 
 A note on counts: descriptive numbers ("~60 types do X") rot silently here —
 three of them had drifted 25–170% before anyone noticed. Prefer a grep the
@@ -183,16 +189,8 @@ Variations on the pattern:
   (`waf_scope`), RAM (`ram_owner` SELF/OTHER via `t`), Service Quotas
   (`quota_service_code`, `c` picker), X-Ray (`xray_window`, `[`/`]` in
   the list pane), CloudTrail (`ct_query`, `f` filter
-  modal). **Cost specifics**: the drill-down (Breakdown/Regions/Forecast) is
-  fetched over the **active period's window** and the `cost_drilldown` map is
-  keyed by `App::cost_drilldown_key` (period + row key) — never the bare row
-  key. The Forecast section is always the *current-month* forecast (labeled
-  so); its MTD baseline comes from `CostDrilldown.mtd_spent` (breakdown sum
-  for MTD, a fourth best-effort CE call otherwise). The 3-month period has no
-  comparable prior window, so `CostLineItem.mom_delta_pct` (last two complete
-  months, derived from the daily series — no extra CE calls) drives the trend
-  arrows/dots and a "By month" table in Trend; the tab row shows a
-  right-aligned `Σ` grand total with the aggregate trend.
+  modal). Cost's drill-down / period / forecast
+  keying rules live in `docs/SERVICES.md` (**Cost drill-down & periods**).
 - **S3** is single-resource (buckets) with a `Bucket | ▸ Objects` mode toggle;
   the bucket's setting views are in-pane detail sections (Overview / Security /
   Operations / Website / Advanced / Metadata / Tags). `ListBuckets` is
@@ -255,39 +253,14 @@ by construction. The render path:
    (drill-in fires section 0's hook) — hooks must be idempotent (LazyMap's
    contains-guard makes that free).
 
-**Flat detail view** (`\`, config `detail_flat`): a sticky toggle that swaps
-the tabbed view for **all sections concatenated in one scroll**, each headed by
-a `━━ Name ━━━…` row (accent-bold; counts as a group header for `[[`/`]]` and
-the body filter). Zero per-service code — do NOT add per-type flat handling:
-`flat_detail_tick` (main loop, pre-draw) rebuilds the body from
-`detail_sections_snapshot()` and a gate in `get_detail_lines()` serves it, so
-every body consumer (scroll/copy/visual/search/jump) works unchanged. On focus
-it fires one **trigger sweep** (reset to default section +
-`cycle_detail_section_next` once around) to start every lazy fetch, and keeps
-`detail_section_idx` synced to the cursor's section by the same generic
-cycling. Digits/`Tab`/chip clicks become header jump
-anchors (`flat_jump_to_section`). Snapshot/section code must call
+**Flat detail view** (`\`, config `detail_flat`) and **detail wrap**
+(`Ctrl-W`, config `detail_wrap`) — mechanics in
+[`docs/DETAIL-PANE.md`](docs/DETAIL-PANE.md). The rules: zero per-service
+code — do NOT add per-type flat handling; snapshot/section code must call
 `section_detail_lines()`, never `get_detail_lines()` (recursion into the flat
-cache).
-
-**Detail wrap** (`Ctrl-W`, config `detail_wrap`): render-only — long rows
-continue on hanging-indent screen rows under the value column. All three
-body renderers go through `layout_detail_body` (`details_pane/mod.rs`), which
-takes the per-renderer row styling as a closure, scrolls in **screen** rows
-bottom-up from the cursor (the log tail's trick; never `Paragraph::wrap`),
-wraps by display width, and records the screen-row → logical-row map
-(`App.detail_body_rows`) that mouse clicks/drags and `→` arrow regions use.
-It also keeps last frame's top row while the cursor stays on screen (so `k`
-moves the cursor, not the view) and marks `/` matches in place.
-**Footer**: renderers pass `detail_footer(…)`'s plain string to the block
-as before; `render_details_pane` then repaints it (`render_detail_footer`,
-from `App.detail_footer_text`) — keys coloured, fitted beside the
-ownership ribbon, each hint a click target. A footer built any other way
-gets none of that.
-Everything that indexes the body (`j`/`k`, copy, visual, `/`, `[[`) stays
-on logical rows. A new body renderer must use the helper, or wrap silently
-doesn't apply to it. `w` stays watch mode; in the `/` search box `Ctrl-W`
-deletes a word.
+cache); a new body renderer must go through `layout_detail_body` and pass
+`detail_footer(…)`'s string to its block, or wrap, click mapping and the
+coloured footer silently don't apply to it.
 
 **`style_detail_row` conventions** (the `(key, value)` tuples
 `*_section_lines` return):
@@ -376,279 +349,7 @@ when you're working on a service instead of in every session.
 
 ### Rich detail-pane views (`m` / `o` / `i` / `t` / `W` / `U` / `N`)
 
-Interactive sub-views render **in the detail pane** (not full-screen modals),
-with `Z` toggling full-width (DetailsOnly ↔ Split). Each owns the keymap while
-open via a handler that runs early in `handle_key` and returns, and is listed
-in `any_pane_overlay_active` (which gates the mouse).
-
-- **Metrics** (`m`): one `App.metrics_in_pane: Option<MetricsKind>` +
-  `open_metrics_in_pane` + `render_metrics_in_pane` (`metrics_overlay.rs`).
-  **Change markers** (#245, `c` toggles, on by default): the `W` timeline's
-  events drawn as vertical lines on every time-series chart. The legend
-  (one entry per event name, `×N`) goes on the chart's own bottom border
-  when the renderer asks for it (`marker_caption`, the spec view), else on
-  the pane's border with the `c`/`W` keys (the hand-built kinds). While any
-  in-pane view is open the status bar shows no keys — each view draws its
-  own and owns the keymap (`:` is off inside them). `W` from the charts hands their timeline to the lens and parks the
-  view (`metrics_behind_lens`); closing the lens restores it as left. `m` runs the same fan-out as `W` once per open, into
-  `App.chart_timeline` (`TimelineTarget::Markers` — never alive beside
-  `trail_in_pane`, they share `trail_generation`), and the chart builders
-  read a render-scoped context (`marker_lines`): **a chart drawn outside
-  those builders gets no markers**, so a new time-series chart should use
-  one or call `marker_lines` itself. Marker x = event time − (`App.
-  metrics_window_end` − `x_max`); the end is recorded as each fetch starts,
-  not at render. Not on the dashboard or Cost (their x axis isn't the fetch
-  window).
-  Opening from the **list** pane sets `details_focused`, so it must also fire
-  the default section's on-enter hook (`reset_detail_section_to_default`) —
-  focus without the hook leaves the pane behind the overlay focused but
-  untriggered, and closing the overlay then shows a spinner for a fetch that
-  never started, forever (the contains-guard blocks any retry).
-  Covers EC2/EBS/Lambda/ECS (service + per-task)/RDS/ASG/CW-alarm/Cost/WAF/
-  API-GW (**flavor-aware**, one spec table per protocol: REST = `ApiName` dim,
-  `4XXError`/`5XXError` + cache hit/miss; HTTP = `ApiId` dim, lowercase
-  `4xx`/`5xx` + `DataProcessed`; WebSocket = `ApiId`,
-  Connect/Message/Client/Execution/Integration counts — the three protocols
-  share `AWS/ApiGateway` but use different metric names)/
-  DynamoDB/EFS/ELB/CloudFront/SQS/SNS/StepFunctions/Network Firewall/
-  FSx/EKS/Kinesis/ElastiCache/OpenSearch/Cw-metric/Bedrock (foundation model +
-  inference profile, `AWS/Bedrock` dim `ModelId`)/S3 (bucket size + object
-  count)/Transfer (`AWS/Transfer` dim `ServerId`)/Route53 health checks
-  (`AWS/Route53` dim `HealthCheckId`, global → us-east-1)/SES (`AWS/SES`,
-  **account-wide, no dimensions** — one series for any SES row, keyed
-  `SES_METRICS_KEY`)/MSK (`AWS/Kafka` dim `Cluster Name`; per-broker
-  bytes/disk series aggregated with the SEARCH/SUM+MAX pattern)/NAT gateways
-  (`AWS/NATGateway` dim `NatGatewayId`)/VPN connections (`AWS/VPN` dim `VpnId`,
-  both tunnels aggregated)/DX connections (`AWS/DX` dim `ConnectionId` —
-  state, bps+pps both ways, errors, light levels)/DX virtual interfaces
-  (`AWS/DX` dims `ConnectionId`+`VirtualInterfaceId` — per-VIF bps/pps, the
-  per-workload traffic signal; a LAG VIF's `connection_id` is the LAG id,
-  which is what the dimension expects)/ECR
-  repos (`AWS/ECR` dim `RepositoryName` — `RepositoryPullCount` is the
-  namespace's only metric, one full-body chart)/Global Accelerator
-  (`AWS/GlobalAccelerator` dim `Accelerator` = the **ARN**, published only in
-  us-west-2 → `cloudwatch_us_west_2_client()`)/WorkSpaces (`AWS/WorkSpaces` dim
-  `WorkspaceId`)/Cognito user pools (`AWS/Cognito` publishes per
-  `(UserPool, UserPoolClient)` pair — aggregated across app clients with the
-  MSK-style SEARCH/SUM `GetMetricData` pattern)/Athena workgroups
-  (`AWS/Athena` dim `WorkGroup` — data scanned + per-phase timing)/Glue jobs
-  (`Glue` namespace, **no `AWS/` prefix**, dims `JobName`/`JobRunId=ALL`/
-  `Type=count`, Maximum stat; needs job metrics enabled)/Redshift clusters
-  (`AWS/Redshift` dim `ClusterIdentifier`)/Redshift Serverless workgroups
-  (`AWS/Redshift-Serverless` dim `Workgroup`)/VPC endpoints
-  (`AWS/PrivateLinkEndpoints` — publishes under the full 4-dim schema, so it
-  needs the SEARCH/SUM `GetMetricData` pattern keyed `VPC Endpoint Id`;
-  **gateway** endpoints (S3/DDB) publish nothing → the pane explains instead
-  of fetching)/Transit Gateways + attachments (`AWS/TransitGateway` dim
-  `TransitGateway`, attachments add `TransitGatewayAttachment`; one
-  one spec table for both)/CW log groups (`AWS/Logs` dim
-  `LogGroupName` — incoming events+bytes, the "is this group receiving
-  anything" signal)/EventBridge rules (`AWS/Events` dim `RuleName` — matched/
-  invoked/failed/DLQ/throttled)/Route 53 **public** hosted zones
-  (`AWS/Route53` dim `HostedZoneId` = the **bare** id (path prefix stripped),
-  us-east-1 like health checks; private zones publish nothing → not
-  offered)/Route 53 Resolver endpoints (`AWS/Route53Resolver` dim
-  `EndpointId`, regional — both direction volumes fetched, the wrong one is
-  just empty)/CodeBuild projects (`AWS/CodeBuild` dim `ProjectName`)/DMS tasks +
-  replication instances (`AWS/DMS` — a task needs **two** dims, the
-  instance's *name* and the task's ARN *resource id*; a spec table each). Each is
-  namespace +
-  dimension-set specific — see its spec table in `src/aws/metrics.rs`, or a
-  hand-built kind's `fetch_*_metrics` fn and `MetricsKind` arm. **New kinds go through the spec table**
-  (`src/aws/metrics.rs`, `MetricsKind::Spec`, rendered by
-  `spec_metrics.rs`; `selected_metric_target`'s arms are the kinds on it): a `&[MetricSpec]`
-  (metric, label, stat, unit, `rate`, `group` for metrics that share a
-  chart) and an arm in `selected_metric_target` give the row list, the
-  chart, change markers, per-metric errors, the `a` picker (`ListMetrics`
-  on the resource's dimensions) and `s` stat cycling, from one
-  `GetMetricData` call over `Event::Lazy`. A hand-built kind (an enum
-  variant + an open arm + a render arm) is for what a spec can't say yet:
-  SEARCH expressions, a fixed home region, S3's daily series, dashboards,
-  Cost. Either way it needs **an arm in `supports_metrics_overlay()`** —
-  that gates the status-bar `m` hint (not the key itself), and it lagging
-  is exactly how DX VIFs shipped with a working `m` but no hint.
-  Notable dimension gotchas: RDS instances vs clusters use different dims;
-  S3 storage metrics are **daily** (fixed 30d window, no time-range knob; only
-  offered for current-region buckets, not other-region stubs);
-  CloudFront/global namespaces query us-east-1 (but Global Accelerator's
-  home is us-west-2); Network Firewall aggregates
-  per-AZ/per-Engine series via `GetMetricData SUM(SEARCH(...))`; ECS per-task +
-  per-container needs Container Insights **enhanced observability** (empty
-  otherwise → hint overlay). Simple U14-batch fetchers share
-  `ec2::parse_metric_datapoints` (reads Sum/Maximum/Average, whichever the
-  query asked for).
-- **Charted CloudWatch dashboard** (`m` on a `CwDashboard`) — the one
-  `MetricsKind` that is *not* a fixed chart set: it re-fetches the dashboard
-  body, lays the widgets out on the console's own 24-column grid scaled to the
-  pane (`dashboard_widget_rect`, `DASH_ROWS_PER_UNIT`), and scrolls (`j`/`k`,
-  `Ctrl-d`/`Ctrl-u`, `gg`/`G` — clamped against `dashboard_grid_rows`).
-  `Tab`/`Shift-Tab` walk a widget cursor (`▸` + accent border, skipping text
-  panels) and `⏎` zooms one widget to the whole pane — the only way to read a
-  chart in a split pane, where a grid unit is ~3 columns. `Esc` unwinds zoom →
-  cursor → pane, so it never closes out from under a zoom. **Mouse**: click
-  selects a widget, double-click zooms, wheel scrolls the grid —
-  `handle_cw_dashboard_mouse` runs *before* `handle_mouse`'s blanket
-  `any_pane_overlay_active` gate (and before the generic in-pane handler). Hit
-  targets come from `App.cw_dashboard_regions` (a `RefCell` the renderer fills
-  as it draws, like `click_regions`), so they match what's on screen after
-  scrolling and clipping; text panels are excluded, since `Tab` can't reach
-  them and a click would strand the cursor. The opening range
-  comes from the **body's own** `start` (`parse_dashboard_settings`, resolved
-  to the smallest covering preset) and is adopted inside the fetch — the range
-  isn't known until the body is read, so doing it there keeps it to one round
-  trip; `[`/`]` clears `cw_dashboard_range_from_body` so a refresh can't snap
-  back. Series come back in one `GetMetricData` call **per region**, keyed by
-  `dashboard_query_id`. Per widget view: `timeSeries` → braille chart (with
-  `annotations.horizontal` as reference lines, labelled in the **title** — the
-  legend box costs 2 rows + 1 per entry and a widget-sized plot has ~4 to
-  give, so an extra entry there hides the legend entirely); `singleValue` →
-  big-number tiles (+ sparkline when the author asked); `gauge` → a bar against
-  `yAxis.left`; `bar`/`pie` → horizontal bars. `stacked` series accumulate (top
-  line = the total; unaligned lengths fall back to unstacked rather than
-  inventing an alignment) and `yAxis: right` series are **rescaled onto the
-  left range** with a `›` in the legend and their real scale in the title —
-  ratatui charts have one y-axis, so a latency-beside-requests widget would
-  otherwise draw the latency flat along the bottom (`dashboard_plot_points`).
-  `text` widgets draw **unframed**
-  like the console does (a border would eat two of their three rows), and their
-  markdown links / `[button:…]` extensions flatten to `Label ↗`;
-  `alarm` widgets resolve to state chips via a best-effort `DescribeAlarms`
-  grouped by the ARN's region. A cell too small for axes degrades to a
-  sparkline. Whether a tile shows the *latest* datapoint or the *sum* over the
-  window follows the widget's stat (`DrawnSeries::value`) — reading the latest
-  point of a `Sum` series reports one bucket as the whole day.
-  Three deliberate limits: `MAX_DASHBOARD_QUERIES` (— `GetMetricData` bills per
-  metric requested, so an uncapped keystroke on a hundred-series dashboard is a
-  surprise charge; same reason it never fires from a section hook); a
-  cross-account `accountId` on a metric line is ignored; and one bad metric-math
-  expression fails the whole request, so a failure retries once **without** the
-  expression queries and flags `math_error` rather than blanking the region.
-- **S3 object browser** (`o`): `s3_object_browser.rs` / `S3ObjectBrowserState`.
-- **DynamoDB item browser** (`i`): `ddb_item_browser.rs` / `DdbBrowserState`.
-- **AgentCore memory session browser** (`i`, on a memory store):
-  `memory_browser.rs` / `MemoryBrowserState`. Actors → Sessions → Events
-  (`t` toggles a Records mode over long-term memory). `i` is shared with the
-  DynamoDB browser — the two selections never co-occur — so a new `i` source
-  needs an arm in **both** key chains **and** `supports_item_browser()`, which
-  gates the status-bar hint.
-- **Live log tail** (`t`, on a log group, Lambda, RDS, ECS task, Network
-  Firewall, WAF web ACL, CloudTrail trail, Route 53 hosted zone (query
-  logs), Step Functions state machine or execution, CodeBuild, a
-  CodePipeline run, or a Batch job): `log_tail.rs` /
-  `LogTailState`. **Adding a tail source takes two changes**: the downcast
-  branch in `open_log_tail` AND its `is_selected_*` in `supports_log_tail()` —
-  the latter gates the `t` key itself (and the status-bar hint), so a branch
-  without the gate is dead code (this silently broke WAF + trail tails once);
-  a background loop
-  polls `cloudwatch::poll_log_tail` and streams `LogTailBatch` events,
-  generation-guarded. Non-log-group sources resolve a group first (Lambda
-  synchronously to `/aws/lambda/<name>`; ECS/NFW/CodeBuild async, handing the
-  resolved group+streams back via `Event::LogTailResolved`). Tails **seed from a
-  lookback window** (default last 15m); `[`/`]` narrow/widen it and restart the
-  poll. `y` copies, `e` opens the current buffer in `$EDITOR`. `w` wraps long
-  lines onto hanging-indent continuation rows instead of clipping (both
-  modes; session-sticky, startup default via config `log_wrap`) — the follow
-  window is computed **bottom-up by wrapped row count**, so the newest record
-  stays fully visible; don't swap it for `Paragraph::wrap`, which anchors to
-  the top and clips the tail.
-- **Quick log search** (`f`, on a log group): the **same** `log_tail.rs` pane in
-  `LogPaneMode::Search`. One-shot server-side `cloudwatch::search_log_events`
-  (filter pattern over `[now − range, now]`, capped ~5k lines). `/`/`i` edit the
-  pattern, `⇥`/`T` cycle the range preset, `⏎` re-run. `s` flips a live tail into
-  search on the same group; `f` on a metric-filter row pre-seeds that filter's
-  pattern.
-- **Change timeline** (`W`, on **any** resource — list or detail pane):
-  `App.trail_in_pane: Option<TrailLensState>` (`trail_lens.rs`; row model in
-  `src/timeline.rs`) — "what changed around this resource?", six sources
-  merged newest-first, each row wearing a colored badge. **CT**: one-shot
-  `cloudtrail::fetch_trail_events` (`LookupEvents` filtered by
-  `ResourceName`, throttled 2 TPS so no polling, cap ~50 — a capped lookup reports
-  where it stopped (`TrailLookup::cut` → `trail_cut`), so the lens reads `N+`
-  and the chart legend `N+ changes` instead of passing it off as quiet; identifiers from
-  `Resource::trail_lookup_keys()`, default `[id]`; IAM types add the
-  friendly name). **ALM**: alarms matched by walking the **warm CloudWatch
-  cache** (any dimension value == resource id *or* name — namespaces
-  disagree on which), then `DescribeAlarmHistory` per match (cap
-  `MAX_TIMELINE_ALARMS=5`, StateUpdate items only); a cold cache degrades to
-  a dim "alarm history unavailable" note, never an error. **CFN**: when the
-  ownership resolver names a stack, `fetch_stack_events` filtered to this
-  resource's logical id + stack-level rows (logical id == stack name).
-  **DEP**: ECS deployments + service events straight off `EcsServiceInfo` —
-  zero fetch. **ASG** / **RDS** (`trigger_timeline_ops_sources`): what AWS
-  itself did, which CloudTrail never records — Auto Scaling activities
-  (group, or an instance via its `aws:autoscaling:groupName` tag, filtered
-  to activities naming it) and RDS events (instance/cluster; 14-day
-  retention, noted on longer ranges). The fan-out is `App::seed_trail_lens` (inputs computed by
-  `timeline_inputs`); sources land independently (`TrailLensLoaded` /
-  `TrailLensAux`, one shared generation guard) and the lens stays **off**
-  the LazyStore deliberately — like the metrics maps it refetches per open.
-  CT failures take the headline error slot; aux-source failures degrade to
-  dim notes. Header row 2: per-source counts + the ownership line. Keys:
-  `f` cycles a source filter, `[`/`]` widen the window (`TrailRange`
-  7d/30d/90d — 90d is CloudTrail's ceiling; aux sources filter client-side
-  to the same cutoff), `a` toggles read events in (CT only, mutations-only
-  default, filtered client-side since `ReadOnly` can't combine with
-  `ResourceName`), `r` refreshes all sources, `⏎`/`v` open the row in
-  `$EDITOR` (raw JSON for CT, text summary otherwise), `y` copies it.
-- **Referenced by** (`U`, on any resource, either pane):
-  `App.refs_in_pane: Option<RefsLensState>` (`refs_lens.rs`; matcher + row
-  model in `src/references.rs`) — the reverse of ownership: which loaded
-  resources mention this one. **Zero API, warm caches only** (the `@all`
-  precedent): `scan_refs_lens` walks `cache.get_ref` for every
-  `ServiceType` (plus the on-screen list when its cache has lapsed) and
-  matches `lookup_keys` (id + distinct name) against each candidate, in
-  order: **`Resource::references()`** (`(label, id-or-ARN)` pairs — the
-  label becomes the `via` column; default = `security_group_ids()` as
-  `Security Group`, overridden on the core compute/network/data types —
-  grep `fn references`; Route 53 records add the *derived* load-balancer
-  name / bucket next to the raw hostname, since whole-token matching can't
-  see `my-alb` inside `my-alb-1234567890.…`), then tag values (`via Tag
-  aws:cloudformation:stack-name` is how `U` on a stack lists its
-  resources), then flat `details()` rows, then `search_text()`. **Rich
-  split-pane types must override `references()`** — their flat `details()`
-  omits most links (an instance's groups/subnet/role live only in section
-  renderers), which is exactly why `U` on a security group once found
-  nothing.
-  Matching is **whole-token** (`value_mentions`) so a name like `web` can't
-  hit `webserver`; ARN/path-shaped keys match as substrings, which is what
-  lets a role name hit inside its ARN. A candidate's own name/id row is
-  skipped so a same-named resource elsewhere isn't a "reference". Header
-  row 2 states coverage (searched N loaded · M not loaded). Keys: `f`
-  cycles a per-service filter, `r` rescans (after loading more services),
-  `⏎` jumps to the row via `jump_to_cached_resource` (the helper factored
-  out of the `@all` result jump — also used by the access lens), `y` copies
-  the id.
-- **Network access** (`N`, on anything with security groups):
-  `App.access_in_pane: Option<AccessLensState>` (`access_lens.rs`) — the
-  **effective** rule table across every attached group, so an instance with
-  three groups is one view, not three jumps. Which groups a resource
-  carries is `Resource::security_group_ids()` (default empty; overridden on
-  instances, ENIs, both SG types, RDS instance/cluster, Lambda, ECS
-  service, ELB, EKS (+ the managed cluster SG), ElastiCache, OpenSearch,
-  MSK, Redshift cluster/workgroup, CodeBuild, resolver endpoints, VPC
-  endpoints, API GW VPC links — grep `fn security_group_ids` for the
-  current set; **a new SG-bearing type needs an override or `N` says "no
-  security groups"**). Groups resolve from the warm EC2 / VPC caches
-  (`cached_security_groups`, converting `VpcSecurityGroup`) and the rest
-  from one `DescribeSecurityGroups` (`Event::AccessLensLoaded`,
-  `access_generation`-guarded; off the LazyStore like the other lenses, `r`
-  refetches all). Below the SG rows come the **subnet NACLs** (#246): the
-  subnets are the `Subnet` rows of `references()` (so a type that lists its
-  subnets there gets NACLs for free), the ACLs come from the warm VPC cache
-  (`cached_network_acls`) or `DescribeNetworkAcls` by `association.subnet-id`
-  in the same task. NACL rows keep **rule order** (first match wins — never
-  the SG port sort), the `32767` catch-all reads `*`, and an ACL whose first
-  rule each way allows everything is labelled `allow-all`. `merge_rules` collapses identical `(direction, protocol,
-  ports, source)` rules and lists the contributing groups; sorted inbound
-  first then by port. `t` cycles inbound → outbound → both (sticky across
-  opens), open-to-world sources render in the warning colour, a source that
-  is a load balancer's own SG is labelled `⇠ ALB name` (warm ELB cache only,
-  `cached_lb_security_groups`; a cold cache says so in the header), `⏎` jumps to
-  the row's group (a referenced `sg-` source wins over the contributor),
-  `e` opens the whole table, `y` copies a row.
-  Both lenses share the `W` plumbing: a `handle_*_key` early in
-  `handle_key`, an arm in `any_pane_overlay_active`, the `details_pane`
-  dispatch + ribbon guard, and a `supports_*` gate for the status-bar hint.
+Interactive sub-views (metrics, item/object/memory browsers, log tail + search, the `W`/`U`/`N` lenses) render in the detail pane. **Before adding or editing one — or a metrics kind, tail source or lens — read [`docs/RICH-VIEWS.md`](docs/RICH-VIEWS.md).**
 
 ### Cross-service "go to resource" jump (`Enter`)
 
@@ -737,111 +438,11 @@ label `scaled to 0`, sorted next to stopped) — not a healthy green row.
 
 ### Macros (`,`, `src/macros.rs`)
 
-A recorded, replayable sequence of navigation steps — the multi-account
-routine ("@orgs → Accounts → that account → assume → @sh") as one keystroke.
-`,` opens the picker (`⏎` run, `n` record, `d` delete); while recording, `,`
-stops and prompts for a name. Saved as JSON via the same best-effort
-load/save shape as `bookmarks.rs` (`$NEBOTO_MACROS` → XDG →
-`~/.config/neboto/macros.json`); a parse failure yields an empty list, never
-an error.
-
-**`,` is intercepted at the top of `handle_key`**, not with the other global
-binds, because the detail-pane keymap block ends in `_ => {}` + `return` — it
-swallows every key it doesn't name, which is why `S`/`R`/`P`/`M`/`?` all carry
-duplicate arms down there. Starting and stopping a recording has to work from
-both panes, so it gets one early arm instead of a seventh duplicate. It's
-gated on `!search_active && !detail_search_active &&
-!any_pane_overlay_active()` so a comma typed into any picker's filter, the
-CloudTrail filter modal, the S3 browser's filter or the macro name prompt
-stays a literal comma. Inside an in-pane overlay `,` therefore does nothing —
-`Esc` out first (deliberate: several overlays have text inputs, and
-enumerating which accept a comma is more fragile than one blanket rule).
-
-**Steps, not keystrokes.** A raw `KeyEvent` recording breaks on three things
-this app does constantly, so `MacroStep` records the *meaning* wherever the
-app already knows it:
-- **Cursor keys → `SelectId`.** `j` means "row 2 of whatever the API returned
-  today". A run of `j`/`k` collapses to one step carrying the id of the row it
-  landed on, so a reordered list still replays. A missing row **aborts**
-  playback with a status error — continuing would run the rest of the macro
-  against the wrong account.
-- **A search run → one atomic `Search`.** `update_search` re-evaluates the
-  `@` prefix on every keystroke (`app.rs`), so replaying `@`,`o`,`r`,`g`,`s`
-  can fire a load per partial prefix. `/` and `@` (which only *open* the bar)
-  are dropped. `Enter` always records the query; `Esc` records only an
-  `@service` switch, which Esc doesn't undo — an abandoned *filter* would
-  otherwise replay as a list the recording never showed.
-- **Picker outcomes → checkpoints.** Keys pressed inside a modal are filter
-  text and reproduce nothing, so they're dropped and the result is recorded
-  instead: `AssumeRole` / `ExitRole` / `SwitchRegion` / `SwitchProfile` /
-  `SwitchService`. Digit/`Tab` section keys likewise record as
-  `DetailSection(name)`, name-keyed like bookmark restore.
-- **S3 object browsing → `S3Object { bucket, prefix, key }`.** The browser
-  counts as a modal for the recorder (`any_selector_visible` includes it):
-  its cursor indexes a *filtered, sorted, partially-paginated* view, so a
-  keystroke replay lands somewhere arbitrary. Its location is diffed and
-  **collapsed** like a cursor run — browsing into and back out of folders
-  leaves one step for where you ended up — and replays through the exact
-  `pending_s3_object_key` machinery an S3 bookmark restore uses. The browser
-  also paginates on its **own** `loading` flag, not `App::loading`, so
-  `macro_ready` tests both; without that a step fires into a half-listed
-  folder.
-
-**How recording works.** `macro_note_key` stashes the key pre-dispatch (the
-search query has to be snapshotted there — `Esc` clears it), then
-`macro_record_pass` classifies it one main-loop iteration later and diffs
-credential state for the async checkpoints. Diffing centrally is what keeps
-this out of the 20k lines of `handle_key` — the same trick
-`record_message_history` uses. Two ordering rules earn their keep:
-`drop_trailing_opener` removes the `s`/`R`/`P` that opened a picker once its
-outcome lands (else replay leaves a modal on screen), and `SwitchService` is
-emitted **only on the service picker's closing edge**, because
-`current_service` also moves on every `@service` search and on the
-assume-role landing, which already have their own steps.
-
-**How playback works.** One step per main-loop iteration, gated on
-`macro_ready` — `!loading && !search_needs_update && switching_region.is_none()
-&& pending_jump.is_none()` plus the editor/session flags — with a 120ms settle
-after each step so an enqueued async request (`OrgRoleSwitchRequested`) reaches
-`handle_event` and raises `loading` before quiescence is re-tested. Modals are
-deliberately **not** in the gate: a macro may legitimately need to drive one,
-and gating on them would deadlock. `Key` steps are injected as `Event::Key` so
-the key path can't tell a replay from a real press; the semantic steps are
-applied directly.
-
-**`-m/--macro NAME`** runs a saved macro at startup. It arms the *same*
-`macro_player` the picker does — no separate playback path, so the quiescence
-gate covers the startup load for free. Two wrinkles: the name is resolved by
-`App::arm_startup_macro` **after** `from_parts` (not in `Cli::apply_to`, since
-it names an action rather than a config value, and the saved macros have to be
-loaded first), and an unknown name appends to `error_message` rather than
-replacing it, so a config-parse or theme warning already in that one slot isn't
-clobbered — the message lists the saved names, which is the only discovery path
-before the TUI is up. `macro_supersedes_startup_load` skips `main.rs`'s initial
-`load_service_resources` when the macro's first step is a service switch
-(`Search("@…")` or `SwitchService`); deliberately narrow, because a macro
-opening with `SelectId` still needs the startup view loaded.
-
-**Deliberately not recorded**: `e` and `q` (`is_unrecordable`) — `e` hands the
-terminal to `$EDITOR`, which drops and rebuilds the very event channel the
-player writes to, and `q` ends the session mid-run. Keys inside the quota /
-CloudTrail-filter / SSM-session modals are dropped with no checkpoint, so a
-macro simply doesn't reproduce those (it never stalls waiting on a modal it
-can't drive). In-pane overlays (`m`/`t`/`o`/`i`) record as raw keys and replay
-consistently, but aren't modelled.
+Recorded, replayable navigation steps. **Before touching `src/macros.rs`, the recorder/player on `App`, or `,` handling, read [`docs/MACROS.md`](docs/MACROS.md)** (it also covers Keycast, which rides the same diffing shape).
 
 ### Keycast (`--show-keys`, `src/keycast.rs`)
 
-A corner box naming each key and what it did (`W  change timeline`,
-`2  Deployments`), for recordings and screen shares; the demo tapes use it.
-It rides the macro recorder's shape: `handle_key` snapshots a
-`keycast::View` before dispatch, `keycast_tick` (main loop, after
-`macro_tick`) snapshots again, and `classify` names the **difference** — an
-overlay opened, the service or section changed, focus moved. A small fallback
-table covers keys with no visible effect (copy, wrap, filter chips). So a new
-feature gets a correct label for free if its state is in `View`; a new
-in-pane view needs a name in `App::keycast_view`'s overlay chain. Typing is
-never echoed: while `View.input` is set only `⏎`/`Esc` show.
+See [`docs/MACROS.md`](docs/MACROS.md#keycast---show-keys-srckeycastrs). A new in-pane view needs a name in `App::keycast_view`'s overlay chain.
 
 ### Caching (`src/aws/cache.rs`)
 
@@ -1253,62 +854,17 @@ and the approaches you rejected are the part nobody can recover from your code.
   `ddb_item_browser.rs`, `memory_browser.rs`, `log_tail.rs` (rich views);
   `*_tabs.rs` (one per multi-resource service); the `*_selector.rs` modals
   (`S`/`R`/`P`/`c` pickers); `splash.rs` (welcome screen).
-- **`src/export.rs`**: `X` export (detail) / `Ctrl-X` (list) → JSON + CSV +
-  Markdown (the formats config `export_formats` enables), via
-  `detail_sections_snapshot()`. A single-resource `X` waits for every lazy
-  section like the selection deep export does (`pending_deep_export` with
-  `single`; `Esc` cancels) — never an export of only the sections you
-  opened — and all three of its files come from those sections (JSON =
-  `detail_json`, CSV = long `ID,Section,Key,Value`). "Still loading" means
-  a whole placeholder section **or** any single `Loading…` row
-  (`any_section_unloaded`; `neboto get` waits on the same test). The list
-  Markdown and CSV share `list_columns`. Also `detail_json()` — the sections-as-JSON
-  serializer behind the default `e` editor view. Files land in the working
-  directory, or config `export_dir`; `NEBOTO_EXPORT_DIR` overrides both (the
-  test harness sets it to a temp dir). The detail Markdown synthesizes
-  a `## Tags` section when no captured section is named "Tags" (exact
-  case-insensitive match — `contains` would hit "Stages").
-- **`src/config.rs`**: TOML `Config` (`$NEBOTO_CONFIG` → XDG → `~/.neboto.toml`):
-  `default_service`/`default_region`/`default_profile`, `show_banner`,
-  `endpoint_url`, `watch`/`watch_interval` (start in watch mode / its cadence),
-  `detail_flat` (start in the flat all-section detail view),
-  `log_wrap` (start log tail/search panes with long lines wrapped),
-  `detail_wrap` (start the detail body with long values wrapped — `Ctrl-W`),
-  `show_keys` (keycast: each key and what it did, in a corner box),
-  `export_formats` (which of `json`/`csv`/`md` exports write, default all
-  three — `export::ExportFormats`; bad values warn at startup, never fatal) +
-  `export_dir` (`~/` expanded, created on demand; `NEBOTO_EXPORT_DIR` wins),
-  `theme` (presets: `dark` default, `light`, `solarized-dark/-light`,
-  `gruvbox-dark/-light`, `dracula`, `nord`, `catppuccin-mocha/-latte` —
-  `theme::PRESET_NAMES`; separators optional, `mocha`/`latte` also resolve) +
-  `[theme_colors]` (per-color overrides by palette field name, `#rrggbb` or
-  ANSI names; bad keys/values warn at startup, never fatal),
-  `org_access_role`/`org_access_roles` (member-account switch role name(s),
-  default `OrganizationAccountAccessRole`; a list opens the role picker),
-  `controltower_audit_account` (+ optional `controltower_audit_role`,
-  defaulting to the member-switch role) — the account holding the Control
-  Tower Config aggregator, so the Compliance tab works from the management
-  account; **quote it**, a bare 12-digit id is a TOML integer and the whole
-  file then fails to parse,
-  `owner_tags` (owner-ish tag keys for the ownership ribbon, default
-  `["owner", "team"]`, case-insensitive) + `managed_by_tags` (ManagedBy-marker
-  keys, default `["managedby", "managed-by", "managed_by"]`) +
-  `ownership_ribbon` (default true; `false` hides the ribbon, timeline
-  unaffected),
-  `update_check` (default true: a once-a-day anonymous GET of the latest
-  GitHub Release, `src/update_check.rs` — the **only non-AWS request**, so it
-  stays silent on failure, never runs in tests / headless / `--demo` / CI
-  (`App::spawn_update_check` is called from `main.rs`'s TUI startup only),
-  and shows as a clickable `↑ vX.Y.Z` service-strip chip),
-  `cache_ttl` (base cache freshness in seconds, default 300) +
-  `[cache_ttls]` (per-service overrides keyed by any `@`-search prefix;
-  unknown prefixes are ignored),
-  `pinned_services` (prefixes seeded into `visited_services` so their strip
-  chips show before they load; unknown prefixes warn at startup),
-  `regions` (your working set: `ls --regions` fans out over it, and the `R`
-  picker lists it first and counts the current service in each; unknown
-  codes warn at startup).
-  No `default_service` ⇒ welcome splash, nothing loads.
+- **`src/export.rs`**: `X` (detail) / `Ctrl-X` (list) export via
+  `detail_sections_snapshot()`, plus `detail_json()` behind the default `e`
+  view. Waiting/loading rules and where files land:
+  [`docs/DETAIL-PANE.md`](docs/DETAIL-PANE.md#export).
+- **`src/config.rs`**: TOML `Config` (`$NEBOTO_CONFIG` → XDG → `~/.neboto.toml`);
+  every option is listed in [`docs/CONFIG.md`](docs/CONFIG.md). Bad values
+  warn at startup, never fatal. `controltower_audit_account` must be
+  **quoted** — a bare 12-digit id is a TOML integer and the whole file then
+  fails to parse. `update_check` is the **only non-AWS request**: silent on
+  failure, never in tests / headless / `--demo` / CI. No `default_service` ⇒
+  welcome splash, nothing loads.
 - **`src/cli.rs`**: clap `Cli` (parsed in `main` before the runtime).
   `-s/--service`, `-r/--region`, `-p/--profile`, `--endpoint-url`,
   `--banner`/`--no-banner`, `-w/--watch`, `--theme`, `--show-keys`,
@@ -1329,44 +885,7 @@ and the approaches you rejected are the part nobody can recover from your code.
 
 ### Headless subcommands (`neboto ls` / `get`, `src/headless.rs`)
 
-`neboto services` / `ls <@svc>` / `get <@svc> <id|name>...` run once and
-print (table / json / md / csv) instead of starting the TUI — the read-only
-guarantee is the point, for scripts and agents (#65 has the roadmap:
-`search`, lenses, MCP). `main` dispatches on `cli.command` before the TUI is
-built. `ls` builds the same services via `App::build_services` and drains
-`list_resources_streaming`'s events (`list_all`), then applies the TUI's
-filters as flags. `ls --regions` repeats that per region on
-`AwsClients::for_region` (same credentials, region swapped — never a
-rebuild per region) and tags each row; an SCP region deny is `denied`, not a
-failure. **`get` runs a terminal-less `App`** (`App::new_headless`):
-it loads the list the way the main loop does, selects each resource like a
-jump (`headless_select` → `align_view_to_resource_type`), then repeats the
-deep-export walk (`headless_capture`: list-nav side effects + every
-section's on-enter hook) and pumps `handle_event` until no section reads
-`Loading…` or `--wait` runs out. So every split pane works with zero
-per-service code — **don't add per-type `get` handling**; a pane that
-doesn't settle is a trigger bug the TUI has too. It never calls
-`handle_key`, which is where the secret reveal lives (a test holds that
-line). Exports strip the panes' key hints (`press t to tail`, `x reveal ·
-Y copy` — `export_rows`), so write hints in that shape. Rules: stdout carries
-only the result (warnings to stderr, so `| jq` holds); JSON carries
-`"schema": "neboto/v1"`; exit 0/1/2 = ok/AWS error/usage (incl. not found
-or ambiguous); a bad region or profile **fails** (the TUI falls back, which
-in a script would answer from the wrong account). **Output contract**: the stable half (flags,
-envelopes, core keys, section/type names, prefixes, CSV headers) is pinned
-by `contract_tests.rs` against `src/headless/contract.json`. Section
-*bodies* are deliberately outside it, so pane work never needs a schema
-change — but renaming a section label or a resource type **is** a breaking
-change for scripts: the test fails, and the fix is to keep the old name or
-bump `SCHEMA`, not to re-bless. Additions: `NEBOTO_BLESS=1 cargo test
-contract`. Tests run against the
-demo account through `AwsClients::new_demo_for_test()` — never
-`demo::enable()` in a test, it's process-wide and would move every other
-test's dead-endpoint clients onto fixtures. To prove a call *didn't* happen,
-read `demo::TEST_LOG` (every demo request in the test process).
-**`skills/neboto/SKILL.md`** is the agent-facing guide to these commands —
-change it with the CLI (its `neboto …` examples are parse-checked by
-`skill_examples_parse`, but prose about output shapes and exit codes isn't).
+`neboto services` / `ls` / `get` print instead of starting the TUI. **Before touching `src/headless.rs`, `src/headless/`, or `skills/neboto/SKILL.md`, read [`docs/HEADLESS.md`](docs/HEADLESS.md)** — the output contract is pinned and section/type renames are breaking changes.
 
 ### Local emulator (floci / LocalStack)
 
@@ -1379,53 +898,7 @@ with `COUNT=200 ./scripts/seed-floci.sh`, then
 
 ### Demo mode (`--demo`, `src/demo/`)
 
-An offline, made-up account (`acme-prod`, #47). `demo::enable()` runs before
-the clients are built. `AwsClients::build` then installs `demo::http_client()`
-on the `SdkConfig`, which answers every request from embedded fixtures, and
-skips the profile and assumed-role credentials. Nothing above the HTTP layer
-changes: lists, lazy sections and jumps all make real SDK calls. **Covering a
-new service or section means adding fixtures, never demo branches in app
-code.**
-
-Fixtures live in `src/demo/fixtures/<service>/` and are registered in
-`fixtures.rs`, whose header lists the story (what's planted, for which clip):
-- **Lookup key:** the service (endpoint host label) and the operation (the
-  `X-Amz-Target` suffix, the `Action` form field, or `METHOD /path` for
-  restJson — a `*` path segment matches any one segment). An entry can also
-  list `when` substrings the request URI + body must all contain; the first
-  match wins, so narrow entries go first.
-- **Wire format:** bodies are raw wire format (EC2 query XML, awsQuery XML,
-  awsJson, restJson). The exception is RPC v2 CBOR (CloudWatch), which is
-  binary: write those fixtures as JSON, with timestamps as
-  `{"$timestamp": {{epoch:…}}}` and doubles with a decimal point (`5.0`).
-  `src/demo/cbor.rs` encodes them on the way out, and decodes the request
-  body to JSON, so `when` matches text like `"AlarmName":"x"`. A body starting `!status 404` fails with that status
-  (with `__type` copied to `x-amzn-errortype`) — use it where the real API
-  errors for "none", or the app reads an empty success as "configured".
-- **Placeholders:** `{{account}}`, `{{region}}`, `{{iso:now-15m}}`,
-  `{{epoch:now-2h}}` and `{{epochms:…}}` (CloudWatch Logs). Offsets chain
-  (`now-26h+31s`) for events seconds apart. Times are always relative to now.
-- **Id filtering:** EC2 describe calls that name ids (`GroupId.N`,
-  `VolumeId.N`) get the fixture's list cut down to them (`narrow`); callers
-  like the `N` lens merge whatever comes back. Extend `narrow` for another
-  by-id call rather than adding one fixture per id.
-- **Generated:** `FilterLogEvents` on a scripted group (`generate.rs`) is
-  computed per request from a fixed clock, so a live tail keeps moving and a
-  search finds the same lines; so is a `GetMetricData` made of plain
-  `MetricStat` queries (the spec-charted kinds), so `m` draws moving
-  series. Expression queries (SEARCH, math) still need fixtures.
-- **No fixture:** an unmatched operation returns a protocol-correct *empty*
-  success, so the service lists empty and `resource_list.rs` says "Not in the
-  demo dataset yet". Except restXml (S3, Route 53, CloudFront): an empty
-  body works for some operations, but most check a per-operation root
-  element, so those calls need an empty-list fixture (see S3 `ListBuckets`).
-- **Finding what to add:** `NEBOTO_DEMO_TRACE=<file>` logs every request with
-  `fixture` / `generated` / `EMPTY` — open a view and read which calls it made.
-
-The fixture tests in `src/demo/tests.rs` drive real SDK clients, so a fixture
-that doesn't deserialize fails `cargo test`; another checks every fixture
-renders to parseable JSON / balanced XML. The showcase clips are VHS tapes in
-`demo/scenes/` recorded against `--demo`.
+Offline made-up account answered from fixtures at the HTTP layer — **covering a new service or section means adding fixtures, never demo branches in app code.** Details: [`src/demo/CLAUDE.md`](src/demo/CLAUDE.md) (loads automatically when working in `src/demo/`).
 
 ## Testing
 
