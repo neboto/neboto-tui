@@ -66,6 +66,7 @@ mod mouse_pane_views_test;
 mod tgw_route_table_overview_test;
 mod timeline_test;
 mod list_ux_test;
+mod search_follow_test;
 mod region_fanout_test;
 mod access_lens_test;
 mod changes_test;

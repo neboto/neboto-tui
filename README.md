@@ -293,6 +293,13 @@ names, IPs, CIDRs, AZs, tags, ARNs, usernames, emails, and per-service extras
 like every secondary private IP on an ENI or every resource id in a GuardDuty
 finding.
 
+On a service with sub-tabs, the search covers every tab: the tabs it found
+nothing on are dimmed, and while you type, a tab with no matches gives way to the
+first tab that has some (`/payments` on EC2's Instances lands on Security
+Groups). It returns to the tab you started on once that tab matches again, or
+on `Esc`; `⏎` keeps the tab it found. A tab you pick yourself is never
+switched away from.
+
 `@all` searches only what is already cached, and says how many services that
 was — it never fires fetches. The service strip shows what it covered:
 each service you've opened this session carries its match count

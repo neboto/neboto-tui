@@ -55,7 +55,23 @@ pub fn subtab_bar_spans(
     area: Rect,
     tabs: &[(char, &str, bool)],
 ) -> Vec<Span<'static>> {
-    chip_spans(app, area, tabs, LEADING, ClickAction::Key)
+    // While a search is filtering the list, the tabs it found nothing on
+    // are dimmed — so the ones left bright say where the matches are.
+    let counts = &app.sub_tab_match_counts;
+    let empty: Vec<char> = tabs
+        .iter()
+        .map(|&(key, _, _)| key)
+        .filter(|&key| key_index(key).and_then(|i| counts.get(i)) == Some(&0))
+        .collect();
+    chip_spans_muted(app, area, tabs, LEADING, ClickAction::Key, &empty)
+}
+
+/// A number key's sub-tab position: `1`→0 … `9`→8, `0`→9 (a tenth tab).
+fn key_index(key: char) -> Option<usize> {
+    match key.to_digit(10)? {
+        0 => Some(9),
+        d => Some(d as usize - 1),
+    }
 }
 
 /// The chip strip behind both the sub-tab bar and the detail pane's section
@@ -67,6 +83,18 @@ pub fn chip_spans(
     tabs: &[(char, &str, bool)],
     leading: u16,
     action: fn(char) -> ClickAction,
+) -> Vec<Span<'static>> {
+    chip_spans_muted(app, area, tabs, leading, action, &[])
+}
+
+/// [`chip_spans`], drawing the inactive chips whose key is in `muted` dim.
+fn chip_spans_muted(
+    app: &App,
+    area: Rect,
+    tabs: &[(char, &str, bool)],
+    leading: u16,
+    action: fn(char) -> ClickAction,
+    muted: &[char],
 ) -> Vec<Span<'static>> {
     if tabs.is_empty() || area.width == 0 {
         return Vec::new();
@@ -131,6 +159,10 @@ pub fn chip_spans(
                     .bg(theme::aws_orange())
                     .add_modifier(Modifier::BOLD),
             ));
+        } else if muted.contains(&key) {
+            let dim = Style::default().fg(theme::text_dim());
+            spans.push(Span::styled(key.to_string(), dim));
+            spans.push(Span::styled(format!(" {} ", label), dim));
         } else {
             spans.push(Span::styled(key.to_string(), Style::default().fg(theme::accent())));
             spans.push(Span::styled(format!(" {} ", label), Style::default().fg(crate::ui::theme::text_muted())));
