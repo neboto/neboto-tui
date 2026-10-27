@@ -108,7 +108,7 @@ impl SpecMetricsState {
                     out.push_str(&format!("\n{summary}\n"));
                 }
                 for t in &data.tables {
-                    let (header, rows) = t.text(120, usize::MAX);
+                    let (header, rows) = t.full_text();
                     out.push_str(&format!("\n{} ({})\n{header}\n", t.title, self.range.label()));
                     for r in rows {
                         out.push_str(&r);

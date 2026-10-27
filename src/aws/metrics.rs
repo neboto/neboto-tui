@@ -669,6 +669,16 @@ impl BreakdownTable {
     /// name, then `Total`, then each live column. Columns go from the right
     /// before the name gets narrower than 16.
     pub fn text(&self, width: usize, max_rows: usize) -> (String, Vec<String>) {
+        self.text_capped(width, max_rows, 40)
+    }
+
+    /// Every row with every live column and each name in full: the `e`
+    /// view, where names are copied out to the console or Terraform.
+    pub fn full_text(&self) -> (String, Vec<String>) {
+        self.text_capped(usize::MAX, usize::MAX, usize::MAX)
+    }
+
+    fn text_capped(&self, width: usize, max_rows: usize, name_cap: usize) -> (String, Vec<String>) {
         const NUM_W: usize = 8;
         const NAME_MIN: usize = 16;
         let mut cols = self.live_columns();
@@ -678,9 +688,9 @@ impl BreakdownTable {
         while !cols.is_empty() && name_w(cols.len()) < NAME_MIN {
             cols.pop();
         }
-        // When the columns all fit, the name takes what it needs, up to 40.
+        // When the columns all fit, the name takes what it needs, up to the cap.
         let longest = self.rows.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0).max(4);
-        let nw = name_w(cols.len()).min(longest.max(NAME_MIN)).min(40);
+        let nw = name_w(cols.len()).min(longest.max(NAME_MIN)).min(name_cap);
         // The end of a name is what tells rows apart (`…CommonRuleSet`,
         // `…bot:category:http_library`), so a long one keeps its end.
         let fit = |s: &str| -> String {
@@ -1141,6 +1151,18 @@ mod tests {
         assert!(rows[0].contains("…") && rows[0].contains("CommonRuleSet"), "keeps the name's end: {}", rows[0]);
         let (_, rows) = table().text(80, 1);
         assert_eq!(rows.len(), 1, "max_rows caps the rows");
+    }
+
+    #[test]
+    fn the_full_text_keeps_every_name_whole() {
+        let mut t = table();
+        let long = "awswaf:managed:aws:bot-control:bot:category:http_library";
+        t.rows.push((long.to_string(), vec![0.0, 640.0, 0.0]));
+        let (_, rows) = t.text(120, 10);
+        assert!(!rows[2].contains(long), "the view truncates: {}", rows[2]);
+        let (header, rows) = t.full_text();
+        assert!(rows[2].contains(long) && rows.iter().all(|r| !r.contains('…')), "{rows:?}");
+        assert!(header.contains("Allow") && header.contains("Block"), "{header}");
     }
 
     #[test]
