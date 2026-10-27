@@ -380,29 +380,35 @@ pub(super) fn mocks() -> Vec<Mock> {
         (
             ServiceType::Inspector,
             "InspFinding",
-            Box::new(svc::inspector::InspFinding {
-                arn: "arn:aws:inspector2:us-east-1:123456789012:finding/0123456789abcdef0123456789abcdef".to_string(),
-                title: "Mock finding".to_string(),
-                description: "mock description".to_string(),
-                finding_type: "PACKAGE_VULNERABILITY".to_string(),
-                severity_label: "HIGH".to_string(),
-                status: "ACTIVE".to_string(),
-                inspector_score: 7.5,
-                resource_type: "AWS_EC2_INSTANCE".to_string(),
-                resource_id: "i-0123456789abcdef0".to_string(),
-                repository: String::new(),
-                image_tags: vec![],
-                cve: "CVE-2024-0001".to_string(),
-                package_summary: "mock-package@1.0.0 -> fixed 1.0.1".to_string(),
-                fix_available: "YES".to_string(),
-                exploit_available: "NO".to_string(),
-                vuln_rows: vec![],
-                remediation_text: "Update the package".to_string(),
-                remediation_url: String::new(),
-                first_observed: Some("2024-01-01T00:00:00Z".to_string()),
-                last_observed: Some("2024-01-01T00:00:00Z".to_string()),
-                raw_json: "{}".to_string(),
-            }),
+            Box::new(svc::inspector::InspFinding::from_sdk(
+                &aws_sdk_inspector2::types::Finding::builder()
+                    .finding_arn("arn:aws:inspector2:us-east-1:123456789012:finding/0123456789abcdef0123456789abcdef")
+                    .aws_account_id("123456789012")
+                    .r#type(aws_sdk_inspector2::types::FindingType::PackageVulnerability)
+                    .title("CVE-2024-0001 - mock-package")
+                    .description("mock description")
+                    .severity(aws_sdk_inspector2::types::Severity::High)
+                    .status(aws_sdk_inspector2::types::FindingStatus::Active)
+                    .inspector_score(7.5)
+                    .first_observed_at(aws_smithy_types::DateTime::from_secs(1_704_067_200))
+                    .last_observed_at(aws_smithy_types::DateTime::from_secs(1_704_067_200))
+                    .resources(
+                        aws_sdk_inspector2::types::Resource::builder()
+                            .r#type(aws_sdk_inspector2::types::ResourceType::AwsEc2Instance)
+                            .id("i-0123456789abcdef0")
+                            .build()
+                            .unwrap(),
+                    )
+                    .package_vulnerability_details(
+                        aws_sdk_inspector2::types::PackageVulnerabilityDetails::builder()
+                            .vulnerability_id("CVE-2024-0001")
+                            .source("NVD")
+                            .build()
+                            .unwrap(),
+                    )
+                    .build()
+                    .unwrap(),
+            )),
         ),
         (
             ServiceType::SecurityHub,

@@ -20,12 +20,18 @@ pub(super) fn render_insp_finding_split(app: &App, finding: &InspFinding, area: 
         Span::raw("  "),
         Span::styled("● ", Style::default().fg(sev_color)),
         Span::styled(
-            format!("{} ({:.1})", finding.severity_label, finding.inspector_score),
+            finding.severity_display(),
             Style::default().fg(sev_color).add_modifier(Modifier::BOLD),
         ),
         Span::styled("  ·  ", Style::default().fg(theme::text_dim())),
         Span::styled(finding.finding_type.clone(), Style::default().fg(theme::text_dim())),
     ];
+    if let Some(epss) = finding.epss {
+        sev_line.push(Span::styled(
+            format!("  ·  EPSS {:.1}%", epss * 100.0),
+            Style::default().fg(theme::text_dim()),
+        ));
+    }
     if actionable {
         sev_line.push(Span::styled(
             "  ·  ⚡ exploit + fix",
@@ -74,21 +80,70 @@ pub fn insp_finding_section_lines(
     match section {
         InspFindingDetailSection::Overview => {
             let mut rows = vec![
+                ("Finding ARN".to_string(), finding.arn.clone()),
                 ("Title".to_string(), finding.title.clone()),
                 ("Type".to_string(), finding.finding_type.clone()),
-                (
-                    "Severity".to_string(),
-                    format!("{} ({:.1})", finding.severity_label, finding.inspector_score),
-                ),
-                ("Status".to_string(), finding.status.clone()),
-                ("Fix Available".to_string(), finding.fix_available.clone()),
-                ("Exploit Available".to_string(), finding.exploit_available.clone()),
             ];
+            if !finding.cve.is_empty() {
+                rows.push(("CVE".to_string(), finding.cve.clone()));
+            }
+            if !finding.related_vulnerabilities.is_empty() {
+                rows.push(("Related".to_string(), finding.related_vulnerabilities.join(", ")));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("Risk".to_string(), String::new()));
+            rows.push(("Severity".to_string(), finding.severity_display()));
+            if finding.inspector_score.is_none() {
+                // Without a CVSS there's no Inspector score; say where the
+                // severity came from instead of printing a fake 0.0.
+                rows.push((
+                    String::new(),
+                    "· not scored by Inspector yet (no CVSS) — see Vendor Severity".to_string(),
+                ));
+            }
+            if !finding.vendor_severity.is_empty() {
+                rows.push(("Vendor Severity".to_string(), finding.vendor_severity.clone()));
+            }
+            if let Some(e) = finding.epss_display() {
+                rows.push(("EPSS".to_string(), e));
+            }
+            rows.push(("Fix Available".to_string(), finding.fix_available.clone()));
+            rows.push(("Exploit Available".to_string(), finding.exploit_available.clone()));
+            if let Some(x) = &finding.last_known_exploit {
+                rows.push(("Last Known Exploit".to_string(), x.clone()));
+            }
+            rows.push(("Status".to_string(), finding.status.clone()));
+
+            rows.push((String::new(), String::new()));
+            rows.push(("Affected".to_string(), String::new()));
+            rows.push(("Resource".to_string(), finding.resource_display()));
+            if !finding.aws_account_id.is_empty() {
+                rows.push(("Account".to_string(), finding.aws_account_id.clone()));
+            }
+            if !finding.resource_region.is_empty() {
+                rows.push(("Region".to_string(), finding.resource_region.clone()));
+            }
+            const PKG_PREVIEW: usize = 8;
+            for p in finding.packages.iter().take(PKG_PREVIEW) {
+                rows.push(("Package".to_string(), p.clone()));
+            }
+            if finding.packages.len() > PKG_PREVIEW {
+                rows.push((
+                    String::new(),
+                    format!("· {} more — 2 Vulnerability", finding.packages.len() - PKG_PREVIEW),
+                ));
+            }
+
+            rows.push((String::new(), String::new()));
+            rows.push(("Timeline".to_string(), String::new()));
             if let Some(f) = &finding.first_observed {
                 rows.push(("First Observed".to_string(), f.clone()));
             }
             if let Some(l) = &finding.last_observed {
                 rows.push(("Last Observed".to_string(), l.clone()));
+            }
+            if let Some(u) = &finding.updated_at {
+                rows.push(("Updated".to_string(), u.clone()));
             }
             if !finding.description.is_empty() {
                 rows.push((String::new(), String::new()));
@@ -107,6 +162,12 @@ pub fn insp_finding_section_lines(
         }
         InspFindingDetailSection::Resource => {
             let mut rows = vec![("Resource Type".to_string(), finding.resource_type.clone())];
+            if !finding.aws_account_id.is_empty() {
+                rows.push(("Account".to_string(), finding.aws_account_id.clone()));
+            }
+            if !finding.resource_region.is_empty() {
+                rows.push(("Region".to_string(), finding.resource_region.clone()));
+            }
             rows.push((String::new(), String::new()));
             if finding.resource_id.is_empty() {
                 rows.push((" No affected resource".to_string(), String::new()));
@@ -121,7 +182,11 @@ pub fn insp_finding_section_lines(
                 }
                 // ARN/id row is a cross-service jump anchor (EC2 instance / Lambda / …).
                 rows.push(("Resource ID".to_string(), finding.resource_id.clone()));
+                rows.extend(finding.resource_rows.iter().cloned());
             }
+            rows.push((String::new(), String::new()));
+            rows.push(("Tags".to_string(), String::new()));
+            rows.extend(tag_rows(&finding.tags));
             rows
         }
         InspFindingDetailSection::Remediation => {
