@@ -300,6 +300,67 @@ impl VpcView {
     }
 }
 
+/// Every tabbed service's sub-tab views, **in key order** (`1`, `2`, …,
+/// `0` for a tenth). Expands to `$cb!(args; Svc => field: View [variants],
+/// …)` so the lookups on `App` (`sub_tab_filters`, `sub_tab_index`,
+/// `set_sub_tab`) share one list. The harness test
+/// `sub_tab_table_follows_the_number_keys` holds the order to the keys.
+macro_rules! sub_tab_table {
+    ($cb:ident!($($args:tt)*)) => {
+        $cb!($($args)*;
+            EC2 => ec2_view: Ec2View [Instances, SecurityGroups, EbsVolumes, NetworkInterfaces, Amis, Snapshots, LaunchTemplates, ElasticIps],
+            ECS => ecs_view: EcsView [Clusters, Services, TaskDefinitions, Tasks],
+            IdentityCenter => ic_view: IcView [Instance, PermissionSets, Users, Groups, Applications],
+            VPC => vpc_view: VpcView [Vpcs, Subnets, Routing, Gateways, Peering, SecurityGroups, NetworkAcls, Endpoints, VpnConnections, DhcpOptions],
+            TransitGateway => tgw_view: TgwView [TransitGateways, Attachments, RouteTables],
+            Route53Resolver => resolver_view: ResolverView [Endpoints, Rules],
+            DirectConnect => dx_view: DxView [Connections, VirtualInterfaces, Lags, Gateways],
+            ApiGateway => apigw_view: ApiGatewayView [RestApis, HttpApis, CustomDomains, UsagePlans, VpcLinks],
+            CloudFormation => cfn_view: CfnView [Stacks, StackSets, Exports, Deleted],
+            Route53 => r53_view: R53View [Zones, Records, HealthChecks],
+            CloudFront => cf_view: CloudFrontView [Distributions, Functions, Policies, Oacs],
+            CloudWatch => cw_view: CwView [Alarms, LogGroups, Dashboards, Metrics, CrossAccount, Streams, Insights, AccountPolicies],
+            RDS => rds_view: RdsView [Instances, Clusters, Snapshots, ParamGroups, OptionGroups, SubnetGroups, Proxies],
+            IAM => iam_view: IamView [Roles, Policies, Users, Groups, AccessAnalyzer, IdentityProviders, Account, InstanceProfiles],
+            Organizations => org_view: OrgView [Overview, Accounts, Ous, Policies, Delegated, Trusted],
+            Elb => elb_view: ElbView [LoadBalancers, TargetGroups],
+            Messaging => msg_view: MsgView [Queues, Topics],
+            EventBridge => eventbridge_view: EventBridgeView [Rules, EventBuses, Archives, Replays, Schedules, Pipes],
+            GuardDuty => guardduty_view: GuardDutyView [Findings, Summary, Coverage, Filters, Lists, Accounts, Malware, Detectors],
+            SecurityHub => securityhub_view: SecurityHubView [Overview, Findings, Controls, Standards, Insights, Automations, Integrations, Configuration, Accounts],
+            Cognito => cognito_view: CognitoView [UserPools, IdentityPools, Users],
+            Inspector => inspector_view: InspectorView [Findings, Resources, Coverage],
+            Fsx => fsx_view: FsxView [FileSystems, Volumes],
+            S3Tables => s3tables_view: S3TablesView [Buckets, Tables],
+            Bedrock => bedrock_view: BedrockView [FoundationModels, InferenceProfiles, Guardrails, KnowledgeBases, Agents, Prompts, Flows, CustomModels, ImportedModels],
+            AgentCore => agentcore_view: AgentCoreView [Runtimes, Gateways, Memory, Identity, Tools, Policy, Evaluation, Registry, Harness, Payments],
+            Backup => backup_view: BackupView [Vaults, Plans, ProtectedResources, Jobs],
+            ServiceCatalog => sc_view: ScView [Portfolios, Products, ProvisionedProducts, TagOptions],
+            NetworkFirewall => nfw_view: NfwView [Firewalls, Policies, RuleGroups],
+            Code => code_view: CodeView [Repositories, BuildProjects, Pipelines, Deployments, Artifacts, Executions, PullRequests],
+            Ssm => ssm_view: SsmView [Parameters, Documents, Fleet, Patch, Associations, RunCommand, Automation, MaintWindows, OpsItems, Sessions],
+            Config => config_view: ConfigView [Rules, ConformancePacks],
+            Waf => waf_view: WafView [WebAcls, IpSets, RuleGroups],
+            Kinesis => kinesis_view: KinesisView [Streams, Firehose],
+            Ecr => ecr_view: EcrView [Repositories, Images],
+            Lambda => lambda_view: LambdaView [Functions, Layers],
+            StepFunctions => sfn_view: SfnView [StateMachines, Executions],
+            Redshift => redshift_view: RedshiftView [Clusters, Workgroups, Snapshots],
+            Batch => batch_view: BatchView [Queues, ComputeEnvironments, Jobs, JobDefinitions],
+            XRay => xray_view: XRayView [ServiceMap, Traces, Config],
+            Changes => changes_view: ChangesView [All, Iam, Trail, Config, Deploys, Ops],
+            Dms => dms_view: DmsView [Tasks, Instances, Endpoints, Serverless],
+            Beanstalk => beanstalk_view: BeanstalkView [Environments, Applications, Versions],
+            ControlTower => controltower_view: ControlTowerView [LandingZone, Controls, Baselines, Operations, Catalog, Compliance, Accounts],
+            Athena => athena_view: AthenaView [Workgroups, DataCatalogs, Databases, Queries, SavedQueries],
+            Glue => glue_view: GlueView [Databases, Tables, Crawlers, Jobs, JobRuns],
+            Ses => ses_view: SesView [Identities, ConfigurationSets, Suppression],
+            CloudTrail => cloudtrail_view: CloudTrailView [Events, Trails, Insights],
+            Fms => fms_view: FmsView [Policies, AppsLists, ProtocolsLists, ResourceSets],
+        )
+    };
+}
+
 /// A sub-tab type filter may be a single resource type or several
 /// pipe-separated alternatives (grouped tabs like VPC's Routing = route
 /// tables + prefix lists).
@@ -1951,6 +2012,13 @@ pub struct App {
     /// (`0` = after the last char), so assigning a query anywhere leaves it
     /// at the end. Edited by `search::line_edit`.
     pub search_cursor_back: usize,
+    /// The sub-tab a `/` search started on. While typing, a tab with no
+    /// matches gives way to the first that has some, and the search comes
+    /// back here once this tab matches again (or on `Esc`).
+    pub search_home_tab: Option<(ServiceType, usize)>,
+    /// Matches per sub-tab for the current query, in key order (empty with
+    /// no query) — which sub-tab chips the search dims.
+    pub sub_tab_match_counts: Vec<usize>,
     /// This session's submitted `/` queries, oldest first, de-duplicated
     /// (a re-run moves to the end). `↑`/`↓` in the search bar walk it.
     /// In memory only — queries can hold account names and tag values.
@@ -2990,6 +3058,8 @@ impl App {
             search_needs_update: false,
             search_last_modified: None,
             search_cursor_back: 0,
+            search_home_tab: None,
+            sub_tab_match_counts: Vec::new(),
             search_history: Vec::new(),
             search_history_cursor: None,
             search_history_draft: String::new(),
@@ -4833,12 +4903,19 @@ impl App {
                 KeyCode::Esc => {
                     self.search_active = false;
                     self.search_history_cursor = None;
+                    // Cancelled: back to the tab the search started on.
+                    if let Some((svc, i)) = self.search_home_tab.take() {
+                        if self.current_service == Some(svc) {
+                            self.set_sub_tab(i);
+                        }
+                    }
                     self.search_query.clear();
                     self.search_last_modified = None;
                     self.search_needs_update = true;
                 }
                 KeyCode::Enter => {
                     self.search_active = false;
+                    self.search_home_tab = None;
                     // Recorded before the service-switch rewrite below, so
                     // recalling it switches service again.
                     self.record_search_history();
@@ -8070,6 +8147,7 @@ impl App {
                 // Clear any previous search to give a clean slate
                 self.search_query.clear();
                 self.search_cursor_back = 0;
+                self.search_home_tab = None;
                 self.search_last_modified = None;
                 self.search_needs_update = true;
             }
@@ -8609,219 +8687,62 @@ impl App {
     }
 
     /// Point the current service's sub-tab view at the tab that lists `rtype`
-    /// (first matching tab in declaration order; no-op for single-list
-    /// services or an unknown type). The `@all` jump needs this: the target's
-    /// service lands on its default/last sub-tab, whose type filter would
-    /// hide the resource and strand the pending jump on row 0. Every tabbed
-    /// service in `active_type_filter` must have an arm here — the harness
+    /// (first matching tab in key order; no-op for single-list services or
+    /// an unknown type). The `@all` jump needs this: the target's service
+    /// lands on its default/last sub-tab, whose type filter would hide the
+    /// resource and strand the pending jump on row 0. Every tabbed service
+    /// in `active_type_filter` must be in `sub_tab_table!` — the harness
     /// test `every_resource_type_lands_on_a_sub_tab` catches a missing
     /// variant.
     fn align_view_to_resource_type(&mut self, rtype: &str) {
-        // `$field = first variant whose resource_type_filter() lists rtype`.
-        macro_rules! align {
-            ($self:ident, $rt:ident, $field:ident, $ty:ident, [$($v:ident),+ $(,)?]) => {
-                if let Some(v) = [$($ty::$v),+]
-                    .into_iter()
-                    .find(|v| type_filter_matches(v.resource_type_filter(), $rt))
-                {
-                    $self.$field = v;
+        if let Some(i) = self.sub_tab_filters().iter().position(|f| type_filter_matches(f, rtype)) {
+            self.set_sub_tab(i);
+        }
+    }
+
+    /// The current service's sub-tab type filters in key order: `[i]` is
+    /// what key `i + 1` shows (`0` for a tenth tab). Empty for single-list
+    /// and toggle-row services.
+    pub fn sub_tab_filters(&self) -> Vec<&'static str> {
+        macro_rules! filters {
+            ($s:ident; $($svc:ident => $field:ident: $ty:ident [$($v:ident),+]),+ $(,)?) => {
+                match $s.current_service {
+                    $(Some(ServiceType::$svc) => vec![$($ty::$v.resource_type_filter()),+],)+
+                    _ => Vec::new(),
                 }
             };
         }
-        match self.current_service {
-            Some(ServiceType::EC2) => align!(
-                self, rtype, ec2_view, Ec2View,
-                [Instances, SecurityGroups, EbsVolumes, NetworkInterfaces, Amis, Snapshots,
-                 LaunchTemplates, ElasticIps]
-            ),
-            Some(ServiceType::ECS) => {
-                align!(self, rtype, ecs_view, EcsView, [Clusters, Services, TaskDefinitions, Tasks])
-            }
-            Some(ServiceType::IdentityCenter) => align!(
-                self, rtype, ic_view, IcView,
-                [Instance, PermissionSets, Users, Groups, Applications]
-            ),
-            Some(ServiceType::VPC) => align!(
-                self, rtype, vpc_view, VpcView,
-                [Vpcs, Subnets, Routing, Gateways, Peering, SecurityGroups, NetworkAcls,
-                 Endpoints, VpnConnections, DhcpOptions]
-            ),
-            Some(ServiceType::TransitGateway) => {
-                align!(self, rtype, tgw_view, TgwView, [TransitGateways, Attachments, RouteTables])
-            }
-            Some(ServiceType::Route53Resolver) => {
-                align!(self, rtype, resolver_view, ResolverView, [Endpoints, Rules])
-            }
-            Some(ServiceType::DirectConnect) => {
-                align!(self, rtype, dx_view, DxView, [Connections, VirtualInterfaces, Lags, Gateways])
-            }
-            Some(ServiceType::ApiGateway) => align!(
-                self, rtype, apigw_view, ApiGatewayView,
-                [RestApis, HttpApis, CustomDomains, UsagePlans, VpcLinks]
-            ),
-            Some(ServiceType::CloudFormation) => {
-                align!(self, rtype, cfn_view, CfnView, [Stacks, StackSets, Exports, Deleted])
-            }
-            Some(ServiceType::Route53) => {
-                align!(self, rtype, r53_view, R53View, [Zones, Records, HealthChecks])
-            }
-            Some(ServiceType::CloudFront) => {
-                align!(self, rtype, cf_view, CloudFrontView, [Distributions, Functions, Policies, Oacs])
-            }
-            Some(ServiceType::CloudWatch) => {
-                align!(self, rtype, cw_view, CwView,
-                    [Alarms, LogGroups, Dashboards, Metrics, CrossAccount, Streams, Insights,
-                     AccountPolicies])
-            }
-            Some(ServiceType::RDS) => {
-                align!(
-                    self, rtype, rds_view, RdsView,
-                    [Instances, Clusters, Snapshots, ParamGroups, OptionGroups, SubnetGroups, Proxies]
-                )
-            }
-            Some(ServiceType::IAM) => {
-                align!(
-                    self, rtype, iam_view, IamView,
-                    [Roles, Policies, Users, Groups, AccessAnalyzer, IdentityProviders, Account,
-                     InstanceProfiles]
-                )
-            }
-            Some(ServiceType::Organizations) => align!(
-                self, rtype, org_view, OrgView,
-                [Overview, Accounts, Ous, Policies, Delegated, Trusted]
-            ),
-            Some(ServiceType::Elb) => {
-                align!(self, rtype, elb_view, ElbView, [LoadBalancers, TargetGroups])
-            }
-            Some(ServiceType::Messaging) => {
-                align!(self, rtype, msg_view, MsgView, [Queues, Topics])
-            }
-            Some(ServiceType::EventBridge) => align!(
-                self, rtype, eventbridge_view, EventBridgeView,
-                [Rules, EventBuses, Archives, Replays, Schedules, Pipes]
-            ),
-            Some(ServiceType::GuardDuty) => {
-                align!(
-                    self, rtype, guardduty_view, GuardDutyView,
-                    [Findings, Summary, Coverage, Filters, Lists, Accounts, Malware, Detectors]
-                )
-            }
-            Some(ServiceType::SecurityHub) => align!(
-                self, rtype, securityhub_view, SecurityHubView,
-                [
-                    Overview, Findings, Controls, Standards, Insights, Automations,
-                    Integrations, Configuration, Accounts
-                ]
-            ),
-            Some(ServiceType::Cognito) => {
-                align!(self, rtype, cognito_view, CognitoView, [UserPools, IdentityPools, Users])
-            }
-            Some(ServiceType::Inspector) => {
-                align!(self, rtype, inspector_view, InspectorView, [Findings, Resources, Coverage])
-            }
-            Some(ServiceType::Fsx) => {
-                align!(self, rtype, fsx_view, FsxView, [FileSystems, Volumes])
-            }
-            Some(ServiceType::S3Tables) => {
-                align!(self, rtype, s3tables_view, S3TablesView, [Buckets, Tables])
-            }
-            Some(ServiceType::Bedrock) => align!(
-                self, rtype, bedrock_view, BedrockView,
-                [FoundationModels, InferenceProfiles, Guardrails, KnowledgeBases, Agents, Prompts,
-                 Flows, CustomModels, ImportedModels]
-            ),
-            Some(ServiceType::AgentCore) => align!(
-                self, rtype, agentcore_view, AgentCoreView,
-                [Runtimes, Gateways, Memory, Identity, Tools, Policy, Evaluation, Registry,
-                 Harness, Payments]
-            ),
-            Some(ServiceType::Backup) => {
-                align!(self, rtype, backup_view, BackupView, [Vaults, Plans, ProtectedResources, Jobs])
-            }
-            Some(ServiceType::ServiceCatalog) => align!(
-                self, rtype, sc_view, ScView,
-                [Portfolios, Products, ProvisionedProducts, TagOptions]
-            ),
-            Some(ServiceType::NetworkFirewall) => {
-                align!(self, rtype, nfw_view, NfwView, [Firewalls, Policies, RuleGroups])
-            }
-            Some(ServiceType::Code) => align!(
-                self, rtype, code_view, CodeView,
-                [Repositories, BuildProjects, Pipelines, Deployments, Artifacts, Executions,
-                 PullRequests]
-            ),
-            Some(ServiceType::Ssm) => align!(
-                self, rtype, ssm_view, SsmView,
-                [Parameters, Documents, Fleet, Patch, Associations, RunCommand, Automation,
-                 MaintWindows, OpsItems, Sessions]
-            ),
-            Some(ServiceType::Config) => {
-                align!(self, rtype, config_view, ConfigView, [Rules, ConformancePacks])
-            }
-            Some(ServiceType::Waf) => {
-                // Scope stays put — @all only ever lists the current scope's
-                // cached variant, so the row is in this scope by construction.
-                align!(self, rtype, waf_view, WafView, [WebAcls, IpSets, RuleGroups])
-            }
-            Some(ServiceType::Kinesis) => {
-                align!(self, rtype, kinesis_view, KinesisView, [Streams, Firehose])
-            }
-            Some(ServiceType::Ecr) => {
-                align!(self, rtype, ecr_view, EcrView, [Repositories, Images])
-            }
-            Some(ServiceType::Lambda) => {
-                align!(self, rtype, lambda_view, LambdaView, [Functions, Layers])
-            }
-            Some(ServiceType::StepFunctions) => {
-                align!(self, rtype, sfn_view, SfnView, [StateMachines, Executions])
-            }
-            Some(ServiceType::Redshift) => {
-                align!(self, rtype, redshift_view, RedshiftView, [Clusters, Workgroups, Snapshots])
-            }
-            Some(ServiceType::Batch) => align!(
-                self, rtype, batch_view, BatchView,
-                [Queues, ComputeEnvironments, Jobs, JobDefinitions]
-            ),
-            Some(ServiceType::XRay) => {
-                align!(self, rtype, xray_view, XRayView, [ServiceMap, Traces, Config])
-            }
-            Some(ServiceType::Changes) => {
-                align!(self, rtype, changes_view, ChangesView, [All, Iam, Trail, Config, Deploys, Ops])
-            }
-            Some(ServiceType::Dms) => {
-                align!(self, rtype, dms_view, DmsView, [Tasks, Instances, Endpoints, Serverless])
-            }
-            Some(ServiceType::Beanstalk) => align!(
-                self, rtype, beanstalk_view, BeanstalkView,
-                [Environments, Applications, Versions]
-            ),
-            Some(ServiceType::ControlTower) => {
-                align!(
-                    self,
-                    rtype,
-                    controltower_view,
-                    ControlTowerView,
-                    [LandingZone, Controls, Baselines, Operations, Catalog, Compliance, Accounts]
-                )
-            }
-            Some(ServiceType::Athena) => align!(
-                self, rtype, athena_view, AthenaView,
-                [Workgroups, DataCatalogs, Databases, Queries, SavedQueries]
-            ),
-            Some(ServiceType::Glue) => {
-                align!(self, rtype, glue_view, GlueView, [Databases, Tables, Crawlers, Jobs, JobRuns])
-            }
-            Some(ServiceType::Ses) => {
-                align!(self, rtype, ses_view, SesView, [Identities, ConfigurationSets, Suppression])
-            }
-            Some(ServiceType::CloudTrail) => {
-                align!(self, rtype, cloudtrail_view, CloudTrailView, [Events, Trails, Insights])
-            }
-            Some(ServiceType::Fms) => {
-                align!(self, rtype, fms_view, FmsView, [Policies, AppsLists, ProtocolsLists, ResourceSets])
-            }
-            _ => {}
+        sub_tab_table!(filters!(self))
+    }
+
+    /// Which of `sub_tab_filters` is showing.
+    pub fn sub_tab_index(&self) -> Option<usize> {
+        macro_rules! index {
+            ($s:ident; $($svc:ident => $field:ident: $ty:ident [$($v:ident),+]),+ $(,)?) => {
+                match $s.current_service {
+                    $(Some(ServiceType::$svc) => [$($ty::$v),+].iter().position(|v| *v == $s.$field),)+
+                    _ => None,
+                }
+            };
         }
+        sub_tab_table!(index!(self))
+    }
+
+    /// Show the current service's `i`th sub-tab (key order). No-op past the end.
+    fn set_sub_tab(&mut self, i: usize) {
+        macro_rules! set {
+            ($s:ident, $i:ident; $($svc:ident => $field:ident: $ty:ident [$($v:ident),+]),+ $(,)?) => {
+                match $s.current_service {
+                    $(Some(ServiceType::$svc) => {
+                        if let Some(v) = [$($ty::$v),+].into_iter().nth($i) {
+                            $s.$field = v;
+                        }
+                    })+
+                    _ => {}
+                }
+            };
+        }
+        sub_tab_table!(set!(self, i))
     }
 
     /// Total resources in the **current sub-tab view** (the "of M" denominator).
@@ -8852,6 +8773,7 @@ impl App {
         self.search_active = true;
         self.search_query = "@".to_string();
         self.search_cursor_back = 0;
+        self.search_home_tab = None;
         self.search_last_modified = Some(Instant::now());
         self.search_needs_update = true;
     }
@@ -9400,6 +9322,65 @@ impl App {
         next.map(|i| self.search_history[i].clone())
     }
 
+    /// How many of `matches` (after the tag filters and `a`'s noise hiding)
+    /// each sub-tab lists, in key order. Empty without a query, under `@all`,
+    /// or for a service without sub-tabs. A tab's own extra filters (`F`,
+    /// ECS task status, …) aren't applied: the count is a hint that matches
+    /// are there, not the row count you'll see.
+    fn count_sub_tab_matches(
+        &self,
+        matches: &[(usize, i64)],
+        tag_filters: &[crate::search::query_parser::TagFilter],
+        fuzzy_text: &str,
+    ) -> Vec<usize> {
+        if self.all_search_mode || (fuzzy_text.is_empty() && tag_filters.is_empty()) {
+            return Vec::new();
+        }
+        let filters = self.sub_tab_filters();
+        let mut counts = vec![0; filters.len()];
+        for &(idx, _) in matches {
+            let r = &self.resources[idx];
+            if (self.hide_noise && r.is_noise()) || !tag_filters.iter().all(|f| f.matches(r.tags())) {
+                continue;
+            }
+            for (n, f) in counts.iter_mut().zip(&filters) {
+                if type_filter_matches(f, r.resource_type()) {
+                    *n += 1;
+                }
+            }
+        }
+        counts
+    }
+
+    /// While typing a search: stay on the tab the search started on while it
+    /// has matches, otherwise show the first tab that does. Leaves a picked
+    /// `F` state filter alone — that's a choice about this tab.
+    fn follow_matches_to_sub_tab(&mut self) {
+        let (Some(svc), Some(cur)) = (self.current_service, self.sub_tab_index()) else {
+            return;
+        };
+        let home = match self.search_home_tab {
+            Some((s, i)) if s == svc => i,
+            // First pass of this search, or `@svc` switched service.
+            _ => {
+                self.search_home_tab = Some((svc, cur));
+                cur
+            }
+        };
+        if self.list_state_filter.is_some() {
+            return;
+        }
+        let counts = &self.sub_tab_match_counts;
+        let target = if counts.get(home).is_none_or(|&n| n > 0) {
+            home
+        } else {
+            counts.iter().position(|&n| n > 0).unwrap_or(home)
+        };
+        if target != cur {
+            self.set_sub_tab(target);
+        }
+    }
+
     pub fn update_search(&mut self) {
         use crate::search::fuzzy::FuzzyMatcher;
         use crate::search::query_parser::parse_query;
@@ -9524,7 +9505,6 @@ impl App {
         } else {
             &self.search_query
         };
-        let type_filter: Option<&'static str> = self.active_type_filter();
 
         // Exact `tag:key[=value]` terms are split out of the query; only the
         // remainder fuzzy-matches.
@@ -9532,6 +9512,11 @@ impl App {
             crate::search::query_parser::split_tag_filters(search_text);
 
         let matches = matcher.filter_resources(&fuzzy_text, &self.resources);
+        self.sub_tab_match_counts = self.count_sub_tab_matches(&matches, &tag_filters, &fuzzy_text);
+        if self.search_active {
+            self.follow_matches_to_sub_tab();
+        }
+        let type_filter: Option<&'static str> = self.active_type_filter();
         // Apply the type filter, then the generic "hide noise" filter
         // (Resource::is_noise — passing checks / OK alarms / compliant rules),
         // tracking how many noise rows were hidden and whether any exist in view.
