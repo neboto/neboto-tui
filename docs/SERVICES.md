@@ -1616,7 +1616,14 @@ the service you're touching.
   ACL's `WebACL` and `Region`). The ACL's own set ends with a **Block
   rate** row, metric math with every term `FILL`ed (sparse series) and
   an `IF` for no traffic: blocked ÷ (allowed + blocked + CAPTCHA +
-  challenge), Count left out for the same reason as above. The web ACL pane's
+  challenge), Count left out for the same reason as above. **`x`** in
+  the view samples requests into the editor (`fetch_sampled_requests`
+  with a rule and a window): the cursor's rule row, else the drilled one,
+  else the default action (`Default_Action` maps there too). The window
+  is the chart's, clipped to the **three hours AWS keeps samples for**
+  (`SAMPLE_WINDOW_SECS`), so a 24h chart samples only its last 3h. A
+  label row can't be sampled (`GetSampledRequests` is per rule): labels
+  are the rows with a `:`, which rule metric names can't contain. The web ACL pane's
   **Insights** section (key 6) is a lazy
   `fetch_waf_insights` (`lazy.waf_insights` keyed by ACL name): one
   `GetSampledRequests` per sampler — default action + rules by priority,
@@ -1669,12 +1676,18 @@ the service you're touching.
     says whether additional metrics are on: off (or no subscription) makes
     Cache hit rate / Origin latency say why instead of "no data in the
     window"; on adds the six per-status rates (`CLOUDFRONT_ADDITIONAL`);
-    a denial says nothing either way.
+    a denial says nothing either way. **`OriginLatency` is percentile-only**
+    (AWS's valid statistic is `Percentile`), so it's asked for as p99; an
+    `Average` comes back empty even with additional metrics on.
   - **Functions** — `ListFunctions` over both stages (DEVELOPMENT lists all,
     LIVE marks published; unpublished renders as a ⚠ pending state). 2-section
     split pane Overview / **Code** — Code is a lazy `GetFunction`
     (`lazy.cf_function_code` keyed by name, LIVE preferred) rendering the actual
-    source inline; `e` on the Code section opens it as `.js`.
+    source inline; `e` on the Code section opens it as `.js`. `m` charts
+    `CLOUDFRONT_FUNCTION` (invocations, execution + validation errors on one
+    chart, throttles, compute utilization) keyed `FunctionName` +
+    `Region=Global` in us-east-1; nothing publishes until a distribution
+    runs the function.
   - **Policies** — one flat-detail row per policy (kind Cache / Origin Request /
     Response Headers) with the full flattened config: TTLs + cache-key params,
     forwarded headers/cookies/query strings, CORS (⚠ wildcard origin),

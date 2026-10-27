@@ -394,7 +394,18 @@ pub const CLOUDFRONT_DISTRIBUTION: &[MetricSpec] = &[
     m("4xxErrorRate", "4xx rate", Avg, Unit::Percent).group("errors"),
     m("5xxErrorRate", "5xx rate", Avg, Unit::Percent).group("errors"),
     m("CacheHitRate", "Cache hit rate", Avg, Unit::Percent),
-    m("OriginLatency", "Origin latency", Avg, Unit::Millis),
+    // CloudFront publishes origin latency as percentiles only: an Average
+    // comes back empty.
+    m("OriginLatency", "Origin latency", Stat::P99, Unit::Millis),
+];
+
+/// A CloudFront Function, keyed `FunctionName` + `Region=Global`.
+pub const CLOUDFRONT_FUNCTION: &[MetricSpec] = &[
+    m("FunctionInvocations", "Invocations", Sum, Unit::Count),
+    m("FunctionExecutionErrors", "Execution errors", Sum, Unit::Count).group("errors").tone(Tone::Bad),
+    m("FunctionValidationErrors", "Validation errors", Sum, Unit::Count).group("errors").tone(Tone::Warn),
+    m("FunctionThrottles", "Throttles", Sum, Unit::Count),
+    m("FunctionComputeUtilization", "Compute", Avg, Unit::Percent),
 ];
 
 /// `WebACL` + `Rule=ALL` (+ `Region` for REGIONAL ACLs): every action on
