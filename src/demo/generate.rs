@@ -90,27 +90,44 @@ fn filter_log_events(body: &str, now_ms: i64) -> Option<String> {
 /// slow wave around a per-metric level plus repeatable jitter, so a refetch
 /// shows the same history with a new point at the end. `orders-api`'s
 /// errors climb over the last 40 minutes, the story its alarm tells. Only
-/// a request made of plain `MetricStat` queries (the spec-charted kinds,
-/// `aws::metrics`) is answered; one with an expression (SEARCH, math)
-/// falls through to the fixtures.
+/// a request made of plain `MetricStat` queries and metric math (the
+/// spec-charted kinds, `aws::metrics`) is answered — math as its own made-up
+/// series, keyed by the expression; one with a SEARCH falls through to the
+/// fixtures.
 fn get_metric_data(body: &str, now: i64) -> Option<String> {
     let req: serde_json::Value = serde_json::from_str(body).ok()?;
     let ts = |k: &str| req.get(k).and_then(|v| v.get("$timestamp").or(Some(v))).and_then(|v| v.as_f64());
     let (start, end) = (ts("StartTime")? as i64, (ts("EndTime")? as i64).min(now));
     let queries = req.get("MetricDataQueries")?.as_array()?;
     let mut results = Vec::new();
+    // Math has no period of its own: it takes the metrics' it reads.
+    let stat_period = queries
+        .iter()
+        .find_map(|q| q.get("MetricStat")?.get("Period")?.as_i64())
+        .unwrap_or(60)
+        .max(1);
     for q in queries {
-        let stat = q.get("MetricStat")?;
-        let metric = stat.get("Metric")?;
-        let name = metric.get("MetricName")?.as_str()?;
-        let resource: String = metric
-            .get("Dimensions")
-            .and_then(|d| d.as_array())
-            .into_iter()
-            .flatten()
-            .filter_map(|d| d.get("Value")?.as_str())
-            .collect();
-        let period = stat.get("Period").and_then(|p| p.as_i64()).unwrap_or(60).max(1);
+        let (name, resource, period) = match q.get("MetricStat") {
+            Some(stat) => {
+                let metric = stat.get("Metric")?;
+                let name = metric.get("MetricName")?.as_str()?;
+                let resource: String = metric
+                    .get("Dimensions")
+                    .and_then(|d| d.as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|d| d.get("Value")?.as_str())
+                    .collect();
+                (name, resource, stat.get("Period").and_then(|p| p.as_i64()).unwrap_or(60).max(1))
+            }
+            None => {
+                let expr = q.get("Expression")?.as_str()?;
+                if expr.contains("SEARCH") {
+                    return None;
+                }
+                ("Expression", expr.to_string(), stat_period)
+            }
+        };
         let seed = resource.bytes().chain(name.bytes()).fold(0i64, |h, b| h.wrapping_mul(31).wrapping_add(b as i64));
         let (mut times, mut values) = (Vec::new(), Vec::new());
         let mut t = start.div_euclid(period) * period + period;
@@ -346,6 +363,6 @@ mod tests {
             "MetricDataQueries": [{"Id": "m0", "Expression": "SUM(SEARCH('{AWS/Kafka} x', 'Sum', 60))"}]
         })
         .to_string();
-        assert!(get_metric_data(&search, now).is_none(), "expressions fall through");
+        assert!(get_metric_data(&search, now).is_none(), "a SEARCH falls through");
     }
 }

@@ -93,7 +93,17 @@ in `any_pane_overlay_active` (which gates the mouse).
   dimensions once before the first fetch (`prepare`) — WAF looks up the
   ACL's `WebACL` metric name that way, then SEARCHes per-rule and
   per-label totals (`BreakdownTable`, which the web ACL's Traffic section
-  draws too). A hand-built kind (an enum
+  draws too). `Tab` moves into those tables and `⏎` on a row charts that
+  row's own series (`Drill`: specs against the row's dimensions) in
+  place of the set, `d` going back; the tables are refetched only for a
+  new range or `r`, never for a new charted set. A spec row can be
+  **metric math** over the set's other rows (`e(label, expr, unit)`,
+  `{MetricName}` placeholders resolved to the request's ids by
+  `fetch_series`; an expression naming a metric that isn't charted is a
+  row error, not a failed call) and can carry a `Tone` so its colour
+  means something (blocked is red whatever the palette order). SEARCH is
+  still not a spec row: it returns many series, math returns one. A
+  hand-built kind (an enum
   variant + an open arm + a render arm) is for what a spec can't say yet:
   SEARCH expressions, a fixed home region, S3's daily series, dashboards,
   Cost. Either way it needs **an arm in `supports_metrics_overlay()`** —
