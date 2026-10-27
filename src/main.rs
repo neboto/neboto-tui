@@ -321,8 +321,11 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
         banner::render_banner(banner_area, frame);
     }
 
-    // Render service tab bar
-    service_tabs::render_service_tabs(app, layout.tabs_area, frame);
+    // Reset the mouse click regions before the first bar that records any,
+    // so every bar this frame can append fresh ones.
+    app.clear_click_regions();
+    let tabs_area = render_nav_buttons(app, layout.tabs_area, frame);
+    service_tabs::render_service_tabs(app, tabs_area, frame);
 
     // Render search bar
     search_bar::render_search_bar(app, layout.search_area, frame);
@@ -661,6 +664,36 @@ fn fit_hint_line(mut line: Line<'static>, max_width: usize) -> Line<'static> {
         line.spans.truncate(keep);
     }
     line
+}
+
+/// The browser-style `← →` at the service strip's left edge: history back
+/// and forward (`⌫` / `Ctrl-O`, `Ctrl-F`) for the mouse, dim when there is
+/// nowhere to go. Returns the rest of the strip.
+fn render_nav_buttons(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui::Frame) -> ratatui::layout::Rect {
+    const BUTTON: u16 = 3;
+    if app.current_service.is_none() || area.width < BUTTON * 2 + 20 {
+        return area;
+    }
+    let style = |live: bool| {
+        if live {
+            Style::default().fg(theme::accent()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::text_dim())
+        }
+    };
+    let back = app.nav_back_index().is_some();
+    let forward = app.nav_forward_index().is_some();
+    let line = Line::from(vec![
+        Span::styled(" ← ", style(back)),
+        Span::styled(" → ", style(forward)),
+        Span::styled("│", Style::default().fg(theme::text_dim())),
+    ]);
+    let width = line.width() as u16;
+    let button = |i: u16| ratatui::layout::Rect { x: area.x + i * BUTTON, y: area.y, width: BUTTON, height: 1 };
+    app.push_click_region(button(0), app::ClickAction::Back);
+    app.push_click_region(button(1), app::ClickAction::Forward);
+    frame.render_widget(Paragraph::new(line), ratatui::layout::Rect { width, ..area });
+    ratatui::layout::Rect { x: area.x + width, width: area.width - width, ..area }
 }
 
 fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui::Frame) {

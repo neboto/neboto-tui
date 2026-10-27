@@ -152,9 +152,10 @@ pub enum ClickAction {
     FollowJump(usize),
     /// The service strip's `↑ vX.Y.Z` chip: show how to upgrade.
     UpdateNotice,
-    /// The detail footer's `⌃F forward to …` hint (a `Press` can't carry
-    /// the Ctrl modifier).
-    NavForward,
+    /// The service strip's `←` / `→`: history back / forward, as `⌫` and
+    /// `Ctrl-F` (a `Press` can't carry the Ctrl modifier).
+    Back,
+    Forward,
     /// A Cost period chip on the detail pane's border: show spend over that
     /// period. Periods have no digit of their own (`[`/`]` step them), so a
     /// replayed key can't pick one directly.
@@ -1388,23 +1389,6 @@ fn nav_back_target(len: usize, cursor: Option<usize>) -> Option<usize> {
         None => len.checked_sub(1), // live → newest entry
         Some(0) => None,            // already at the oldest
         Some(i) => Some(i - 1)}
-}
-
-/// `{service} {id tail}` for the footer's back hint: an ARN or path keeps
-/// only its last `/` or `:` segment (a Lambda or ECS service ARN reads as its
-/// name), capped so a long id can't crowd out the rest of the footer.
-fn nav_hint_label(service: ServiceType, id: Option<&str>) -> String {
-    const MAX: usize = 28;
-    let Some(id) = id.filter(|id| !id.is_empty()) else {
-        return service.short_name().to_string();
-    };
-    let tail = id.rsplit(['/', ':']).find(|seg| !seg.is_empty()).unwrap_or(id);
-    let tail = if tail.chars().count() > MAX {
-        format!("{}…", tail.chars().take(MAX - 1).collect::<String>())
-    } else {
-        tail.to_string()
-    };
-    format!("{} {tail}", service.short_name())
 }
 
 /// Where forward (`Ctrl-F`) lands: the next entry, but only while parked
@@ -5346,8 +5330,8 @@ impl App {
                 KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.nav_back(event_tx);
                 }
-                // ⌫ too, as in the list — the footer's `⌫ back to …` hint
-                // names it. (The body search box takes its own ⌫ first.)
+                // ⌫ too, as in the list (and the strip's `←`). The body
+                // search box takes its own ⌫ first.
                 KeyCode::Backspace if key.modifiers.is_empty() => {
                     self.nav_back(event_tx);
                 }
@@ -20957,8 +20941,9 @@ impl App {
     }
 
     /// The entry `⌫` / `Ctrl-O` would land on — `nav_back` after
-    /// `park_here`, computed without recording anything (the footer hint).
-    fn nav_back_index(&self) -> Option<usize> {
+    /// `park_here`, computed without recording anything (the strip's `←`
+    /// asks it every frame).
+    pub(crate) fn nav_back_index(&self) -> Option<usize> {
         if self.nav_cursor.is_none() {
             let skip = if self.here_is_history_top() { 2 } else { 1 };
             return self.nav_history.len().checked_sub(skip);
@@ -21100,36 +21085,9 @@ impl App {
         }
     }
 
-    /// Where `Ctrl-F` would go, in the same short form as `nav_back_hint`.
-    pub(crate) fn nav_forward_hint(&self) -> Option<String> {
-        let idx = nav_forward_target(self.nav_history.len(), self.nav_cursor)?;
-        Some(self.nav_location_hint(&self.nav_history[idx]))
-    }
-
-    /// `nav_hint_label`, plus the region when it isn't this one — the step
-    /// switches region, so the hint should say so.
-    fn nav_location_hint(&self, loc: &NavLocation) -> String {
-        let label = nav_hint_label(loc.service, loc.selected_id.as_deref());
-        match loc.other_region(self.current_region) {
-            Some(r) => format!("{label} · {r}"),
-            None => label,
-        }
-    }
-
-    /// Where `⌫` / `Ctrl-O` would go, shortened for the detail footer:
-    /// `EC2 i-0abc…`, an ARN or path cut to its last segment. `None` when
-    /// there's no history behind us, or the entry is where we already are.
-    pub(crate) fn nav_back_hint(&self) -> Option<String> {
-        let idx = self.nav_back_index()?;
-        let loc = &self.nav_history[idx];
-        let here = self.get_selected_resource().map(|r| r.id().to_string());
-        if Some(loc.service) == self.current_service
-            && loc.selected_id == here
-            && loc.other_region(self.current_region).is_none()
-        {
-            return None;
-        }
-        Some(self.nav_location_hint(loc))
+    /// The entry `Ctrl-F` would land on: `None` live or at the newest.
+    pub(crate) fn nav_forward_index(&self) -> Option<usize> {
+        nav_forward_target(self.nav_history.len(), self.nav_cursor)
     }
 
     /// Backtick: toggle the jump-list picker (most-recent first). Opens with the
@@ -24393,7 +24351,20 @@ impl App {
     ) -> Result<()> {
         match action {
             ClickAction::UpdateNotice => self.open_update_notice(),
-            ClickAction::NavForward => self.nav_forward(event_tx),
+            ClickAction::Back | ClickAction::Forward => {
+                let back = matches!(action, ClickAction::Back);
+                let target = if back { self.nav_back_index() } else { self.nav_forward_index() };
+                // A dim arrow does nothing, rather than a "no previous
+                // location" error for clicking it.
+                if self.search_active || target.is_none() {
+                    return Ok(());
+                }
+                if back {
+                    self.nav_back(event_tx);
+                } else {
+                    self.nav_forward(event_tx);
+                }
+            }
             ClickAction::CostPeriod(period) => {
                 // A stale region from before a service switch does nothing.
                 if self.current_service == Some(ServiceType::Cost)
@@ -33579,8 +33550,7 @@ mod flat_view_tests {
 
 #[cfg(test)]
 mod nav_tests {
-    use super::{nav_back_target, nav_forward_target, nav_hint_label, record_into, NAV_HISTORY_MAX};
-    use crate::aws::service::ServiceType;
+    use super::{nav_back_target, nav_forward_target, record_into, NAV_HISTORY_MAX};
 
     // --- nav_forward_target: where Ctrl-F lands ---
 
@@ -33590,29 +33560,6 @@ mod nav_tests {
         assert_eq!(nav_forward_target(3, Some(0)), Some(1));
         assert_eq!(nav_forward_target(3, Some(1)), Some(2));
         assert_eq!(nav_forward_target(3, Some(2)), None, "at the newest");
-    }
-
-    // --- nav_hint_label: the detail footer's `⌫ back to …` text ---
-
-    #[test]
-    fn hint_label_cuts_arns_and_paths_to_their_last_segment() {
-        let lambda = "arn:aws:lambda:us-east-1:111122223333:function:orders-api";
-        assert_eq!(nav_hint_label(ServiceType::Lambda, Some(lambda)), "λ orders-api");
-        let ecs = "arn:aws:ecs:us-east-1:111122223333:service/prod/web";
-        assert_eq!(nav_hint_label(ServiceType::ECS, Some(ecs)), "ECS web");
-        assert_eq!(nav_hint_label(ServiceType::EC2, Some("i-0abc")), "EC2 i-0abc");
-        // A trailing separator doesn't leave an empty tail.
-        assert_eq!(nav_hint_label(ServiceType::S3, Some("logs/")), "S3 logs");
-    }
-
-    #[test]
-    fn hint_label_caps_long_ids_and_falls_back_to_the_service() {
-        let long = "a".repeat(40);
-        let label = nav_hint_label(ServiceType::EC2, Some(&long));
-        assert_eq!(label.chars().count(), "EC2 ".len() + 28);
-        assert!(label.ends_with('…'));
-        assert_eq!(nav_hint_label(ServiceType::EC2, None), "EC2");
-        assert_eq!(nav_hint_label(ServiceType::EC2, Some("")), "EC2");
     }
 
     // --- nav_back_target: where Ctrl-O lands (non-destructive) ---

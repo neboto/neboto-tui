@@ -219,8 +219,8 @@ selection. The essentials:
 | `[[` / `]]` | Previous / next group header |
 | `l` `→` `⏎` | Follow the link under the cursor (rows marked `→`) |
 | `h` `←` `Esc` | Back to the list |
-| `⌫` `Ctrl-O` | Back through history (the footer names where: `⌫ back to EC2 i-0abc`, plus the region when going back switches it) |
-| `Ctrl-F` | Forward again, after going back (`⌃F forward to …`) |
+| `⌫` `Ctrl-O` | Back through history (the `←` at the service strip's left edge lights when there's somewhere to go) |
+| `Ctrl-F` | Forward again, after going back (`→` on the service strip) |
 | `/` | Filter the body text; `n` / `N` step through the matches |
 | `Ctrl-W` | Wrap long values onto continuation rows (toggle) |
 | `y` / `c` | Copy the row, or the visual selection |
@@ -258,7 +258,7 @@ the faster route, but nothing needs it.
 | Click a `→` | Follow that link |
 | Click the `↑ vX.Y.Z` chip | Copy the upgrade command (shown when a newer release is out) |
 | Click the detail pane's title bar | Full width (`Z`) |
-| Click `⌫ back to …` / `⌃F forward to …` in the detail footer | Back / forward through history |
+| Click `←` / `→` at the service strip's left edge | Back / forward through history |
 | Wheel | Scroll the list, the detail body, a picker, or an in-pane view (the log tail pauses following, as `k` does) |
 | Drag | Select a range of rows (then `y` copies it) |
 | Right-click | Back (`Ctrl-O`); in a popup or an in-pane view (`m`, `t`, `o`, `i`, `W`, `U`, `N`), close it |
