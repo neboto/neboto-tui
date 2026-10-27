@@ -54,7 +54,7 @@ use crate::aws::services::api_gateway::{
     ApiCustomDomain, ApiUsagePlan, HttpApi, RestApi, UsagePlanKeyInfo,
 };
 use crate::aws::services::awsconfig::ConfigRule;
-use crate::aws::services::waf::{WafInsights, WafMetricsState, WafWebAcl};
+use crate::aws::services::waf::{WafInsights, WafTraffic, WafWebAcl};
 use crate::aws::services::cloudwatch::{CwAlarm, CwCompositeAlarm, CwDashboard, CwLogGroup};
 use crate::aws::services::ec2::{Ec2Instance, NetworkInterface};
 use crate::aws::services::ecs::{EcsCluster, EcsServiceInfo, EcsTask, EcsTaskDefinition};

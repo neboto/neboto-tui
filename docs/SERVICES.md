@@ -1566,31 +1566,50 @@ the service you're touching.
   didn't: after a region/profile switch in CLOUDFRONT scope the rebuilt
   service listed regional ACLs under the CloudFront tab *and* cached them
   under the CloudFront variant key, and metrics queried `Region="Global"` in
-  us-east-1 for ACLs that publish regionally). `m`/Traffic
-  metrics: the `WebACL` dimension value is tried as the **ACL name first, then
-  the `VisibilityConfig` metric name** (best-effort `GetWebACL`) — accounts
-  publish under one or the other, so `fetch_waf_metrics` probes rather than
-  guesses. **The `Region` dimension exists only for REGIONAL scope** — the
+  us-east-1 for ACLs that publish regionally). `m` is the spec view
+  (`aws::metrics::WAF_WEB_ACL`, the five actions on one chart). **The
+  `WebACL` dimension value is looked up, never assumed.** AWS's dimension
+  table says it is the ACL's `VisibilityConfig` metric name, but real
+  accounts have shown data under the ACL's *name* instead: the first spec
+  port used only the metric name and charted nothing where v0.10.0 (which
+  tried the name, then the metric name) charted traffic. So the target
+  opens with the name, and its `Breakdown::Waf` resolves the value once
+  before the first fetch (`resolve_metric_name`): `GetWebACL` for the
+  metric name, and when that differs from the name, one `ListMetrics`
+  (`Rule=ALL`, plus `Region` for REGIONAL) to see which of the two
+  CloudWatch has series for — the metric name wins a tie or a miss. The
+  view's range line shows the dimensions it used, so an empty chart says
+  what it asked for. With `CloudWatchMetricsEnabled` off it says so
+  instead of charting nothing. **The `Region` dimension exists only for REGIONAL scope** — the
   docs' dimension table says Region is "required for all protected resource
   types *except* CloudFront distributions", so CLOUDFRONT-scope series (in
-  us-east-1) have no Region dimension at all and every query (stat series +
-  both SEARCH schemas) must omit it; `Region="Global"` matches nothing and
+  us-east-1) have no Region dimension at all and every query (the series
+  and both SEARCH schemas) must omit it; `Region="Global"` matches nothing and
   shipped once as permanently-empty CloudFront charts while Insights (a WAF
-  API, not CloudWatch) happily showed traffic. Charts are five `Rule=ALL`
-  `GetMetricStatistics` series (Allowed /
-  Blocked / Counted / **CAPTCHA / Challenge**; no IAM beyond what every
-  metrics pane needs); the "Requests by Rule" table is a **best-effort**
-  paginated `GetMetricData` per-rule SEARCH (schema
-  `{AWS/WAFV2,Region,Rule,WebACL}`, minus `Region` for CLOUDFRONT, dynamic
-  label `${PROP('Dim.Rule')}`;
-  managed rule-group rollups + `Default_Action` included, Rule=ALL excluded) —
-  a denial degrades to a `rule_note` hint, never kills the charts.
-  `WafMetricsState` has an `Error` arm (only when *nothing* came back and a
-  call failed) — surfaced via `error_rows`, never an eternal "Loading…".
-  The same GetMetricData call also SEARCHes the label schema
-  (`{AWS/WAFV2,LabelName,LabelNamespace,Region,WebACL}`, same Region rule) into a
-  "Requests by Label" table (bot categories / attack signals; hidden when no
-  labels fired). The web ACL pane's **Insights** section (key 6) is a lazy
+  API, not CloudWatch) happily showed traffic. The rule and label tables
+  (`waf::fetch_traffic`) are one paginated `GetMetricData`: a SEARCH per
+  action over `{AWS/WAFV2,Region,Rule,WebACL}` (minus `Region` for
+  CLOUDFRONT, dynamic label `${PROP('Dim.Rule')}`; managed rule-group
+  rollups and `Default_Action` included, the `Rule=ALL` series kept apart
+  as the totals) and one over `{AWS/WAFV2,LabelName,LabelNamespace,Region,WebACL}`
+  (bot categories / attack signals; that table is hidden when no labels
+  fired). The view draws them beside the chart; the Traffic section
+  (`lazy.waf_traffic`, keyed by ACL id) draws the same tables over a fixed
+  24 hours, since a LazyMap can't follow a range knob. **Reading the
+  numbers:** WAF publishes a minute only when it had requests, so the
+  action specs are `sparse` and `fetch_series` fills quiet periods with
+  zeros (min/avg/last were averaging only the busy minutes); the last
+  three minutes are left unfilled since they may still be publishing.
+  **Count is non-terminating** — a counted request is also allowed or
+  blocked later — so percentages are of allowed + blocked + CAPTCHA +
+  challenge (`WafTraffic::requests`), never of a sum including Counted
+  (the first Traffic section did that and under-stated every share).
+  Rule rows are keyed by each rule's *metric name*, and AWS doesn't
+  publish Count matches inside managed rule groups to the web ACL, so a
+  group in Count mode shows nothing in the tables. The label table's
+  dimension is `LabelName` here; AWS's metrics page lists it as `Label`,
+  which is unverified either way. The web ACL pane's
+  **Insights** section (key 6) is a lazy
   `fetch_waf_insights` (`lazy.waf_insights` keyed by ACL name): one
   `GetSampledRequests` per sampler — default action + rules by priority,
   capped `MAX_INSIGHT_SAMPLERS=10` with the overflow reported — aggregated

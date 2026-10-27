@@ -188,7 +188,7 @@ async fn every_spec_target_has_a_mock_that_charts() {
         "AWS/WorkSpaces", "AWS/Athena", "Glue", "AWS/TransitGateway", "AWS/Logs", "AWS/Events",
         "AWS/Route53Resolver", "AWS/CodeBuild", "AWS/CloudFront", "AWS/Route53", "AWS/GlobalAccelerator",
         "AWS/ECS", "AWS/AutoScaling", "ContainerInsights", "AWS/ApiGateway", "AWS/ApplicationELB", "AWS/ES",
-        "AWS/DMS", "ECS/ContainerInsights",
+        "AWS/DMS", "ECS/ContainerInsights", "AWS/WAFV2",
     ] {
         assert!(seen.contains_key(ns), "no mock reaches the {ns} spec arm: {seen:?}");
     }
@@ -196,6 +196,50 @@ async fn every_spec_target_has_a_mock_that_charts() {
     assert_eq!(seen["AWS/Route53"], Some("us-east-1"));
     assert_eq!(seen["AWS/GlobalAccelerator"], Some("us-west-2"));
     assert_eq!(seen["AWS/SQS"], None);
+}
+
+/// A web ACL charts its five actions on one chart, keyed `WebACL` +
+/// `Rule=ALL`, with `Region` only for a REGIONAL ACL: CLOUDFRONT-scope ACLs
+/// publish in us-east-1 with no `Region` dimension at all. Its rule tables
+/// sit beside the chart; a failed breakdown is a warning there, never an
+/// error for the series.
+#[tokio::test]
+async fn a_web_acl_charts_its_actions_with_the_rule_tables_beside() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let acl = all_mocks().into_iter().find(|(_, l, _)| *l == "WafWebAcl").unwrap().2;
+    select_mock(&mut app, ServiceType::Waf, acl.clone_box());
+    let dims = |t: &crate::aws::metrics::MetricTarget| -> Vec<String> {
+        t.dimensions.iter().map(|(n, v)| format!("{n}={v}")).collect()
+    };
+
+    let regional = app.selected_metric_target().unwrap();
+    let region = app.aws_clients.current_region().to_string();
+    assert_eq!(dims(&regional), ["WebACL=mock-web-acl".to_string(), "Rule=ALL".into(), format!("Region={region}")]);
+    assert_eq!(regional.home, None);
+    assert!(regional.breakdown.is_some());
+
+    app.waf_scope = crate::aws::services::waf::WafScope::CloudFront;
+    let cloudfront = app.selected_metric_target().unwrap();
+    assert_eq!(dims(&cloudfront), ["WebACL=mock-web-acl", "Rule=ALL"]);
+    assert_eq!(cloudfront.home, Some("us-east-1"));
+    app.waf_scope = crate::aws::services::waf::WafScope::Regional;
+
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    assert_eq!(app.metrics_in_pane, Some(MetricsKind::Spec));
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    let labels: Vec<&str> = st.series.iter().map(|s| s.query.label.as_str()).collect();
+    assert_eq!(labels, ["Allowed", "Blocked", "Counted", "CAPTCHA", "Challenge"]);
+    assert!(st.series.iter().all(|s| s.query.group.as_deref() == Some("actions")), "one chart");
+    assert!(st.series.iter().all(|s| s.error.is_none()), "the series chart");
+    assert!(st.breakdown.is_some(), "the breakdown came back with them");
+
+    press(&mut app, &tx, KeyCode::Char('Z')).await;
+    let screen = screen_of(&app);
+    assert!(screen.contains("Metrics — Web ACL · mock-web-acl"), "{screen}");
+    assert!(screen.contains("Totals · last 1h"), "{screen}");
+    assert!(screen.contains("WebACL=mock-web-acl, Rule=ALL"), "the looked-up dimension is shown: {screen}");
 }
 
 /// `5` reaches back 30 days (a stopped instance's last week of data), the
@@ -379,3 +423,4 @@ async fn a_capped_lookup_says_how_far_back_it_read() {
     assert!(screen.contains(&format!("CloudTrail stopped at its cap: nothing before {} read", &at[5..])), "{screen}");
     assert!(screen.contains("1+"), "{screen}");
 }
+

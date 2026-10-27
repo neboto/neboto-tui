@@ -64,13 +64,13 @@ pub(super) fn render_waf_section_tabs(app: &App, area: Rect, frame: &mut Frame) 
 pub fn waf_web_acl_section_lines(
     acl: &WafWebAcl,
     section: WafWebAclDetailSection,
-    metrics: Option<&WafMetricsState>,
+    traffic: Option<&Lazy<Box<WafTraffic>>>,
     detail: Option<&crate::lazy::Lazy<Box<crate::aws::services::waf::WafWebAclDetail>>>,
     insights: Option<&Lazy<Box<WafInsights>>>,
 ) -> Vec<(String, String)> {
     match section {
         WafWebAclDetailSection::Overview => waf_details_lines(acl),
-        WafWebAclDetailSection::Traffic => waf_traffic_lines(metrics),
+        WafWebAclDetailSection::Traffic => waf_traffic_lines(traffic),
         WafWebAclDetailSection::Insights => waf_insights_lines(insights),
         WafWebAclDetailSection::Rules => {
             let mut rows = vec![("".to_string(), "".to_string())];
@@ -374,228 +374,66 @@ pub(super) fn waf_details_lines(acl: &WafWebAcl) -> Vec<(String, String)> {
     ]
 }
 
-pub(super) fn waf_traffic_lines(metrics: Option<&WafMetricsState>) -> Vec<(String, String)> {
-    match metrics {
-        None | Some(WafMetricsState::Loading) => {
-            vec![("".to_string(), "Loading traffic metrics…".to_string())]
+pub(super) fn waf_traffic_lines(traffic: Option<&Lazy<Box<WafTraffic>>>) -> Vec<(String, String)> {
+    let mut rows = vec![("".to_string(), "".to_string())];
+    let t = match traffic {
+        None | Some(Lazy::Loading) => {
+            rows.push(("  Loading…".to_string(), "".to_string()));
+            return rows;
         }
-        Some(WafMetricsState::Error(e)) => {
-            let mut rows = vec![("".to_string(), "".to_string())];
+        Some(Lazy::Error(e)) => {
             rows.extend(error_rows(e));
-            rows
+            return rows;
         }
-        Some(WafMetricsState::Loaded(data)) => {
-            let sum = |pts: &[(f64, f64)]| -> f64 { pts.iter().map(|(_, v)| v).sum() };
-            let total_allowed = sum(&data.allowed);
-            let total_blocked = sum(&data.blocked);
-            let total_counted = sum(&data.counted);
-            let total_captcha = sum(&data.captcha);
-            let total_challenge = sum(&data.challenge);
-            let total =
-                total_allowed + total_blocked + total_counted + total_captcha + total_challenge;
-
-            let pct = |v: f64| -> String {
-                if total > 0.0 {
-                    format!("{:.1}%", v / total * 100.0)
-                } else {
-                    "—".to_string()
-                }
-            };
-
-            let mut rows = vec![
-                ("Traffic Summary".to_string(), "".to_string()),
-                ("".to_string(), "".to_string()),
-            ];
-
-            // Header
-            rows.push((
-                " Metric                  Count         % of Total".to_string(),
-                "".to_string(),
-            ));
-            rows.push((
-                " ─────────────────────────────────────────────────".to_string(),
-                "".to_string(),
-            ));
-            for (label, v) in [
-                ("Allowed Requests", total_allowed),
-                ("Blocked Requests", total_blocked),
-                ("Counted Requests", total_counted),
-                ("CAPTCHA Requests", total_captcha),
-                ("Challenge Requests", total_challenge),
-            ] {
-                rows.push((
-                    format!(" {:<23} {:<14}{}", label, format_count(v), pct(v)),
-                    "".to_string(),
-                ));
+        Some(Lazy::Loaded(t)) => t,
+    };
+    // Count doesn't end a request, so the percentages are of the requests
+    // that did end here (`WafTraffic::requests`) and Counted has none.
+    let requests = t.requests();
+    rows.push(("Last 24 hours".to_string(), "".to_string()));
+    if requests <= 0.0 && t.totals.counted <= 0.0 {
+        rows.push(("".to_string(), "No requests in the last 24 hours".to_string()));
+    } else {
+        rows.push(("Requests".to_string(), format_count(requests)));
+        let tt = &t.totals;
+        for (name, v) in [("Allowed", tt.allowed), ("Blocked", tt.blocked), ("CAPTCHA", tt.captcha), ("Challenge", tt.challenge)] {
+            // Allowed and Blocked always; the rest only when a rule uses them.
+            if v > 0.0 || name == "Allowed" || name == "Blocked" {
+                rows.push((name.to_string(), format!("{}  ({})", format_count(v), crate::aws::services::waf::pct(v, requests))));
             }
-            rows.push((
-                " ─────────────────────────────────────────────────".to_string(),
-                "".to_string(),
-            ));
-            rows.push((
-                format!(
-                    " Total                   {}",
-                    format_count(total)
-                ),
-                "".to_string(),
-            ));
-
-            rows.push(("".to_string(), "".to_string()));
-            rows.push((
-                format!("Period: {} │ press m for full chart overlay", data.time_range.label()),
-                "".to_string(),
-            ));
-            rows.push(("".to_string(), "".to_string()));
-
-            // Per-rule range totals (managed rule-group rollups + Default_Action
-            // included) — the console dashboard's "top rules" table.
-            if let Some(note) = &data.rule_note {
-                rows.push((format!(" ⚠ {}", note), "".to_string()));
-                rows.push(("".to_string(), "".to_string()));
-            }
-            if !data.rule_traffic.is_empty() {
-                rows.push((
-                    format!("Requests by Rule ({})", data.time_range.label()),
-                    "".to_string(),
-                ));
-                rows.push(("".to_string(), "".to_string()));
-                rows.push((
-                    format!(
-                        " {:<34} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
-                        "Rule", "Total", "Allow", "Block", "Count", "CAPTCHA", "Chlng"
-                    ),
-                    "".to_string(),
-                ));
-                let fmt0 = |v: f64| -> String {
-                    if v > 0.0 { format_count(v) } else { "—".to_string() }
-                };
-                const MAX_RULE_ROWS: usize = 30;
-                for r in data.rule_traffic.iter().take(MAX_RULE_ROWS) {
-                    let name = if r.name.chars().count() > 34 {
-                        format!("{}…", r.name.chars().take(33).collect::<String>())
-                    } else {
-                        r.name.clone()
-                    };
-                    rows.push((
-                        format!(
-                            " {:<34} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
-                            name,
-                            format_count(r.total()),
-                            fmt0(r.allowed),
-                            fmt0(r.blocked),
-                            fmt0(r.counted),
-                            fmt0(r.captcha),
-                            fmt0(r.challenge),
-                        ),
-                        "".to_string(),
-                    ));
-                }
-                if data.rule_traffic.len() > MAX_RULE_ROWS {
-                    rows.push((
-                        format!(" … +{} more rules", data.rule_traffic.len() - MAX_RULE_ROWS),
-                        "".to_string(),
-                    ));
-                }
-                rows.push(("".to_string(), "".to_string()));
-            }
-
-            // Per-label totals — managed rule groups emit these (bot
-            // categories, attack signals); absent unless labels fired.
-            if !data.label_traffic.is_empty() {
-                rows.push((
-                    format!("Requests by Label ({})", data.time_range.label()),
-                    "".to_string(),
-                ));
-                rows.push(("".to_string(), "".to_string()));
-                const MAX_LABEL_ROWS: usize = 20;
-                for l in data.label_traffic.iter().take(MAX_LABEL_ROWS) {
-                    let name = if l.name.chars().count() > 64 {
-                        format!("{}…", l.name.chars().take(63).collect::<String>())
-                    } else {
-                        l.name.clone()
-                    };
-                    let mut parts: Vec<String> = Vec::new();
-                    for (v, tag) in [
-                        (l.allowed, "alw"),
-                        (l.blocked, "blk"),
-                        (l.counted, "cnt"),
-                        (l.captcha, "cap"),
-                        (l.challenge, "chl"),
-                    ] {
-                        if v > 0.0 {
-                            parts.push(format!("{} {}", tag, format_count(v)));
-                        }
-                    }
-                    rows.push((
-                        format!(
-                            " {} — {} ({})",
-                            name,
-                            format_count(l.total()),
-                            parts.join(" · ")
-                        ),
-                        "".to_string(),
-                    ));
-                }
-                if data.label_traffic.len() > MAX_LABEL_ROWS {
-                    rows.push((
-                        format!(
-                            " … +{} more labels",
-                            data.label_traffic.len() - MAX_LABEL_ROWS
-                        ),
-                        "".to_string(),
-                    ));
-                }
-                rows.push(("".to_string(), "".to_string()));
-            }
-
-            // Sparkline-style breakdown per data point
-            if !data.allowed.is_empty() || !data.blocked.is_empty() {
-                rows.push(("Recent Activity".to_string(), "".to_string()));
-                rows.push(("".to_string(), "".to_string()));
-
-                let max_pts = 20;
-                let spark = |pts: &[(f64, f64)]| -> String {
-                    if pts.is_empty() { return "—".to_string(); }
-                    let bars = "▁▂▃▄▅▆▇█";
-                    let bar_chars: Vec<char> = bars.chars().collect();
-                    let max_v = pts.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max).max(1.0);
-                    let step = pts.len().max(1) / max_pts.min(pts.len()).max(1);
-                    pts.iter()
-                        .step_by(step.max(1))
-                        .take(max_pts)
-                        .map(|(_, v)| {
-                            let idx = ((v / max_v) * 7.0).round() as usize;
-                            bar_chars[idx.min(7)]
-                        })
-                        .collect()
-                };
-
-                rows.push((format!(" Allowed   {}", spark(&data.allowed)), "".to_string()));
-                rows.push((format!(" Blocked   {}", spark(&data.blocked)), "".to_string()));
-                rows.push((format!(" Counted   {}", spark(&data.counted)), "".to_string()));
-                if !data.captcha.is_empty() {
-                    rows.push((format!(" CAPTCHA   {}", spark(&data.captcha)), "".to_string()));
-                }
-                if !data.challenge.is_empty() {
-                    rows.push((format!(" Challenge {}", spark(&data.challenge)), "".to_string()));
-                }
-            }
-
-            rows.push(("".to_string(), "".to_string()));
-            rows
+        }
+        if tt.counted > 0.0 {
+            rows.push(("Counted".to_string(), format!("{}  (also allowed or blocked later)", format_count(tt.counted))));
         }
     }
+    rows.push(("".to_string(), "· m charts them over any range, with these tables beside the chart".to_string()));
+    // The tables the `m` view draws, from the same formatter.
+    const MAX_ROWS: usize = 30;
+    for table in t.tables() {
+        rows.push(("".to_string(), "".to_string()));
+        rows.push((table.title.clone(), "".to_string()));
+        if table.rows.is_empty() {
+            rows.push(("".to_string(), "No per-rule traffic in the last 24 hours".to_string()));
+            continue;
+        }
+        let (header, lines) = table.text(100, MAX_ROWS);
+        rows.push((header, "".to_string()));
+        rows.extend(lines.into_iter().map(|l| (l, "".to_string())));
+        if table.rows.len() > MAX_ROWS {
+            rows.push(("".to_string(), format!("· {} more", table.rows.len() - MAX_ROWS)));
+        }
+    }
+    // AWS doesn't publish these to the web ACL, so no table can show them.
+    rows.push(("".to_string(), "".to_string()));
+    rows.push((
+        "".to_string(),
+        "· Rows are rules' metric names; Count matches inside managed rule groups aren't published here".to_string(),
+    ));
+    rows
 }
 
 pub(super) fn format_count(v: f64) -> String {
-    let n = v as u64;
-    if n >= 1_000_000 {
-        format!("{:.1}M", v / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}K", v / 1_000.0)
-    } else {
-        format!("{}", n)
-    }
+    crate::aws::metrics::fmt_count(v)
 }
 
 pub(super) fn waf_insights_lines(

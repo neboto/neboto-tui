@@ -11,7 +11,7 @@
 //! warning on its own row, never an error for the view.
 
 use crate::app::App;
-use crate::aws::metrics::{fmt_value, MetricDefinition, MetricQuery, MetricSeries, MetricTarget, RANGES};
+use crate::aws::metrics::{fmt_value, BreakdownData, MetricDefinition, MetricQuery, MetricSeries, MetricTarget, RANGES};
 use crate::aws::services::ec2::MetricsTimeRange;
 use crate::ui::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -44,6 +44,8 @@ pub struct SpecMetricsState {
     /// The window's end, epoch seconds (the chart's `now`).
     pub end: i64,
     pub picker: Option<MetricPicker>,
+    /// The target's breakdown tables for the range, once fetched.
+    pub breakdown: Option<Result<BreakdownData, String>>,
 }
 
 impl SpecMetricsState {
@@ -59,6 +61,7 @@ impl SpecMetricsState {
             selected: 0,
             end: 0,
             picker: None,
+            breakdown: None,
         }
     }
 
@@ -98,6 +101,23 @@ impl SpecMetricsState {
         for s in &self.series {
             out.push_str(&s.summary());
             out.push('\n');
+        }
+        match &self.breakdown {
+            Some(Ok(data)) => {
+                if let Some(summary) = &data.summary {
+                    out.push_str(&format!("\n{summary}\n"));
+                }
+                for t in &data.tables {
+                    let (header, rows) = t.full_text();
+                    out.push_str(&format!("\n{} ({})\n{header}\n", t.title, self.range.label()));
+                    for r in rows {
+                        out.push_str(&r);
+                        out.push('\n');
+                    }
+                }
+            }
+            Some(Err(e)) => out.push_str(&format!("\nBreakdown: {e}\n")),
+            None => {}
         }
         out
     }
@@ -180,8 +200,10 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
     // `d default set`, and the `a` list is plainly a list.
     range.push(Span::styled(format!("   {}", st.target.namespace), dim));
     // A metric row's title is only the metric's name: its dimensions are
-    // what say which instance or queue it is. A resource's title says so.
-    if st.target.specs.is_empty() && !st.target.dimensions.is_empty() {
+    // what say which instance or queue it is. A resource's title says so,
+    // except where a dimension was looked up (WAF's `WebACL` metric name):
+    // that one is shown, so an empty chart says what it asked for.
+    if (st.target.specs.is_empty() || st.target.breakdown.is_some()) && !st.target.dimensions.is_empty() {
         let dims: Vec<String> = st.target.dimensions.iter().map(|(n, v)| format!("{n}={v}")).collect();
         range.push(Span::styled(format!(" · {}", dims.join(", ")), dim));
     }
@@ -352,7 +374,28 @@ fn render_series(app: &App, st: &SpecMetricsState, area: Rect, frame: &mut Frame
     frame.render_widget(Paragraph::new(lines), list_area);
     app.popup_hits.borrow_mut().record_rows(list_area, 0, st.series.len());
 
-    if let (Some(chart_area), Some(sel)) = (chart_area, st.selected_series()) {
+    let Some(chart_area) = chart_area else { return };
+    // A target with a breakdown shares the chart's space with its tables:
+    // beside the chart when the pane is wide, under it when it is tall.
+    let (chart_area, table_area) = match &st.target.breakdown {
+        None => (chart_area, None),
+        Some(_) if chart_area.width >= 110 => {
+            let parts = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+                .split(chart_area);
+            (parts[0], Some(parts[1]))
+        }
+        Some(_) if chart_area.height >= 18 => {
+            let parts = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(9), Constraint::Percentage(45)])
+                .split(chart_area);
+            (parts[0], Some(parts[1]))
+        }
+        Some(_) => (chart_area, None),
+    };
+    if let Some(sel) = st.selected_series() {
         // The selected metric and its group's others, each in its row colour.
         let drawn: Vec<(usize, &MetricSeries)> = match &sel.query.group {
             Some(g) => st.series.iter().enumerate().filter(|(_, s)| s.query.group.as_ref() == Some(g)).collect(),
@@ -360,6 +403,61 @@ fn render_series(app: &App, st: &SpecMetricsState, area: Rect, frame: &mut Frame
         };
         render_chart(st, &drawn, chart_area, frame);
     }
+    if let Some(area) = table_area {
+        render_breakdown(st, area, frame);
+    }
+}
+
+/// The target's breakdown tables (WAF's requests by rule and by label) for
+/// the view's range. What doesn't fit is left to `e`, which lists them all.
+fn render_breakdown(st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
+    let dim = Style::default().fg(theme::text_dim());
+    let block = Block::default()
+        .title(Span::styled(format!(" Totals · last {} ", st.range.label()), dim))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::border_dim()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let height = inner.height as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    match &st.breakdown {
+        None => lines.push(Line::styled(if st.loading { " Reading…" } else { " Nothing to show" }, dim)),
+        Some(Err(e)) => lines.push(Line::styled(format!(" ⚠ {e}"), Style::default().fg(theme::warning()))),
+        Some(Ok(data)) => {
+            if let Some(summary) = &data.summary {
+                lines.push(Line::styled(
+                    format!(" {summary}"),
+                    Style::default().fg(theme::text_primary()).add_modifier(Modifier::BOLD),
+                ));
+                lines.push(Line::raw(""));
+            }
+            let tables = &data.tables;
+            for (i, t) in tables.iter().enumerate() {
+                if i > 0 {
+                    lines.push(Line::raw(""));
+                }
+                lines.push(Line::styled(
+                    format!(" {}", t.title),
+                    Style::default().fg(theme::heading()).add_modifier(Modifier::BOLD),
+                ));
+                if t.rows.is_empty() {
+                    lines.push(Line::styled(" None in the range", dim));
+                    continue;
+                }
+                // Leave the next table its title, header and a row.
+                let reserve = if i + 1 < tables.len() { 4 } else { 0 };
+                let room = height.saturating_sub(lines.len() + 1 + reserve).max(1);
+                let shown = if t.rows.len() > room { room.saturating_sub(1).max(1) } else { room };
+                let (header, rows) = t.text(inner.width as usize, shown);
+                lines.push(Line::styled(header, dim));
+                lines.extend(rows.into_iter().map(|r| Line::styled(r, Style::default().fg(theme::text_primary()))));
+                if t.rows.len() > shown {
+                    lines.push(Line::styled(format!(" · {} more — e lists them all", t.rows.len() - shown), dim));
+                }
+            }
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// The selected metric (with its group) as braille lines over the window.

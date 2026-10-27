@@ -559,7 +559,6 @@ pub enum MetricsKind {
     Spec,
     CwAlarm,
     Cost,
-    Waf,
     Nfw,
     Fsx,
     FsxVolume,
@@ -2554,7 +2553,6 @@ pub struct App {
     pub config_view: ConfigView,
     pub waf_view: WafView,
     pub waf_scope: WafScope,
-    pub waf_metrics: HashMap<String, crate::aws::services::waf::WafMetricsState>,
     /// CFN Events section body toggle (`f`): chronological stream ↔ the
     /// per-resource progress rollup ("what's left"). Sticky for the session,
     /// like the flat detail view.
@@ -3256,7 +3254,6 @@ impl App {
             config_view: ConfigView::Rules,
             waf_view: WafView::WebAcls,
             waf_scope: WafScope::Regional,
-            waf_metrics: HashMap::new(),
             cfn_events_progress: false,
             cfn_progress_poll_last: None,
             iam_view: IamView::Roles,
@@ -3678,12 +3675,6 @@ impl App {
                     self.s3_object_browser.message = Some(format!("Presign failed: {}", e));
                 }
             },
-            Event::WafMetricsLoaded { web_acl_name, result } => {
-                let state = match result {
-                    Ok(data) => crate::aws::services::waf::WafMetricsState::Loaded(data),
-                    Err(e) => crate::aws::services::waf::WafMetricsState::Error(e)};
-                self.waf_metrics.insert(web_acl_name, state);
-            }
             Event::NfwMetricsLoaded { firewall_name, data } => {
                 self.nfw_metrics.insert(
                     firewall_name,
@@ -4688,21 +4679,6 @@ impl App {
                     KeyCode::Char(']') => {
                         self.fsx_metrics_time_range = self.fsx_metrics_time_range.next();
                         self.trigger_fsx_volume_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Waf => match key.code {
-                    KeyCode::Char('r') => {
-                        self.waf_metrics.clear();
-                        self.trigger_waf_metrics_load(event_tx);
-                    }
-                    KeyCode::Char('[') => {
-                        self.ec2_metrics_time_range = self.ec2_metrics_time_range.prev();
-                        self.trigger_waf_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.ec2_metrics_time_range = self.ec2_metrics_time_range.next();
-                        self.trigger_waf_metrics_load(event_tx);
                     }
                     _ => {}
                 },
@@ -24134,7 +24110,39 @@ impl App {
 
     pub(crate) fn hook_waf_web_acl_traffic(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         self.trigger_waf_web_acl_detail_load(event_tx);
-        self.trigger_waf_metrics_load(event_tx);
+        self.trigger_waf_traffic_load(event_tx);
+    }
+
+    /// The Traffic section's totals over a fixed 24 hours (the `m` view has
+    /// the range knob): the ACL's metric name, then one SEARCH call.
+    pub(crate) fn trigger_waf_traffic_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::waf::{self, WafScope};
+        let Some(acl) = self.get_selected_resource().and_then(|r| r.as_any().downcast_ref::<waf::WafWebAcl>()) else {
+            return;
+        };
+        let (name, id) = (acl.name.clone(), acl.id.clone());
+        let scope = self.waf_scope;
+        let (client, cw, region) = match scope {
+            WafScope::CloudFront => {
+                (self.aws_clients.wafv2_cloudfront_client(), self.aws_clients.cloudwatch_us_east_1_client(), None)
+            }
+            WafScope::Regional => (
+                self.aws_clients.wafv2_client(),
+                self.aws_clients.cloudwatch_client(),
+                Some(self.aws_clients.current_region().to_string()),
+            ),
+        };
+        let range = MetricsTimeRange::TwentyFourHours;
+        self.trigger_lazy(|app| &mut app.lazy.waf_traffic, id.clone(), event_tx, async move {
+            let (metric, enabled) = waf::resolve_metric_name(&client, &cw, scope, &name, &id, region.as_deref()).await;
+            if !enabled {
+                return Err("CloudWatch metrics are off in this web ACL's visibility config".to_string());
+            }
+            let end = epoch_now();
+            waf::fetch_traffic(&cw, &metric, region.as_deref(), end - range.duration_secs(), end, range.period_secs())
+                .await
+                .map(Box::new)
+        });
     }
 
     pub(crate) fn hook_waf_web_acl_insights(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
@@ -27088,7 +27096,7 @@ impl App {
                 return crate::ui::widgets::details_pane::waf_web_acl_section_lines(
                     acl,
                     crate::aws::services::waf::WafWebAclDetailSection::from_index(self.detail_section_idx),
-                    self.waf_metrics.get(&acl.name),
+                    self.lazy.waf_traffic.get(&acl.id),
                     self.lazy.waf_web_acl_details.get(&acl.id),
                     self.lazy.waf_insights.get(&acl.name),
                 );
@@ -30917,47 +30925,6 @@ impl App {
         }
     }
 
-    pub(crate) fn trigger_waf_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(acl) = self.get_selected_resource().and_then(|r| {
-            r.as_any()
-                .downcast_ref::<crate::aws::services::waf::WafWebAcl>()
-        }) {
-            let name = acl.name.clone();
-            let id = acl.id.clone();
-            let scope = self.waf_scope;
-            let waf_client = match scope {
-                WafScope::CloudFront => self.aws_clients.wafv2_cloudfront_client(),
-                WafScope::Regional => self.aws_clients.wafv2_client()};
-            let cw_client = match scope {
-                WafScope::CloudFront => self.aws_clients.cloudwatch_us_east_1_client(),
-                WafScope::Regional => self.aws_clients.cloudwatch_client()};
-            let region = self.aws_clients.current_region().to_string();
-            let time_range = self.ec2_metrics_time_range;
-            self.waf_metrics.insert(
-                name.clone(),
-                crate::aws::services::waf::WafMetricsState::Loading,
-            );
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                let result = crate::aws::services::waf::fetch_waf_metrics(
-                    waf_client,
-                    cw_client,
-                    name.clone(),
-                    id,
-                    scope,
-                    region,
-                    time_range,
-                )
-                .await
-                .map(Box::new)
-                .map_err(|e| e.to_string());
-                let _ = tx.send(crate::event::Event::WafMetricsLoaded {
-                    web_acl_name: name,
-                    result});
-            });
-        }
-    }
-
     pub fn is_selected_secret(&self) -> bool {
         self.get_selected_resource()
             .and_then(|r| {
@@ -32054,6 +32021,7 @@ impl App {
             home: None,
             hint: None,
             extra: Vec::new(),
+            breakdown: None,
         };
         macro_rules! is {
             ($t:ty) => {
@@ -32146,6 +32114,32 @@ impl App {
                 home: Some("us-east-1"),
                 ..target("CloudFront distribution", "AWS/CloudFront", dims, m::CLOUDFRONT_DISTRIBUTION)
             }
+        } else if let Some(acl) = is!(s::waf::WafWebAcl) {
+            // `WebACL` starts as the name; the breakdown's first fetch swaps
+            // in the ACL's metric name, which is what AWS publishes under.
+            let cloudfront = self.waf_scope == s::waf::WafScope::CloudFront;
+            let region = (!cloudfront).then(|| self.aws_clients.current_region().to_string());
+            let mut dims = vec![("WebACL".to_string(), acl.name.clone()), ("Rule".to_string(), "ALL".to_string())];
+            if let Some(r) = &region {
+                dims.push(("Region".to_string(), r.clone()));
+            }
+            let client = if cloudfront {
+                self.aws_clients.wafv2_cloudfront_client()
+            } else {
+                self.aws_clients.wafv2_client()
+            };
+            MetricTarget {
+                home: cloudfront.then_some("us-east-1"),
+                breakdown: Some(m::Breakdown::Waf {
+                    client,
+                    scope: self.waf_scope,
+                    name: acl.name.clone(),
+                    id: acl.id.clone(),
+                    region,
+                    metric_name: None,
+                }),
+                ..target("Web ACL", "AWS/WAFV2", dims, m::WAF_WEB_ACL)
+            }
         } else if let Some(h) = is!(s::route53::R53HealthCheck) {
             MetricTarget {
                 home: Some("us-east-1"),
@@ -32191,6 +32185,7 @@ impl App {
                             unit: m::Unit::Percent,
                             rate: false,
                             group: Some(group.to_string()),
+                            sparse: false,
                         })
                 })
                 .collect();
@@ -32260,6 +32255,7 @@ impl App {
                 unit: m::Unit::Raw,
                 rate: false,
                 group: None,
+                sparse: false,
             };
             MetricTarget {
                 extra: vec![query],
@@ -32300,17 +32296,46 @@ impl App {
         let Some(st) = self.spec_metrics.as_mut() else { return };
         st.loading = true;
         self.spec_metrics_range = st.range;
-        let (queries, range) = (st.queries.clone(), st.range);
+        let (mut queries, range) = (st.queries.clone(), st.range);
+        let breakdown = st.target.breakdown.clone();
+        let mut dims = st.target.dimensions.clone();
         let cw = spec_metrics_client(&self.aws_clients, st.target.home);
         let epoch = self.lazy.epoch();
         let tx = event_tx.clone();
         tokio::spawn(async move {
-            let series = crate::aws::metrics::fetch_series(&cw, &queries, range, end).await;
+            let fix = match &breakdown {
+                Some(b) => b.prepare(&cw, &mut queries).await,
+                None => None,
+            };
+            if let Some(f) = &fix {
+                f.apply_to(&mut dims);
+            }
+            let tables = async {
+                match &breakdown {
+                    Some(b) => Some(b.fetch(&cw, &dims, range, end).await),
+                    None => None,
+                }
+            };
+            let (series, tables) =
+                tokio::join!(crate::aws::metrics::fetch_series(&cw, &queries, range, end), tables);
             let apply: Box<dyn FnOnce(&mut App) + Send> = Box::new(move |app: &mut App| {
                 if app.spec_metrics_generation != generation {
                     return;
                 }
                 if let Some(st) = app.spec_metrics.as_mut() {
+                    if let Some(f) = &fix {
+                        f.apply_to(&mut st.target.dimensions);
+                        for q in st.queries.iter_mut() {
+                            f.apply_to(&mut q.dimensions);
+                        }
+                        if let Some(b) = st.target.breakdown.as_mut() {
+                            b.settle(f);
+                        }
+                        if f.hint.is_some() {
+                            st.target.hint = f.hint;
+                        }
+                    }
+                    st.breakdown = tables;
                     st.set_series(end, series);
                 }
             });
@@ -32440,9 +32465,6 @@ impl App {
         } else if self.is_selected_cost_item() {
             // Daily series is already loaded with the row — no fetch.
             Some(MetricsKind::Cost)
-        } else if self.is_selected_waf_web_acl() {
-            self.trigger_waf_metrics_load(event_tx);
-            Some(MetricsKind::Waf)
         } else if self.is_selected_nfw_firewall() {
             self.trigger_nfw_metrics_load(event_tx);
             Some(MetricsKind::Nfw)
