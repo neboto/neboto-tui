@@ -1947,6 +1947,10 @@ pub struct App {
     pub is_service_switch_query: bool,
     pub search_needs_update: bool, // Flag to defer search processing
     pub search_last_modified: Option<Instant>, // Track when search input last changed
+    /// The search bar's cursor, in chars from the **end** of `search_query`
+    /// (`0` = after the last char), so assigning a query anywhere leaves it
+    /// at the end. Edited by `search::line_edit`.
+    pub search_cursor_back: usize,
     /// This session's submitted `/` queries, oldest first, de-duplicated
     /// (a re-run moves to the end). `↑`/`↓` in the search bar walk it.
     /// In memory only — queries can hold account names and tag values.
@@ -2090,6 +2094,8 @@ pub struct App {
     pub last_left_click: Option<(std::time::Instant, u16, u16)>,
     pub detail_search_active: bool,
     pub detail_search_query: String,
+    /// `detail_search_query`'s cursor, as `search_cursor_back`.
+    pub detail_search_cursor_back: usize,
     /// Flat detail view (`\`, config `detail_flat`): every section of the
     /// selected resource concatenated into one scroll instead of the tabbed
     /// section-at-a-time view. Section chips/digits become jump anchors.
@@ -2983,6 +2989,7 @@ impl App {
             is_service_switch_query: false,
             search_needs_update: false,
             search_last_modified: None,
+            search_cursor_back: 0,
             search_history: Vec::new(),
             search_history_cursor: None,
             search_history_draft: String::new(),
@@ -3055,6 +3062,7 @@ impl App {
             deep_export_progress: None,
             detail_search_active: false,
             detail_search_query: String::new(),
+            detail_search_cursor_back: 0,
             detail_flat_mode: config.detail_flat.unwrap_or(false),
             log_wrap: config.log_wrap.unwrap_or(false),
             detail_wrap: config.detail_wrap.unwrap_or(false),
@@ -4800,25 +4808,24 @@ impl App {
 
         // If we're in search mode, handle text input
         if self.search_active {
-            match key.code {
-                KeyCode::Char(c) => {
-                    self.search_query.push(c);
+            use crate::search::line_edit::{self, Edit};
+            match line_edit::apply(&mut self.search_query, &mut self.search_cursor_back, key) {
+                Edit::Changed => {
                     // Editing a recalled query makes it the new draft.
                     self.search_history_cursor = None;
                     // Mark that input changed and defer search processing
                     self.search_last_modified = Some(Instant::now());
                     self.search_needs_update = true;
+                    return Ok(());
                 }
-                KeyCode::Backspace => {
-                    self.search_query.pop();
-                    self.search_history_cursor = None;
-                    // Mark that input changed and defer search processing
-                    self.search_last_modified = Some(Instant::now());
-                    self.search_needs_update = true;
-                }
+                Edit::Moved => return Ok(()),
+                Edit::Ignored => {}
+            }
+            match key.code {
                 KeyCode::Up | KeyCode::Down => {
                     if let Some(query) = self.step_search_history(key.code == KeyCode::Up) {
                         self.search_query = query;
+                        self.search_cursor_back = 0;
                         self.search_last_modified = Some(Instant::now());
                         self.search_needs_update = true;
                     }
@@ -4856,6 +4863,7 @@ impl App {
                                 .find(|s| s.prefix()[1..].starts_with(lower.as_str()));
                             if let Some(service) = first {
                                 self.search_query = format!("{} ", service.prefix());
+                                self.search_cursor_back = 0;
                                 self.search_last_modified = Some(Instant::now());
                                 self.search_needs_update = true;
                             }
@@ -4953,26 +4961,18 @@ impl App {
 
             // Detail pane inline search: active while typing
             if self.detail_search_active {
+                use crate::search::line_edit::{self, Edit};
+                // `Ctrl-W` deletes a word here, as in a shell — not the
+                // body-wrap toggle, and not a literal `w`.
+                match line_edit::apply(&mut self.detail_search_query, &mut self.detail_search_cursor_back, key) {
+                    Edit::Changed => {
+                        self.details_selected_index = Some(0);
+                        return Ok(());
+                    }
+                    Edit::Moved => return Ok(()),
+                    Edit::Ignored => {}
+                }
                 match key.code {
-                    // Ctrl-W deletes the last word, as in a shell — not the
-                    // body-wrap toggle, and not a literal `w`.
-                    KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let q = self.detail_search_query.trim_end().to_string();
-                        let keep = q.rfind(' ').map(|i| i + 1).unwrap_or(0);
-                        self.detail_search_query.truncate(keep);
-                        self.details_selected_index = Some(0);
-                        return Ok(());
-                    }
-                    KeyCode::Char(c) => {
-                        self.detail_search_query.push(c);
-                        self.details_selected_index = Some(0);
-                        return Ok(());
-                    }
-                    KeyCode::Backspace => {
-                        self.detail_search_query.pop();
-                        self.details_selected_index = Some(0);
-                        return Ok(());
-                    }
                     KeyCode::Enter => {
                         // Confirm — stay in detail pane, keep filter, exit typing mode
                         self.detail_search_active = false;
@@ -5130,6 +5130,7 @@ impl App {
                 KeyCode::Char('/') => {
                     self.detail_search_active = true;
                     self.detail_search_query.clear();
+                    self.detail_search_cursor_back = 0;
                     self.details_selected_index = Some(0);
                 }
                 KeyCode::Char('x') => {
@@ -8068,6 +8069,7 @@ impl App {
                 self.search_active = true;
                 // Clear any previous search to give a clean slate
                 self.search_query.clear();
+                self.search_cursor_back = 0;
                 self.search_last_modified = None;
                 self.search_needs_update = true;
             }
@@ -8849,6 +8851,7 @@ impl App {
         self.layout_mode = LayoutMode::Split;
         self.search_active = true;
         self.search_query = "@".to_string();
+        self.search_cursor_back = 0;
         self.search_last_modified = Some(Instant::now());
         self.search_needs_update = true;
     }

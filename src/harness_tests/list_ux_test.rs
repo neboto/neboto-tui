@@ -439,3 +439,50 @@ async fn the_strip_arrows_go_back_and_forward() {
     app.handle_event(click(region(&app, false)), &tx).await.unwrap();
     assert_eq!(landed_on(&app).as_deref(), Some("i-b"));
 }
+
+#[tokio::test]
+async fn a_recalled_search_can_be_edited_in_the_middle() {
+    let (mut app, tx, _rx) = test_app().await;
+    app.current_service = Some(ServiceType::EC2);
+    press(&mut app, &tx, KeyCode::Char('/')).await;
+    type_str(&mut app, &tx, "prd-api").await;
+    press(&mut app, &tx, KeyCode::Enter).await;
+
+    // `/` still starts empty — typing straight away is unchanged.
+    press(&mut app, &tx, KeyCode::Char('/')).await;
+    assert!(app.search_active);
+    assert_eq!(app.search_query, "");
+    // ↑ brings it back with the cursor at the end; fix the typo mid-word.
+    press(&mut app, &tx, KeyCode::Up).await;
+    for _ in 0..5 {
+        press(&mut app, &tx, KeyCode::Left).await;
+    }
+    press(&mut app, &tx, KeyCode::Char('o')).await;
+    assert_eq!(app.search_query, "prod-api");
+    // End, then keep typing at the end.
+    press(&mut app, &tx, KeyCode::End).await;
+    type_str(&mut app, &tx, "-gw").await;
+    assert_eq!(app.search_query, "prod-api-gw");
+    // Ctrl-W takes the word before the cursor.
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL)), &tx)
+        .await
+        .unwrap();
+    assert_eq!(app.search_query, "");
+    assert!(app.search_active);
+}
+
+#[tokio::test]
+async fn the_detail_filter_edits_in_the_middle_too() {
+    let (mut app, tx, _rx) = test_app().await;
+    app.current_service = Some(ServiceType::EC2);
+    app.details_focused = true;
+    app.detail_search_active = true;
+    type_str(&mut app, &tx, "subet").await;
+    press(&mut app, &tx, KeyCode::Left).await;
+    press(&mut app, &tx, KeyCode::Left).await;
+    press(&mut app, &tx, KeyCode::Char('n')).await;
+    assert_eq!(app.detail_search_query, "subnet");
+    // Still typing: arrows didn't leave the filter or move the pane.
+    assert!(app.detail_search_active);
+    assert!(app.details_focused);
+}
