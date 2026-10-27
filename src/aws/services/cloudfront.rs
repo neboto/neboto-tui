@@ -1688,3 +1688,99 @@ fn epoch_days_to_ymd(mut days: i64) -> (i32, u8, u8) {
 fn is_leap(y: i32) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
+
+// ── Metrics lookups (`m`) ─────────────────────────────────────────────────────
+
+/// Whether the distribution's additional metrics (cache hit rate, origin
+/// latency, per-status error rates) are on: `None` when it can't be told
+/// (denied, throttled), so nothing is claimed either way.
+pub async fn additional_metrics_enabled(client: &aws_sdk_cloudfront::Client, id: &str) -> Option<bool> {
+    use aws_sdk_cloudfront::types::RealtimeMetricsSubscriptionStatus as Status;
+    match client.get_monitoring_subscription().distribution_id(id).send().await {
+        Ok(resp) => Some(
+            resp.monitoring_subscription()
+                .and_then(|m| m.realtime_metrics_subscription_config())
+                .is_some_and(|c| *c.realtime_metrics_subscription_status() == Status::Enabled),
+        ),
+        // A distribution that never had them has no subscription at all.
+        Err(e) if e.as_service_error().is_some_and(|se| se.is_no_such_monitoring_subscription()) => Some(false),
+        Err(_) => None,
+    }
+}
+
+/// A WAFv2 web ACL's name and id from the ARN a distribution's
+/// `WebACLId` holds (`arn:aws:wafv2:us-east-1:…:global/webacl/NAME/ID`).
+/// `None` for an empty id or a WAF Classic one, which isn't an ARN.
+pub fn waf_acl_from_arn(web_acl_id: &str) -> Option<(String, String)> {
+    let rest = web_acl_id.strip_prefix("arn:")?.split_once("/webacl/")?.1;
+    let (name, id) = rest.split_once('/')?;
+    Some((name.to_string(), id.to_string()))
+}
+
+/// Where the distribution's `Blocked by WAF` row reads from. WAF can
+/// publish a series per protected resource (`Resource` = the distribution's
+/// ARN); when CloudWatch has one, the row uses it (fewest dimensions: the
+/// total, not a per-country or per-attack slice). Otherwise it stays on the
+/// ACL's `Rule=ALL` total, with the ACL's `WebACL` metric name looked up.
+pub async fn waf_blocked_series(
+    cw: &aws_sdk_cloudwatch::Client,
+    waf: &aws_sdk_wafv2::Client,
+    dist_arn: &str,
+    acl_name: &str,
+    acl_id: &str,
+    label: &str,
+) -> crate::aws::metrics::TargetFix {
+    use aws_sdk_cloudwatch::types::DimensionFilter;
+    use crate::aws::metrics::TargetFix;
+    let per_resource = cw
+        .list_metrics()
+        .namespace("AWS/WAFV2")
+        .metric_name("BlockedRequests")
+        .dimensions(DimensionFilter::builder().name("Resource").value(dist_arn).build())
+        .send()
+        .await
+        .ok()
+        .and_then(|resp| {
+            resp.metrics()
+                .iter()
+                .map(|m| {
+                    m.dimensions()
+                        .iter()
+                        .map(|d| (d.name().unwrap_or_default().to_string(), d.value().unwrap_or_default().to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|dims| dims.iter().any(|(n, _)| n == "WebACL"))
+                .min_by_key(|dims| dims.len())
+        });
+    match per_resource {
+        Some(dims) => TargetFix {
+            series: vec![(label.to_string(), dims, "Blocked by WAF".to_string())],
+            ..Default::default()
+        },
+        None => {
+            let (metric, _) = crate::aws::services::waf::resolve_metric_name(
+                waf,
+                cw,
+                crate::aws::services::waf::WafScope::CloudFront,
+                acl_name,
+                acl_id,
+                None,
+            )
+            .await;
+            TargetFix { dimensions: vec![("WebACL".to_string(), metric)], ..Default::default() }
+        }
+    }
+}
+
+#[cfg(test)]
+mod metrics_lookup_tests {
+    use super::*;
+
+    #[test]
+    fn a_wafv2_arn_gives_the_acl_name_and_id() {
+        let arn = "arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge-acl/0123abcd-4567";
+        assert_eq!(waf_acl_from_arn(arn), Some(("edge-acl".to_string(), "0123abcd-4567".to_string())));
+        assert_eq!(waf_acl_from_arn(""), None);
+        assert_eq!(waf_acl_from_arn("a1b2c3d4-classic-id"), None, "WAF Classic ids aren't ARNs");
+    }
+}
