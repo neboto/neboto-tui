@@ -24176,7 +24176,7 @@ impl App {
         };
         let range = MetricsTimeRange::TwentyFourHours;
         self.trigger_lazy(|app| &mut app.lazy.waf_traffic, id.clone(), event_tx, async move {
-            let (metric, enabled) = waf::resolve_metric_name(&client, scope, &name, &id).await;
+            let (metric, enabled) = waf::resolve_metric_name(&client, &cw, scope, &name, &id, region.as_deref()).await;
             if !enabled {
                 return Err("CloudWatch metrics are off in this web ACL's visibility config".to_string());
             }
@@ -32331,7 +32331,7 @@ impl App {
         let tx = event_tx.clone();
         tokio::spawn(async move {
             let fix = match &breakdown {
-                Some(b) => b.prepare(&mut queries).await,
+                Some(b) => b.prepare(&cw, &mut queries).await,
                 None => None,
             };
             if let Some(f) = &fix {

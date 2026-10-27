@@ -239,6 +239,7 @@ async fn a_web_acl_charts_its_actions_with_the_rule_tables_beside() {
     let screen = screen_of(&app);
     assert!(screen.contains("Metrics — Web ACL · mock-web-acl"), "{screen}");
     assert!(screen.contains("Totals · last 1h"), "{screen}");
+    assert!(screen.contains("WebACL=mock-web-acl, Rule=ALL"), "the looked-up dimension is shown: {screen}");
 }
 
 /// `5` reaches back 30 days (a stopped instance's last week of data), the

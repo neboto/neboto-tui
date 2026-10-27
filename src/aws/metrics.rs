@@ -569,11 +569,13 @@ pub struct BreakdownFix {
 impl Breakdown {
     /// Look up what the series need before they can be fetched, and patch
     /// `queries` with it. Done once: the result is kept on the target.
-    pub async fn prepare(&self, queries: &mut [MetricQuery]) -> Option<BreakdownFix> {
+    pub async fn prepare(&self, cw: &aws_sdk_cloudwatch::Client, queries: &mut [MetricQuery]) -> Option<BreakdownFix> {
         match self {
             Breakdown::Waf { metric_name: Some(_), .. } => None,
-            Breakdown::Waf { client, scope, name, id, .. } => {
-                let (metric, enabled) = crate::aws::services::waf::resolve_metric_name(client, *scope, name, id).await;
+            Breakdown::Waf { client, scope, name, id, region, .. } => {
+                let (metric, enabled) =
+                    crate::aws::services::waf::resolve_metric_name(client, cw, *scope, name, id, region.as_deref())
+                        .await;
                 let fix = BreakdownFix {
                     dimensions: vec![("WebACL".to_string(), metric)],
                     hint: (!enabled).then_some("CloudWatch metrics are off in this web ACL's visibility config"),

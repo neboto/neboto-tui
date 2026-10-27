@@ -419,15 +419,80 @@ const WAF_METRICS: [&str; 5] = [
     "ChallengeRequests",
 ];
 
-/// The `WebACL` dimension value and whether the ACL publishes at all. AWS
-/// publishes under the ACL's `VisibilityConfig` metric name, which needn't
-/// be its name; when `GetWebACL` fails the name is the best guess left.
-pub async fn resolve_metric_name(client: &WafClient, scope: WafScope, name: &str, id: &str) -> (String, bool) {
+/// The `WebACL` dimension value and whether the ACL publishes at all.
+/// AWS's docs say series are keyed by the ACL's `VisibilityConfig` metric
+/// name, but v0.10.0's probe found accounts whose data is under the ACL's
+/// name, so neither is assumed: CloudWatch is asked which of the two it has
+/// `Rule=ALL` series for, and the metric name wins a tie or a miss (an ACL
+/// with no traffic in two weeks has no series to find).
+pub async fn resolve_metric_name(
+    client: &WafClient,
+    cw: &aws_sdk_cloudwatch::Client,
+    scope: WafScope,
+    name: &str,
+    id: &str,
+    region: Option<&str>,
+) -> (String, bool) {
     let resp = client.get_web_acl().name(name).id(id).scope(scope.sdk_scope()).send().await;
-    match resp.ok().as_ref().and_then(|r| r.web_acl()).and_then(|a| a.visibility_config()) {
+    let (metric, enabled) = match resp.ok().as_ref().and_then(|r| r.web_acl()).and_then(|a| a.visibility_config()) {
         Some(vc) => (vc.metric_name().to_string(), vc.cloud_watch_metrics_enabled()),
         None => (name.to_string(), true),
+    };
+    if metric == name {
+        return (metric, enabled);
     }
+    let published = published_web_acls(cw, region).await.unwrap_or_default();
+    (pick_web_acl_dim(&metric, name, &published).to_string(), enabled)
+}
+
+/// The metric name if CloudWatch has it, else the name if it has that,
+/// else the metric name.
+fn pick_web_acl_dim<'a>(metric: &'a str, name: &'a str, published: &std::collections::HashSet<String>) -> &'a str {
+    if !published.contains(metric) && published.contains(name) {
+        name
+    } else {
+        metric
+    }
+}
+
+/// The `WebACL` values with `Rule=ALL` series in the last two weeks: in
+/// `region` for a REGIONAL ACL, or with no `Region` at all for CLOUDFRONT
+/// scope (us-east-1 also holds that region's own regional series).
+async fn published_web_acls(
+    cw: &aws_sdk_cloudwatch::Client,
+    region: Option<&str>,
+) -> std::result::Result<std::collections::HashSet<String>, String> {
+    use aws_sdk_cloudwatch::types::DimensionFilter;
+    let mut filters = vec![DimensionFilter::builder().name("Rule").value("ALL").build()];
+    if let Some(r) = region {
+        filters.push(DimensionFilter::builder().name("Region").value(r).build());
+    }
+    let mut out = std::collections::HashSet::new();
+    let mut token: Option<String> = None;
+    for _ in 0..5 {
+        let resp = cw
+            .list_metrics()
+            .namespace("AWS/WAFV2")
+            .set_dimensions(Some(filters.clone()))
+            .set_next_token(token.clone())
+            .send()
+            .await
+            .map_err(|e| crate::error::sdk_error_message(&e))?;
+        for m in resp.metrics() {
+            let dims = m.dimensions();
+            if region.is_none() && dims.iter().any(|d| d.name() == Some("Region")) {
+                continue;
+            }
+            if let Some(v) = dims.iter().find(|d| d.name() == Some("WebACL")).and_then(|d| d.value()) {
+                out.insert(v.to_string());
+            }
+        }
+        token = crate::aws::pagination::next_page_token(resp.next_token(), &token);
+        if token.is_none() {
+            break;
+        }
+    }
+    Ok(out)
 }
 
 /// Fold `(query id, series label) → sum` entries with a given id prefix into
@@ -576,6 +641,15 @@ mod traffic_tests {
         assert_eq!(names, ["Default_Action", "RateLimit", "BadBots"], "by total, ALL left out");
         let (_, labels) = fold_breakdown(&sums, 'l');
         assert_eq!(labels.len(), 1);
+    }
+
+    #[test]
+    fn the_web_acl_dimension_is_whichever_cloudwatch_has() {
+        let published = |v: &[&str]| v.iter().map(|s| s.to_string()).collect();
+        assert_eq!(pick_web_acl_dim("prod-metric", "prod", &published(&["prod-metric"])), "prod-metric");
+        assert_eq!(pick_web_acl_dim("prod-metric", "prod", &published(&["prod"])), "prod", "v0.10.0's case");
+        assert_eq!(pick_web_acl_dim("prod-metric", "prod", &published(&["prod", "prod-metric"])), "prod-metric");
+        assert_eq!(pick_web_acl_dim("prod-metric", "prod", &published(&[])), "prod-metric", "nothing published");
     }
 }
 

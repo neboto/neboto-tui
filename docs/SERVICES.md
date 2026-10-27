@@ -1568,15 +1568,19 @@ the service you're touching.
   under the CloudFront variant key, and metrics queried `Region="Global"` in
   us-east-1 for ACLs that publish regionally). `m` is the spec view
   (`aws::metrics::WAF_WEB_ACL`, the five actions on one chart). **The
-  `WebACL` dimension is the ACL's `VisibilityConfig` metric name**, which
-  needn't be its name (AWS's dimension table: "the metric name of the
-  WebACL"): the target opens with the name, and its `Breakdown::Waf`
-  looks the metric name up with `GetWebACL` before the first fetch and
-  keeps it (`resolve_metric_name`; on failure the name stays). With
-  `CloudWatchMetricsEnabled` off the view says so instead of charting
-  nothing. The old hand-built view guessed instead: it tried the name,
-  then the metric name, and kept whichever returned data, which cost up to
-  ten calls. **The `Region` dimension exists only for REGIONAL scope** — the
+  `WebACL` dimension value is looked up, never assumed.** AWS's dimension
+  table says it is the ACL's `VisibilityConfig` metric name, but real
+  accounts have shown data under the ACL's *name* instead: the first spec
+  port used only the metric name and charted nothing where v0.10.0 (which
+  tried the name, then the metric name) charted traffic. So the target
+  opens with the name, and its `Breakdown::Waf` resolves the value once
+  before the first fetch (`resolve_metric_name`): `GetWebACL` for the
+  metric name, and when that differs from the name, one `ListMetrics`
+  (`Rule=ALL`, plus `Region` for REGIONAL) to see which of the two
+  CloudWatch has series for — the metric name wins a tie or a miss. The
+  view's range line shows the dimensions it used, so an empty chart says
+  what it asked for. With `CloudWatchMetricsEnabled` off it says so
+  instead of charting nothing. **The `Region` dimension exists only for REGIONAL scope** — the
   docs' dimension table says Region is "required for all protected resource
   types *except* CloudFront distributions", so CLOUDFRONT-scope series (in
   us-east-1) have no Region dimension at all and every query (the series

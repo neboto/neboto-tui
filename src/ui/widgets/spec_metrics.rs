@@ -197,8 +197,10 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
     // `d default set`, and the `a` list is plainly a list.
     range.push(Span::styled(format!("   {}", st.target.namespace), dim));
     // A metric row's title is only the metric's name: its dimensions are
-    // what say which instance or queue it is. A resource's title says so.
-    if st.target.specs.is_empty() && !st.target.dimensions.is_empty() {
+    // what say which instance or queue it is. A resource's title says so,
+    // except where a dimension was looked up (WAF's `WebACL` metric name):
+    // that one is shown, so an empty chart says what it asked for.
+    if (st.target.specs.is_empty() || st.target.breakdown.is_some()) && !st.target.dimensions.is_empty() {
         let dims: Vec<String> = st.target.dimensions.iter().map(|(n, v)| format!("{n}={v}")).collect();
         range.push(Span::styled(format!(" · {}", dims.join(", ")), dim));
     }
