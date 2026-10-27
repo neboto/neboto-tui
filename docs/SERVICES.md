@@ -2817,7 +2817,26 @@ the service you're touching.
   step with the table. No CloudWatch namespace → no `m`.
 - **Inspector** (`@inspector`) — sub-tabs Findings / By Resource / Coverage.
   "By Resource" aggregates all findings into one row per scanned resource;
-  `Enter` on a finding's header jumps to that finding in the Findings sub-tab.
+  `Enter` on a finding's header jumps to that finding in the Findings sub-tab
+  (`arn_for_header`; headers get a ` #N` suffix on repeats so two findings
+  sharing a title don't both jump to the first).
+  - **`inspectorScore` is optional** — absent when Inspector has no CVSS yet
+    (a brand-new CVE NVD hasn't scored). The severity still arrives (from the
+    vendor advisory, `packageVulnerabilityDetails.vendorSeverity`). It's an
+    `Option<f64>`: render `CRITICAL (no score)` + the vendor severity, never
+    `unwrap_or(0.0)` — that once shipped as `CRITICAL (0.0)`.
+  - Loads are capped (`MAX_FINDINGS` / `MAX_COVERAGE`, 1000 each) and the
+    severity scope (`t`, default High+) is server-side; By Resource tallies
+    only count what was loaded, so each group says its scope and whether the
+    cap was hit, and the load warns. Don't let either go silent.
+  - Search is a precomputed `search_blob` (every package + file path, related
+    vulns, account, resource tags `k=v`, resource details, description, and
+    `fixable` / `exploitable` / `unscored` words when they hold); a group's
+    blob is its findings' blobs. Findings carry the affected resource's tags,
+    so `tag:` filters and the ownership ribbon work.
+  - `e` (raw) is the whole finding as API-shaped camelCase JSON (`raw_json`),
+    hand-built because the SDK type isn't `Serialize` — add new SDK fields
+    there too.
 - **WorkSpaces** (`@workspaces`) — `fetch_workspace_tags` calls `DescribeTags`
   with the **workspace id, not an ARN**; KMS-key row is jumpable.
 - **Direct Connect** (`@dx`) — sub-tabs Connections / Virtual Interfaces /

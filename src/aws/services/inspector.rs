@@ -13,8 +13,13 @@ use std::any::Any;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-/// Findings fetched per scope are capped to keep memory bounded.
-const MAX_FINDINGS: usize = 500;
+/// Findings fetched per scope are capped to keep memory bounded. Hitting the
+/// cap is never silent: the load warns, and every By Resource row says its
+/// tally is partial.
+const MAX_FINDINGS: usize = 1000;
+
+/// Coverage rows fetched are capped the same way (and warn the same way).
+const MAX_COVERAGE: usize = 1000;
 
 /// Severity scope — a variant-cached server-side filter (like GuardDuty/SH).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +91,7 @@ impl AwsService for InspectorService {
         service_type: ServiceType,
     ) -> Result<()> {
         let mut total = 0usize;
+        let mut truncated = false;
         // Accumulate every finding so we can also stream a by-resource grouping.
         let mut all_findings: Vec<InspFinding> = Vec::new();
 
@@ -123,11 +129,7 @@ impl AwsService for InspectorService {
 
             let mut batch: Vec<InspFinding> =
                 page.findings().iter().map(InspFinding::from_sdk).collect();
-            batch.sort_by(|a, b| {
-                severity_rank(&b.severity_label)
-                    .cmp(&severity_rank(&a.severity_label))
-                    .then(b.inspector_score.partial_cmp(&a.inspector_score).unwrap_or(std::cmp::Ordering::Equal))
-            });
+            batch.sort_by(finding_order);
             if !batch.is_empty() {
                 all_findings.extend(batch.iter().cloned());
                 let boxed: Vec<Box<dyn Resource>> = batch
@@ -147,13 +149,25 @@ impl AwsService for InspectorService {
             }
 
             token = next_page_token(page.next_token(), &token);
-            if token.is_none() || total >= MAX_FINDINGS {
+            if token.is_none() {
+                break;
+            }
+            if total >= MAX_FINDINGS {
+                truncated = true;
+                let _ = event_tx.send(Event::ResourceLoadWarning {
+                    service: service_type,
+                    warning: format!(
+                        "findings: showing the first {} ({} scope) — more exist; `t` narrows the severity scope",
+                        total,
+                        self.scope.label()
+                    ),
+                });
                 break;
             }
         }
 
         // ── By-resource grouping (console-style: by instance / image / fn) ───
-        let groups = InspResourceGroup::group(&all_findings);
+        let groups = InspResourceGroup::group(&all_findings, self.scope, truncated);
         if !groups.is_empty() {
             let boxed: Vec<Box<dyn Resource>> = groups
                 .into_iter()
@@ -185,7 +199,17 @@ impl AwsService for InspectorService {
                         coverage.push(Box::new(InspCoverage::from_sdk(c)) as Box<dyn Resource>);
                     }
                     cov_token = next_page_token(page.next_token(), &cov_token);
-                    if cov_token.is_none() || coverage.len() >= MAX_FINDINGS {
+                    if cov_token.is_none() {
+                        break;
+                    }
+                    if coverage.len() >= MAX_COVERAGE {
+                        let _ = event_tx.send(Event::ResourceLoadWarning {
+                            service: service_type,
+                            warning: format!(
+                                "coverage: showing the first {} resources — more exist",
+                                coverage.len()
+                            ),
+                        });
                         break;
                     }
                 }
@@ -276,6 +300,9 @@ pub fn severity_to_state(label: &str) -> ResourceState {
 
 // ── InspFinding ──────────────────────────────────────────────────────────────
 
+/// Reference URLs / network-path steps shown before a `· N more` note.
+const MAX_LIST_ROWS: usize = 10;
+
 #[derive(Debug, Clone)]
 pub struct InspFinding {
     pub arn: String,
@@ -284,7 +311,17 @@ pub struct InspFinding {
     pub finding_type: String,
     pub severity_label: String,
     pub status: String,
-    pub inspector_score: f64,
+    /// `None` when Inspector hasn't scored the finding — typically a CVE too
+    /// new for NVD to have a CVSS. The severity then stands on its own (the
+    /// vendor advisory's), so never render this as `0.0`.
+    pub inspector_score: Option<f64>,
+    /// The advisory vendor's own rating (`packageVulnerabilityDetails.vendorSeverity`).
+    pub vendor_severity: String,
+    /// EPSS: probability (0–1) the CVE is exploited in the next 30 days.
+    pub epss: Option<f64>,
+    pub last_known_exploit: Option<String>,
+    pub aws_account_id: String,
+    pub resource_region: String,
     pub resource_type: String,
     pub resource_id: String,
     /// ECR container-image findings only: the repository + image tags, so the
@@ -292,56 +329,193 @@ pub struct InspFinding {
     pub repository: String,
     pub image_tags: Vec<String>,
     pub cve: String,
-    pub package_summary: String,
+    pub related_vulnerabilities: Vec<String>,
+    /// Every vulnerable package as `name@version → fixed X`.
+    pub packages: Vec<String>,
     pub fix_available: String,
     pub exploit_available: String,
+    /// The Vulnerability section (scoring, advisory, packages, references),
+    /// built once at ingestion.
     pub vuln_rows: Vec<(String, String)>,
+    /// Type-specific resource detail (ECR image / EC2 instance / Lambda).
+    pub resource_rows: Vec<(String, String)>,
     pub remediation_text: String,
     pub remediation_url: String,
     pub first_observed: Option<String>,
     pub last_observed: Option<String>,
+    pub updated_at: Option<String>,
+    /// The affected resource's tags — so `tag:` filters and the ownership
+    /// ribbon work on findings.
+    pub tags: HashMap<String, String>,
+    /// Everything searchable, precomputed (`search_text` runs per keystroke).
+    pub search_blob: String,
     pub raw_json: String,
 }
 
+fn fmt_dt(d: &aws_smithy_types::DateTime) -> String {
+    fmt_epoch_secs(d.secs())
+}
+
+/// `0.0423` → `0.0423 (4.2%)`.
+fn fmt_epss(p: f64) -> String {
+    format!("{:.4} ({:.1}%)", p, p * 100.0)
+}
+
+/// Push `(key, value)` when the value is non-empty.
+fn push_some(rows: &mut Vec<(String, String)>, key: &str, value: Option<&str>) {
+    if let Some(v) = value.filter(|v| !v.is_empty()) {
+        rows.push((key.to_string(), v.to_string()));
+    }
+}
+
+/// A capped list of rows under one key, with the `· N more` note.
+fn push_capped(rows: &mut Vec<(String, String)>, key: &str, values: &[String]) {
+    for v in values.iter().take(MAX_LIST_ROWS) {
+        rows.push((key.to_string(), v.clone()));
+    }
+    if values.len() > MAX_LIST_ROWS {
+        rows.push((String::new(), format!("· {} more", values.len() - MAX_LIST_ROWS)));
+    }
+}
+
 impl InspFinding {
-    fn from_sdk(f: &Finding) -> Self {
+    pub(crate) fn from_sdk(f: &Finding) -> Self {
         let finding_type = f.r#type().as_str().to_string();
         let severity_label = f.severity().as_str().to_string();
         let status = f.status().as_str().to_string();
-        let inspector_score = f.inspector_score().unwrap_or(0.0);
+        let inspector_score = f.inspector_score();
+        let epss = f.epss().map(|e| e.score());
+        let last_known_exploit = f
+            .exploitability_details()
+            .and_then(|e| e.last_known_exploit_at())
+            .map(fmt_dt);
 
         let first_resource = f.resources().first();
         let (resource_type, resource_id) = first_resource
             .map(|r| (r.r#type().as_str().to_string(), r.id().to_string()))
             .unwrap_or_default();
+        let resource_region = first_resource
+            .and_then(|r| r.region())
+            .unwrap_or_default()
+            .to_string();
+        let tags = first_resource
+            .and_then(|r| r.tags())
+            .cloned()
+            .unwrap_or_default();
 
         // Container images carry a repository + tags in their resource details;
         // capture them so the resource reads as `repo:tag`, not an image digest.
         let (mut repository, mut image_tags) = (String::new(), Vec::new());
-        if let Some(img) = first_resource
-            .and_then(|r| r.details())
-            .and_then(|d| d.aws_ecr_container_image())
-        {
-            repository = img.repository_name().to_string();
-            image_tags = img.image_tags().to_vec();
+        let mut resource_rows: Vec<(String, String)> = Vec::new();
+        if let Some(d) = first_resource.and_then(|r| r.details()) {
+            if let Some(img) = d.aws_ecr_container_image() {
+                repository = img.repository_name().to_string();
+                image_tags = img.image_tags().to_vec();
+                push_some(&mut resource_rows, "Registry", Some(img.registry()));
+                push_some(&mut resource_rows, "Image Hash", Some(img.image_hash()));
+                push_some(&mut resource_rows, "Pushed", img.pushed_at().map(fmt_dt).as_deref());
+                push_some(&mut resource_rows, "Author", img.author());
+                push_some(&mut resource_rows, "Architecture", img.architecture());
+                push_some(&mut resource_rows, "Platform", img.platform());
+                if let Some(n) = img.in_use_count() {
+                    resource_rows.push(("In Use Count".to_string(), n.to_string()));
+                }
+                push_some(&mut resource_rows, "Last In Use", img.last_in_use_at().map(fmt_dt).as_deref());
+            }
+            if let Some(ec2) = d.aws_ec2_instance() {
+                push_some(&mut resource_rows, "AMI", ec2.image_id());
+                push_some(&mut resource_rows, "Platform", ec2.platform());
+                push_some(&mut resource_rows, "VPC", ec2.vpc_id());
+                push_some(&mut resource_rows, "Subnet", ec2.subnet_id());
+                push_some(&mut resource_rows, "Key Pair", ec2.key_name());
+                push_some(&mut resource_rows, "Instance Profile", ec2.iam_instance_profile_arn());
+                push_some(&mut resource_rows, "Launched", ec2.launched_at().map(fmt_dt).as_deref());
+            }
+            if let Some(fun) = d.aws_lambda_function() {
+                push_some(&mut resource_rows, "Function", Some(fun.function_name()));
+                push_some(&mut resource_rows, "Runtime", Some(fun.runtime().as_str()));
+                push_some(&mut resource_rows, "Version", Some(fun.version()));
+                push_some(&mut resource_rows, "Package Type", fun.package_type().map(|p| p.as_str()));
+                let archs: Vec<&str> = fun.architectures().iter().map(|a| a.as_str()).collect();
+                if !archs.is_empty() {
+                    resource_rows.push(("Architectures".to_string(), archs.join(", ")));
+                }
+                push_some(&mut resource_rows, "Execution Role", Some(fun.execution_role_arn()));
+                push_some(&mut resource_rows, "Last Modified", fun.last_modified_at().map(fmt_dt).as_deref());
+                push_capped(&mut resource_rows, "Layer", fun.layers());
+                if let Some(vpc) = fun.vpc_config() {
+                    push_some(&mut resource_rows, "VPC", vpc.vpc_id());
+                    push_capped(&mut resource_rows, "Subnet", vpc.subnet_ids());
+                    push_capped(&mut resource_rows, "Security Group", vpc.security_group_ids());
+                }
+            }
         }
 
         let mut cve = String::new();
-        let mut package_summary = String::new();
-        let mut vuln_rows: Vec<(String, String)> = Vec::new();
+        let mut vendor_severity = String::new();
+        let mut related_vulnerabilities: Vec<String> = Vec::new();
+        let mut packages: Vec<String> = Vec::new();
+        // Package paths / managers etc. — searchable, not shown in the list.
+        let mut package_search: Vec<String> = Vec::new();
+        let mut code_search: Vec<String> = Vec::new();
+
+        // ── Scoring (every finding type) ─────────────────────────────────────
+        let mut vuln_rows: Vec<(String, String)> = vec![("Scoring".to_string(), String::new())];
+        vuln_rows.push((
+            "Inspector Score".to_string(),
+            match inspector_score {
+                Some(s) => format!("{:.1}", s),
+                None => "— not scored by Inspector (no CVSS yet)".to_string(),
+            },
+        ));
+        if let Some(pv) = f.package_vulnerability_details() {
+            vendor_severity = pv.vendor_severity().unwrap_or_default().to_string();
+        }
+        push_some(&mut vuln_rows, "Vendor Severity", Some(vendor_severity.as_str()));
+        if let Some(p) = epss {
+            vuln_rows.push(("EPSS".to_string(), fmt_epss(p)));
+        }
+        push_some(&mut vuln_rows, "Last Known Exploit", last_known_exploit.as_deref());
+        if let Some(adj) = f.inspector_score_details().and_then(|d| d.adjusted_cvss()) {
+            let src = match adj.cvss_source() {
+                Some(c) if !c.is_empty() => format!("{} via {}", adj.score_source(), c),
+                _ => adj.score_source().to_string(),
+            };
+            vuln_rows.push((
+                "Adjusted CVSS".to_string(),
+                format!("{} (v{}, {}) {}", adj.score(), adj.version(), src, adj.scoring_vector()),
+            ));
+            for a in adj.adjustments() {
+                vuln_rows.push((format!("    {}", a.metric()), a.reason().to_string()));
+            }
+        }
 
         if let Some(pv) = f.package_vulnerability_details() {
-            cve = pv.vulnerability_id().to_string();
-            vuln_rows.push(("CVE".to_string(), cve.clone()));
-            if !pv.source().is_empty() {
-                vuln_rows.push(("Source".to_string(), pv.source().to_string()));
-            }
-            if let Some(score) = pv.cvss().first() {
+            for score in pv.cvss() {
+                let key = if score.source().is_empty() {
+                    "CVSS".to_string()
+                } else {
+                    format!("CVSS · {}", score.source())
+                };
                 vuln_rows.push((
-                    "CVSS".to_string(),
+                    key,
                     format!("{} (v{}) {}", score.base_score(), score.version(), score.scoring_vector()),
                 ));
             }
+
+            cve = pv.vulnerability_id().to_string();
+            related_vulnerabilities = pv.related_vulnerabilities().to_vec();
+            vuln_rows.push((String::new(), String::new()));
+            vuln_rows.push(("Advisory".to_string(), String::new()));
+            vuln_rows.push(("CVE".to_string(), cve.clone()));
+            if !related_vulnerabilities.is_empty() {
+                vuln_rows.push(("Related".to_string(), related_vulnerabilities.join(", ")));
+            }
+            push_some(&mut vuln_rows, "Source", Some(pv.source()));
+            push_some(&mut vuln_rows, "Source URL", pv.source_url());
+            push_some(&mut vuln_rows, "Vendor Published", pv.vendor_created_at().map(fmt_dt).as_deref());
+            push_some(&mut vuln_rows, "Vendor Updated", pv.vendor_updated_at().map(fmt_dt).as_deref());
+
             if !pv.vulnerable_packages().is_empty() {
                 vuln_rows.push((String::new(), String::new()));
                 vuln_rows.push(("Vulnerable Packages".to_string(), String::new())); // group header
@@ -349,27 +523,83 @@ impl InspFinding {
                     let fixed = p.fixed_in_version().unwrap_or("—");
                     let line = format!("{}@{} → fixed {}", p.name(), p.version(), fixed);
                     vuln_rows.push((format!("  {}", line), String::new()));
-                    if package_summary.is_empty() {
-                        package_summary = line;
+                    let manager = p.package_manager().map(|m| m.as_str());
+                    push_some(&mut vuln_rows, "    Manager", manager);
+                    push_some(&mut vuln_rows, "    Arch", p.arch());
+                    push_some(&mut vuln_rows, "    Release", p.release());
+                    if p.epoch() != 0 {
+                        vuln_rows.push(("    Epoch".to_string(), p.epoch().to_string()));
                     }
+                    push_some(&mut vuln_rows, "    File", p.file_path());
+                    push_some(&mut vuln_rows, "    Remediation", p.remediation());
+                    push_some(&mut vuln_rows, "    Image Layer", p.source_layer_hash());
+                    push_some(&mut vuln_rows, "    Lambda Layer", p.source_lambda_layer_arn());
+                    package_search.extend(
+                        [manager, p.file_path(), p.source_lambda_layer_arn(), p.remediation()]
+                            .into_iter()
+                            .flatten()
+                            .map(str::to_string),
+                    );
+                    packages.push(line);
                 }
             }
-            for url in pv.reference_urls().iter().take(5) {
-                vuln_rows.push(("Reference".to_string(), url.clone()));
+            if !pv.reference_urls().is_empty() {
+                vuln_rows.push((String::new(), String::new()));
+                vuln_rows.push(("References".to_string(), String::new()));
+                push_capped(&mut vuln_rows, "Reference", pv.reference_urls());
             }
         } else if let Some(nr) = f.network_reachability_details() {
+            vuln_rows.push((String::new(), String::new()));
+            vuln_rows.push(("Network Reachability".to_string(), String::new()));
             vuln_rows.push(("Protocol".to_string(), nr.protocol().as_str().to_string()));
             if let Some(pr) = nr.open_port_range() {
                 vuln_rows.push(("Open Ports".to_string(), format!("{}–{}", pr.begin(), pr.end())));
             }
+            if let Some(path) = nr.network_path() {
+                let steps = path.steps();
+                if !steps.is_empty() {
+                    vuln_rows.push((String::new(), String::new()));
+                    vuln_rows.push(("Network Path".to_string(), String::new()));
+                    for s in steps.iter().take(MAX_LIST_ROWS * 2) {
+                        // Value is the component id (sg-/eni-/igw-…), so it's jumpable.
+                        vuln_rows.push((format!("  {}", s.component_type()), s.component_id().to_string()));
+                        code_search.push(s.component_id().to_string());
+                    }
+                    if steps.len() > MAX_LIST_ROWS * 2 {
+                        vuln_rows.push((String::new(), format!("· {} more", steps.len() - MAX_LIST_ROWS * 2)));
+                    }
+                }
+            }
         } else if let Some(cv) = f.code_vulnerability_details() {
+            vuln_rows.push((String::new(), String::new()));
+            vuln_rows.push(("Code Vulnerability".to_string(), String::new()));
             vuln_rows.push(("Detector".to_string(), cv.detector_name().to_string()));
+            push_some(&mut vuln_rows, "Detector ID", Some(cv.detector_id()));
+            push_some(&mut vuln_rows, "Rule ID", cv.rule_id());
             if !cv.cwes().is_empty() {
                 vuln_rows.push(("CWEs".to_string(), cv.cwes().join(", ")));
             }
-            if let Some(fp) = cv.file_path() {
-                vuln_rows.push(("File".to_string(), fp.file_name().to_string()));
+            if !cv.detector_tags().is_empty() {
+                vuln_rows.push(("Detector Tags".to_string(), cv.detector_tags().join(", ")));
             }
+            if let Some(fp) = cv.file_path() {
+                vuln_rows.push((
+                    "File".to_string(),
+                    format!("{}:{}–{}", fp.file_name(), fp.start_line(), fp.end_line()),
+                ));
+                push_some(&mut vuln_rows, "Path", Some(fp.file_path()));
+                code_search.push(fp.file_path().to_string());
+            }
+            push_some(&mut vuln_rows, "Lambda Layer", cv.source_lambda_layer_arn());
+            if !cv.reference_urls().is_empty() {
+                vuln_rows.push((String::new(), String::new()));
+                vuln_rows.push(("References".to_string(), String::new()));
+                push_capped(&mut vuln_rows, "Reference", cv.reference_urls());
+            }
+            code_search.push(cv.detector_name().to_string());
+            code_search.extend(cv.rule_id().map(str::to_string));
+            code_search.extend(cv.cwes().iter().cloned());
+            code_search.extend(cv.detector_tags().iter().cloned());
         }
 
         let fix_available = f
@@ -391,20 +621,51 @@ impl InspFinding {
 
         let title = f.title().unwrap_or_default().to_string();
         let description = f.description().to_string();
-        let first_observed = Some(fmt_epoch_secs(f.first_observed_at().secs()));
-        let last_observed = Some(fmt_epoch_secs(f.last_observed_at().secs()));
+        let first_observed = Some(fmt_dt(f.first_observed_at()));
+        let last_observed = Some(fmt_dt(f.last_observed_at()));
+        let updated_at = f.updated_at().map(fmt_dt);
 
-        let raw_json = build_raw_json(
-            f,
-            &finding_type,
-            &severity_label,
-            &status,
-            &resource_type,
-            &resource_id,
-            &vuln_rows,
-            &fix_available,
-            &exploit_available,
-        );
+        let mut search_parts: Vec<String> = vec![
+            title.clone(),
+            cve.clone(),
+            related_vulnerabilities.join(" "),
+            severity_label.clone(),
+            vendor_severity.clone(),
+            finding_type.clone(),
+            status.clone(),
+            resource_type.clone(),
+            resource_id.clone(),
+            repository.clone(),
+            image_tags.join(" "),
+            packages.join(" "),
+            package_search.join(" "),
+            code_search.join(" "),
+            f.aws_account_id().to_string(),
+            resource_region.clone(),
+            f.finding_arn().to_string(),
+        ];
+        // Words a triage search reaches for, only when they hold.
+        if fix_available == "YES" {
+            search_parts.push("fixable fix-available".to_string());
+        }
+        if exploit_available == "YES" {
+            search_parts.push("exploitable exploit-available".to_string());
+        }
+        if inspector_score.is_none() {
+            search_parts.push("unscored".to_string());
+        }
+        for (k, v) in &tags {
+            search_parts.push(format!("{}={}", k, v));
+        }
+        for (_, v) in &resource_rows {
+            search_parts.push(v.clone());
+        }
+        search_parts.push(description.clone());
+        let search_blob = search_parts
+            .into_iter()
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
 
         Self {
             arn: f.finding_arn().to_string(),
@@ -414,26 +675,55 @@ impl InspFinding {
             severity_label,
             status,
             inspector_score,
+            vendor_severity,
+            epss,
+            last_known_exploit,
+            aws_account_id: f.aws_account_id().to_string(),
+            resource_region,
             resource_type,
             resource_id,
             repository,
             image_tags,
             cve,
-            package_summary,
+            related_vulnerabilities,
+            packages,
             fix_available,
             exploit_available,
             vuln_rows,
+            resource_rows,
             remediation_text,
             remediation_url,
             first_observed,
             last_observed,
-            raw_json,
+            updated_at,
+            tags,
+            search_blob,
+            raw_json: raw_json(f),
         }
     }
 
     /// Exploitable + a fix available = act now.
     pub fn is_actionable(&self) -> bool {
         self.exploit_available == "YES" && self.fix_available == "YES"
+    }
+
+    /// `CRITICAL (9.8)`, or `CRITICAL (no score)` when Inspector hasn't scored
+    /// it — never `(0.0)`, which reads as a real score of zero.
+    pub fn severity_display(&self) -> String {
+        match self.inspector_score {
+            Some(s) => format!("{} ({:.1})", self.severity_label, s),
+            None => format!("{} (no score)", self.severity_label),
+        }
+    }
+
+    /// The score for sorting; unscored sorts below any scored finding of the
+    /// same severity.
+    fn sort_score(&self) -> f64 {
+        self.inspector_score.unwrap_or(-1.0)
+    }
+
+    pub fn epss_display(&self) -> Option<String> {
+        self.epss.map(fmt_epss)
     }
 
     /// A human-friendly label for the affected resource. Container images read
@@ -452,6 +742,19 @@ impl InspFinding {
         }
         self.resource_id.clone()
     }
+}
+
+/// Severity first, then Inspector score (unscored last), then EPSS.
+fn finding_order(a: &InspFinding, b: &InspFinding) -> std::cmp::Ordering {
+    severity_rank(&b.severity_label)
+        .cmp(&severity_rank(&a.severity_label))
+        .then(b.sort_score().partial_cmp(&a.sort_score()).unwrap_or(std::cmp::Ordering::Equal))
+        .then(
+            b.epss
+                .unwrap_or(-1.0)
+                .partial_cmp(&a.epss.unwrap_or(-1.0))
+                .unwrap_or(std::cmp::Ordering::Equal),
+        )
 }
 
 /// Truncate an image-digest reference to `sha256:` + the first 12 hex chars.
@@ -492,6 +795,9 @@ impl Resource for InspFinding {
     fn resource_type(&self) -> &str {
         "Inspector Finding"
     }
+    fn list_summary(&self) -> Option<String> {
+        Some(self.resource_display()).filter(|s| !s.is_empty())
+    }
     fn state(&self) -> ResourceState {
         severity_to_state(&self.severity_label)
     }
@@ -500,29 +806,17 @@ impl Resource for InspFinding {
         native_state_label(&self.severity_label, || self.state())
     }
     fn tags(&self) -> &HashMap<String, String> {
-        static EMPTY: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
-        EMPTY.get_or_init(HashMap::new)
+        &self.tags
     }
     fn search_text(&self) -> String {
-        // `arn` is included so a by-resource group can jump to one finding by
-        // setting the search query to its ARN (see insp_resource_finding_jump).
-        format!(
-            "{} {} {} {} {} {} {} {} {}",
-            self.title,
-            self.cve,
-            self.severity_label,
-            self.finding_type,
-            self.resource_id,
-            self.repository,
-            self.image_tags.join(" "),
-            self.package_summary,
-            self.arn,
-        )
+        // Includes the ARN, so a by-resource group can jump to one finding by
+        // setting the search query to it (see insp_resource_finding_jump).
+        self.search_blob.clone()
     }
     fn details(&self) -> Vec<(String, String)> {
         vec![
             ("Title".to_string(), self.title.clone()),
-            ("Severity".to_string(), self.severity_label.clone()),
+            ("Severity".to_string(), self.severity_display()),
             ("CVE".to_string(), self.cve.clone()),
         ]
     }
@@ -624,23 +918,32 @@ impl Resource for InspCoverage {
 #[derive(Debug, Clone)]
 pub struct InspResourceGroup {
     pub resource_id: String,
-    pub resource_type: String, // raw, e.g. AWS_EC2_INSTANCE
     pub display_type: String,  // friendly, e.g. "EC2 Instance"
     pub display_id: String,    // friendly, e.g. "my-repo:latest" (else = resource_id)
     pub findings: Vec<InspFinding>,
+    /// One group-header line per finding (parallel to `findings`), made
+    /// unique within the group — the Enter-jump maps a header back to its
+    /// finding, so two findings sharing a title must not share a header.
+    headers: Vec<String>,
     pub critical: usize,
     pub high: usize,
     pub medium: usize,
     pub low: usize,
     pub other: usize,
     pub highest_severity: String,
+    /// The severity scope the findings were loaded under — the tally only
+    /// counts what that scope fetched.
+    scope: InspSeverityScope,
+    /// The finding load hit `MAX_FINDINGS`, so this tally may be short.
+    truncated: bool,
     tags: HashMap<String, String>,
+    search_blob: String,
 }
 
 impl InspResourceGroup {
     /// Build the per-resource groups from a flat finding list, severity-sorted
     /// within each group and ordered worst-resource-first.
-    fn group(findings: &[InspFinding]) -> Vec<InspResourceGroup> {
+    fn group(findings: &[InspFinding], scope: InspSeverityScope, truncated: bool) -> Vec<InspResourceGroup> {
         let mut map: HashMap<(String, String), Vec<InspFinding>> = HashMap::new();
         for f in findings {
             if f.resource_id.is_empty() {
@@ -654,15 +957,7 @@ impl InspResourceGroup {
         let mut groups: Vec<InspResourceGroup> = map
             .into_iter()
             .map(|((resource_type, resource_id), mut fs)| {
-                fs.sort_by(|a, b| {
-                    severity_rank(&b.severity_label)
-                        .cmp(&severity_rank(&a.severity_label))
-                        .then(
-                            b.inspector_score
-                                .partial_cmp(&a.inspector_score)
-                                .unwrap_or(std::cmp::Ordering::Equal),
-                        )
-                });
+                fs.sort_by(finding_order);
                 let (mut critical, mut high, mut medium, mut low, mut other) = (0, 0, 0, 0, 0);
                 for f in &fs {
                     match f.severity_label.as_str() {
@@ -681,11 +976,22 @@ impl InspResourceGroup {
                     .first()
                     .map(|f| f.resource_display())
                     .unwrap_or_else(|| resource_id.clone());
+                let tags = fs.first().map(|f| f.tags.clone()).unwrap_or_default();
+                let display_type = display_resource_type(&resource_type);
+                let mut blob = vec![
+                    resource_id.clone(),
+                    display_id.clone(),
+                    display_type.clone(),
+                    resource_type.clone(),
+                ];
+                // Every finding's own blob, so a group is findable by any CVE,
+                // package, title, file path… that any of its findings carries.
+                blob.extend(fs.iter().map(|f| f.search_blob.clone()));
                 InspResourceGroup {
-                    display_type: display_resource_type(&resource_type),
+                    display_type,
                     display_id,
                     resource_id,
-                    resource_type,
+                    headers: unique_headers(&fs),
                     findings: fs,
                     critical,
                     high,
@@ -693,7 +999,10 @@ impl InspResourceGroup {
                     low,
                     other,
                     highest_severity,
-                    tags: HashMap::new(),
+                    scope,
+                    truncated,
+                    tags,
+                    search_blob: blob.join(" "),
                 }
             })
             .collect();
@@ -711,23 +1020,13 @@ impl InspResourceGroup {
         self.findings.len()
     }
 
-    /// The magenta group-header line for a finding in `details()` — also the key
-    /// the Enter-jump matches a row back to its finding.
-    fn finding_header(f: &InspFinding) -> String {
-        if f.title.is_empty() {
-            format!("{}  {}", f.severity_label, f.cve)
-        } else {
-            format!("{}  {}", f.severity_label, f.title)
-        }
-    }
-
     /// Find the finding ARN whose detail header equals `header` (for the Enter
     /// jump from a by-resource group row to the individual finding).
     pub fn arn_for_header(&self, header: &str) -> Option<String> {
-        self.findings
+        self.headers
             .iter()
-            .find(|f| Self::finding_header(f) == header)
-            .map(|f| f.arn.clone())
+            .position(|h| h == header)
+            .map(|i| self.findings[i].arn.clone())
     }
 
     /// Compact severity tally for the list row, e.g. "3C 5H 2M".
@@ -750,6 +1049,29 @@ impl InspResourceGroup {
         }
         parts.join(" ")
     }
+}
+
+/// The magenta group-header line per finding — `SEVERITY  title` — with a
+/// ` #N` suffix on repeats so each maps back to exactly one finding.
+fn unique_headers(findings: &[InspFinding]) -> Vec<String> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    findings
+        .iter()
+        .map(|f| {
+            let base = if f.title.is_empty() {
+                format!("{}  {}", f.severity_label, f.cve)
+            } else {
+                format!("{}  {}", f.severity_label, f.title)
+            };
+            let n = seen.entry(base.clone()).or_insert(0);
+            *n += 1;
+            if *n == 1 {
+                base
+            } else {
+                format!("{} #{}", base, n)
+            }
+        })
+        .collect()
 }
 
 /// Map a raw Inspector resource type to a friendly label.
@@ -785,32 +1107,37 @@ impl Resource for InspResourceGroup {
         &self.tags
     }
     fn search_text(&self) -> String {
-        // Include CVEs so a resource group is findable by any of its CVEs.
-        let cves: Vec<&str> = self
-            .findings
-            .iter()
-            .map(|f| f.cve.as_str())
-            .filter(|c| !c.is_empty())
-            .collect();
-        format!(
-            "{} {} {} {} {}",
-            self.resource_id,
-            self.display_id,
-            self.display_type,
-            self.resource_type,
-            cves.join(" ")
-        )
+        self.search_blob.clone()
     }
     fn details(&self) -> Vec<(String, String)> {
         // The generic detail header already shows Resource/Type/State; lead with
         // the finding tally, then a full per-finding report.
-        let mut rows: Vec<(String, String)> = vec![
-            (
-                "Findings".to_string(),
-                format!("{} total · {}", self.total(), self.severity_summary()),
-            ),
-            (String::new(), String::new()),
-        ];
+        let mut rows: Vec<(String, String)> = vec![(
+            "Findings".to_string(),
+            format!("{} total · {}", self.total(), self.severity_summary()),
+        )];
+        if self.scope != InspSeverityScope::All {
+            rows.push((
+                String::new(),
+                format!("· {} scope — lower severities aren't loaded; `t` widens", self.scope.label()),
+            ));
+        }
+        if self.truncated {
+            rows.push((
+                String::new(),
+                format!("⚠ Finding load capped at {} — this tally may be incomplete", MAX_FINDINGS),
+            ));
+        }
+        if let Some(first) = self.findings.first() {
+            if !first.aws_account_id.is_empty() {
+                rows.push(("Account".to_string(), first.aws_account_id.clone()));
+            }
+            if !first.resource_region.is_empty() {
+                rows.push(("Region".to_string(), first.resource_region.clone()));
+            }
+            rows.extend(first.resource_rows.iter().cloned());
+        }
+        rows.push((String::new(), String::new()));
 
         // Every finding for this resource, with full vulnerability detail — so
         // the pane reads as a per-resource report and `X` export captures it all.
@@ -819,17 +1146,30 @@ impl Resource for InspResourceGroup {
                 rows.push((String::new(), String::new()));
             }
             // Group header (magenta bold): severity + title.
-            rows.push((Self::finding_header(f), String::new()));
+            rows.push((self.headers[i].clone(), String::new()));
             if !f.cve.is_empty() {
                 rows.push(("CVE".to_string(), f.cve.clone()));
             }
-            if f.inspector_score > 0.0 {
-                rows.push(("Score".to_string(), format!("{:.1}", f.inspector_score)));
+            rows.push((
+                "Score".to_string(),
+                match f.inspector_score {
+                    Some(s) => format!("{:.1}", s),
+                    None => "— not scored by Inspector (no CVSS yet)".to_string(),
+                },
+            ));
+            if !f.vendor_severity.is_empty() {
+                rows.push(("Vendor Severity".to_string(), f.vendor_severity.clone()));
+            }
+            if let Some(e) = f.epss_display() {
+                rows.push(("EPSS".to_string(), e));
             }
             rows.push(("Fix Available".to_string(), f.fix_available.clone()));
             rows.push(("Exploit".to_string(), f.exploit_available.clone()));
-            if !f.package_summary.is_empty() {
-                rows.push(("Package".to_string(), f.package_summary.clone()));
+            if let Some(x) = &f.last_known_exploit {
+                rows.push(("Last Known Exploit".to_string(), x.clone()));
+            }
+            for p in &f.packages {
+                rows.push(("Package".to_string(), p.clone()));
             }
             if let Some(last) = &f.last_observed {
                 rows.push(("Last Observed".to_string(), last.clone()));
@@ -862,40 +1202,198 @@ impl Resource for InspResourceGroup {
 
 // ── raw JSON (the SDK finding isn't Serialize) ───────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
-fn build_raw_json(
-    f: &Finding,
-    finding_type: &str,
-    severity_label: &str,
-    status: &str,
-    resource_type: &str,
-    resource_id: &str,
-    vuln_rows: &[(String, String)],
-    fix_available: &str,
-    exploit_available: &str,
-) -> String {
-    use serde_json::{json, Map, Value};
-    let mut vuln = Map::new();
-    for (k, v) in vuln_rows {
-        if k.trim().is_empty() || v.is_empty() {
-            continue;
-        }
-        vuln.insert(k.trim().to_string(), Value::String(v.clone()));
+/// The whole finding as API-shaped JSON (camelCase, as `aws inspector2
+/// list-findings` prints it) — every field, so `e` hides nothing.
+fn raw_json(f: &Finding) -> String {
+    use serde_json::{json, Value};
+    fn dt(d: Option<&aws_smithy_types::DateTime>) -> Value {
+        d.and_then(|d| d.fmt(aws_smithy_types::date_time::Format::DateTime).ok())
+            .map(Value::String)
+            .unwrap_or(Value::Null)
     }
-    let v = json!({
-        "FindingArn": f.finding_arn(),
-        "Title": f.title().unwrap_or_default(),
-        "Description": f.description(),
-        "Type": finding_type,
-        "Severity": severity_label,
-        "Status": status,
-        "InspectorScore": f.inspector_score().unwrap_or(0.0),
-        "Resource": { "Type": resource_type, "Id": resource_id },
-        "FixAvailable": fix_available,
-        "ExploitAvailable": exploit_available,
-        "Vulnerability": Value::Object(vuln),
+    fn s(v: Option<&str>) -> Value {
+        v.map(|v| Value::String(v.to_string())).unwrap_or(Value::Null)
+    }
+
+    let resources: Vec<Value> = f
+        .resources()
+        .iter()
+        .map(|r| {
+            let details = r.details().map(|d| {
+                json!({
+                    "awsEcrContainerImage": d.aws_ecr_container_image().map(|i| json!({
+                        "repositoryName": i.repository_name(),
+                        "imageTags": i.image_tags(),
+                        "pushedAt": dt(i.pushed_at()),
+                        "author": s(i.author()),
+                        "architecture": s(i.architecture()),
+                        "imageHash": i.image_hash(),
+                        "registry": i.registry(),
+                        "platform": s(i.platform()),
+                        "lastInUseAt": dt(i.last_in_use_at()),
+                        "inUseCount": i.in_use_count(),
+                    })),
+                    "awsEc2Instance": d.aws_ec2_instance().map(|e| json!({
+                        "type": s(e.r#type()),
+                        "imageId": s(e.image_id()),
+                        "ipV4Addresses": e.ipv4_addresses(),
+                        "ipV6Addresses": e.ipv6_addresses(),
+                        "keyName": s(e.key_name()),
+                        "iamInstanceProfileArn": s(e.iam_instance_profile_arn()),
+                        "vpcId": s(e.vpc_id()),
+                        "subnetId": s(e.subnet_id()),
+                        "launchedAt": dt(e.launched_at()),
+                        "platform": s(e.platform()),
+                    })),
+                    "awsLambdaFunction": d.aws_lambda_function().map(|l| json!({
+                        "functionName": l.function_name(),
+                        "runtime": l.runtime().as_str(),
+                        "codeSha256": l.code_sha256(),
+                        "version": l.version(),
+                        "executionRoleArn": l.execution_role_arn(),
+                        "layers": l.layers(),
+                        "vpcConfig": l.vpc_config().map(|v| json!({
+                            "vpcId": s(v.vpc_id()),
+                            "subnetIds": v.subnet_ids(),
+                            "securityGroupIds": v.security_group_ids(),
+                        })),
+                        "packageType": l.package_type().map(|p| p.as_str()),
+                        "architectures": l.architectures().iter().map(|a| a.as_str()).collect::<Vec<_>>(),
+                        "lastModifiedAt": dt(l.last_modified_at()),
+                    })),
+                })
+            });
+            json!({
+                "type": r.r#type().as_str(),
+                "id": r.id(),
+                "partition": s(r.partition()),
+                "region": s(r.region()),
+                "tags": r.tags(),
+                "details": details,
+            })
+        })
+        .collect();
+
+    let package = f.package_vulnerability_details().map(|pv| {
+        json!({
+            "vulnerabilityId": pv.vulnerability_id(),
+            "source": pv.source(),
+            "sourceUrl": s(pv.source_url()),
+            "vendorSeverity": s(pv.vendor_severity()),
+            "vendorCreatedAt": dt(pv.vendor_created_at()),
+            "vendorUpdatedAt": dt(pv.vendor_updated_at()),
+            "relatedVulnerabilities": pv.related_vulnerabilities(),
+            "referenceUrls": pv.reference_urls(),
+            "cvss": pv.cvss().iter().map(|c| json!({
+                "baseScore": c.base_score(),
+                "scoringVector": c.scoring_vector(),
+                "version": c.version(),
+                "source": c.source(),
+            })).collect::<Vec<_>>(),
+            "vulnerablePackages": pv.vulnerable_packages().iter().map(|p| json!({
+                "name": p.name(),
+                "version": p.version(),
+                "epoch": p.epoch(),
+                "release": s(p.release()),
+                "arch": s(p.arch()),
+                "packageManager": p.package_manager().map(|m| m.as_str()),
+                "filePath": s(p.file_path()),
+                "fixedInVersion": s(p.fixed_in_version()),
+                "remediation": s(p.remediation()),
+                "sourceLayerHash": s(p.source_layer_hash()),
+                "sourceLambdaLayerArn": s(p.source_lambda_layer_arn()),
+            })).collect::<Vec<_>>(),
+        })
     });
-    serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".to_string())
+
+    let network = f.network_reachability_details().map(|nr| {
+        json!({
+            "protocol": nr.protocol().as_str(),
+            "openPortRange": nr.open_port_range().map(|p| json!({ "begin": p.begin(), "end": p.end() })),
+            "networkPath": nr.network_path().map(|p| p.steps().iter().map(|st| json!({
+                "componentId": st.component_id(),
+                "componentType": st.component_type(),
+                "componentArn": s(st.component_arn()),
+            })).collect::<Vec<_>>()),
+        })
+    });
+
+    let code = f.code_vulnerability_details().map(|cv| {
+        json!({
+            "detectorId": cv.detector_id(),
+            "detectorName": cv.detector_name(),
+            "detectorTags": cv.detector_tags(),
+            "ruleId": s(cv.rule_id()),
+            "cwes": cv.cwes(),
+            "referenceUrls": cv.reference_urls(),
+            "sourceLambdaLayerArn": s(cv.source_lambda_layer_arn()),
+            "filePath": cv.file_path().map(|fp| json!({
+                "fileName": fp.file_name(),
+                "filePath": fp.file_path(),
+                "startLine": fp.start_line(),
+                "endLine": fp.end_line(),
+            })),
+        })
+    });
+
+    let adjusted = f.inspector_score_details().and_then(|d| d.adjusted_cvss()).map(|a| {
+        json!({
+            "scoreSource": a.score_source(),
+            "cvssSource": s(a.cvss_source()),
+            "version": a.version(),
+            "score": a.score(),
+            "scoringVector": a.scoring_vector(),
+            "adjustments": a.adjustments().iter().map(|x| json!({
+                "metric": x.metric(),
+                "reason": x.reason(),
+            })).collect::<Vec<_>>(),
+        })
+    });
+
+    let v = json!({
+        "findingArn": f.finding_arn(),
+        "awsAccountId": f.aws_account_id(),
+        "type": f.r#type().as_str(),
+        "title": s(f.title()),
+        "description": f.description(),
+        "severity": f.severity().as_str(),
+        "status": f.status().as_str(),
+        "inspectorScore": f.inspector_score(),
+        "inspectorScoreDetails": adjusted.map(|a| json!({ "adjustedCvss": a })),
+        "epss": f.epss().map(|e| json!({ "score": e.score() })),
+        "fixAvailable": f.fix_available().map(|x| x.as_str()),
+        "exploitAvailable": f.exploit_available().map(|x| x.as_str()),
+        "exploitabilityDetails": f.exploitability_details().map(|e| json!({
+            "lastKnownExploitAt": dt(e.last_known_exploit_at()),
+        })),
+        "firstObservedAt": dt(Some(f.first_observed_at())),
+        "lastObservedAt": dt(Some(f.last_observed_at())),
+        "updatedAt": dt(f.updated_at()),
+        "remediation": f.remediation().and_then(|r| r.recommendation()).map(|r| json!({
+            "text": s(r.text()),
+            "url": s(r.url()),
+        })),
+        "resources": resources,
+        "packageVulnerabilityDetails": package,
+        "networkReachabilityDetails": network,
+        "codeVulnerabilityDetails": code,
+    });
+    serde_json::to_string_pretty(&strip_nulls(v)).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Drop null / absent fields so the JSON reads like the API's own output.
+fn strip_nulls(v: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match v {
+        Value::Object(m) => Value::Object(
+            m.into_iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (k, strip_nulls(v)))
+                .collect(),
+        ),
+        Value::Array(a) => Value::Array(a.into_iter().map(strip_nulls).collect()),
+        other => other,
+    }
 }
 
 // ── Timestamp helper ─────────────────────────────────────────────────────────
@@ -944,29 +1442,135 @@ mod tests {
     use super::*;
 
     fn finding(resource_type: &str, resource_id: &str, repo: &str, tags: &[&str]) -> InspFinding {
-        InspFinding {
-            arn: String::new(),
-            title: String::new(),
-            description: String::new(),
-            finding_type: String::new(),
-            severity_label: "HIGH".to_string(),
-            status: "ACTIVE".to_string(),
-            inspector_score: 0.0,
-            resource_type: resource_type.to_string(),
-            resource_id: resource_id.to_string(),
-            repository: repo.to_string(),
-            image_tags: tags.iter().map(|t| t.to_string()).collect(),
-            cve: String::new(),
-            package_summary: String::new(),
-            fix_available: "UNKNOWN".to_string(),
-            exploit_available: "UNKNOWN".to_string(),
-            vuln_rows: Vec::new(),
-            remediation_text: String::new(),
-            remediation_url: String::new(),
-            first_observed: None,
-            last_observed: None,
-            raw_json: String::new(),
+        let mut f = InspFinding::from_sdk(&sdk_finding("CVE-2024-0001", None, None));
+        f.resource_type = resource_type.to_string();
+        f.resource_id = resource_id.to_string();
+        f.repository = repo.to_string();
+        f.image_tags = tags.iter().map(|t| t.to_string()).collect();
+        f
+    }
+
+    /// A CRITICAL package finding on an EC2 instance with two packages, the
+    /// second of which is the one a search has to reach.
+    fn sdk_finding(cve: &str, score: Option<f64>, vendor: Option<&str>) -> Finding {
+        use aws_sdk_inspector2::types::{
+            FindingStatus, FindingType, PackageVulnerabilityDetails, Resource as SdkResource,
+            ResourceType, Severity, VulnerablePackage,
+        };
+        let pkg = |name: &str| {
+            VulnerablePackage::builder()
+                .name(name)
+                .version("1.0.0")
+                .fixed_in_version("1.0.1")
+                .file_path(format!("/usr/lib/{name}"))
+                .build()
+                .unwrap()
+        };
+        let mut pv = PackageVulnerabilityDetails::builder()
+            .vulnerability_id(cve)
+            .source("UBUNTU_CVE")
+            .vulnerable_packages(pkg("openssl"))
+            .vulnerable_packages(pkg("libxml2"))
+            .related_vulnerabilities("GHSA-xxxx-yyyy");
+        if let Some(v) = vendor {
+            pv = pv.vendor_severity(v);
         }
+        let mut b = Finding::builder()
+            .finding_arn(format!("arn:aws:inspector2:us-east-1:123456789012:finding/{cve}"))
+            .aws_account_id("123456789012")
+            .r#type(FindingType::PackageVulnerability)
+            .title(format!("{cve} - openssl, libxml2"))
+            .description("a description")
+            .severity(Severity::Critical)
+            .status(FindingStatus::Active)
+            .first_observed_at(aws_smithy_types::DateTime::from_secs(1_704_067_200))
+            .last_observed_at(aws_smithy_types::DateTime::from_secs(1_704_067_200))
+            .resources(
+                SdkResource::builder()
+                    .r#type(ResourceType::AwsEc2Instance)
+                    .id("i-0abc123")
+                    .tags("team", "payments")
+                    .build()
+                    .unwrap(),
+            )
+            .package_vulnerability_details(pv.build().unwrap());
+        if let Some(s) = score {
+            b = b.inspector_score(s);
+        }
+        b.build().unwrap()
+    }
+
+    #[test]
+    fn unscored_finding_never_reads_as_zero() {
+        let f = InspFinding::from_sdk(&sdk_finding("CVE-2026-11147", None, Some("CRITICAL")));
+        assert_eq!(f.inspector_score, None);
+        assert_eq!(f.severity_display(), "CRITICAL (no score)");
+        assert_eq!(f.vendor_severity, "CRITICAL");
+        assert!(!f.severity_display().contains("0.0"));
+        let grp = &InspResourceGroup::group(&[f], InspSeverityScope::All, false)[0];
+        let score = grp.details().into_iter().find(|(k, _)| k == "Score").unwrap();
+        assert!(score.1.contains("not scored"), "{score:?}");
+    }
+
+    #[test]
+    fn scored_finding_shows_its_score() {
+        let f = InspFinding::from_sdk(&sdk_finding("CVE-2024-0001", Some(9.8), None));
+        assert_eq!(f.severity_display(), "CRITICAL (9.8)");
+    }
+
+    #[test]
+    fn search_reaches_every_package_tag_and_related_id() {
+        let f = InspFinding::from_sdk(&sdk_finding("CVE-2024-0001", None, None));
+        let text = f.search_text();
+        for needle in ["libxml2", "/usr/lib/libxml2", "GHSA-xxxx-yyyy", "team=payments", "123456789012", "unscored"] {
+            assert!(text.contains(needle), "missing {needle:?} in {text}");
+        }
+        let grp = &InspResourceGroup::group(&[f], InspSeverityScope::All, false)[0];
+        assert!(grp.search_text().contains("libxml2"));
+        assert_eq!(grp.tags().get("team").map(String::as_str), Some("payments"));
+    }
+
+    #[test]
+    fn every_package_is_listed_not_just_the_first() {
+        let f = InspFinding::from_sdk(&sdk_finding("CVE-2024-0001", None, None));
+        assert_eq!(f.packages.len(), 2);
+        assert!(f.vuln_rows.iter().any(|(k, v)| k.trim() == "File" && v == "/usr/lib/libxml2"));
+    }
+
+    #[test]
+    fn duplicate_titles_jump_to_distinct_findings() {
+        let mut a = InspFinding::from_sdk(&sdk_finding("CVE-2024-0001", Some(9.8), None));
+        let mut b = a.clone();
+        a.arn = "arn-a".to_string();
+        b.arn = "arn-b".to_string();
+        let grp = &InspResourceGroup::group(&[a, b], InspSeverityScope::All, false)[0];
+        let headers: Vec<String> = grp
+            .details()
+            .into_iter()
+            .filter(|(k, v)| v.is_empty() && !k.is_empty() && !k.starts_with(' '))
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(headers.len(), 2);
+        let arns: Vec<_> = headers.iter().map(|h| grp.arn_for_header(h).unwrap()).collect();
+        assert_ne!(arns[0], arns[1]);
+    }
+
+    #[test]
+    fn partial_tally_says_so() {
+        let f = InspFinding::from_sdk(&sdk_finding("CVE-2024-0001", None, None));
+        let grp = &InspResourceGroup::group(&[f], InspSeverityScope::High, true)[0];
+        let notes: Vec<String> = grp.details().into_iter().map(|(_, v)| v).collect();
+        assert!(notes.iter().any(|v| v.contains("High+ scope")));
+        assert!(notes.iter().any(|v| v.contains("capped")));
+    }
+
+    #[test]
+    fn raw_json_keeps_vendor_severity_and_omits_missing_score() {
+        let f = InspFinding::from_sdk(&sdk_finding("CVE-2026-11147", None, Some("CRITICAL")));
+        let v: serde_json::Value = serde_json::from_str(&f.raw_json).unwrap();
+        assert_eq!(v["packageVulnerabilityDetails"]["vendorSeverity"], "CRITICAL");
+        assert!(v.get("inspectorScore").is_none());
+        assert_eq!(v["packageVulnerabilityDetails"]["vulnerablePackages"].as_array().unwrap().len(), 2);
     }
 
     const IMG_ID: &str =
