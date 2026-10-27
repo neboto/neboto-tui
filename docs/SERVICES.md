@@ -1595,7 +1595,20 @@ the service you're touching.
   (bot categories / attack signals; that table is hidden when no labels
   fired). The view draws them beside the chart; the Traffic section
   (`lazy.waf_traffic`, keyed by ACL id) draws the same tables over a fixed
-  24 hours, since a LazyMap can't follow a range knob. The web ACL pane's
+  24 hours, since a LazyMap can't follow a range knob. **Reading the
+  numbers:** WAF publishes a minute only when it had requests, so the
+  action specs are `sparse` and `fetch_series` fills quiet periods with
+  zeros (min/avg/last were averaging only the busy minutes); the last
+  three minutes are left unfilled since they may still be publishing.
+  **Count is non-terminating** — a counted request is also allowed or
+  blocked later — so percentages are of allowed + blocked + CAPTCHA +
+  challenge (`WafTraffic::requests`), never of a sum including Counted
+  (the first Traffic section did that and under-stated every share).
+  Rule rows are keyed by each rule's *metric name*, and AWS doesn't
+  publish Count matches inside managed rule groups to the web ACL, so a
+  group in Count mode shows nothing in the tables. The label table's
+  dimension is `LabelName` here; AWS's metrics page lists it as `Label`,
+  which is unverified either way. The web ACL pane's
   **Insights** section (key 6) is a lazy
   `fetch_waf_insights` (`lazy.waf_insights` keyed by ACL name): one
   `GetSampledRequests` per sampler — default action + rules by priority,

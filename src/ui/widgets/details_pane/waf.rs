@@ -387,19 +387,24 @@ pub(super) fn waf_traffic_lines(traffic: Option<&Lazy<Box<WafTraffic>>>) -> Vec<
         }
         Some(Lazy::Loaded(t)) => t,
     };
-    let total = t.totals.total();
+    // Count doesn't end a request, so the percentages are of the requests
+    // that did end here (`WafTraffic::requests`) and Counted has none.
+    let requests = t.requests();
     rows.push(("Last 24 hours".to_string(), "".to_string()));
-    if total <= 0.0 {
+    if requests <= 0.0 && t.totals.counted <= 0.0 {
         rows.push(("".to_string(), "No requests in the last 24 hours".to_string()));
     } else {
-        let names = ["Allowed", "Blocked", "Counted", "CAPTCHA", "Challenge"];
-        for (name, v) in names.iter().zip(t.totals.values()) {
+        rows.push(("Requests".to_string(), format_count(requests)));
+        let tt = &t.totals;
+        for (name, v) in [("Allowed", tt.allowed), ("Blocked", tt.blocked), ("CAPTCHA", tt.captcha), ("Challenge", tt.challenge)] {
             // Allowed and Blocked always; the rest only when a rule uses them.
-            if v > 0.0 || *name == "Allowed" || *name == "Blocked" {
-                rows.push((name.to_string(), format!("{}  ({:.1}%)", format_count(v), v / total * 100.0)));
+            if v > 0.0 || name == "Allowed" || name == "Blocked" {
+                rows.push((name.to_string(), format!("{}  ({})", format_count(v), crate::aws::services::waf::pct(v, requests))));
             }
         }
-        rows.push(("Total".to_string(), format_count(total)));
+        if tt.counted > 0.0 {
+            rows.push(("Counted".to_string(), format!("{}  (also allowed or blocked later)", format_count(tt.counted))));
+        }
     }
     rows.push(("".to_string(), "· m charts them over any range, with these tables beside the chart".to_string()));
     // The tables the `m` view draws, from the same formatter.
@@ -418,6 +423,12 @@ pub(super) fn waf_traffic_lines(traffic: Option<&Lazy<Box<WafTraffic>>>) -> Vec<
             rows.push(("".to_string(), format!("· {} more", table.rows.len() - MAX_ROWS)));
         }
     }
+    // AWS doesn't publish these to the web ACL, so no table can show them.
+    rows.push(("".to_string(), "".to_string()));
+    rows.push((
+        "".to_string(),
+        "· Rows are rules' metric names; Count matches inside managed rule groups aren't published here".to_string(),
+    ));
     rows
 }
 

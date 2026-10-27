@@ -11,7 +11,7 @@
 //! warning on its own row, never an error for the view.
 
 use crate::app::App;
-use crate::aws::metrics::{fmt_value, BreakdownTable, MetricDefinition, MetricQuery, MetricSeries, MetricTarget, RANGES};
+use crate::aws::metrics::{fmt_value, BreakdownData, MetricDefinition, MetricQuery, MetricSeries, MetricTarget, RANGES};
 use crate::aws::services::ec2::MetricsTimeRange;
 use crate::ui::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -45,7 +45,7 @@ pub struct SpecMetricsState {
     pub end: i64,
     pub picker: Option<MetricPicker>,
     /// The target's breakdown tables for the range, once fetched.
-    pub breakdown: Option<Result<Vec<BreakdownTable>, String>>,
+    pub breakdown: Option<Result<BreakdownData, String>>,
 }
 
 impl SpecMetricsState {
@@ -103,8 +103,11 @@ impl SpecMetricsState {
             out.push('\n');
         }
         match &self.breakdown {
-            Some(Ok(tables)) => {
-                for t in tables {
+            Some(Ok(data)) => {
+                if let Some(summary) = &data.summary {
+                    out.push_str(&format!("\n{summary}\n"));
+                }
+                for t in &data.tables {
                     let (header, rows) = t.text(120, usize::MAX);
                     out.push_str(&format!("\n{} ({})\n{header}\n", t.title, self.range.label()));
                     for r in rows {
@@ -420,7 +423,15 @@ fn render_breakdown(st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
     match &st.breakdown {
         None => lines.push(Line::styled(if st.loading { " Reading…" } else { " Nothing to show" }, dim)),
         Some(Err(e)) => lines.push(Line::styled(format!(" ⚠ {e}"), Style::default().fg(theme::warning()))),
-        Some(Ok(tables)) => {
+        Some(Ok(data)) => {
+            if let Some(summary) = &data.summary {
+                lines.push(Line::styled(
+                    format!(" {summary}"),
+                    Style::default().fg(theme::text_primary()).add_modifier(Modifier::BOLD),
+                ));
+                lines.push(Line::raw(""));
+            }
+            let tables = &data.tables;
             for (i, t) in tables.iter().enumerate() {
                 if i > 0 {
                     lines.push(Line::raw(""));

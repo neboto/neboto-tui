@@ -394,6 +394,34 @@ pub struct WafTraffic {
 pub const WAF_ACTIONS: [&str; 5] = ["Allow", "Block", "Count", "CAPTCHA", "Chlng"];
 
 impl WafTraffic {
+    /// Requests that ended in the ACL: allowed, blocked, CAPTCHA'd or
+    /// challenged. Count doesn't end a request (a counted one is allowed or
+    /// blocked after), so it is never part of a percentage.
+    pub fn requests(&self) -> f64 {
+        let t = &self.totals;
+        t.allowed + t.blocked + t.captcha + t.challenge
+    }
+
+    /// `182.4K requests · 96.6% allowed · 3.2% blocked · 220 counted`: the
+    /// web ACL's own totals, the line above its tables.
+    pub fn summary(&self) -> Option<String> {
+        let total = self.requests();
+        if total <= 0.0 && self.totals.counted <= 0.0 {
+            return None;
+        }
+        let t = &self.totals;
+        let mut parts = vec![format!("{} requests", crate::aws::metrics::fmt_count(total))];
+        for (v, what) in [(t.allowed, "allowed"), (t.blocked, "blocked"), (t.captcha, "CAPTCHA"), (t.challenge, "challenged")] {
+            if v > 0.0 || what == "allowed" || what == "blocked" {
+                parts.push(format!("{} {what}", pct(v, total)));
+            }
+        }
+        if t.counted > 0.0 {
+            parts.push(format!("{} counted", crate::aws::metrics::fmt_count(t.counted)));
+        }
+        Some(parts.join(" · "))
+    }
+
     /// The rule and label tables, as the metrics view and the Traffic
     /// section both draw them.
     pub fn tables(&self) -> Vec<crate::aws::metrics::BreakdownTable> {
@@ -408,6 +436,15 @@ impl WafTraffic {
             out.push(table("Requests by label", &self.labels));
         }
         out
+    }
+}
+
+/// `96.6%`, or `0%` of nothing.
+pub fn pct(v: f64, total: f64) -> String {
+    if total > 0.0 {
+        format!("{:.1}%", v / total * 100.0)
+    } else {
+        "0%".to_string()
     }
 }
 
@@ -641,6 +678,17 @@ mod traffic_tests {
         assert_eq!(names, ["Default_Action", "RateLimit", "BadBots"], "by total, ALL left out");
         let (_, labels) = fold_breakdown(&sums, 'l');
         assert_eq!(labels.len(), 1);
+    }
+
+    #[test]
+    fn counted_requests_are_never_part_of_a_percentage() {
+        let t = WafTraffic {
+            totals: WafRuleTraffic { name: "ALL".into(), allowed: 90.0, blocked: 10.0, counted: 50.0, ..Default::default() },
+            ..Default::default()
+        };
+        assert_eq!(t.requests(), 100.0);
+        assert_eq!(t.summary().as_deref(), Some("100 requests · 90.0% allowed · 10.0% blocked · 50 counted"));
+        assert_eq!(WafTraffic::default().summary(), None);
     }
 
     #[test]

@@ -32214,6 +32214,7 @@ impl App {
                             unit: m::Unit::Percent,
                             rate: false,
                             group: Some(group.to_string()),
+                            sparse: false,
                         })
                 })
                 .collect();
@@ -32283,6 +32284,7 @@ impl App {
                 unit: m::Unit::Raw,
                 rate: false,
                 group: None,
+                sparse: false,
             };
             MetricTarget {
                 extra: vec![query],

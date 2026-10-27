@@ -90,10 +90,13 @@ pub struct MetricSpec {
     /// A namespace other than the target's, for a set that spans two (an
     /// ECS service's task counts live in Container Insights).
     pub namespace: Option<&'static str>,
+    /// Published only for a period that has a non-zero value (WAF's
+    /// counts): a missing period is a zero, and is charted as one.
+    pub sparse: bool,
 }
 
 const fn m(metric: &'static str, label: &'static str, stat: Stat, unit: Unit) -> MetricSpec {
-    MetricSpec { metric, label, stat, unit, rate: false, group: None, namespace: None }
+    MetricSpec { metric, label, stat, unit, rate: false, group: None, namespace: None, sparse: false }
 }
 
 impl MetricSpec {
@@ -107,6 +110,10 @@ impl MetricSpec {
 
     const fn ns(self, namespace: &'static str) -> Self {
         MetricSpec { namespace: Some(namespace), ..self }
+    }
+
+    const fn sparse(self) -> Self {
+        MetricSpec { sparse: true, ..self }
     }
 }
 
@@ -369,13 +376,14 @@ pub const CLOUDFRONT_DISTRIBUTION: &[MetricSpec] = &[
 ];
 
 /// `WebACL` + `Rule=ALL` (+ `Region` for REGIONAL ACLs): every action on
-/// one chart, so the split between them reads at a glance.
+/// one chart, so the split between them reads at a glance. WAF publishes a
+/// minute only when it had requests, hence `sparse`.
 pub const WAF_WEB_ACL: &[MetricSpec] = &[
-    m("AllowedRequests", "Allowed", Sum, Unit::Count).group("actions"),
-    m("BlockedRequests", "Blocked", Sum, Unit::Count).group("actions"),
-    m("CountedRequests", "Counted", Sum, Unit::Count).group("actions"),
-    m("CaptchaRequests", "CAPTCHA", Sum, Unit::Count).group("actions"),
-    m("ChallengeRequests", "Challenge", Sum, Unit::Count).group("actions"),
+    m("AllowedRequests", "Allowed", Sum, Unit::Count).group("actions").sparse(),
+    m("BlockedRequests", "Blocked", Sum, Unit::Count).group("actions").sparse(),
+    m("CountedRequests", "Counted", Sum, Unit::Count).group("actions").sparse(),
+    m("CaptchaRequests", "CAPTCHA", Sum, Unit::Count).group("actions").sparse(),
+    m("ChallengeRequests", "Challenge", Sum, Unit::Count).group("actions").sparse(),
 ];
 
 pub const R53_HEALTH_CHECK: &[MetricSpec] = &[
@@ -603,7 +611,7 @@ impl Breakdown {
         dimensions: &[(String, String)],
         range: MetricsTimeRange,
         end: i64,
-    ) -> Result<Vec<BreakdownTable>, String> {
+    ) -> Result<BreakdownData, String> {
         match self {
             Breakdown::Waf { region, .. } => {
                 let web_acl = dimensions.iter().find(|(n, _)| n == "WebACL").map_or("", |(_, v)| v.as_str());
@@ -617,7 +625,7 @@ impl Breakdown {
                     range.period_secs(),
                 )
                 .await?;
-                Ok(traffic.tables())
+                Ok(BreakdownData { summary: traffic.summary(), tables: traffic.tables() })
             }
         }
     }
@@ -631,6 +639,14 @@ impl BreakdownFix {
             }
         }
     }
+}
+
+/// A breakdown's answer: a one-line summary of the whole (`None` when there
+/// is nothing to sum), then its tables.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BreakdownData {
+    pub summary: Option<String>,
+    pub tables: Vec<BreakdownTable>,
 }
 
 /// Range totals per dimension value: one row per value, one column per
@@ -722,6 +738,7 @@ impl MetricTarget {
                 unit: s.unit,
                 rate: s.rate,
                 group: s.group.map(str::to_string),
+                sparse: s.sparse,
             })
             .chain(self.extra.iter().cloned())
             .collect()
@@ -740,6 +757,8 @@ pub struct MetricQuery {
     pub unit: Unit,
     pub rate: bool,
     pub group: Option<String>,
+    /// See [`MetricSpec::sparse`].
+    pub sparse: bool,
 }
 
 /// One metric's answer: (epoch seconds, value) points oldest first, or why not.
@@ -882,9 +901,42 @@ pub async fn fetch_series(
         .zip(points.into_iter().zip(errors))
         .map(|(q, (mut pts, error))| {
             pts.sort_by_key(|(t, _)| *t);
+            if q.sparse {
+                zero_fill(&mut pts, start, end, period as i64);
+            }
             MetricSeries { query: q.clone(), points: pts, error }
         })
         .collect()
+}
+
+/// How long CloudWatch can take to publish a period: a missing point this
+/// close to the window's end may be late, not zero.
+const PUBLISH_LAG_SECS: i64 = 180;
+
+/// A sparse metric's quiet periods as zeros, so min, avg and last and the
+/// chart read them as nothing happening rather than skipping them. A
+/// series with no points at all stays empty ("no data in the window"),
+/// and the last few minutes are left alone (`PUBLISH_LAG_SECS`).
+fn zero_fill(points: &mut Vec<(i64, f64)>, start: i64, end: i64, period: i64) {
+    let Some(&(first, _)) = points.first() else { return };
+    if period <= 0 {
+        return;
+    }
+    // CloudWatch's buckets are aligned to the period; follow its phase.
+    let phase = first.rem_euclid(period);
+    let mut t = start - (start - phase).rem_euclid(period);
+    if t < start {
+        t += period;
+    }
+    let have: std::collections::HashSet<i64> = points.iter().map(|(t, _)| *t).collect();
+    let cutoff = end - period - PUBLISH_LAG_SECS;
+    while t <= cutoff {
+        if !have.contains(&t) {
+            points.push((t, 0.0));
+        }
+        t += period;
+    }
+    points.sort_by_key(|(t, _)| *t);
 }
 
 /// One entry of the `a` picker: a metric `ListMetrics` knows for the resource.
@@ -907,6 +959,7 @@ impl MetricDefinition {
             unit: Unit::Raw,
             rate: false,
             group: None,
+            sparse: false,
         }
     }
 }
@@ -1036,6 +1089,12 @@ pub fn step_range(r: MetricsTimeRange, step: isize) -> MetricsTimeRange {
 mod tests {
     use super::*;
 
+    impl MetricDefinition {
+        fn default_query() -> MetricQuery {
+            MetricDefinition { namespace: "AWS/WAFV2".into(), metric: "BlockedRequests".into(), dimensions: vec![] }.query()
+        }
+    }
+
     fn table() -> BreakdownTable {
         BreakdownTable {
             title: "Requests by rule".to_string(),
@@ -1045,6 +1104,23 @@ mod tests {
                 ("Default_Action".to_string(), vec![900.0, 0.0, 0.0]),
             ],
         }
+    }
+
+    #[test]
+    fn a_sparse_series_reads_its_quiet_minutes_as_zero() {
+        // Three blocked requests in one minute of an hour.
+        let (start, end) = (6_000, 6_000 + 3_600);
+        let mut pts = vec![(6_600, 3.0)];
+        zero_fill(&mut pts, start, end, 60);
+        let s = MetricSeries { query: MetricDefinition::default_query(), points: pts.clone(), error: None };
+        let st = s.stats().unwrap();
+        assert_eq!((st.min, st.max), (0.0, 3.0));
+        assert!(st.avg < 0.06, "not 3: {}", st.avg);
+        assert!(pts.windows(2).all(|w| w[1].0 - w[0].0 == 60), "one point a minute");
+        assert!(pts.last().unwrap().0 <= end - 60 - PUBLISH_LAG_SECS, "the last minutes may still be publishing");
+        let mut empty: Vec<(i64, f64)> = Vec::new();
+        zero_fill(&mut empty, start, end, 60);
+        assert!(empty.is_empty(), "no data stays no data");
     }
 
     #[test]
