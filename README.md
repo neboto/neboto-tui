@@ -284,7 +284,10 @@ arn:aws:iam::…       paste an ARN — it fuzzy-matches rather than erroring
 
 Typing `@e` pops a completion dropdown; `Tab` completes to the first match.
 `↑` / `↓` in the search bar recall this session's earlier searches (in memory
-only, never written to disk).
+only, never written to disk). `←` / `→` / `Home` / `End` move through the
+query, so `/` `↑` `←←←` fixes a typo in the last search; the usual shell keys
+(`Ctrl-W`, `Ctrl-U`, `Alt-←`…) work too. The detail pane's `/` filter edits the
+same way.
 Matching is fuzzy (Skim) with a score threshold, over every indexed field — ids,
 names, IPs, CIDRs, AZs, tags, ARNs, usernames, emails, and per-service extras
 like every secondary private IP on an ENI or every resource id in a GuardDuty

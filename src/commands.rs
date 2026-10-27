@@ -253,6 +253,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(Search, "tag:k=v", "exact tag filter"),
     cmd(Search, "Tab", "complete @prefix"),
     cmd(Search, "↑ / ↓", "earlier searches (this session)"),
+    cmd(Search, "← → Home End", "edit the query (shell keys work too)"),
     cmd(Context, "S", "switch service").runs(Key('S')),
     cmd(Context, "R", "switch region").runs(Key('R')),
     cmd(Context, "P", "switch profile").runs(Key('P')),
