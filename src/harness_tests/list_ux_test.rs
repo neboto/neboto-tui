@@ -1,5 +1,5 @@
 //! #118 polish: pinned service chips, `/` search history, the detail
-//! footer's `⌫ back to …` hint, and the list's per-type summary column.
+//! history arrows on the service strip, and the list's per-type summary column.
 
 use super::*;
 use crate::aws::services::ec2::Ec2Instance;
@@ -73,29 +73,30 @@ async fn up_and_down_walk_the_search_history_and_restore_the_draft() {
     assert_eq!(app.search_history.len(), 2);
 }
 
+/// The ids `⌫` and `Ctrl-F` would land on (the strip's lit `←` / `→`).
+fn back_id(app: &App) -> Option<String> {
+    app.nav_back_index().and_then(|i| app.nav_history[i].selected_id.clone())
+}
+
+fn forward_id(app: &App) -> Option<String> {
+    app.nav_forward_index().and_then(|i| app.nav_history[i].selected_id.clone())
+}
+
+/// `←` lights only when there's somewhere else to go back to — not for an
+/// entry that is where we already are.
 #[tokio::test]
-async fn detail_footer_names_where_back_goes() {
+async fn back_arrow_lights_only_with_somewhere_to_go() {
     let (mut app, _tx, _rx) = test_app().await;
-    let instance = |id: &str| -> Box<dyn Resource> {
-        Box::new(Ec2Instance::from_sdk(&aws_sdk_ec2::types::Instance::builder().instance_id(id).build()))
-    };
-    app.current_service = Some(ServiceType::EC2);
-    app.resources = vec![instance("i-0here")];
-    app.filtered_resources = vec![0];
-    app.selected_index = Some(0);
-    assert_eq!(app.nav_back_hint(), None, "no history, no hint");
-
-    // History pointing at where we already are says nothing.
+    ec2_rows(&mut app, &["i-0here", "i-0there"]);
+    assert_eq!(app.nav_back_index(), None, "no history");
     app.record_location();
-    assert_eq!(app.nav_back_hint(), None);
-
-    app.nav_history[0].selected_id = Some("arn:aws:lambda:us-east-1:111122223333:function:orders".into());
-    app.nav_history[0].service = ServiceType::Lambda;
-    assert_eq!(app.nav_back_hint().as_deref(), Some("λ orders"));
+    assert_eq!(app.nav_back_index(), None, "history is only where we are");
+    app.selected_index = Some(1);
+    assert_eq!(back_id(&app).as_deref(), Some("i-0here"));
 
     app.details_focused = true;
     let screen = draw(&app);
-    assert!(screen.contains("⌫ back to λ orders"), "footer: {screen}");
+    assert!(!screen.contains("⌫ back to"), "the footer no longer names history: {screen}");
     assert!(screen.contains("h list"), "h should say it goes to the list: {screen}");
 }
 
@@ -196,7 +197,7 @@ async fn the_list_shows_the_summary_column() {
     assert!(screen.contains("t3.micro · i-0abc"), "{screen}");
 }
 
-// ── Back-history sync: what the `⌫ back to …` hint made visible ──────────
+// ── Back-history sync: where `⌫` lands ───────────────────────────────────
 
 fn ec2_rows(app: &mut App, ids: &[&str]) {
     app.current_service = Some(ServiceType::EC2);
@@ -221,7 +222,7 @@ async fn back_returns_to_where_you_left_not_where_you_went_back_to() {
     app.selected_index = Some(1); // j to B
     app.record_location(); // jump away from B
     app.current_service = Some(ServiceType::Lambda);
-    assert_eq!(app.nav_back_hint().as_deref(), Some("EC2 i-b"));
+    assert_eq!(back_id(&app).as_deref(), Some("i-b"));
     assert_eq!(app.nav_history.len(), 1);
 }
 
@@ -262,10 +263,10 @@ async fn a_same_service_filter_is_still_recorded() {
     assert_eq!(app.nav_history[0].query, "@all web", "@all results are a place to come back to");
 }
 
-/// ⌫ goes back from the detail pane too (it used to be list-only, while the
-/// footer hint named it), and the hint is a click target that does the same.
+/// ⌫ goes back from the detail pane too (it used to be list-only), and so
+/// does a click on the strip's `←` while the detail pane has focus.
 #[tokio::test]
-async fn back_hint_key_and_click_both_go_back_from_the_detail_pane() {
+async fn back_key_and_arrow_both_go_back_from_the_detail_pane() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let (mut app, tx, _rx) = test_app().await;
     ec2_rows(&mut app, &["i-a", "i-b"]);
@@ -287,12 +288,12 @@ async fn back_hint_key_and_click_both_go_back_from_the_detail_pane() {
         .click_regions
         .borrow()
         .iter()
-        .find(|r| matches!(r.action, ClickAction::Press(KeyCode::Backspace)))
-        .expect("the back hint is clickable")
+        .find(|r| matches!(r.action, ClickAction::Back))
+        .expect("the strip's ← is clickable")
         .rect;
     let row = screen.lines().nth(rect.y as usize).unwrap();
     let covered: String = row.chars().skip(rect.x as usize).take(rect.width as usize).collect();
-    assert_eq!(covered, "⌫ back to EC2 i-a", "region sits exactly on the hint");
+    assert_eq!(covered, " ← ", "region sits exactly on the arrow");
 
     let ev = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -340,17 +341,17 @@ async fn forward_returns_to_where_back_left() {
     app.record_location(); // jump away from A …
     app.selected_index = Some(1); // … landing on B
     app.details_focused = true;
-    assert_eq!(app.nav_forward_hint(), None, "live: nothing ahead");
+    assert_eq!(forward_id(&app), None, "live: nothing ahead");
 
     press(&mut app, &tx, KeyCode::Backspace).await;
     assert_eq!(landed_on(&app).as_deref(), Some("i-a"));
-    assert_eq!(app.nav_forward_hint().as_deref(), Some("EC2 i-b"));
-    assert_eq!(app.nav_back_hint(), None, "A is the oldest");
+    assert_eq!(forward_id(&app).as_deref(), Some("i-b"));
+    assert_eq!(back_id(&app), None, "A is the oldest");
 
     app.handle_event(Event::Key(ctrl('f')), &tx).await.unwrap();
     assert_eq!(landed_on(&app).as_deref(), Some("i-b"));
-    assert_eq!(app.nav_forward_hint(), None, "B is the newest");
-    assert_eq!(app.nav_back_hint().as_deref(), Some("EC2 i-a"));
+    assert_eq!(forward_id(&app), None, "B is the newest");
+    assert_eq!(back_id(&app).as_deref(), Some("i-a"));
     assert_eq!(app.nav_history.len(), 2, "back and forth adds no entries");
 }
 
@@ -365,7 +366,7 @@ async fn a_new_jump_after_going_back_drops_forward() {
     app.pending_jump = None;
     app.selected_index = Some(2); // move to C, then jump away
     app.record_location();
-    assert_eq!(app.nav_forward_hint(), None);
+    assert_eq!(forward_id(&app), None);
     let ids: Vec<_> = app.nav_history.iter().map(|l| l.selected_id.clone().unwrap()).collect();
     assert_eq!(ids, vec!["i-c"], "A was replaced by where we left from; B dropped");
 }
@@ -398,33 +399,43 @@ async fn ctrl_f_is_forward_even_where_f_means_something() {
     assert_eq!(app.nav_cursor, Some(1));
 }
 
-/// The forward hint is a click target too.
+/// The service strip's `←` / `→` are back and forward for the mouse; a
+/// dim arrow does nothing.
 #[tokio::test]
-async fn forward_hint_is_clickable() {
+async fn the_strip_arrows_go_back_and_forward() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let (mut app, tx, _rx) = test_app().await;
     ec2_rows(&mut app, &["i-a", "i-b"]);
-    app.record_location();
-    app.selected_index = Some(1);
-    press(&mut app, &tx, KeyCode::Backspace).await;
-    app.details_focused = true;
-    let screen = draw(&app);
-    let rect = app
-        .click_regions
-        .borrow()
-        .iter()
-        .find(|r| matches!(r.action, ClickAction::NavForward))
-        .expect("the forward hint is clickable")
-        .rect;
-    let row = screen.lines().nth(rect.y as usize).unwrap();
-    let covered: String = row.chars().skip(rect.x as usize).take(rect.width as usize).collect();
-    assert_eq!(covered, "⌃F forward to EC2 i-b");
-    let ev = MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: rect.x + 1,
-        row: rect.y,
-        modifiers: KeyModifiers::NONE,
+    let region = |app: &App, back: bool| {
+        draw(app);
+        app.click_regions
+            .borrow()
+            .iter()
+            .find(|r| matches!(r.action, ClickAction::Back if back) || matches!(r.action, ClickAction::Forward if !back))
+            .expect("the strip draws both arrows")
+            .rect
     };
-    app.handle_event(Event::Mouse(ev), &tx).await.unwrap();
+    let click = |rect: ratatui::layout::Rect| {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+    let screen = draw(&app);
+    let strip = screen.lines().find(|l| l.contains(" ←  → │")).expect("arrows on the strip");
+    assert!(strip.starts_with(" ←  → │"), "arrows lead the strip: {strip}");
+
+    // Nothing behind: a click does nothing, and says nothing.
+    app.handle_event(click(region(&app, true)), &tx).await.unwrap();
+    assert_eq!(landed_on(&app).as_deref(), Some("i-a"));
+    assert_eq!(app.error_message, None);
+
+    app.record_location(); // jump away from A …
+    app.selected_index = Some(1); // … landing on B
+    app.handle_event(click(region(&app, true)), &tx).await.unwrap();
+    assert_eq!(landed_on(&app).as_deref(), Some("i-a"));
+    app.handle_event(click(region(&app, false)), &tx).await.unwrap();
     assert_eq!(landed_on(&app).as_deref(), Some("i-b"));
 }
