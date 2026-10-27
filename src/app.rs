@@ -23178,6 +23178,7 @@ impl App {
             || self.is_selected_kinesis()
             || self.is_selected_firehose()
             || self.is_selected_cf_distribution()
+            || self.get_selected_resource().is_some_and(|r| r.as_any().is::<crate::aws::services::cloudfront::CfFunction>())
             || self.is_selected_sqs_queue()
             || self.is_selected_sns_topic()
             || self.is_selected_sfn_state_machine()
@@ -30875,6 +30876,17 @@ impl App {
         &self,
         event_tx: &mpsc::UnboundedSender<Event>,
     ) -> bool {
+        self.trigger_waf_samples(None, None, event_tx)
+    }
+
+    /// Sampled requests into the editor: one rule's (its metric name) or the
+    /// default action's, over `window` clipped to the three hours AWS keeps.
+    fn trigger_waf_samples(
+        &self,
+        rule: Option<String>,
+        window: Option<(i64, i64)>,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> bool {
         if let Some(acl) = self.get_selected_resource().and_then(|r| {
             r.as_any()
                 .downcast_ref::<crate::aws::services::waf::WafWebAcl>()
@@ -30889,7 +30901,7 @@ impl App {
             let tx = event_tx.clone();
             tokio::spawn(async move {
                 match crate::aws::services::waf::fetch_sampled_requests(
-                    client, arn, name.clone(), id, scope,
+                    client, arn, name.clone(), id, scope, rule, window,
                 )
                 .await
                 {
@@ -32161,6 +32173,13 @@ impl App {
                 }),
                 ..target("CloudFront distribution", "AWS/CloudFront", dims, m::CLOUDFRONT_DISTRIBUTION)
             }
+        } else if let Some(f) = is!(s::cloudfront::CfFunction) {
+            let dims = vec![("FunctionName".to_string(), f.name.clone()), ("Region".to_string(), "Global".to_string())];
+            MetricTarget {
+                home: Some("us-east-1"),
+                hint: Some("Nothing published in the window; a function publishes only once a distribution runs it"),
+                ..target("CloudFront function", "AWS/CloudFront", dims, m::CLOUDFRONT_FUNCTION)
+            }
         } else if let Some(acl) = is!(s::waf::WafWebAcl) {
             // `WebACL` starts as the name; `Resolve` swaps in whichever value
             // CloudWatch has series for before the first fetch.
@@ -32462,6 +32481,21 @@ impl App {
                     None if st.table_rows() > 0 => Some(0),
                     None => None,
                 };
+            }
+            // A web ACL's sampled requests for the rule in view, over the
+            // chart's window (AWS keeps three hours), into the editor.
+            KeyCode::Char('x') if st.target.breakdown.is_some() => {
+                // Before the first answer there is no window yet: all three hours.
+                let window = (st.end > 0).then(|| (st.end - st.range.duration_secs(), st.end));
+                match st.sample_rule() {
+                    Ok(rule) => {
+                        let what = rule.clone().unwrap_or_else(|| "the default action".to_string());
+                        if self.trigger_waf_samples(rule, window, event_tx) {
+                            self.success_message = Some(format!("Sampling requests for {what}…"));
+                        }
+                    }
+                    Err(e) => self.error_message = Some(e.to_string()),
+                }
             }
             // In the tables, `y` copies the row's whole name.
             KeyCode::Char('y') if st.table_cursor.is_some() => {

@@ -292,6 +292,18 @@ async fn enter_on_a_rule_charts_its_own_actions() {
     assert!(dims.contains(&("LabelName".into(), "http_library".into())), "{dims:?}");
     assert!(!dims.iter().any(|(n, _)| n == "Rule"), "{dims:?}");
 
+    // `x` on a label: sampled requests are per rule, so it says so.
+    app.error_message = None;
+    press(&mut app, &tx, KeyCode::Char('x')).await;
+    assert!(app.error_message.as_deref().is_some_and(|e| e.contains("per rule")), "{:?}", app.error_message);
+    // On a rule it samples that rule; Default_Action is the ACL's default.
+    press(&mut app, &tx, KeyCode::Char('k')).await;
+    press(&mut app, &tx, KeyCode::Char('x')).await;
+    assert_eq!(app.success_message.as_deref(), Some("Sampling requests for RateLimit-per-IP…"));
+    press(&mut app, &tx, KeyCode::Char('g')).await;
+    press(&mut app, &tx, KeyCode::Char('x')).await;
+    assert_eq!(app.success_message.as_deref(), Some("Sampling requests for the default action…"));
+
     // Esc leaves the tables, not the view; `d` is the ACL's set again.
     press(&mut app, &tx, KeyCode::Esc).await;
     assert_eq!(app.metrics_in_pane, Some(MetricsKind::Spec));
@@ -342,6 +354,27 @@ async fn a_distribution_charts_its_web_acl_s_blocks_beside_its_requests() {
     classic.web_acl_id = "a1b2c3d4-classic".to_string();
     select_mock(&mut app, ServiceType::CloudFront, Box::new(classic));
     assert!(app.selected_metric_target().unwrap().extra.is_empty(), "WAF Classic isn't WAFV2");
+}
+
+/// A CloudFront Function charts in us-east-1 keyed `FunctionName` +
+/// `Region=Global`, its two kinds of error on one chart.
+#[tokio::test]
+async fn a_cloudfront_function_charts_its_invocations_and_errors() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let f = all_mocks().into_iter().find(|(_, l, _)| *l == "CfFunction").unwrap().2;
+    let name = f.name().to_string();
+    select_mock(&mut app, ServiceType::CloudFront, f);
+    assert!(app.supports_metrics_overlay(), "the status bar offers m");
+    let t = app.selected_metric_target().unwrap();
+    assert_eq!(t.dimensions, [("FunctionName".to_string(), name), ("Region".to_string(), "Global".to_string())]);
+    assert_eq!(t.home, Some("us-east-1"));
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    let labels: Vec<&str> = st.series.iter().map(|s| s.query.label.as_str()).collect();
+    assert_eq!(labels, ["Invocations", "Execution errors", "Validation errors", "Throttles", "Compute"]);
+    assert!(st.series.iter().all(|s| s.error.is_none() && !s.points.is_empty()));
 }
 
 /// `5` reaches back 30 days (a stopped instance's last week of data), the

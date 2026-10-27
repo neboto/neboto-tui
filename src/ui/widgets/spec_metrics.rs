@@ -109,6 +109,19 @@ impl SpecMetricsState {
         Some((&self.tables()[n], r))
     }
 
+    /// What `x` samples: the cursor's rule, else the drilled one, else the
+    /// default action (`None`). `GetSampledRequests` is per rule, so a label
+    /// row is an error; labels are the only rows with a `:` (rule metric
+    /// names can't hold one).
+    pub fn sample_rule(&self) -> Result<Option<String>, &'static str> {
+        let name = self.cursor_row().map(|(t, r)| t.rows[r].0.clone()).or_else(|| self.drilled.clone());
+        match name {
+            Some(n) if n.contains(':') => Err("Sampled requests are per rule: pick a rule row, not a label"),
+            Some(n) if n == "Default_Action" => Ok(None),
+            other => Ok(other),
+        }
+    }
+
     /// `⏎` on a table row: chart that row's own series. The cursor stays,
     /// so the next `j` + `⏎` charts the next one.
     pub fn drill(&mut self) -> bool {
@@ -313,13 +326,18 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
         vec![("j/k", "select"), ("⏎", "chart it"), ("Esc", "back")]
     } else if st.table_cursor.is_some() {
         let back: &[(&str, &str)] = if st.curated { &[] } else { &[("d", "default set")] };
-        [&[("j/k", "select"), ("⏎", "chart it"), ("y", "copy name")][..], back, &[("Tab", "metrics"), ("Esc", "back")]].concat()
+        [&[("j/k", "select"), ("⏎", "chart it"), ("x", "samples"), ("y", "copy name")][..], back, &[("Tab", "metrics"), ("Esc", "back")]]
+            .concat()
     } else {
         // `d` only means something once a picked metric replaced the set.
         let back: &[(&str, &str)] = if st.curated { &[] } else { &[("d", "default set")] };
         let changes: &[(&str, &str)] =
             if app.metrics_supports_markers() { &[("c", "changes"), ("W", "timeline")] } else { &[] };
-        let tables: &[(&str, &str)] = if st.table_rows() > 0 { &[("Tab", "rules")] } else { &[] };
+        let tables: &[(&str, &str)] = match (st.table_rows() > 0, st.target.breakdown.is_some()) {
+            (true, _) => &[("Tab", "rules"), ("x", "samples")],
+            (false, true) => &[("x", "samples")],
+            _ => &[],
+        };
         [&[("[/]", "range"), ("s", "stat"), ("a", "all")][..], tables, back, changes, &[("y", "copy"), ("e", "edit"), ("Esc", "close")]]
             .concat()
     };

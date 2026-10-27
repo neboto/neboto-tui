@@ -707,6 +707,16 @@ mod traffic_tests {
     }
 
     #[test]
+    fn samples_never_reach_past_three_hours() {
+        let now = 100_000;
+        assert_eq!(clip_sample_window(None, now), (now - SAMPLE_WINDOW_SECS, now));
+        // A 24h chart: only its last three hours have samples.
+        assert_eq!(clip_sample_window(Some((now - 86_400, now)), now), (now - SAMPLE_WINDOW_SECS, now));
+        // A 1h chart keeps its hour.
+        assert_eq!(clip_sample_window(Some((now - 3_600, now)), now), (now - 3_600, now));
+    }
+
+    #[test]
     fn counted_requests_are_never_part_of_a_percentage() {
         let t = WafTraffic {
             totals: WafRuleTraffic { name: "ALL".into(), allowed: 90.0, blocked: 10.0, counted: 50.0, ..Default::default() },
@@ -729,36 +739,50 @@ mod traffic_tests {
 
 // ── Sampled Requests ──────────────────────────────────────────────────────────
 
+/// How far back `GetSampledRequests` reaches: AWS keeps samples for three
+/// hours, whatever window is asked for.
+pub const SAMPLE_WINDOW_SECS: i64 = 3 * 3600;
+
+/// What to sample: one rule (its metric name, as the `Rule` dimension and
+/// the metrics view's rule rows carry it), or the ACL's default action.
+/// `window` is `(start, end)` epoch seconds, clipped to the last three
+/// hours; `None` is all three.
 pub async fn fetch_sampled_requests(
     client: WafClient,
     web_acl_arn: String,
     web_acl_name: String,
     web_acl_id: String,
     scope: WafScope,
+    rule: Option<String>,
+    window: Option<(i64, i64)>,
 ) -> Result<String> {
     use aws_sdk_wafv2::primitives::DateTime as WafDateTime;
 
-    // First, get the Web ACL's metric name via GetWebACL
-    let acl_resp = client
-        .get_web_acl()
-        .name(&web_acl_name)
-        .id(&web_acl_id)
-        .scope(scope.sdk_scope())
-        .send()
-        .await
-        .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
-
-    let metric_name = acl_resp
-        .web_acl()
-        .and_then(|acl| acl.visibility_config())
-        .map(|vc| vc.metric_name().to_string())
-        .unwrap_or_else(|| web_acl_name.clone());
+    // The default action is sampled under the ACL's own metric name.
+    let metric_name = match &rule {
+        Some(r) => r.clone(),
+        None => {
+            let acl_resp = client
+                .get_web_acl()
+                .name(&web_acl_name)
+                .id(&web_acl_id)
+                .scope(scope.sdk_scope())
+                .send()
+                .await
+                .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+            acl_resp
+                .web_acl()
+                .and_then(|acl| acl.visibility_config())
+                .map(|vc| vc.metric_name().to_string())
+                .unwrap_or_else(|| web_acl_name.clone())
+        }
+    };
 
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    let start_secs = now_secs - 3 * 3600; // last 3 hours
+    let (start_secs, now_secs) = clip_sample_window(window, now_secs);
 
     let time_window = aws_sdk_wafv2::types::TimeWindow::builder()
         .start_time(WafDateTime::from_secs(start_secs))
@@ -781,7 +805,15 @@ pub async fn fetch_sampled_requests(
     let total = resp.population_size();
     let samples = resp.sampled_requests();
 
-    lines.push("WAF Sampled Requests (last 3 hours)".to_string());
+    let what = match &rule {
+        Some(r) => format!("rule {r}"),
+        None => "default action".to_string(),
+    };
+    let span = match window {
+        None => "last 3 hours".to_string(),
+        Some(_) => format!("last {} min", (now_secs - start_secs + 59) / 60),
+    };
+    lines.push(format!("WAF Sampled Requests — {what} — {span} (AWS keeps 3 hours of samples)"));
     lines.push(format!("Total population: {}  |  Samples shown: {}", total, samples.len()));
     lines.push(String::new());
     lines.push(format!(
@@ -860,10 +892,23 @@ pub async fn fetch_sampled_requests(
     }
 
     if samples.is_empty() {
-        lines.push("  No sampled requests in the last 3 hours.".to_string());
+        lines.push(format!("  No sampled requests for the {what} in the {span}."));
     }
 
     Ok(lines.join("\n"))
+}
+
+/// `window` clipped to what AWS still holds: never before three hours ago,
+/// never after now, and at least a minute long.
+fn clip_sample_window(window: Option<(i64, i64)>, now: i64) -> (i64, i64) {
+    let floor = now - SAMPLE_WINDOW_SECS;
+    match window {
+        None => (floor, now),
+        Some((start, end)) => {
+            let end = end.min(now);
+            (start.max(floor).min(end - 60), end)
+        }
+    }
 }
 
 // ── Log-tail resolution (`t` on a web ACL) ────────────────────────────────────
