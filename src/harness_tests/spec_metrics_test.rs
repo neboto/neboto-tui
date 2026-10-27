@@ -230,9 +230,10 @@ async fn a_web_acl_charts_its_actions_with_the_rule_tables_beside() {
     settle(&mut app, &tx, &mut rx).await;
     let st = app.spec_metrics.as_ref().unwrap();
     let labels: Vec<&str> = st.series.iter().map(|s| s.query.label.as_str()).collect();
-    assert_eq!(labels, ["Allowed", "Blocked", "Counted", "CAPTCHA", "Challenge"]);
-    assert!(st.series.iter().all(|s| s.query.group.as_deref() == Some("actions")), "one chart");
-    assert!(st.series.iter().all(|s| s.error.is_none()), "the series chart");
+    assert_eq!(labels, ["Allowed", "Blocked", "Counted", "CAPTCHA", "Challenge", "Block rate"]);
+    assert!(st.series[..5].iter().all(|s| s.query.group.as_deref() == Some("actions")), "one chart");
+    assert!(st.series[5].query.expression.is_some(), "the rate is metric math");
+    assert!(st.series.iter().all(|s| s.error.is_none() && !s.points.is_empty()), "the series chart");
     assert!(st.breakdown.is_some(), "the breakdown came back with them");
 
     press(&mut app, &tx, KeyCode::Char('Z')).await;
@@ -240,6 +241,65 @@ async fn a_web_acl_charts_its_actions_with_the_rule_tables_beside() {
     assert!(screen.contains("Metrics — Web ACL · mock-web-acl"), "{screen}");
     assert!(screen.contains("Totals · last 1h"), "{screen}");
     assert!(screen.contains("WebACL=mock-web-acl, Rule=ALL"), "the looked-up dimension is shown: {screen}");
+}
+
+/// `Tab` into the totals panel, `j` to a rule and `⏎` charts that rule's
+/// own actions (`Rule=<name>`, the ACL's WebACL and Region kept); `d`
+/// goes back to the ACL's set. A label row charts with its namespace and
+/// name.
+#[tokio::test]
+async fn enter_on_a_rule_charts_its_own_actions() {
+    use crate::aws::services::waf::{WafRuleTraffic, WafTraffic};
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let acl = all_mocks().into_iter().find(|(_, l, _)| *l == "WafWebAcl").unwrap().2;
+    select_mock(&mut app, ServiceType::Waf, acl.clone_box());
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    // The demo has no SEARCH answers, so the tables are put in by hand.
+    let region = app.aws_clients.current_region().to_string();
+    let base = vec![("WebACL".to_string(), "mock-web-acl".to_string()), ("Region".to_string(), region.clone())];
+    let row = |name: &str, blocked: f64| WafRuleTraffic { name: name.into(), blocked, ..Default::default() };
+    let traffic = WafTraffic {
+        totals: Default::default(),
+        rules: vec![row("Default_Action", 900.0), row("RateLimit-per-IP", 40.0)],
+        labels: vec![row("awswaf:managed:aws:bot-control:bot:category:http_library", 5.0)],
+    };
+    app.spec_metrics.as_mut().unwrap().breakdown =
+        Some(Ok(crate::aws::metrics::BreakdownData { summary: traffic.summary(), tables: traffic.tables(&base) }));
+
+    press(&mut app, &tx, KeyCode::Tab).await;
+    press(&mut app, &tx, KeyCode::Char('j')).await;
+    assert_eq!(app.spec_metrics.as_ref().unwrap().table_cursor, Some(1));
+    press(&mut app, &tx, KeyCode::Enter).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert_eq!(st.drilled.as_deref(), Some("RateLimit-per-IP"));
+    assert_eq!(st.series.len(), 5, "the actions, no rate");
+    let dims: Vec<String> = st.series[0].query.dimensions.iter().map(|(n, v)| format!("{n}={v}")).collect();
+    assert_eq!(dims, ["WebACL=mock-web-acl".to_string(), format!("Region={region}"), "Rule=RateLimit-per-IP".into()]);
+    assert!(st.series.iter().all(|s| s.error.is_none() && !s.points.is_empty()));
+    let screen = screen_of(&app);
+    assert!(screen.contains("▸ RateLimit-per-IP"), "the range line names it: {screen}");
+
+    // The label below the two rules: namespace and name split back apart.
+    press(&mut app, &tx, KeyCode::Char('j')).await;
+    press(&mut app, &tx, KeyCode::Enter).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    let dims = &st.series[0].query.dimensions;
+    assert!(dims.contains(&("LabelNamespace".into(), "awswaf:managed:aws:bot-control:bot:category".into())), "{dims:?}");
+    assert!(dims.contains(&("LabelName".into(), "http_library".into())), "{dims:?}");
+    assert!(!dims.iter().any(|(n, _)| n == "Rule"), "{dims:?}");
+
+    // Esc leaves the tables, not the view; `d` is the ACL's set again.
+    press(&mut app, &tx, KeyCode::Esc).await;
+    assert_eq!(app.metrics_in_pane, Some(MetricsKind::Spec));
+    assert_eq!(app.spec_metrics.as_ref().unwrap().table_cursor, None);
+    press(&mut app, &tx, KeyCode::Char('d')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert_eq!((st.series.len(), st.drilled.as_deref()), (6, None));
 }
 
 /// `5` reaches back 30 days (a stopped instance's last week of data), the

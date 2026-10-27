@@ -423,17 +423,42 @@ impl WafTraffic {
     }
 
     /// The rule and label tables, as the metrics view and the Traffic
-    /// section both draw them.
-    pub fn tables(&self) -> Vec<crate::aws::metrics::BreakdownTable> {
-        let table = |title: &str, rows: &[WafRuleTraffic]| crate::aws::metrics::BreakdownTable {
-            title: title.to_string(),
-            columns: &WAF_ACTIONS,
-            rows: rows.iter().map(|r| (r.name.clone(), r.values().to_vec())).collect(),
+    /// section both draw them. With the ACL's `WebACL` (+ `Region`) as
+    /// `base`, each row can chart its own actions (`⏎` in the view); the
+    /// Traffic section passes none.
+    pub fn tables(&self, base: &[(String, String)]) -> Vec<crate::aws::metrics::BreakdownTable> {
+        use crate::aws::metrics::{BreakdownTable, Drill, WAF_RULE};
+        let with = |extra: Vec<(String, String)>| -> Vec<(String, String)> {
+            let mut d = base.to_vec();
+            d.extend(extra);
+            d
         };
-        let mut out = vec![table("Requests by rule", &self.rules)];
+        let table = |title: &str, rows: &[WafRuleTraffic], dims: &dyn Fn(&str) -> Option<Vec<(String, String)>>| {
+            let drill_dims: Option<Vec<_>> = rows.iter().map(|r| dims(&r.name)).collect();
+            BreakdownTable {
+                title: title.to_string(),
+                columns: &WAF_ACTIONS,
+                rows: rows.iter().map(|r| (r.name.clone(), r.values().to_vec())).collect(),
+                drill: drill_dims.filter(|_| !base.is_empty()).map(|dimensions| Drill {
+                    namespace: "AWS/WAFV2",
+                    specs: WAF_RULE,
+                    dimensions,
+                }),
+            }
+        };
+        let rule = |name: &str| Some(with(vec![("Rule".to_string(), name.to_string())]));
+        // `namespace:name`, split back at the last colon.
+        let label = |full: &str| {
+            let (ns, name) = full.rsplit_once(':')?;
+            Some(with(vec![
+                ("LabelNamespace".to_string(), ns.to_string()),
+                ("LabelName".to_string(), name.to_string()),
+            ]))
+        };
+        let mut out = vec![table("Requests by rule", &self.rules, &rule)];
         // Absent unless a label fired (bot categories, attack signals).
         if !self.labels.is_empty() {
-            out.push(table("Requests by label", &self.labels));
+            out.push(table("Requests by label", &self.labels, &label));
         }
         out
     }
@@ -616,7 +641,8 @@ pub async fn fetch_traffic(
             aws_sdk_cloudwatch::types::MetricDataQuery::builder()
                 .id(format!("l{}", i))
                 .expression(label_expr)
-                .label("${PROP('Dim.LabelName')}")
+                // The whole label: names repeat across namespaces.
+                .label("${PROP('Dim.LabelNamespace')}:${PROP('Dim.LabelName')}")
                 .build(),
         );
     }

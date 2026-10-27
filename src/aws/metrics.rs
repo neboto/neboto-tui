@@ -75,6 +75,15 @@ pub enum Unit {
     Raw,
 }
 
+/// What a series means, when its colour should say so: a block is bad
+/// whatever the palette's order. Mapped to theme colours by the renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Good,
+    Bad,
+    Warn,
+}
+
 /// One curated metric of a kind.
 #[derive(Debug, Clone, Copy)]
 pub struct MetricSpec {
@@ -93,10 +102,19 @@ pub struct MetricSpec {
     /// Published only for a period that has a non-zero value (WAF's
     /// counts): a missing period is a zero, and is charted as one.
     pub sparse: bool,
+    pub tone: Option<Tone>,
+    /// Metric math over the set's other metrics in place of a metric of
+    /// its own: `{MetricName}` stands for that metric's series.
+    pub expr: Option<&'static str>,
 }
 
 const fn m(metric: &'static str, label: &'static str, stat: Stat, unit: Unit) -> MetricSpec {
-    MetricSpec { metric, label, stat, unit, rate: false, group: None, namespace: None, sparse: false }
+    MetricSpec { metric, label, stat, unit, rate: false, group: None, namespace: None, sparse: false, tone: None, expr: None }
+}
+
+/// A row computed from the set's other rows (see [`MetricSpec::expr`]).
+const fn e(label: &'static str, expr: &'static str, unit: Unit) -> MetricSpec {
+    MetricSpec { expr: Some(expr), ..m("", label, Stat::Sum, unit) }
 }
 
 impl MetricSpec {
@@ -114,6 +132,10 @@ impl MetricSpec {
 
     const fn sparse(self) -> Self {
         MetricSpec { sparse: true, ..self }
+    }
+
+    const fn tone(self, tone: Tone) -> Self {
+        MetricSpec { tone: Some(tone), ..self }
     }
 }
 
@@ -376,15 +398,29 @@ pub const CLOUDFRONT_DISTRIBUTION: &[MetricSpec] = &[
 ];
 
 /// `WebACL` + `Rule=ALL` (+ `Region` for REGIONAL ACLs): every action on
-/// one chart, so the split between them reads at a glance. WAF publishes a
-/// minute only when it had requests, hence `sparse`.
+/// one chart, so the split between them reads at a glance, then the share
+/// blocked. WAF publishes a minute only when it had requests, hence
+/// `sparse` and the `FILL`s. Count doesn't end a request, so it isn't part
+/// of the rate's denominator (`WafTraffic::requests` says the same).
 pub const WAF_WEB_ACL: &[MetricSpec] = &[
-    m("AllowedRequests", "Allowed", Sum, Unit::Count).group("actions").sparse(),
-    m("BlockedRequests", "Blocked", Sum, Unit::Count).group("actions").sparse(),
-    m("CountedRequests", "Counted", Sum, Unit::Count).group("actions").sparse(),
+    m("AllowedRequests", "Allowed", Sum, Unit::Count).group("actions").sparse().tone(Tone::Good),
+    m("BlockedRequests", "Blocked", Sum, Unit::Count).group("actions").sparse().tone(Tone::Bad),
+    m("CountedRequests", "Counted", Sum, Unit::Count).group("actions").sparse().tone(Tone::Warn),
     m("CaptchaRequests", "CAPTCHA", Sum, Unit::Count).group("actions").sparse(),
     m("ChallengeRequests", "Challenge", Sum, Unit::Count).group("actions").sparse(),
+    e(
+        "Block rate",
+        "IF(FILL({AllowedRequests},0)+FILL({BlockedRequests},0)+FILL({CaptchaRequests},0)+FILL({ChallengeRequests},0) > 0, \
+         100*FILL({BlockedRequests},0)/(FILL({AllowedRequests},0)+FILL({BlockedRequests},0)+FILL({CaptchaRequests},0)+FILL({ChallengeRequests},0)), 0)",
+        Unit::Percent,
+    )
+    .tone(Tone::Bad),
 ];
+
+/// One rule's or label's actions over time (`⏎` on a breakdown row): the
+/// web ACL's actions, without the rate (a rule's own block rate is 100% or
+/// nothing).
+pub const WAF_RULE: &[MetricSpec] = WAF_WEB_ACL.split_at(5).0;
 
 pub const R53_HEALTH_CHECK: &[MetricSpec] = &[
     m("HealthCheckStatus", "Status (1 = healthy)", Min, Unit::Raw),
@@ -625,7 +661,10 @@ impl Breakdown {
                     range.period_secs(),
                 )
                 .await?;
-                Ok(BreakdownData { summary: traffic.summary(), tables: traffic.tables() })
+                // A row charts against the ACL's own WebACL and Region.
+                let base: Vec<(String, String)> =
+                    dimensions.iter().filter(|(n, _)| n == "WebACL" || n == "Region").cloned().collect();
+                Ok(BreakdownData { summary: traffic.summary(), tables: traffic.tables(&base) })
             }
         }
     }
@@ -643,7 +682,7 @@ impl BreakdownFix {
 
 /// A breakdown's answer: a one-line summary of the whole (`None` when there
 /// is nothing to sum), then its tables.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct BreakdownData {
     pub summary: Option<String>,
     pub tables: Vec<BreakdownTable>,
@@ -651,11 +690,29 @@ pub struct BreakdownData {
 
 /// Range totals per dimension value: one row per value, one column per
 /// metric, rows sorted by their total.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct BreakdownTable {
     pub title: String,
     pub columns: &'static [&'static str],
     pub rows: Vec<(String, Vec<f64>)>,
+    /// How `⏎` charts a row over time, when it can.
+    pub drill: Option<Drill>,
+}
+
+/// A breakdown row's own series: `specs` against that row's dimensions.
+#[derive(Debug, Clone)]
+pub struct Drill {
+    pub namespace: &'static str,
+    pub specs: &'static [MetricSpec],
+    /// One set per row, in `rows` order.
+    pub dimensions: Vec<Vec<(String, String)>>,
+}
+
+impl Drill {
+    pub fn queries(&self, row: usize) -> Option<Vec<MetricQuery>> {
+        let dims = self.dimensions.get(row)?;
+        Some(self.specs.iter().map(|s| MetricQuery::from_spec(s, self.namespace, dims.clone())).collect())
+    }
 }
 
 impl BreakdownTable {
@@ -669,16 +726,22 @@ impl BreakdownTable {
     /// name, then `Total`, then each live column. Columns go from the right
     /// before the name gets narrower than 16.
     pub fn text(&self, width: usize, max_rows: usize) -> (String, Vec<String>) {
-        self.text_capped(width, max_rows, 40)
+        self.text_window(width, 0, max_rows)
+    }
+
+    /// As [`text`](Self::text), from row `skip` on: the panel scrolled to
+    /// its cursor. The layout is the whole table's, so it holds still.
+    pub fn text_window(&self, width: usize, skip: usize, max_rows: usize) -> (String, Vec<String>) {
+        self.text_capped(width, skip, max_rows, 40)
     }
 
     /// Every row with every live column and each name in full: the `e`
     /// view, where names are copied out to the console or Terraform.
     pub fn full_text(&self) -> (String, Vec<String>) {
-        self.text_capped(usize::MAX, usize::MAX, usize::MAX)
+        self.text_capped(usize::MAX, 0, usize::MAX, usize::MAX)
     }
 
-    fn text_capped(&self, width: usize, max_rows: usize, name_cap: usize) -> (String, Vec<String>) {
+    fn text_capped(&self, width: usize, skip: usize, max_rows: usize, name_cap: usize) -> (String, Vec<String>) {
         const NUM_W: usize = 8;
         const NAME_MIN: usize = 16;
         let mut cols = self.live_columns();
@@ -708,6 +771,7 @@ impl BreakdownTable {
         let rows = self
             .rows
             .iter()
+            .skip(skip)
             .take(max_rows)
             .map(|(name, vals)| {
                 let total: f64 = vals.iter().sum();
@@ -739,17 +803,7 @@ impl MetricTarget {
     pub fn curated_queries(&self) -> Vec<MetricQuery> {
         self.specs
             .iter()
-            .map(|s| MetricQuery {
-                namespace: s.namespace.map_or_else(|| self.namespace.clone(), str::to_string),
-                metric: s.metric.to_string(),
-                dimensions: self.dimensions.clone(),
-                label: s.label.to_string(),
-                stat: s.stat,
-                unit: s.unit,
-                rate: s.rate,
-                group: s.group.map(str::to_string),
-                sparse: s.sparse,
-            })
+            .map(|s| MetricQuery::from_spec(s, &self.namespace, self.dimensions.clone()))
             .chain(self.extra.iter().cloned())
             .collect()
     }
@@ -769,6 +823,37 @@ pub struct MetricQuery {
     pub group: Option<String>,
     /// See [`MetricSpec::sparse`].
     pub sparse: bool,
+    pub tone: Option<Tone>,
+    /// See [`MetricSpec::expr`]: metric math, `{MetricName}` placeholders
+    /// and all; `metric` is then empty.
+    pub expression: Option<String>,
+}
+
+impl MetricQuery {
+    /// `sum BlockedRequests`, or `expression`: what a row is, after its label.
+    pub fn describe(&self) -> String {
+        match &self.expression {
+            Some(_) => "expression".to_string(),
+            None => format!("{} {}", self.stat.short(), self.metric),
+        }
+    }
+
+    /// One spec resolved against a set of dimensions.
+    pub fn from_spec(s: &MetricSpec, namespace: &str, dimensions: Vec<(String, String)>) -> Self {
+        MetricQuery {
+            namespace: s.namespace.unwrap_or(namespace).to_string(),
+            metric: s.metric.to_string(),
+            dimensions,
+            label: s.label.to_string(),
+            stat: s.stat,
+            unit: s.unit,
+            rate: s.rate,
+            group: s.group.map(str::to_string),
+            sparse: s.sparse,
+            tone: s.tone,
+            expression: s.expr.map(str::to_string),
+        }
+    }
 }
 
 /// One metric's answer: (epoch seconds, value) points oldest first, or why not.
@@ -803,7 +888,7 @@ impl MetricSeries {
     /// `y` copy and the `e` editor view.
     pub fn summary(&self) -> String {
         let q = &self.query;
-        let head = format!("{} ({} {})", q.label, q.stat.short(), q.metric);
+        let head = format!("{} ({})", q.label, q.describe());
         match (&self.error, self.stats()) {
             (Some(e), _) => format!("{head}  ! {e}"),
             (None, None) => format!("{head}  no data in the window"),
@@ -846,22 +931,31 @@ pub async fn fetch_series(
 ) -> Vec<MetricSeries> {
     let period = range.period_secs();
     let start = end - range.duration_secs();
-    let data_queries: Vec<MetricDataQuery> = queries
-        .iter()
-        .enumerate()
-        .map(|(i, q)| {
-            let metric = Metric::builder()
-                .namespace(&q.namespace)
-                .metric_name(&q.metric)
-                .set_dimensions(Some(dims(&q.dimensions)))
-                .build();
-            let stat = MetricStat::builder().metric(metric).period(period).stat(q.stat.api()).build();
-            MetricDataQuery::builder().id(format!("q{i}")).metric_stat(stat).build()
-        })
-        .collect();
+    let mut errors: Vec<Option<String>> = vec![Some("not in the response".to_string()); queries.len()];
+    let mut data_queries: Vec<MetricDataQuery> = Vec::new();
+    for (i, q) in queries.iter().enumerate() {
+        match &q.expression {
+            None => {
+                let metric = Metric::builder()
+                    .namespace(&q.namespace)
+                    .metric_name(&q.metric)
+                    .set_dimensions(Some(dims(&q.dimensions)))
+                    .build();
+                let stat = MetricStat::builder().metric(metric).period(period).stat(q.stat.api()).build();
+                data_queries.push(MetricDataQuery::builder().id(format!("q{i}")).metric_stat(stat).build());
+            }
+            // An expression naming a metric that isn't in the request would
+            // fail the whole call, so it's left out and says why.
+            Some(expr) => match resolve_expression(expr, queries) {
+                Ok(resolved) => {
+                    data_queries.push(MetricDataQuery::builder().id(format!("q{i}")).expression(resolved).build())
+                }
+                Err(e) => errors[i] = Some(e),
+            },
+        }
+    }
 
     let mut points: Vec<Vec<(i64, f64)>> = vec![Vec::new(); queries.len()];
-    let mut errors: Vec<Option<String>> = vec![Some("not in the response".to_string()); queries.len()];
     let mut token: Option<String> = None;
     loop {
         let resp = cw
@@ -919,6 +1013,27 @@ pub async fn fetch_series(
         .collect()
 }
 
+/// `{MetricName}` placeholders as the ids of the set's metrics of that
+/// name (`q0`, `q1`, …), or the name of one the set doesn't have.
+fn resolve_expression(expr: &str, queries: &[MetricQuery]) -> Result<String, String> {
+    let mut out = String::with_capacity(expr.len());
+    let mut rest = expr;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let close = after.find('}').ok_or_else(|| "unclosed { in the expression".to_string())?;
+        let name = &after[..close];
+        let i = queries
+            .iter()
+            .position(|q| q.expression.is_none() && q.metric == name)
+            .ok_or_else(|| format!("needs {name}, which isn't charted"))?;
+        out.push_str(&format!("q{i}"));
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
 /// How long CloudWatch can take to publish a period: a missing point this
 /// close to the window's end may be late, not zero.
 const PUBLISH_LAG_SECS: i64 = 180;
@@ -970,6 +1085,8 @@ impl MetricDefinition {
             rate: false,
             group: None,
             sparse: false,
+            tone: None,
+            expression: None,
         }
     }
 }
@@ -1113,7 +1230,32 @@ mod tests {
                 ("AWS-AWSManagedRulesCommonRuleSet".to_string(), vec![0.0, 1_500.0, 0.0]),
                 ("Default_Action".to_string(), vec![900.0, 0.0, 0.0]),
             ],
+            drill: None,
         }
+    }
+
+    #[test]
+    fn an_expression_names_the_set_s_metrics_by_id() {
+        let target = MetricTarget {
+            title: String::new(),
+            namespace: "AWS/WAFV2".into(),
+            dimensions: vec![("WebACL".into(), "a".into())],
+            specs: WAF_WEB_ACL,
+            home: None,
+            hint: None,
+            extra: Vec::new(),
+            breakdown: None,
+        };
+        let qs = target.curated_queries();
+        let rate = qs.iter().find(|q| q.label == "Block rate").unwrap();
+        let resolved = resolve_expression(rate.expression.as_deref().unwrap(), &qs).unwrap();
+        assert!(resolved.contains("FILL(q1,0)") && resolved.contains("FILL(q0,0)"), "{resolved}");
+        assert!(!resolved.contains('{') && !resolved.contains("FILL(q2"), "Count isn't in the rate: {resolved}");
+        let only_blocked: Vec<MetricQuery> = qs.iter().filter(|q| q.metric != "AllowedRequests").cloned().collect();
+        let err = resolve_expression(rate.expression.as_deref().unwrap(), &only_blocked).unwrap_err();
+        assert_eq!(err, "needs AllowedRequests, which isn't charted");
+        assert_eq!(WAF_RULE.len(), 5);
+        assert!(WAF_RULE.iter().all(|s| s.expr.is_none()));
     }
 
     #[test]

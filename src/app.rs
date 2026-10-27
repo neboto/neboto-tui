@@ -4527,7 +4527,17 @@ impl App {
                     }
                     return Ok(());
                 }
-                // Esc (and `a`) step out of the spec view's metric picker first.
+                // Esc steps out of the spec view's breakdown tables first…
+                KeyCode::Esc
+                    if kind == MetricsKind::Spec
+                        && self.spec_metrics.as_ref().is_some_and(|m| m.picker.is_none() && m.table_cursor.is_some()) =>
+                {
+                    if let Some(m) = self.spec_metrics.as_mut() {
+                        m.table_cursor = None;
+                    }
+                    return Ok(());
+                }
+                // …and Esc (and `a`) out of its metric picker.
                 KeyCode::Esc | KeyCode::Char('a')
                     if kind == MetricsKind::Spec
                         && self.spec_metrics.as_ref().is_some_and(|m| m.picker.is_some()) =>
@@ -32186,6 +32196,8 @@ impl App {
                             rate: false,
                             group: Some(group.to_string()),
                             sparse: false,
+                            tone: None,
+                            expression: None,
                         })
                 })
                 .collect();
@@ -32256,6 +32268,8 @@ impl App {
                 rate: false,
                 group: None,
                 sparse: false,
+                tone: None,
+                expression: None,
             };
             MetricTarget {
                 extra: vec![query],
@@ -32298,6 +32312,7 @@ impl App {
         self.spec_metrics_range = st.range;
         let (mut queries, range) = (st.queries.clone(), st.range);
         let breakdown = st.target.breakdown.clone();
+        let want_tables = breakdown.is_some() && st.breakdown_for != Some(range);
         let mut dims = st.target.dimensions.clone();
         let cw = spec_metrics_client(&self.aws_clients, st.target.home);
         let epoch = self.lazy.epoch();
@@ -32312,8 +32327,8 @@ impl App {
             }
             let tables = async {
                 match &breakdown {
-                    Some(b) => Some(b.fetch(&cw, &dims, range, end).await),
-                    None => None,
+                    Some(b) if want_tables => Some(b.fetch(&cw, &dims, range, end).await),
+                    _ => None,
                 }
             };
             let (series, tables) =
@@ -32335,7 +32350,13 @@ impl App {
                             st.target.hint = f.hint;
                         }
                     }
-                    st.breakdown = tables;
+                    if want_tables {
+                        st.breakdown = tables;
+                        st.breakdown_for = Some(range);
+                    }
+                    // A refetch can bring fewer rows than the cursor was on.
+                    let rows = st.table_rows();
+                    st.table_cursor = st.table_cursor.filter(|_| rows > 0).map(|c| c.min(rows - 1));
                     st.set_series(end, series);
                 }
             });
@@ -32389,12 +32410,30 @@ impl App {
                     st.picker = None;
                     st.queries = vec![q];
                     st.curated = false;
+                    st.drilled = None;
                     st.series.clear();
                     st.selected = 0;
+                    self.fetch_spec_metrics(event_tx);
+                } else if st.table_cursor.is_some() && st.drill() {
+                    // A breakdown row: its own actions over time.
                     self.fetch_spec_metrics(event_tx);
                 }
             }
             _ if st.picker.is_some() => {}
+            // Into the breakdown tables and back out (Esc too, above).
+            KeyCode::Tab | KeyCode::BackTab => {
+                st.table_cursor = match st.table_cursor {
+                    Some(_) => None,
+                    None if st.table_rows() > 0 => Some(0),
+                    None => None,
+                };
+            }
+            // In the tables, `y` copies the row's whole name.
+            KeyCode::Char('y') if st.table_cursor.is_some() => {
+                if let Some(name) = st.cursor_row().map(|(t, r)| t.rows[r].0.clone()) {
+                    self.copy_to_clipboard(&name, "name");
+                }
+            }
             KeyCode::Char(']') => {
                 st.range = crate::aws::metrics::step_range(st.range, 1);
                 self.fetch_spec_metrics(event_tx);
@@ -32413,10 +32452,14 @@ impl App {
                     self.widen_chart_markers(event_tx);
                 }
             }
-            KeyCode::Char('r') => self.fetch_spec_metrics(event_tx),
+            KeyCode::Char('r') => {
+                st.breakdown_for = None;
+                self.fetch_spec_metrics(event_tx);
+            }
             KeyCode::Char('s') => {
                 let i = st.selected;
-                if let Some(q) = st.queries.get_mut(i) {
+                // An expression has no statistic of its own to cycle.
+                if let Some(q) = st.queries.get_mut(i).filter(|q| q.expression.is_none()) {
                     q.stat = q.stat.next();
                     self.fetch_spec_metrics(event_tx);
                 }
@@ -32425,6 +32468,7 @@ impl App {
             KeyCode::Char('d') if !st.curated => {
                 st.queries = st.target.curated_queries();
                 st.curated = true;
+                st.drilled = None;
                 st.series.clear();
                 st.selected = 0;
                 self.fetch_spec_metrics(event_tx);

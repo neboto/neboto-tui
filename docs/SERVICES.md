@@ -1608,7 +1608,15 @@ the service you're touching.
   publish Count matches inside managed rule groups to the web ACL, so a
   group in Count mode shows nothing in the tables. The label table's
   dimension is `LabelName` here; AWS's metrics page lists it as `Label`,
-  which is unverified either way. The web ACL pane's
+  which is unverified either way. Label rows are the whole label
+  (`${PROP('Dim.LabelNamespace')}:${PROP('Dim.LabelName')}`): by name alone,
+  two namespaces' `http_library` merged into one row. `⏎` on a row
+  charts it (`WAF_RULE`, the five actions: `Rule=<metric name>`, or
+  `LabelNamespace` + `LabelName` split back at the last colon, with the
+  ACL's `WebACL` and `Region`). The ACL's own set ends with a **Block
+  rate** row, metric math with every term `FILL`ed (sparse series) and
+  an `IF` for no traffic: blocked ÷ (allowed + blocked + CAPTCHA +
+  challenge), Count left out for the same reason as above. The web ACL pane's
   **Insights** section (key 6) is a lazy
   `fetch_waf_insights` (`lazy.waf_insights` keyed by ACL name): one
   `GetSampledRequests` per sampler — default action + rules by priority,

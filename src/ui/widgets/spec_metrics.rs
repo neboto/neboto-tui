@@ -46,6 +46,13 @@ pub struct SpecMetricsState {
     pub picker: Option<MetricPicker>,
     /// The target's breakdown tables for the range, once fetched.
     pub breakdown: Option<Result<BreakdownData, String>>,
+    /// The range `breakdown` is for: the tables don't change with the
+    /// charted set (`⏎`, `s`, `d`), so only a new range or `r` refetches.
+    pub breakdown_for: Option<MetricsTimeRange>,
+    /// `Tab` into the tables: the cursor, counting rows through every table.
+    pub table_cursor: Option<usize>,
+    /// The breakdown row charted in place of the set (`⏎` on it).
+    pub drilled: Option<String>,
 }
 
 impl SpecMetricsState {
@@ -62,7 +69,53 @@ impl SpecMetricsState {
             end: 0,
             picker: None,
             breakdown: None,
+            breakdown_for: None,
+            table_cursor: None,
+            drilled: None,
         }
+    }
+
+    fn tables(&self) -> &[crate::aws::metrics::BreakdownTable] {
+        match &self.breakdown {
+            Some(Ok(d)) => &d.tables,
+            _ => &[],
+        }
+    }
+
+    /// Rows across every table, the cursor's range.
+    pub fn table_rows(&self) -> usize {
+        self.tables().iter().map(|t| t.rows.len()).sum()
+    }
+
+    /// The cursor as (table index, row within it).
+    fn cursor_pos(&self) -> Option<(usize, usize)> {
+        let mut i = self.table_cursor?;
+        for (n, t) in self.tables().iter().enumerate() {
+            if i < t.rows.len() {
+                return Some((n, i));
+            }
+            i -= t.rows.len();
+        }
+        None
+    }
+
+    /// The cursor's table and row within it.
+    pub fn cursor_row(&self) -> Option<(&crate::aws::metrics::BreakdownTable, usize)> {
+        let (n, r) = self.cursor_pos()?;
+        Some((&self.tables()[n], r))
+    }
+
+    /// `⏎` on a table row: chart that row's own series. The cursor stays,
+    /// so the next `j` + `⏎` charts the next one.
+    pub fn drill(&mut self) -> bool {
+        let Some((t, r)) = self.cursor_row() else { return false };
+        let Some(queries) = t.drill.as_ref().and_then(|d| d.queries(r)) else { return false };
+        self.drilled = Some(t.rows[r].0.clone());
+        self.queries = queries;
+        self.curated = false;
+        self.series.clear();
+        self.selected = 0;
+        true
     }
 
     pub fn set_series(&mut self, end: i64, series: Vec<MetricSeries>) {
@@ -76,11 +129,14 @@ impl SpecMetricsState {
         self.series.get(self.selected)
     }
 
-    /// `j`/`k`: the picker's cursor while it is open, else the metric's.
+    /// `j`/`k`: the picker's cursor while it is open, the tables' while
+    /// they have focus, else the metric's.
     pub fn move_by(&mut self, delta: isize) {
-        let (cur, len) = match self.picker.as_mut() {
-            Some(p) => (&mut p.selected, p.defs.len()),
-            None => (&mut self.selected, self.series.len()),
+        let rows = self.table_rows();
+        let (cur, len) = match (self.picker.as_mut(), self.table_cursor.as_mut()) {
+            (Some(p), _) => (&mut p.selected, p.defs.len()),
+            (None, Some(c)) => (c, rows),
+            (None, None) => (&mut self.selected, self.series.len()),
         };
         let max = len.saturating_sub(1) as isize;
         *cur = (*cur as isize + delta).clamp(0, max.max(0)) as usize;
@@ -150,6 +206,18 @@ fn series_color(i: usize) -> Color {
         [i % 6]
 }
 
+/// A row's colour: its tone when the spec gives one (blocked is red), else
+/// its place in the palette.
+fn row_color(st: &SpecMetricsState, i: usize) -> Color {
+    use crate::aws::metrics::Tone;
+    match st.series.get(i).and_then(|s| s.query.tone) {
+        Some(Tone::Good) => theme::success(),
+        Some(Tone::Bad) => theme::error(),
+        Some(Tone::Warn) => theme::warning(),
+        None => series_color(i),
+    }
+}
+
 pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
     let Some(st) = &app.spec_metrics else { return };
     let block = Block::default()
@@ -203,12 +271,20 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
     // what say which instance or queue it is. A resource's title says so,
     // except where a dimension was looked up (WAF's `WebACL` metric name):
     // that one is shown, so an empty chart says what it asked for.
-    if (st.target.specs.is_empty() || st.target.breakdown.is_some()) && !st.target.dimensions.is_empty() {
+    // A drilled row names itself instead (below): the line has no room for both.
+    if st.drilled.is_none()
+        && (st.target.specs.is_empty() || st.target.breakdown.is_some())
+        && !st.target.dimensions.is_empty()
+    {
         let dims: Vec<String> = st.target.dimensions.iter().map(|(n, v)| format!("{n}={v}")).collect();
         range.push(Span::styled(format!(" · {}", dims.join(", ")), dim));
     }
     if let Some(home) = st.target.home {
         range.push(Span::styled(format!(" in {home}"), dim));
+    }
+    // A breakdown row charted in place of the set says which.
+    if let Some(row) = &st.drilled {
+        range.push(Span::styled(format!(" · ▸ {row}"), Style::default().fg(theme::accent()).add_modifier(Modifier::BOLD)));
     }
     let failed = st.series.iter().filter(|s| s.error.is_some()).count();
     if failed > 0 && !st.loading {
@@ -231,12 +307,16 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
     // ── Footer ──
     let hints: Vec<(&str, &str)> = if st.picker.is_some() {
         vec![("j/k", "select"), ("⏎", "chart it"), ("Esc", "back")]
+    } else if st.table_cursor.is_some() {
+        let back: &[(&str, &str)] = if st.curated { &[] } else { &[("d", "default set")] };
+        [&[("j/k", "select"), ("⏎", "chart it"), ("y", "copy name")][..], back, &[("Tab", "metrics"), ("Esc", "back")]].concat()
     } else {
         // `d` only means something once a picked metric replaced the set.
         let back: &[(&str, &str)] = if st.curated { &[] } else { &[("d", "default set")] };
         let changes: &[(&str, &str)] =
             if app.metrics_supports_markers() { &[("c", "changes"), ("W", "timeline")] } else { &[] };
-        [&[("[/]", "range"), ("s", "stat"), ("a", "all")][..], back, changes, &[("y", "copy"), ("e", "edit"), ("Esc", "close")]]
+        let tables: &[(&str, &str)] = if st.table_rows() > 0 { &[("Tab", "rules")] } else { &[] };
+        [&[("[/]", "range"), ("s", "stat"), ("a", "all")][..], tables, back, changes, &[("y", "copy"), ("e", "edit"), ("Esc", "close")]]
             .concat()
     };
     // A narrow pane drops hints from the end, but `Esc` stays the last.
@@ -342,7 +422,7 @@ fn render_series(app: &App, st: &SpecMetricsState, area: Rect, frame: &mut Frame
             (None, Some(row)) => {
                 let spark = spark_line(&s.points, spark_w);
                 let pad = spark_w.saturating_sub(spark.chars().count());
-                spans.push(Span::styled(spark, Style::default().fg(series_color(i))));
+                spans.push(Span::styled(spark, Style::default().fg(row_color(st, i))));
                 spans.push(Span::raw(" ".repeat(pad + 1)));
                 for &c in shown {
                     spans.push(Span::styled(format!("{} ", NAMES[c]), Style::default().fg(theme::text_dim())));
@@ -351,7 +431,8 @@ fn render_series(app: &App, st: &SpecMetricsState, area: Rect, frame: &mut Frame
                         bold(Style::default().fg(theme::text_muted())),
                     ));
                 }
-                spans.push(Span::styled(format!("({})", s.query.stat.short()), Style::default().fg(theme::text_dim())));
+                let how = if s.query.expression.is_some() { "math" } else { s.query.stat.short() };
+                spans.push(Span::styled(format!("({how})"), Style::default().fg(theme::text_dim())));
             }
         }
         lines.push(Line::from(spans));
@@ -412,10 +493,12 @@ fn render_series(app: &App, st: &SpecMetricsState, area: Rect, frame: &mut Frame
 /// the view's range. What doesn't fit is left to `e`, which lists them all.
 fn render_breakdown(st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
     let dim = Style::default().fg(theme::text_dim());
+    let focused = st.table_cursor.is_some();
+    let border = if focused { theme::border_focused() } else { theme::border_dim() };
     let block = Block::default()
         .title(Span::styled(format!(" Totals · last {} ", st.range.label()), dim))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::border_dim()));
+        .border_style(Style::default().fg(border));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let height = inner.height as usize;
@@ -432,6 +515,7 @@ fn render_breakdown(st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
                 lines.push(Line::raw(""));
             }
             let tables = &data.tables;
+            let cursor = st.cursor_pos();
             for (i, t) in tables.iter().enumerate() {
                 if i > 0 {
                     lines.push(Line::raw(""));
@@ -448,11 +532,30 @@ fn render_breakdown(st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
                 let reserve = if i + 1 < tables.len() { 4 } else { 0 };
                 let room = height.saturating_sub(lines.len() + 1 + reserve).max(1);
                 let shown = if t.rows.len() > room { room.saturating_sub(1).max(1) } else { room };
-                let (header, rows) = t.text(inner.width as usize, shown);
+                // Scrolled so the cursor's row is on screen.
+                let here = cursor.filter(|(n, _)| *n == i).map(|(_, r)| r);
+                let skip = here.map_or(0, |r| (r + 1).saturating_sub(shown));
+                let (header, rows) = t.text_window(inner.width as usize, skip, shown);
                 lines.push(Line::styled(header, dim));
-                lines.extend(rows.into_iter().map(|r| Line::styled(r, Style::default().fg(theme::text_primary()))));
-                if t.rows.len() > shown {
-                    lines.push(Line::styled(format!(" · {} more — e lists them all", t.rows.len() - shown), dim));
+                for (k, row) in rows.into_iter().enumerate() {
+                    let r = skip + k;
+                    let name = &t.rows[r].0;
+                    let line = if here == Some(r) {
+                        // The cursor: `▸` in the leading space, bold.
+                        Line::styled(
+                            format!("▸{}", &row[1..]),
+                            Style::default().fg(theme::accent()).add_modifier(Modifier::BOLD),
+                        )
+                    } else if st.drilled.as_ref() == Some(name) {
+                        Line::styled(row, Style::default().fg(theme::accent()))
+                    } else {
+                        Line::styled(row, Style::default().fg(theme::text_primary()))
+                    };
+                    lines.push(line);
+                }
+                let below = t.rows.len().saturating_sub(skip + shown);
+                if below > 0 {
+                    lines.push(Line::styled(format!(" · {below} more — e lists them all"), dim));
                 }
             }
         }
@@ -482,7 +585,7 @@ fn render_chart(st: &SpecMetricsState, drawn: &[(usize, &MetricSeries)], area: R
             .data(pts)
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::default().fg(series_color(*i)));
+            .style(Style::default().fg(row_color(st, *i)));
         // A legend only when there is more than one line to tell apart.
         if drawn.len() > 1 {
             ds = ds.name(s.query.label.clone());
@@ -490,9 +593,12 @@ fn render_chart(st: &SpecMetricsState, drawn: &[(usize, &MetricSeries)], area: R
         datasets.push(ds);
     }
     let sel = drawn.iter().find(|(i, _)| *i == st.selected).map(|(_, s)| *s).unwrap_or(drawn[0].1);
-    let title = format!(" {} · {} ({}) ", sel.query.label, sel.query.metric, sel.query.stat.short());
+    let title = match &sel.query.expression {
+        Some(_) => format!(" {} · expression ", sel.query.label),
+        None => format!(" {} · {} ({}) ", sel.query.label, sel.query.metric, sel.query.stat.short()),
+    };
     let mut block = Block::default()
-        .title(Span::styled(title, Style::default().fg(series_color(st.selected)).add_modifier(Modifier::BOLD)))
+        .title(Span::styled(title, Style::default().fg(row_color(st, st.selected)).add_modifier(Modifier::BOLD)))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::text_dim()));
     // The change markers' legend on the chart they're drawn on.

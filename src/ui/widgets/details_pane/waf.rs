@@ -409,7 +409,7 @@ pub(super) fn waf_traffic_lines(traffic: Option<&Lazy<Box<WafTraffic>>>) -> Vec<
     rows.push(("".to_string(), "· m charts them over any range, with these tables beside the chart".to_string()));
     // The tables the `m` view draws, from the same formatter.
     const MAX_ROWS: usize = 30;
-    for table in t.tables() {
+    for table in t.tables(&[]) {
         rows.push(("".to_string(), "".to_string()));
         rows.push((table.title.clone(), "".to_string()));
         if table.rows.is_empty() {
