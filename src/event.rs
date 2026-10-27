@@ -226,12 +226,6 @@ pub enum Event {
         statuses: HashMap<String, SsmInstanceStatus>,
     },
 
-    /// Fired when a WAF Web ACL's traffic metrics have been fetched.
-    WafMetricsLoaded {
-        web_acl_name: String,
-        result: Result<Box<crate::aws::services::waf::WafMetricsData>, String>,
-    },
-
     /// Fired when a Network Firewall's traffic metrics have been fetched.
     /// Keyed by firewall name.
     NfwMetricsLoaded {

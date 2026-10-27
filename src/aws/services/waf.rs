@@ -357,10 +357,9 @@ impl Resource for WafRuleGroup {
 
 // ── WAF Metrics ───────────────────────────────────────────────────────────────
 
-use crate::aws::services::ec2::MetricsTimeRange;
-
-/// Range totals for one Rule-dimension series (a top-level rule, a managed
-/// rule-group rollup, or `Default_Action`).
+/// Range totals for one Rule- or label-dimension series (a top-level rule, a
+/// managed rule-group rollup, `Default_Action`, a bot category…), or the
+/// web ACL's own `Rule=ALL` totals.
 #[derive(Debug, Clone, Default)]
 pub struct WafRuleTraffic {
     pub name: String,
@@ -375,32 +374,41 @@ impl WafRuleTraffic {
     pub fn total(&self) -> f64 {
         self.allowed + self.blocked + self.counted + self.captcha + self.challenge
     }
+
+    /// In [`WAF_ACTIONS`] order.
+    pub fn values(&self) -> [f64; 5] {
+        [self.allowed, self.blocked, self.counted, self.captcha, self.challenge]
+    }
 }
 
-#[derive(Debug, Clone)]
-pub struct WafMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub allowed: Vec<(f64, f64)>,
-    pub blocked: Vec<(f64, f64)>,
-    pub counted: Vec<(f64, f64)>,
-    pub captcha: Vec<(f64, f64)>,
-    pub challenge: Vec<(f64, f64)>,
-    /// Per-rule range totals, sorted by total desc (Rule=ALL excluded).
-    pub rule_traffic: Vec<WafRuleTraffic>,
-    /// Per-label range totals (managed rule groups emit these — bot
-    /// categories, attack signals), sorted by total desc.
-    pub label_traffic: Vec<WafRuleTraffic>,
-    /// Set when the per-rule/label breakdown couldn't be fetched (e.g. the
-    /// policy lacks `cloudwatch:GetMetricData`) — the charts still render.
-    pub rule_note: Option<String>,
-    pub x_max: f64,
+/// A web ACL's traffic over a window: the `Rule=ALL` totals plus one row per
+/// rule and per label, both sorted by total, descending.
+#[derive(Debug, Clone, Default)]
+pub struct WafTraffic {
+    pub totals: WafRuleTraffic,
+    pub rules: Vec<WafRuleTraffic>,
+    pub labels: Vec<WafRuleTraffic>,
 }
 
-#[derive(Debug, Clone)]
-pub enum WafMetricsState {
-    Loading,
-    Loaded(Box<WafMetricsData>),
-    Error(String),
+/// The table columns' names, in [`WafRuleTraffic::values`] order.
+pub const WAF_ACTIONS: [&str; 5] = ["Allow", "Block", "Count", "CAPTCHA", "Chlng"];
+
+impl WafTraffic {
+    /// The rule and label tables, as the metrics view and the Traffic
+    /// section both draw them.
+    pub fn tables(&self) -> Vec<crate::aws::metrics::BreakdownTable> {
+        let table = |title: &str, rows: &[WafRuleTraffic]| crate::aws::metrics::BreakdownTable {
+            title: title.to_string(),
+            columns: &WAF_ACTIONS,
+            rows: rows.iter().map(|r| (r.name.clone(), r.values().to_vec())).collect(),
+        };
+        let mut out = vec![table("Requests by rule", &self.rules)];
+        // Absent unless a label fired (bot categories, attack signals).
+        if !self.labels.is_empty() {
+            out.push(table("Requests by label", &self.labels));
+        }
+        out
+    }
 }
 
 const WAF_METRICS: [&str; 5] = [
@@ -411,74 +419,25 @@ const WAF_METRICS: [&str; 5] = [
     "ChallengeRequests",
 ];
 
-/// One `GetMetricStatistics` Sum series for a `WebACL` + `Rule=ALL` (+
-/// `Region` for REGIONAL scope) dimension set. `region_value` is `None` for
-/// CLOUDFRONT-scope ACLs — they publish with no `Region` dimension at all,
-/// and GetMetricStatistics only matches the exact dimension set.
-async fn fetch_stat_series(
-    cw_client: &aws_sdk_cloudwatch::Client,
-    metric: &str,
-    web_acl_dim: &str,
-    region_value: Option<&str>,
-    start_secs: i64,
-    now_secs: i64,
-    period: i32,
-) -> std::result::Result<Vec<(f64, f64)>, String> {
-    let mut req = cw_client
-        .get_metric_statistics()
-        .namespace("AWS/WAFV2")
-        .metric_name(metric)
-        .dimensions(
-            aws_sdk_cloudwatch::types::Dimension::builder()
-                .name("WebACL")
-                .value(web_acl_dim)
-                .build(),
-        )
-        .dimensions(
-            aws_sdk_cloudwatch::types::Dimension::builder()
-                .name("Rule")
-                .value("ALL")
-                .build(),
-        );
-    if let Some(rv) = region_value {
-        req = req.dimensions(
-            aws_sdk_cloudwatch::types::Dimension::builder()
-                .name("Region")
-                .value(rv)
-                .build(),
-        );
+/// The `WebACL` dimension value and whether the ACL publishes at all. AWS
+/// publishes under the ACL's `VisibilityConfig` metric name, which needn't
+/// be its name; when `GetWebACL` fails the name is the best guess left.
+pub async fn resolve_metric_name(client: &WafClient, scope: WafScope, name: &str, id: &str) -> (String, bool) {
+    let resp = client.get_web_acl().name(name).id(id).scope(scope.sdk_scope()).send().await;
+    match resp.ok().as_ref().and_then(|r| r.web_acl()).and_then(|a| a.visibility_config()) {
+        Some(vc) => (vc.metric_name().to_string(), vc.cloud_watch_metrics_enabled()),
+        None => (name.to_string(), true),
     }
-    let resp = req
-        .start_time(CwDateTime::from_secs(start_secs))
-        .end_time(CwDateTime::from_secs(now_secs))
-        .period(period)
-        .set_statistics(Some(vec![aws_sdk_cloudwatch::types::Statistic::Sum]))
-        .send()
-        .await
-        .map_err(|e| crate::error::sdk_error_message(&e))?;
-    let mut pts: Vec<(f64, f64)> = resp
-        .datapoints()
-        .iter()
-        .filter_map(|dp| {
-            let t = dp.timestamp()?.secs() as f64 - start_secs as f64;
-            let v = dp.sum()?;
-            Some((t, v))
-        })
-        .collect();
-    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(pts)
 }
 
 /// Fold `(query id, series label) → sum` entries with a given id prefix into
 /// sorted per-key traffic rows. The digit after the prefix indexes
-/// [`WAF_METRICS`].
-fn fold_breakdown(
-    sums: &HashMap<(String, String), f64>,
-    prefix: char,
-) -> Vec<WafRuleTraffic> {
+/// [`WAF_METRICS`]. The `ALL` series is left out of the rows and returned
+/// on its own.
+fn fold_breakdown(sums: &HashMap<(String, String), f64>, prefix: char) -> (WafRuleTraffic, Vec<WafRuleTraffic>) {
     let mut by_key: HashMap<String, WafRuleTraffic> = HashMap::new();
     for ((id, label), sum) in sums {
-        if !id.starts_with(prefix) || label == "ALL" || *sum <= 0.0 {
+        if !id.starts_with(prefix) || *sum <= 0.0 {
             continue;
         }
         let e = by_key.entry(label.clone()).or_insert_with(|| WafRuleTraffic {
@@ -494,32 +453,33 @@ fn fold_breakdown(
             _ => {}
         }
     }
+    let all = by_key.remove("ALL").unwrap_or_default();
     let mut rows: Vec<WafRuleTraffic> = by_key.into_values().collect();
     rows.sort_by(|a, b| {
         b.total()
             .partial_cmp(&a.total())
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.name.cmp(&b.name))
     });
-    rows
+    (all, rows)
 }
 
 /// Per-rule and per-label range totals via one paginated `GetMetricData` —
 /// a SEARCH per metric over the `Rule` schema (one series per rule: top-level
-/// rules, managed rule-group rollups, `Default_Action`) and one over the
-/// label schema (bot categories, attack signals), without needing the metric
-/// names up front. Best-effort: callers turn a failure into a note, never a
-/// fetch error.
-async fn fetch_rule_breakdown(
+/// rules, managed rule-group rollups, `Default_Action`, and `ALL`) and one
+/// over the label schema (bot categories, attack signals), without needing
+/// the metric names up front. `region` is `None` for CLOUDFRONT-scope ACLs.
+pub async fn fetch_traffic(
     cw_client: &aws_sdk_cloudwatch::Client,
     web_acl_dim: &str,
-    region_value: Option<&str>,
+    region: Option<&str>,
     start_secs: i64,
     now_secs: i64,
     period: i32,
-) -> std::result::Result<(Vec<WafRuleTraffic>, Vec<WafRuleTraffic>), String> {
+) -> std::result::Result<WafTraffic, String> {
     // The SEARCH schema names the exact dimension set — CLOUDFRONT-scope ACLs
     // publish without a Region dimension, so the schema must omit it too.
-    let (rule_schema, label_schema, region_filter) = match region_value {
+    let (rule_schema, label_schema, region_filter) = match region {
         Some(rv) => (
             "{AWS/WAFV2,Region,Rule,WebACL}",
             "{AWS/WAFV2,LabelName,LabelNamespace,Region,WebACL}",
@@ -561,7 +521,7 @@ async fn fetch_rule_breakdown(
 
     // A busy ACL returns many series (and a series can span result pages), so
     // accumulate across the paginated responses.
-    let mut rule_sums: HashMap<(String, String), f64> = HashMap::new();
+    let mut sums: HashMap<(String, String), f64> = HashMap::new();
     let mut next: Option<String> = None;
     loop {
         let mut req = cw_client
@@ -580,7 +540,7 @@ async fn fetch_rule_breakdown(
             let id = r.id().unwrap_or_default().to_string();
             let label = r.label().unwrap_or_default().to_string();
             let sum: f64 = r.values().iter().sum();
-            *rule_sums.entry((id, label)).or_insert(0.0) += sum;
+            *sums.entry((id, label)).or_insert(0.0) += sum;
         }
         next = crate::aws::pagination::next_page_token(resp.next_token(), &next);
         if next.is_none() {
@@ -588,141 +548,35 @@ async fn fetch_rule_breakdown(
         }
     }
 
-    Ok((
-        fold_breakdown(&rule_sums, 'e'),
-        fold_breakdown(&rule_sums, 'l'),
-    ))
+    let (totals, rules) = fold_breakdown(&sums, 'e');
+    let (_, labels) = fold_breakdown(&sums, 'l');
+    Ok(WafTraffic { totals, rules, labels })
 }
 
-pub async fn fetch_waf_metrics(
-    waf_client: WafClient,
-    cw_client: aws_sdk_cloudwatch::Client,
-    web_acl_name: String,
-    web_acl_id: String,
-    scope: WafScope,
-    region: String,
-    time_range: MetricsTimeRange,
-) -> Result<WafMetricsData> {
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start_secs = now_secs - time_range.duration_secs();
-    let period = time_range.period_secs();
+#[cfg(test)]
+mod traffic_tests {
+    use super::*;
 
-    // WAFv2 metrics use dimensions WebACL + Rule, plus Region for REGIONAL
-    // scope only — the docs' dimension table says Region is "required for all
-    // protected resource types except for Amazon CloudFront distributions",
-    // so a CLOUDFRONT query must omit it entirely (Region="Global" matches
-    // nothing; that shipped once as permanently-empty CloudFront charts).
-    let region_value = match scope {
-        WafScope::CloudFront => None,
-        WafScope::Regional => Some(region),
-    };
-
-    // Candidate WebACL dimension values: the ACL name first, then (when it
-    // differs) the VisibilityConfig metric name — accounts publish under one
-    // or the other, so try both instead of guessing. GetWebACL is best-effort;
-    // without it the name alone still matches the common case.
-    let mut candidates = vec![web_acl_name.clone()];
-    if let Ok(resp) = waf_client
-        .get_web_acl()
-        .name(&web_acl_name)
-        .id(&web_acl_id)
-        .scope(scope.sdk_scope())
-        .send()
-        .await
-    {
-        if let Some(mn) = resp
-            .web_acl()
-            .and_then(|a| a.visibility_config())
-            .map(|vc| vc.metric_name().to_string())
-        {
-            if mn != web_acl_name {
-                candidates.push(mn);
-            }
-        }
+    #[test]
+    fn the_all_series_is_the_totals_not_a_rule() {
+        let sums: HashMap<(String, String), f64> = [
+            (("e0", "ALL"), 120.0),
+            (("e1", "ALL"), 30.0),
+            (("e1", "RateLimit"), 25.0),
+            (("e0", "Default_Action"), 120.0),
+            (("e1", "BadBots"), 5.0),
+            (("l1", "awswaf:managed:aws:bot-control:bot:category:scraper"), 5.0),
+        ]
+        .into_iter()
+        .map(|((id, label), v)| ((id.to_string(), label.to_string()), v))
+        .collect();
+        let (totals, rules) = fold_breakdown(&sums, 'e');
+        assert_eq!((totals.allowed, totals.blocked), (120.0, 30.0));
+        let names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["Default_Action", "RateLimit", "BadBots"], "by total, ALL left out");
+        let (_, labels) = fold_breakdown(&sums, 'l');
+        assert_eq!(labels.len(), 1);
     }
-
-    // Charts ride GetMetricStatistics (the call every metrics pane uses, so
-    // no extra IAM requirement), trying each candidate until one has data.
-    let mut charts: [Vec<(f64, f64)>; 5] = Default::default();
-    let mut first_err: Option<String> = None;
-    let mut web_acl_dim = candidates[0].clone();
-    for cand in &candidates {
-        let (a, b, c, d, e) = tokio::join!(
-            fetch_stat_series(&cw_client, WAF_METRICS[0], cand, region_value.as_deref(), start_secs, now_secs, period),
-            fetch_stat_series(&cw_client, WAF_METRICS[1], cand, region_value.as_deref(), start_secs, now_secs, period),
-            fetch_stat_series(&cw_client, WAF_METRICS[2], cand, region_value.as_deref(), start_secs, now_secs, period),
-            fetch_stat_series(&cw_client, WAF_METRICS[3], cand, region_value.as_deref(), start_secs, now_secs, period),
-            fetch_stat_series(&cw_client, WAF_METRICS[4], cand, region_value.as_deref(), start_secs, now_secs, period),
-        );
-        let mut any = false;
-        for (i, r) in [a, b, c, d, e].into_iter().enumerate() {
-            match r {
-                Ok(pts) => {
-                    if !pts.is_empty() {
-                        any = true;
-                    }
-                    charts[i] = pts;
-                }
-                Err(e) => {
-                    if first_err.is_none() {
-                        first_err = Some(e);
-                    }
-                }
-            }
-        }
-        if any {
-            web_acl_dim = cand.clone();
-            break;
-        }
-    }
-
-    // Per-rule/label breakdown is best-effort — GetMetricData is a newer IAM
-    // requirement than the charts, so a denial degrades to a note.
-    let (rule_traffic, label_traffic, rule_note) = match fetch_rule_breakdown(
-        &cw_client,
-        &web_acl_dim,
-        region_value.as_deref(),
-        start_secs,
-        now_secs,
-        period,
-    )
-    .await
-    {
-        Ok((rt, lt)) => (rt, lt, None),
-        Err(e) => (
-            Vec::new(),
-            Vec::new(),
-            Some(format!(
-                "Per-rule breakdown unavailable (needs cloudwatch:GetMetricData): {}",
-                e
-            )),
-        ),
-    };
-
-    // Only fail the whole fetch when nothing at all came back and a call
-    // errored — otherwise partial data (with the note) beats an error page.
-    if charts.iter().all(|c| c.is_empty()) && rule_traffic.is_empty() && label_traffic.is_empty() {
-        if let Some(e) = first_err {
-            return Err(crate::error::Error::AwsSdk(e));
-        }
-    }
-
-    let [allowed, blocked, counted, captcha, challenge] = charts;
-    Ok(WafMetricsData {
-        time_range,
-        allowed,
-        blocked,
-        counted,
-        captcha,
-        challenge,
-        rule_traffic,
-        label_traffic,
-        rule_note,
-        x_max: time_range.duration_secs() as f64,
-    })
 }
 
 // ── Sampled Requests ──────────────────────────────────────────────────────────

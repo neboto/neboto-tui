@@ -87,7 +87,13 @@ in `any_pane_overlay_active` (which gates the mouse).
   chart) and an arm in `selected_metric_target` give the row list, the
   chart, change markers, per-metric errors, the `a` picker (`ListMetrics`
   on the resource's dimensions) and `s` stat cycling, from one
-  `GetMetricData` call over `Event::Lazy`. A hand-built kind (an enum
+  `GetMetricData` call over `Event::Lazy`. A target's optional
+  `Breakdown` adds range-total tables beside the chart (under it on a
+  narrow pane), fetched in the same task; it can also patch the target's
+  dimensions once before the first fetch (`prepare`) — WAF looks up the
+  ACL's `WebACL` metric name that way, then SEARCHes per-rule and
+  per-label totals (`BreakdownTable`, which the web ACL's Traffic section
+  draws too). A hand-built kind (an enum
   variant + an open arm + a render arm) is for what a spec can't say yet:
   SEARCH expressions, a fixed home region, S3's daily series, dashboards,
   Cost. Either way it needs **an arm in `supports_metrics_overlay()`** —

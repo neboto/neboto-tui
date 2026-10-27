@@ -153,6 +153,8 @@ pub struct LazyStore {
     pub waf_insights: LazyMap<Box<crate::aws::services::waf::WafInsights>>,
     /// A Web ACL's rules / associated resources / logging, keyed by ACL id.
     pub waf_web_acl_details: LazyMap<Box<crate::aws::services::waf::WafWebAclDetail>>,
+    /// A web ACL's Traffic section: the last 24 hours' totals, keyed by ACL id.
+    pub waf_traffic: LazyMap<Box<crate::aws::services::waf::WafTraffic>>,
     /// An IP set's addresses + tags, keyed by IP set id.
     pub waf_ip_set_details: LazyMap<Box<crate::aws::services::waf::WafIpSetDetail>>,
     /// A rule group's rules + tags, keyed by rule-group id.

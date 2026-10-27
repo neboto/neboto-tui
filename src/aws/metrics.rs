@@ -368,6 +368,16 @@ pub const CLOUDFRONT_DISTRIBUTION: &[MetricSpec] = &[
     m("OriginLatency", "Origin latency", Avg, Unit::Millis),
 ];
 
+/// `WebACL` + `Rule=ALL` (+ `Region` for REGIONAL ACLs): every action on
+/// one chart, so the split between them reads at a glance.
+pub const WAF_WEB_ACL: &[MetricSpec] = &[
+    m("AllowedRequests", "Allowed", Sum, Unit::Count).group("actions"),
+    m("BlockedRequests", "Blocked", Sum, Unit::Count).group("actions"),
+    m("CountedRequests", "Counted", Sum, Unit::Count).group("actions"),
+    m("CaptchaRequests", "CAPTCHA", Sum, Unit::Count).group("actions"),
+    m("ChallengeRequests", "Challenge", Sum, Unit::Count).group("actions"),
+];
+
 pub const R53_HEALTH_CHECK: &[MetricSpec] = &[
     m("HealthCheckStatus", "Status (1 = healthy)", Min, Unit::Raw),
     m("HealthCheckPercentageHealthy", "Checkers healthy", Avg, Unit::Percent),
@@ -526,6 +536,175 @@ pub struct MetricTarget {
     /// Queries only known at runtime, after the spec rows: one per container
     /// of an ECS task, or the whole set for a CloudWatch metric row.
     pub extra: Vec<MetricQuery>,
+    /// Range totals per dimension value, drawn beside the chart.
+    pub breakdown: Option<Breakdown>,
+}
+
+/// A kind's per-dimension totals, fetched with the series. Only WAF has one
+/// so far: per-rule and per-label SEARCH totals, whose `WebACL` dimension
+/// (the ACL's metric name) is looked up once, before the first fetch.
+#[derive(Debug, Clone)]
+pub enum Breakdown {
+    Waf {
+        client: aws_sdk_wafv2::Client,
+        scope: crate::aws::services::waf::WafScope,
+        name: String,
+        id: String,
+        /// `None` for CLOUDFRONT-scope ACLs, which publish without one.
+        region: Option<String>,
+        /// The `WebACL` value once looked up.
+        metric_name: Option<String>,
+    },
+}
+
+/// What a breakdown fetch brings back besides its tables.
+#[derive(Debug, Clone, Default)]
+pub struct BreakdownFix {
+    /// Dimensions to set on the target and its queries: `(name, value)`.
+    pub dimensions: Vec<(String, String)>,
+    /// Said in place of the rows when nothing can publish (metrics off).
+    pub hint: Option<&'static str>,
+}
+
+impl Breakdown {
+    /// Look up what the series need before they can be fetched, and patch
+    /// `queries` with it. Done once: the result is kept on the target.
+    pub async fn prepare(&self, queries: &mut [MetricQuery]) -> Option<BreakdownFix> {
+        match self {
+            Breakdown::Waf { metric_name: Some(_), .. } => None,
+            Breakdown::Waf { client, scope, name, id, .. } => {
+                let (metric, enabled) = crate::aws::services::waf::resolve_metric_name(client, *scope, name, id).await;
+                let fix = BreakdownFix {
+                    dimensions: vec![("WebACL".to_string(), metric)],
+                    hint: (!enabled).then_some("CloudWatch metrics are off in this web ACL's visibility config"),
+                };
+                for q in queries.iter_mut() {
+                    fix.apply_to(&mut q.dimensions);
+                }
+                Some(fix)
+            }
+        }
+    }
+
+    /// Record a `prepare` result so the next fetch skips it.
+    pub fn settle(&mut self, fix: &BreakdownFix) {
+        match self {
+            Breakdown::Waf { metric_name, .. } => {
+                *metric_name = fix.dimensions.iter().find(|(n, _)| n == "WebACL").map(|(_, v)| v.clone());
+            }
+        }
+    }
+
+    pub async fn fetch(
+        &self,
+        cw: &aws_sdk_cloudwatch::Client,
+        dimensions: &[(String, String)],
+        range: MetricsTimeRange,
+        end: i64,
+    ) -> Result<Vec<BreakdownTable>, String> {
+        match self {
+            Breakdown::Waf { region, .. } => {
+                let web_acl = dimensions.iter().find(|(n, _)| n == "WebACL").map_or("", |(_, v)| v.as_str());
+                let start = end - range.duration_secs();
+                let traffic = crate::aws::services::waf::fetch_traffic(
+                    cw,
+                    web_acl,
+                    region.as_deref(),
+                    start,
+                    end,
+                    range.period_secs(),
+                )
+                .await?;
+                Ok(traffic.tables())
+            }
+        }
+    }
+}
+
+impl BreakdownFix {
+    pub fn apply_to(&self, dims: &mut [(String, String)]) {
+        for (name, value) in &self.dimensions {
+            if let Some(d) = dims.iter_mut().find(|(n, _)| n == name) {
+                d.1 = value.clone();
+            }
+        }
+    }
+}
+
+/// Range totals per dimension value: one row per value, one column per
+/// metric, rows sorted by their total.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BreakdownTable {
+    pub title: String,
+    pub columns: &'static [&'static str],
+    pub rows: Vec<(String, Vec<f64>)>,
+}
+
+impl BreakdownTable {
+    /// The columns with any traffic, as indexes: an ACL with no CAPTCHA
+    /// rules shows no CAPTCHA column.
+    fn live_columns(&self) -> Vec<usize> {
+        (0..self.columns.len()).filter(|&c| self.rows.iter().any(|(_, v)| v.get(c).is_some_and(|x| *x > 0.0))).collect()
+    }
+
+    /// The header and up to `max_rows` rows as text in `width` columns:
+    /// name, then `Total`, then each live column. Columns go from the right
+    /// before the name gets narrower than 16.
+    pub fn text(&self, width: usize, max_rows: usize) -> (String, Vec<String>) {
+        const NUM_W: usize = 8;
+        const NAME_MIN: usize = 16;
+        let mut cols = self.live_columns();
+        // One leading space, the name, then a space and a number per column
+        // (Total included).
+        let name_w = |n: usize| width.saturating_sub(1 + (n + 1) * (NUM_W + 1));
+        while !cols.is_empty() && name_w(cols.len()) < NAME_MIN {
+            cols.pop();
+        }
+        // When the columns all fit, the name takes what it needs, up to 40.
+        let longest = self.rows.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0).max(4);
+        let nw = name_w(cols.len()).min(longest.max(NAME_MIN)).min(40);
+        // The end of a name is what tells rows apart (`…CommonRuleSet`,
+        // `…bot:category:http_library`), so a long one keeps its end.
+        let fit = |s: &str| -> String {
+            let n = s.chars().count();
+            if n > nw {
+                format!("…{}", s.chars().skip(n + 1 - nw).collect::<String>())
+            } else {
+                s.to_string()
+            }
+        };
+        let mut header = format!(" {:<nw$} {:>NUM_W$}", "", "Total");
+        for &c in &cols {
+            header.push_str(&format!(" {:>NUM_W$}", self.columns[c]));
+        }
+        let rows = self
+            .rows
+            .iter()
+            .take(max_rows)
+            .map(|(name, vals)| {
+                let total: f64 = vals.iter().sum();
+                let mut line = format!(" {:<nw$} {:>NUM_W$}", fit(name), fmt_count(total));
+                for &c in &cols {
+                    let v = vals.get(c).copied().unwrap_or(0.0);
+                    let cell = if v > 0.0 { fmt_count(v) } else { "—".to_string() };
+                    line.push_str(&format!(" {cell:>NUM_W$}"));
+                }
+                line
+            })
+            .collect();
+        (header, rows)
+    }
+}
+
+/// `1.2K`, `3.4M`: a range total in a table cell.
+pub fn fmt_count(v: f64) -> String {
+    if v >= 1_000_000.0 {
+        format!("{:.1}M", v / 1_000_000.0)
+    } else if v >= 1_000.0 {
+        format!("{:.1}K", v / 1_000.0)
+    } else {
+        format!("{}", v as u64)
+    }
 }
 
 impl MetricTarget {
@@ -855,6 +1034,37 @@ pub fn step_range(r: MetricsTimeRange, step: isize) -> MetricsTimeRange {
 mod tests {
     use super::*;
 
+    fn table() -> BreakdownTable {
+        BreakdownTable {
+            title: "Requests by rule".to_string(),
+            columns: &["Allow", "Block", "Count"],
+            rows: vec![
+                ("AWS-AWSManagedRulesCommonRuleSet".to_string(), vec![0.0, 1_500.0, 0.0]),
+                ("Default_Action".to_string(), vec![900.0, 0.0, 0.0]),
+            ],
+        }
+    }
+
+    #[test]
+    fn a_breakdown_shows_only_columns_with_traffic() {
+        let (header, rows) = table().text(80, 10);
+        assert!(header.contains("Total") && header.contains("Allow") && header.contains("Block"), "{header}");
+        assert!(!header.contains("Count"), "no rule counted anything: {header}");
+        assert!(rows[0].contains("AWS-AWSManagedRulesCommonRuleSet") && rows[0].contains("1.5K"), "{}", rows[0]);
+        // A zero cell is a dash, so the row's one action stands out.
+        assert!(rows[1].trim_end().ends_with("—"), "{}", rows[1]);
+    }
+
+    #[test]
+    fn a_narrow_breakdown_drops_columns_before_the_name_gets_short() {
+        let (header, rows) = table().text(36, 10);
+        assert!(header.contains("Total") && header.contains("Allow") && !header.contains("Block"), "{header}");
+        assert!(rows.iter().all(|r| r.chars().count() <= 36), "{rows:?}");
+        assert!(rows[0].contains("…") && rows[0].contains("CommonRuleSet"), "keeps the name's end: {}", rows[0]);
+        let (_, rows) = table().text(80, 1);
+        assert_eq!(rows.len(), 1, "max_rows caps the rows");
+    }
+
     #[test]
     fn values_read_in_their_unit() {
         assert_eq!(fmt_value(41.234, Unit::Percent), "41.2%");
@@ -876,6 +1086,7 @@ mod tests {
             home: None,
             hint: None,
             extra: Vec::new(),
+            breakdown: None,
         };
         let q = t.curated_queries();
         assert_eq!(q.len(), EC2_INSTANCE.len());
