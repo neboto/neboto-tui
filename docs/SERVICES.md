@@ -1655,11 +1655,21 @@ the service you're touching.
     custom-header count, and origin groups (failover); S3 origin domains (all
     endpoint generations incl. legacy dash-region + website) jump to the bucket
     via `s3_origin_domain_bucket`. Details adds TLS min protocol / SSL method +
-    a ⚠ staging flag. WAF row jumps to WAF in **CLOUDFRONT scope**; metrics use
-    the global namespace via `cloudwatch_us_east_1_client()` — 8 charts incl.
-    BytesUploaded and the "additional monitoring" pair CacheHitRate +
-    OriginLatency (empty unless additional metrics are enabled — normal, not
-    an error).
+    a ⚠ staging flag. WAF row jumps to WAF in **CLOUDFRONT scope**. Metrics
+    (`m`, the spec view, us-east-1): `CLOUDFRONT_DISTRIBUTION` plus, when
+    `WebACLId` is a WAFv2 ARN (a WAF Classic id isn't, and adds nothing), a
+    **Blocked by WAF** row on the Requests chart. `Resolve::CfDistribution`
+    runs once before the first fetch. (1) It asks `ListMetrics` for a
+    `BlockedRequests` series with `Resource=<distribution ARN>` and uses the
+    smallest one (the total, not a per-country slice). If there is none, the
+    row stays on the ACL's `WebACL` + `Rule=ALL` total, with the metric name
+    looked up as for a web ACL. An ACL shared by several distributions
+    overstates any one of them, so the label says `(ACL, N dists)` when
+    other loaded distributions share it. (2) `GetMonitoringSubscription`
+    says whether additional metrics are on: off (or no subscription) makes
+    Cache hit rate / Origin latency say why instead of "no data in the
+    window"; on adds the six per-status rates (`CLOUDFRONT_ADDITIONAL`);
+    a denial says nothing either way.
   - **Functions** — `ListFunctions` over both stages (DEVELOPMENT lists all,
     LIVE marks published; unpublished renders as a ⚠ pending state). 2-section
     split pane Overview / **Code** — Code is a lazy `GetFunction`

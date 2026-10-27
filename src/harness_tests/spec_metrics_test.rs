@@ -302,6 +302,48 @@ async fn enter_on_a_rule_charts_its_own_actions() {
     assert_eq!((st.series.len(), st.drilled.as_deref()), (6, None));
 }
 
+/// A distribution with a WAFv2 ACL charts the ACL's blocked count on its
+/// Requests chart, keyed `WebACL` + `Rule=ALL` (no `Region`: CloudFront
+/// scope) in us-east-1; when other loaded distributions share the ACL the
+/// row says it's the ACL's total. A WAF Classic id adds nothing.
+#[tokio::test]
+async fn a_distribution_charts_its_web_acl_s_blocks_beside_its_requests() {
+    use crate::aws::services::cloudfront::CfDistribution;
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mock = all_mocks().into_iter().find(|(svc, _, r)| *svc == ServiceType::CloudFront && r.as_any().is::<CfDistribution>()).unwrap().2;
+    let mut dist = mock.as_any().downcast_ref::<CfDistribution>().unwrap().clone();
+    dist.web_acl_id = "arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge-acl/0123abcd".to_string();
+    select_mock(&mut app, ServiceType::CloudFront, Box::new(dist.clone()));
+
+    let target = app.selected_metric_target().unwrap();
+    let row = target.extra.iter().find(|q| q.namespace == "AWS/WAFV2").expect("the WAF row");
+    assert_eq!(row.label, "Blocked by WAF");
+    assert_eq!(row.dimensions, [("WebACL".to_string(), "edge-acl".to_string()), ("Rule".to_string(), "ALL".to_string())]);
+    assert_eq!(row.group.as_deref(), Some("requests"), "on the Requests chart");
+    assert!(target.resolve.is_some());
+
+    // A second distribution on the same ACL: the ACL's total isn't this one's.
+    let mut other = dist.clone();
+    other.id = "E2OTHER".to_string();
+    app.resources.push(Box::new(other));
+    let row = app.selected_metric_target().unwrap().extra.into_iter().find(|q| q.namespace == "AWS/WAFV2").unwrap();
+    assert_eq!(row.label, "Blocked by WAF (ACL, 2 dists)");
+    app.resources.truncate(1);
+
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    let waf = st.series.iter().find(|s| s.query.namespace == "AWS/WAFV2").expect("charted");
+    assert!(waf.error.is_none() && !waf.points.is_empty(), "{:?}", waf.error);
+    assert!(st.target.resolve.is_none(), "looked up once");
+
+    let mut classic = dist;
+    classic.web_acl_id = "a1b2c3d4-classic".to_string();
+    select_mock(&mut app, ServiceType::CloudFront, Box::new(classic));
+    assert!(app.selected_metric_target().unwrap().extra.is_empty(), "WAF Classic isn't WAFV2");
+}
+
 /// `5` reaches back 30 days (a stopped instance's last week of data), the
 /// change markers' timeline widens with it, and `W` — which the markers'
 /// legend offers — hands that timeline to the lens instead of doing nothing;

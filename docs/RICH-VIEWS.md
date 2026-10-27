@@ -89,11 +89,15 @@ in `any_pane_overlay_active` (which gates the mouse).
   on the resource's dimensions) and `s` stat cycling, from one
   `GetMetricData` call over `Event::Lazy`. A target's optional
   `Breakdown` adds range-total tables beside the chart (under it on a
-  narrow pane), fetched in the same task; it can also patch the target's
-  dimensions once before the first fetch (`prepare`) — WAF looks up the
-  ACL's `WebACL` metric name that way, then SEARCHes per-rule and
+  narrow pane), fetched in the same task — WAF SEARCHes per-rule and
   per-label totals (`BreakdownTable`, which the web ACL's Traffic section
-  draws too). `Tab` moves into those tables and `⏎` on a row charts that
+  draws too). A target's optional `Resolve` is a lookup run once before
+  the first fetch (`prepare`): WAF finds the ACL's `WebACL` value that
+  way, and CloudFront uses one with no tables (its web ACL's blocked
+  series and whether additional metrics are on). A `TargetFix` can set
+  dimensions by name, re-key a row by label, add rows (curated set only)
+  and give a row a note in place of "no data" (why it can't exist); it
+  lands on the target too, so `d` rebuilds the fixed set. `Tab` moves into those tables and `⏎` on a row charts that
   row's own series (`Drill`: specs against the row's dimensions) in
   place of the set, `d` going back; the tables are refetched only for a
   new range or `r`, never for a new charted set. A spec row can be

@@ -387,7 +387,7 @@ pub const CODEBUILD_PROJECT: &[MetricSpec] = &[
 
 /// Cache hit rate and origin latency need additional metrics switched on.
 pub const CLOUDFRONT_DISTRIBUTION: &[MetricSpec] = &[
-    m("Requests", "Requests", Sum, Unit::Count),
+    m("Requests", "Requests", Sum, Unit::Count).group("requests"),
     m("BytesDownloaded", "Downloaded", Sum, Unit::BytesPerSec).rate().group("bytes"),
     m("BytesUploaded", "Uploaded", Sum, Unit::BytesPerSec).rate().group("bytes"),
     m("TotalErrorRate", "Error rate", Avg, Unit::Percent).group("errors"),
@@ -421,6 +421,21 @@ pub const WAF_WEB_ACL: &[MetricSpec] = &[
 /// web ACL's actions, without the rate (a rule's own block rate is 100% or
 /// nothing).
 pub const WAF_RULE: &[MetricSpec] = WAF_WEB_ACL.split_at(5).0;
+
+/// A distribution's web ACL's blocked count, beside its requests (the
+/// `extra` row its target adds when it has a WAFv2 ACL).
+pub const WAF_BLOCKED_BY_DISTRIBUTION: MetricSpec =
+    m("BlockedRequests", "Blocked by WAF", Sum, Unit::Count).group("requests").sparse().tone(Tone::Bad);
+
+/// Added when the distribution's additional metrics are on (`Resolve`).
+pub const CLOUDFRONT_ADDITIONAL: &[MetricSpec] = &[
+    m("401ErrorRate", "401 rate", Avg, Unit::Percent).group("status"),
+    m("403ErrorRate", "403 rate", Avg, Unit::Percent).group("status"),
+    m("404ErrorRate", "404 rate", Avg, Unit::Percent).group("status"),
+    m("502ErrorRate", "502 rate", Avg, Unit::Percent).group("status"),
+    m("503ErrorRate", "503 rate", Avg, Unit::Percent).group("status"),
+    m("504ErrorRate", "504 rate", Avg, Unit::Percent).group("status"),
+];
 
 pub const R53_HEALTH_CHECK: &[MetricSpec] = &[
     m("HealthCheckStatus", "Status (1 = healthy)", Min, Unit::Raw),
@@ -582,65 +597,155 @@ pub struct MetricTarget {
     pub extra: Vec<MetricQuery>,
     /// Range totals per dimension value, drawn beside the chart.
     pub breakdown: Option<Breakdown>,
+    /// Looked up once, before the first fetch: what the target's own
+    /// fields can't say (WAF's metric name, CloudFront's extra metrics).
+    pub resolve: Option<Resolve>,
 }
 
 /// A kind's per-dimension totals, fetched with the series. Only WAF has one
-/// so far: per-rule and per-label SEARCH totals, whose `WebACL` dimension
-/// (the ACL's metric name) is looked up once, before the first fetch.
+/// so far: per-rule and per-label SEARCH totals.
 #[derive(Debug, Clone)]
 pub enum Breakdown {
     Waf {
+        /// `None` for CLOUDFRONT-scope ACLs, which publish without one.
+        region: Option<String>,
+    },
+}
+
+/// A lookup a target needs before its series are right. Run once; the
+/// result is a [`TargetFix`] kept on the view's state.
+#[derive(Debug, Clone)]
+pub enum Resolve {
+    /// A web ACL's `WebACL` dimension value
+    /// (`waf::resolve_metric_name`).
+    WafWebAcl {
         client: aws_sdk_wafv2::Client,
         scope: crate::aws::services::waf::WafScope,
         name: String,
         id: String,
-        /// `None` for CLOUDFRONT-scope ACLs, which publish without one.
         region: Option<String>,
-        /// The `WebACL` value once looked up.
-        metric_name: Option<String>,
+    },
+    /// A CloudFront distribution: whether its additional metrics are on,
+    /// and where its web ACL's blocked count is published.
+    CfDistribution {
+        client: aws_sdk_cloudfront::Client,
+        id: String,
+        arn: String,
+        /// The `Blocked by WAF` row's label, and the ACL's client, name and
+        /// id, when the distribution has a WAFv2 ACL.
+        waf: Option<(String, aws_sdk_wafv2::Client, String, String)>,
     },
 }
 
-/// What a breakdown fetch brings back besides its tables.
+/// What a [`Resolve`] changes. Applied to the fetch's own queries, then to
+/// the target and the view's queries, so `d` and later fetches keep it.
 #[derive(Debug, Clone, Default)]
-pub struct BreakdownFix {
-    /// Dimensions to set on the target and its queries: `(name, value)`.
+pub struct TargetFix {
+    /// Dimensions to set by name, on the target and every query that has
+    /// them: `(name, value)`.
     pub dimensions: Vec<(String, String)>,
+    /// Queries to re-key wholesale, by label: `(label, dimensions, new label)`.
+    pub series: Vec<(String, Vec<(String, String)>, String)>,
+    /// Rows to add after the set's.
+    pub extra: Vec<MetricQuery>,
+    /// Said on a row in place of "no data", by label.
+    pub notes: Vec<(String, &'static str)>,
     /// Said in place of the rows when nothing can publish (metrics off).
     pub hint: Option<&'static str>,
 }
 
-impl Breakdown {
-    /// Look up what the series need before they can be fetched, and patch
-    /// `queries` with it. Done once: the result is kept on the target.
-    pub async fn prepare(&self, cw: &aws_sdk_cloudwatch::Client, queries: &mut [MetricQuery]) -> Option<BreakdownFix> {
-        match self {
-            Breakdown::Waf { metric_name: Some(_), .. } => None,
-            Breakdown::Waf { client, scope, name, id, region, .. } => {
+impl TargetFix {
+    fn set_dims(&self, dims: &mut [(String, String)]) {
+        for (name, value) in &self.dimensions {
+            if let Some(d) = dims.iter_mut().find(|(n, _)| n == name) {
+                d.1 = value.clone();
+            }
+        }
+    }
+
+    /// The fix on a list of queries; `extra` rows only on the curated set
+    /// (a picked metric or a drilled row has no use for them).
+    pub fn apply_queries(&self, queries: &mut Vec<MetricQuery>, curated: bool) {
+        for q in queries.iter_mut() {
+            self.set_dims(&mut q.dimensions);
+            if let Some((_, dims, label)) = self.series.iter().find(|(l, _, _)| *l == q.label) {
+                q.dimensions = dims.clone();
+                q.label = label.clone();
+            }
+        }
+        if curated {
+            queries.extend(self.extra.iter().cloned());
+        }
+    }
+
+    /// The fix on the target, so a later `d` rebuilds the fixed set.
+    pub fn apply_target(&self, target: &mut MetricTarget) {
+        self.set_dims(&mut target.dimensions);
+        let mut extra = std::mem::take(&mut target.extra);
+        self.apply_queries(&mut extra, true);
+        target.extra = extra;
+        if self.hint.is_some() {
+            target.hint = self.hint;
+        }
+        target.resolve = None;
+    }
+}
+
+impl Resolve {
+    /// Look up what the series need, and fix `queries` with it.
+    pub async fn prepare(&self, cw: &aws_sdk_cloudwatch::Client, queries: &mut Vec<MetricQuery>, curated: bool) -> TargetFix {
+        let fix = match self {
+            Resolve::WafWebAcl { client, scope, name, id, region } => {
                 let (metric, enabled) =
-                    crate::aws::services::waf::resolve_metric_name(client, cw, *scope, name, id, region.as_deref())
-                        .await;
-                let fix = BreakdownFix {
+                    crate::aws::services::waf::resolve_metric_name(client, cw, *scope, name, id, region.as_deref()).await;
+                TargetFix {
                     dimensions: vec![("WebACL".to_string(), metric)],
                     hint: (!enabled).then_some("CloudWatch metrics are off in this web ACL's visibility config"),
-                };
-                for q in queries.iter_mut() {
-                    fix.apply_to(&mut q.dimensions);
+                    ..Default::default()
                 }
-                Some(fix)
             }
-        }
-    }
-
-    /// Record a `prepare` result so the next fetch skips it.
-    pub fn settle(&mut self, fix: &BreakdownFix) {
-        match self {
-            Breakdown::Waf { metric_name, .. } => {
-                *metric_name = fix.dimensions.iter().find(|(n, _)| n == "WebACL").map(|(_, v)| v.clone());
+            Resolve::CfDistribution { client, id, arn, waf } => {
+                let (monitoring, waf_fix) = tokio::join!(
+                    crate::aws::services::cloudfront::additional_metrics_enabled(client, id),
+                    async {
+                        match waf {
+                            Some((label, client, name, acl_id)) => {
+                                Some(crate::aws::services::cloudfront::waf_blocked_series(cw, client, arn, name, acl_id, label).await)
+                            }
+                            None => None,
+                        }
+                    }
+                );
+                let mut fix = waf_fix.unwrap_or_default();
+                match monitoring {
+                    // Off: these rows can't exist, so they say why.
+                    Some(false) => {
+                        for label in ["Cache hit rate", "Origin latency"] {
+                            fix.notes.push((label.to_string(), "needs CloudFront's additional metrics, off for this distribution"));
+                        }
+                    }
+                    // On: the per-status error rates exist too.
+                    Some(true) => {
+                        fix.extra.extend(CLOUDFRONT_ADDITIONAL.iter().map(|s| {
+                            let dims = vec![
+                                ("DistributionId".to_string(), id.clone()),
+                                ("Region".to_string(), "Global".to_string()),
+                            ];
+                            MetricQuery::from_spec(s, "AWS/CloudFront", dims)
+                        }));
+                    }
+                    // Unknown (denied, throttled): say nothing either way.
+                    None => {}
+                }
+                fix
             }
-        }
+        };
+        fix.apply_queries(queries, curated);
+        fix
     }
+}
 
+impl Breakdown {
     pub async fn fetch(
         &self,
         cw: &aws_sdk_cloudwatch::Client,
@@ -649,7 +754,7 @@ impl Breakdown {
         end: i64,
     ) -> Result<BreakdownData, String> {
         match self {
-            Breakdown::Waf { region, .. } => {
+            Breakdown::Waf { region } => {
                 let web_acl = dimensions.iter().find(|(n, _)| n == "WebACL").map_or("", |(_, v)| v.as_str());
                 let start = end - range.duration_secs();
                 let traffic = crate::aws::services::waf::fetch_traffic(
@@ -665,16 +770,6 @@ impl Breakdown {
                 let base: Vec<(String, String)> =
                     dimensions.iter().filter(|(n, _)| n == "WebACL" || n == "Region").cloned().collect();
                 Ok(BreakdownData { summary: traffic.summary(), tables: traffic.tables(&base) })
-            }
-        }
-    }
-}
-
-impl BreakdownFix {
-    pub fn apply_to(&self, dims: &mut [(String, String)]) {
-        for (name, value) in &self.dimensions {
-            if let Some(d) = dims.iter_mut().find(|(n, _)| n == name) {
-                d.1 = value.clone();
             }
         }
     }
@@ -1245,6 +1340,7 @@ mod tests {
             hint: None,
             extra: Vec::new(),
             breakdown: None,
+            resolve: None,
         };
         let qs = target.curated_queries();
         let rate = qs.iter().find(|q| q.label == "Block rate").unwrap();
@@ -1256,6 +1352,29 @@ mod tests {
         assert_eq!(err, "needs AllowedRequests, which isn't charted");
         assert_eq!(WAF_RULE.len(), 5);
         assert!(WAF_RULE.iter().all(|s| s.expr.is_none()));
+    }
+
+    #[test]
+    fn a_fix_rekeys_relabels_and_adds_rows_only_to_the_curated_set() {
+        let q = |label: &str, dims: &[(&str, &str)]| MetricQuery {
+            label: label.to_string(),
+            dimensions: dims.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect(),
+            ..MetricDefinition::default_query()
+        };
+        let fix = TargetFix {
+            dimensions: vec![("WebACL".into(), "edge-metric".into())],
+            series: vec![("Blocked by WAF (ACL, 2 dists)".into(), vec![("Resource".into(), "arn:d".into())], "Blocked by WAF".into())],
+            extra: vec![q("401 rate", &[])],
+            ..Default::default()
+        };
+        let mut set = vec![q("Requests", &[("WebACL", "edge-acl")]), q("Blocked by WAF (ACL, 2 dists)", &[("WebACL", "edge-acl")])];
+        fix.apply_queries(&mut set, true);
+        assert_eq!(set[0].dimensions, [("WebACL".to_string(), "edge-metric".to_string())]);
+        assert_eq!((set[1].label.as_str(), set[1].dimensions[0].0.as_str()), ("Blocked by WAF", "Resource"));
+        assert_eq!(set.len(), 3, "the extra row joins the curated set");
+        let mut picked = vec![q("Requests", &[])];
+        fix.apply_queries(&mut picked, false);
+        assert_eq!(picked.len(), 1, "not a picked metric");
     }
 
     #[test]
@@ -1329,6 +1448,7 @@ mod tests {
             hint: None,
             extra: Vec::new(),
             breakdown: None,
+            resolve: None,
         };
         let q = t.curated_queries();
         assert_eq!(q.len(), EC2_INSTANCE.len());

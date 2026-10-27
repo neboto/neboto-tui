@@ -53,6 +53,9 @@ pub struct SpecMetricsState {
     pub table_cursor: Option<usize>,
     /// The breakdown row charted in place of the set (`⏎` on it).
     pub drilled: Option<String>,
+    /// Said on a row in place of "no data", by label (`TargetFix::notes`):
+    /// why the metric can't exist.
+    pub notes: Vec<(String, &'static str)>,
 }
 
 impl SpecMetricsState {
@@ -72,6 +75,7 @@ impl SpecMetricsState {
             breakdown_for: None,
             table_cursor: None,
             drilled: None,
+            notes: Vec::new(),
         }
     }
 
@@ -418,7 +422,10 @@ fn render_series(app: &App, st: &SpecMetricsState, area: Rect, frame: &mut Frame
         ];
         match (&s.error, row) {
             (Some(e), _) => spans.push(Span::styled(format!("⚠ {e}"), Style::default().fg(theme::warning()))),
-            (None, None) => spans.push(Span::styled("no data in the window", Style::default().fg(theme::text_dim()))),
+            (None, None) => {
+                let note = st.notes.iter().find(|(l, _)| *l == s.query.label).map_or("no data in the window", |(_, n)| *n);
+                spans.push(Span::styled(note, Style::default().fg(theme::text_dim())));
+            }
             (None, Some(row)) => {
                 let spark = spark_line(&s.points, spark_w);
                 let pad = spark_w.saturating_sub(spark.chars().count());

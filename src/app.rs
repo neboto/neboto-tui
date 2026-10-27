@@ -32032,6 +32032,7 @@ impl App {
             hint: None,
             extra: Vec::new(),
             breakdown: None,
+            resolve: None,
         };
         macro_rules! is {
             ($t:ty) => {
@@ -32120,13 +32121,49 @@ impl App {
         } else if let Some(d) = is!(s::cloudfront::CfDistribution) {
             let mut dims = dim("DistributionId", &d.id);
             dims.push(("Region".to_string(), "Global".to_string()));
+            // The web ACL's blocked count beside the requests, on one chart.
+            // Until `Resolve` finds a per-distribution series it is the
+            // ACL's total, which the label says when other loaded
+            // distributions share the ACL.
+            let waf = s::cloudfront::waf_acl_from_arn(&d.web_acl_id).map(|(name, id)| {
+                let sharing = self
+                    .resources
+                    .iter()
+                    .filter_map(|r| r.as_any().downcast_ref::<s::cloudfront::CfDistribution>())
+                    .filter(|o| o.web_acl_id == d.web_acl_id)
+                    .count();
+                let label = if sharing > 1 {
+                    format!("Blocked by WAF (ACL, {sharing} dists)")
+                } else {
+                    "Blocked by WAF".to_string()
+                };
+                (label, name, id)
+            });
+            let extra = waf
+                .iter()
+                .map(|(label, name, _)| m::MetricQuery {
+                    label: label.clone(),
+                    ..m::MetricQuery::from_spec(
+                        &m::WAF_BLOCKED_BY_DISTRIBUTION,
+                        "AWS/WAFV2",
+                        vec![("WebACL".to_string(), name.clone()), ("Rule".to_string(), "ALL".to_string())],
+                    )
+                })
+                .collect();
             MetricTarget {
                 home: Some("us-east-1"),
+                extra,
+                resolve: Some(m::Resolve::CfDistribution {
+                    client: self.aws_clients.cloudfront_client(),
+                    id: d.id.clone(),
+                    arn: d.arn.clone(),
+                    waf: waf.map(|(label, name, id)| (label, self.aws_clients.wafv2_cloudfront_client(), name, id)),
+                }),
                 ..target("CloudFront distribution", "AWS/CloudFront", dims, m::CLOUDFRONT_DISTRIBUTION)
             }
         } else if let Some(acl) = is!(s::waf::WafWebAcl) {
-            // `WebACL` starts as the name; the breakdown's first fetch swaps
-            // in the ACL's metric name, which is what AWS publishes under.
+            // `WebACL` starts as the name; `Resolve` swaps in whichever value
+            // CloudWatch has series for before the first fetch.
             let cloudfront = self.waf_scope == s::waf::WafScope::CloudFront;
             let region = (!cloudfront).then(|| self.aws_clients.current_region().to_string());
             let mut dims = vec![("WebACL".to_string(), acl.name.clone()), ("Rule".to_string(), "ALL".to_string())];
@@ -32140,14 +32177,14 @@ impl App {
             };
             MetricTarget {
                 home: cloudfront.then_some("us-east-1"),
-                breakdown: Some(m::Breakdown::Waf {
+                resolve: Some(m::Resolve::WafWebAcl {
                     client,
                     scope: self.waf_scope,
                     name: acl.name.clone(),
                     id: acl.id.clone(),
-                    region,
-                    metric_name: None,
+                    region: region.clone(),
                 }),
+                breakdown: Some(m::Breakdown::Waf { region }),
                 ..target("Web ACL", "AWS/WAFV2", dims, m::WAF_WEB_ACL)
             }
         } else if let Some(h) = is!(s::route53::R53HealthCheck) {
@@ -32313,18 +32350,21 @@ impl App {
         let (mut queries, range) = (st.queries.clone(), st.range);
         let breakdown = st.target.breakdown.clone();
         let want_tables = breakdown.is_some() && st.breakdown_for != Some(range);
-        let mut dims = st.target.dimensions.clone();
+        let resolve = st.target.resolve.clone();
+        let curated = st.curated;
+        let mut target = st.target.clone();
         let cw = spec_metrics_client(&self.aws_clients, st.target.home);
         let epoch = self.lazy.epoch();
         let tx = event_tx.clone();
         tokio::spawn(async move {
-            let fix = match &breakdown {
-                Some(b) => b.prepare(&cw, &mut queries).await,
+            let fix = match &resolve {
+                Some(r) => Some(r.prepare(&cw, &mut queries, curated).await),
                 None => None,
             };
             if let Some(f) = &fix {
-                f.apply_to(&mut dims);
+                f.apply_target(&mut target);
             }
+            let dims = target.dimensions;
             let tables = async {
                 match &breakdown {
                     Some(b) if want_tables => Some(b.fetch(&cw, &dims, range, end).await),
@@ -32338,17 +32378,12 @@ impl App {
                     return;
                 }
                 if let Some(st) = app.spec_metrics.as_mut() {
-                    if let Some(f) = &fix {
-                        f.apply_to(&mut st.target.dimensions);
-                        for q in st.queries.iter_mut() {
-                            f.apply_to(&mut q.dimensions);
-                        }
-                        if let Some(b) = st.target.breakdown.as_mut() {
-                            b.settle(f);
-                        }
-                        if f.hint.is_some() {
-                            st.target.hint = f.hint;
-                        }
+                    // Only the fetch that resolved applies it: one superseded
+                    // before landing leaves `resolve` set for the next.
+                    if let Some(f) = fix.filter(|_| st.target.resolve.is_some()) {
+                        f.apply_target(&mut st.target);
+                        f.apply_queries(&mut st.queries, st.curated);
+                        st.notes.extend(f.notes);
                     }
                     if want_tables {
                         st.breakdown = tables;
