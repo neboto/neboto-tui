@@ -1981,21 +1981,26 @@ the service you're touching.
   the **whole ARN** (its `id()`), so a customer policy named
   `AdministratorAccess` can't take it. They can't be tagged, so the Tags
   section says that and skips `ListPolicyTags`. An unattached one still
-  isn't listed — a jump to it lands on an empty filter (the role
-  Permissions row's inline expand reaches it via `GetPolicy`).
+  isn't listed — a jump to it lands on an empty filter (`e` on a
+  Permissions row still opens it via `GetPolicy`).
   **Credential report**: `iam:GenerateCredentialReport` is a **mutation**
   (it creates the report), so the read-only guard rejects it. A credential
   report view may only call `GetCredentialReport`, and must degrade to "no
   report generated" when none exists.
   **Permissions vs Policies**: Permissions *names* what's attached (managed
   rows `("  name", arn)`, inline rows `("  name", "inline")` — the shape
-  `iam_permissions_row_target` keys Enter-to-expand on, so change them
-  together); the **Policies** section fetches every document (own list calls,
+  `iam_permissions_row_target` keys `⏎` and `e` on, so change them
+  together); the **Policies** section shows every document (own list calls,
   so it doesn't wait on Permissions; `MAX_POLICY_DOCS` = 20, `buffered(5)`
-  because IAM throttles a burst). Policies is the section-hook path that the
-  flat view, `X` and `neboto get` can reach — the per-row expand is cursor
-  state (`iam_expanded_docs`) they can't. Headers carry no count (`Managed
-  Policies`, not `… (3)`) so export keys stay stable.
+  because IAM throttles a burst). `⏎` on a managed row follows its `→` to
+  the policy's pane, landing on Document (`jump_landing_section`); an inline
+  row has no pane, so `⏎` moves to Policies onto that document
+  (`try_iam_inline_policy_open`, held in `iam_pending_policy_doc` until the
+  documents load). There used to be an Enter-to-expand of the document under
+  the row instead — it shadowed the row's `→`, duplicated Policies, and was
+  cursor state the flat view, `X` and `neboto get` couldn't reach. Headers
+  carry no count (`Managed Policies`, not `… (3)`) so export keys stay
+  stable.
 - **IAM Instance Profiles** (Profiles sub-tab, key 8, #106) — one
   paginated `ListInstanceProfiles` in the IAM load (phase 4b, not a core
   phase: a failure warns, never counts toward the all-failed error). Each

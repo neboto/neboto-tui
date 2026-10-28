@@ -158,12 +158,10 @@ pub enum Event {
     /// Failures never send an event — the check is silent when it can't run.
     UpdateAvailable(String),
 
-    /// Fired when a single managed/inline policy document has been fetched
-    /// (per-row "view document" action in the IAM Role Permissions section).
+    /// A single managed/inline policy document fetched for `$EDITOR` (`e` on
+    /// a Permissions row of an IAM role / user / group).
     IamPolicyDocumentLoaded {
-        title: String,
         content: String,
-        open_editor: bool,
     },
 
     /// Fired when a single SCP's policy document has been fetched

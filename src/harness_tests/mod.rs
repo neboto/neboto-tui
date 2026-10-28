@@ -25,6 +25,7 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
 mod deep_export_test;
+mod iam_permissions_test;
 mod load_stream_test;
 mod macros_test;
 mod keycast_test;

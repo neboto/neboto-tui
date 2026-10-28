@@ -1504,8 +1504,8 @@ pub struct IamPolicyDocs {
 
 /// Most documents one Policies section fetches. IAM allows 20 managed
 /// policies per principal by default (more with a quota increase) plus any
-/// number of inline ones; past this, Enter on a Permissions row still opens
-/// any single one.
+/// number of inline ones; past this, a managed Permissions row's jump still
+/// reaches its pane, and `e` opens any single document.
 pub const MAX_POLICY_DOCS: usize = 20;
 
 /// Every policy document attached to a principal: lists its managed and
