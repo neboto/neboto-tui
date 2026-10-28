@@ -4230,8 +4230,15 @@ where
     let key_widths = key_col_widths(rows, area.width);
     // Each `/` match is marked where it is, on every renderer's rows.
     let query = if focused { app.detail_search_query.to_lowercase() } else { String::new() };
+    let code = CodeBlocks::new(rows, app.syntax_highlight);
     let style_row = |idx: usize, k: &str, v: &str, w: usize| -> Line<'static> {
-        let line = style_row(idx, k, v, w);
+        let mut line = style_row(idx, k, v, w);
+        // A selected row keeps the selection's colours.
+        if !(focused && app.detail_line_in_selection(idx)) {
+            if let Some(spans) = code.spans(rows, idx) {
+                line = recolour_code_row(line, k, spans);
+            }
+        }
         if query.is_empty() {
             line
         } else {
@@ -4365,30 +4372,134 @@ pub(super) fn detail_filter_bar(app: &App) -> Line<'static> {
 /// lowercase form changes byte length is left as is rather than sliced at a
 /// wrong boundary.
 fn highlight_matches(line: Line<'static>, query: &str) -> Line<'static> {
+    // Matched over the whole line, not span by span: a syntax-coloured code
+    // row splits `"Effect": "Allow"` into five spans, and a query across
+    // them must still mark.
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    let lower = text.to_lowercase();
+    if query.is_empty() || lower.len() != text.len() || !lower.contains(query) {
+        return line;
+    }
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut pos = 0;
+    while let Some(found) = lower[pos..].find(query) {
+        let start = pos + found;
+        ranges.push((start, start + query.len()));
+        pos = start + query.len();
+    }
+    // Lowercasing kept the length, but not necessarily every char's: don't
+    // cut a char in half.
+    if ranges.iter().any(|&(a, b)| !text.is_char_boundary(a) || !text.is_char_boundary(b)) {
+        return line;
+    }
     let style = line.style;
     let mut out: Vec<Span<'static>> = Vec::new();
+    let mut offset = 0;
     for span in line.spans {
-        let text = span.content.to_string();
-        let lower = text.to_lowercase();
-        if lower.len() != text.len() || !lower.contains(query) {
-            out.push(Span::styled(text, span.style));
-            continue;
-        }
-        let mut pos = 0;
-        while let Some(found) = lower[pos..].find(query) {
-            let start = pos + found;
-            let end = start + query.len();
-            if start > pos {
-                out.push(Span::styled(text[pos..start].to_string(), span.style));
+        let content = span.content.to_string();
+        let (start, end) = (offset, offset + content.len());
+        offset = end;
+        let mut cur = start;
+        for &(a, b) in &ranges {
+            let (a, b) = (a.max(cur), b.min(end));
+            if a >= b {
+                continue;
             }
-            out.push(Span::styled(text[start..end].to_string(), span.style.add_modifier(Modifier::REVERSED)));
-            pos = end;
+            if a > cur {
+                out.push(Span::styled(content[cur - start..a - start].to_string(), span.style));
+            }
+            out.push(Span::styled(
+                content[a - start..b - start].to_string(),
+                span.style.add_modifier(Modifier::REVERSED),
+            ));
+            cur = b;
         }
-        if pos < text.len() {
-            out.push(Span::styled(text[pos..].to_string(), span.style));
+        if cur < end {
+            out.push(Span::styled(content[cur - start..].to_string(), span.style));
         }
     }
     Line::from(out).style(style)
+}
+
+/// The runs of plain content rows in a body that read as code, coloured at
+/// render time by `ui::syntax`. Detected from the rows themselves each
+/// frame, so no pane declares anything and the rows stay plain text for
+/// copy, export and `/`. A run is highlighted whole (YAML block scalars
+/// carry state from line to line), and only once something in it is drawn.
+struct CodeBlocks {
+    /// Each row's run, as an index into `runs`.
+    run_of: Vec<Option<usize>>,
+    /// `(first row, end row, language)`.
+    runs: Vec<(usize, usize, crate::ui::syntax::Lang)>,
+    lit: std::cell::RefCell<std::collections::HashMap<usize, Vec<Vec<Span<'static>>>>>,
+}
+
+impl CodeBlocks {
+    fn new(rows: &[(String, String)], enabled: bool) -> Self {
+        let mut blocks = CodeBlocks {
+            run_of: Vec::new(),
+            runs: Vec::new(),
+            lit: Default::default(),
+        };
+        if !enabled {
+            return blocks;
+        }
+        blocks.run_of = vec![None; rows.len()];
+        let mut i = 0;
+        while i < rows.len() {
+            if !is_code_row(&rows[i].0, &rows[i].1) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < rows.len() && is_code_row(&rows[i].0, &rows[i].1) {
+                i += 1;
+            }
+            let lines: Vec<&str> = rows[start..i].iter().map(|(k, _)| k.as_str()).collect();
+            if let Some(lang) = crate::ui::syntax::detect(&lines) {
+                let run = blocks.runs.len();
+                blocks.runs.push((start, i, lang));
+                blocks.run_of[start..i].fill(Some(run));
+            }
+        }
+        blocks
+    }
+
+    fn spans(&self, rows: &[(String, String)], idx: usize) -> Option<Vec<Span<'static>>> {
+        let run = (*self.run_of.get(idx)?)?;
+        let (start, end, lang) = self.runs[run];
+        let mut lit = self.lit.borrow_mut();
+        let lines = lit.entry(run).or_insert_with(|| {
+            let text: Vec<&str> = rows[start..end].iter().map(|(k, _)| k.as_str()).collect();
+            crate::ui::syntax::highlight(lang, &text)
+        });
+        lines.get(idx - start).cloned()
+    }
+}
+
+/// A plain content line (`style_detail_row`'s leading-space key, no value)
+/// that isn't one of its styled variants: a warning, an error, a `· `
+/// annotation or a tab-split note.
+fn is_code_row(key: &str, value: &str) -> bool {
+    let t = key.trim_start();
+    value.is_empty()
+        && key.starts_with(' ')
+        && !key.contains('\t')
+        && !t.starts_with('⚠')
+        && !t.starts_with('✗')
+        && !t.starts_with("· ")
+}
+
+/// Swap a plain content row's text for its coloured spans, keeping
+/// anything the renderer appended after it (the `→` jump hint).
+fn recolour_code_row(mut line: Line<'static>, text: &str, spans: Vec<Span<'static>>) -> Line<'static> {
+    if line.spans.first().is_none_or(|s| s.content != text) {
+        return line;
+    }
+    let tail = line.spans.split_off(1);
+    line.spans = spans;
+    line.spans.extend(tail);
+    line
 }
 
 /// First row of an unwrapped body: last frame's `top` while the cursor is
@@ -5623,5 +5734,61 @@ mod detail_wrap_tests {
         // Cursor taller than the pane: start at its own top.
         assert_eq!(first_visible_row(3, 2, h), 3);
         assert_eq!(first_visible_row(0, 5, h), 0);
+    }
+}
+
+#[cfg(test)]
+mod code_block_tests {
+    use super::*;
+
+    fn rows(spec: &[(&str, &str)]) -> Vec<(String, String)> {
+        spec.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn only_runs_that_read_as_code_are_coloured() {
+        let body = rows(&[
+            ("Document", ""),
+            ("  {", ""),
+            ("    \"Effect\": \"Allow\"", ""),
+            ("  }", ""),
+            ("", ""),
+            ("Rules", ""),
+            ("  tcp  443  0.0.0.0/0", ""),
+            ("Name", "web"),
+            ("  ⚠ AccessDenied", ""),
+        ]);
+        let code = CodeBlocks::new(&body, true);
+        let coloured: Vec<usize> = (0..body.len()).filter(|&i| code.spans(&body, i).is_some()).collect();
+        assert_eq!(coloured, vec![1, 2, 3]);
+        // The spans are the row's text, unchanged.
+        let spans = code.spans(&body, 2).unwrap();
+        assert_eq!(spans.iter().map(|s| s.content.as_ref()).collect::<String>(), body[2].0);
+        // Off means off.
+        assert!(CodeBlocks::new(&body, false).spans(&body, 2).is_none());
+    }
+
+    #[test]
+    fn recolour_keeps_the_jump_arrow() {
+        let line = Line::from(vec![Span::raw("  \"Arn\": \"x\""), Span::raw("  →")]);
+        let spans = vec![Span::raw("  \"Arn\""), Span::raw(": \"x\"")];
+        let out = recolour_code_row(line, "  \"Arn\": \"x\"", spans);
+        assert_eq!(out.spans.len(), 3);
+        assert_eq!(out.spans[2].content, "  →");
+    }
+
+    #[test]
+    fn search_marks_a_match_across_spans() {
+        let line = Line::from(vec![Span::raw("\"Effect\""), Span::raw(": "), Span::raw("\"Allow\"")]);
+        let out = highlight_matches(line, "t\": \"al");
+        let marked: String = out
+            .spans
+            .iter()
+            .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(marked, "t\": \"Al");
+        let all: String = out.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(all, "\"Effect\": \"Allow\"");
     }
 }

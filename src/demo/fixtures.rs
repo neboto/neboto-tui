@@ -99,6 +99,8 @@ pub static FIXTURES: &[Fixture] = &[
     // The two t3 web hosts: one unlimited (bills surplus credits), one standard.
     fx!("ec2", "DescribeInstanceCreditSpecifications", when ["i-0a1b2c3d4e5f60001"], "DescribeInstanceCreditSpecifications-0001.xml"),
     fx!("ec2", "DescribeInstanceCreditSpecifications", when ["i-0a1b2c3d4e5f60002"], "DescribeInstanceCreditSpecifications-0002.xml"),
+    // web-1's bootstrap script, for the User Data section (and its shell colours).
+    fx!("ec2", "DescribeInstanceAttribute", when ["i-0a1b2c3d4e5f60001", "userData"], "DescribeInstanceAttribute-userData-0001.xml"),
     fx!("ec2", "DescribeSecurityGroups", "DescribeSecurityGroups.xml"),
     // Instance + ALB network interfaces. `legacy-batch-sg` is on none of them,
     // so it lists as `unused`; the Used By section narrows by `group-id`.

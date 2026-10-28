@@ -281,7 +281,10 @@ coloured footer silently don't apply to it.
   bold subsection label. (No `=== X ===` markers.)
 - **Plain content line**: leading-space key, empty value → `Line::raw`, no
   colon. For fixed-width tables, CIDR lists, template previews. Exception:
-  `⚠`/`✗`-prefixed content lines render WARNING/ERROR-coloured.
+  `⚠`/`✗`-prefixed content lines render WARNING/ERROR-coloured. A run of
+  them that reads as JSON / YAML / shell is syntax-coloured at render
+  (`ui/syntax.rs`, see `docs/DETAIL-PANE.md`) — emit code this way, never
+  styled per pane.
 - **Blank spacer**: both empty → blank line. Spacing is evened out
   centrally (`tidy_section_rows`): none at either end of a section, none
   under a group header, never two in a row — so emit them freely between
