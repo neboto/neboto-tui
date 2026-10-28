@@ -62,6 +62,10 @@ pub struct Config {
     /// pane edge. `Ctrl-W` toggles it at runtime (sticky for the session).
     /// Default false (clip).
     pub detail_wrap: Option<bool>,
+    /// Colour the code the detail panes show — CloudFormation templates,
+    /// policies, definitions, user data (JSON, YAML and shell, recognised
+    /// from the text). Default true.
+    pub syntax_highlight: Option<bool>,
     /// Show each key as it's pressed, and what it did, in a box in the
     /// bottom-right corner — for screen recordings, shares and demos.
     /// `--show-keys` turns it on for one run. Default false.

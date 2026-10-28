@@ -26,7 +26,21 @@ bottom-up from the cursor (the log tail's trick; never `Paragraph::wrap`),
 wraps by display width, and records the screen-row → logical-row map
 (`App.detail_body_rows`) that mouse clicks/drags and `→` arrow regions use.
 It also keeps last frame's top row while the cursor stays on screen (so `k`
-moves the cursor, not the view) and marks `/` matches in place.
+moves the cursor, not the view) and marks `/` matches in place (across
+spans, so a match spanning a coloured code row's tokens still marks).
+
+**Syntax colours** (config `syntax_highlight`): render-only, and no pane
+declares anything. `layout_detail_body` finds runs of plain content rows
+(`CodeBlocks`; a `⚠`/`✗`/`· `/tab row ends a run) and asks
+`ui::syntax::detect` what each run is: JSON by its opening bracket, shell by
+a `#!sh`/`bash` line, YAML by a leading `key:` and mostly mapping/list
+lines; anything else stays plain, so a CIDR list or rule table is never
+coloured. A run is lexed whole (YAML block scalars carry state) and only
+once one of its rows is drawn. The rows stay plain text: copy, export,
+headless output and `/` filtering never see the colours, and a selected
+row keeps the selection's colours. To get a block coloured, emit it as
+plain content lines (`("  {line}", "")`) with a blank spacer or header
+around it — nothing else.
 **Footer**: renderers pass `detail_footer(…)`'s plain string to the block
 as before; `render_details_pane` then repaints it (`render_detail_footer`,
 from `App.detail_footer_text`) — keys coloured, fitted beside the
