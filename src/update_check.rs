@@ -122,7 +122,14 @@ pub fn fetch_latest() -> Result<String, String> {
     struct Release {
         tag_name: String,
     }
+    // The OS trust store, as the AWS SDK uses — ureq's default is Mozilla's
+    // bundled roots, which reject a TLS-inspecting proxy's CA (Zscaler) that
+    // the machine trusts, so the check failed silently behind one.
+    let tls = ureq::tls::TlsConfig::builder()
+        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+        .build();
     let agent: ureq::Agent = ureq::Agent::config_builder()
+        .tls_config(tls)
         .timeout_global(Some(REQUEST_TIMEOUT))
         .build()
         .into();

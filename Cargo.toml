@@ -77,7 +77,7 @@ arboard = "3.3"
 tempfile = "3.8"
 
 # HTTP download (Lambda deployment packages from presigned URLs) + unzip
-ureq = "3"
+ureq = { version = "3", features = ["platform-verifier"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 # Gzip-compressed EC2 user data (Terraform cloudinit_config's default). Already
 # in the tree via zip's deflate feature.
