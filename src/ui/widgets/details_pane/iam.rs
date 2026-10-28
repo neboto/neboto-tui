@@ -598,6 +598,9 @@ pub fn iam_policy_section_lines(
         IamPolicyDetailSection::Overview => iam_policy_overview_lines(policy),
         IamPolicyDetailSection::Document => iam_policy_document_lines(details_state),
         IamPolicyDetailSection::AttachedTo => iam_policy_attached_to_lines(details_state),
+        IamPolicyDetailSection::Tags if policy.is_aws_managed() => {
+            vec![("  AWS-managed policies can't be tagged".to_string(), "".to_string())]
+        }
         IamPolicyDetailSection::Tags => lazy_tag_lines(details_state, |d| &d.tags),
         IamPolicyDetailSection::LastAccessed => iam_last_accessed_lines(last_accessed, &policy.policy_arn),
     }
@@ -612,6 +615,10 @@ pub(super) fn iam_policy_overview_lines(policy: &IamPolicy) -> Vec<(String, Stri
         ("  ARN".to_string(), policy.policy_arn.clone()),
         ("  Policy ID".to_string(), policy.policy_id.clone()),
         ("  Path".to_string(), policy.path.clone()),
+        (
+            "  Managed By".to_string(),
+            if policy.is_aws_managed() { "AWS" } else { "this account" }.to_string(),
+        ),
     ];
     if let Some(desc) = policy.description.as_deref().filter(|d| !d.is_empty()) {
         rows.push(("  Description".to_string(), desc.to_string()));

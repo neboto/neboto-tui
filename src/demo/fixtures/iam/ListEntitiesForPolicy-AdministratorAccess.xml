@@ -1,0 +1,8 @@
+<ListEntitiesForPolicyResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListEntitiesForPolicyResult>
+    <IsTruncated>false</IsTruncated>
+    <PolicyGroups><member><GroupName>platform-admins</GroupName><GroupId>X</GroupId></member></PolicyGroups><PolicyUsers/>
+    <PolicyRoles><member><RoleName>github-actions-deploy</RoleName><RoleId>X</RoleId></member><member><RoleName>OrganizationAccountAccessRole</RoleName><RoleId>X</RoleId></member></PolicyRoles>
+  </ListEntitiesForPolicyResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListEntitiesForPolicyResponse>

@@ -1,0 +1,8 @@
+<ListEntitiesForPolicyResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ListEntitiesForPolicyResult>
+    <IsTruncated>false</IsTruncated>
+    <PolicyGroups/><PolicyUsers><member><UserName>deploy-bot</UserName><UserId>X</UserId></member></PolicyUsers>
+    <PolicyRoles/>
+  </ListEntitiesForPolicyResult>
+  <ResponseMetadata><RequestId>neboto-demo</RequestId></ResponseMetadata>
+</ListEntitiesForPolicyResponse>

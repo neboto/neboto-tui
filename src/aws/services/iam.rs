@@ -89,7 +89,7 @@ impl AwsService for IamService {
             }
         }
 
-        // Phase 2: Policies (customer-managed only, to skip AWS-managed noise)
+        // Phase 2: customer-managed policies. AWS-managed ones come in 2b.
         let mut paginator = self
             .client
             .list_policies()
@@ -126,6 +126,52 @@ impl AwsService for IamService {
                         warning: msg.clone(),
                     });
                     phase_failures.push(msg);
+                    break;
+                }
+            }
+        }
+
+        // Phase 2b: AWS-managed policies attached to something here. All of
+        // them would be ~1,400 rows of noise; the attached few are the ones a
+        // role's Permissions or a pasted ARN points at, and their panes
+        // (document, Attached To, Last Accessed) work on any policy ARN. Not
+        // a core phase: a failure warns, never counts toward the
+        // all-failed error.
+        let mut paginator = self
+            .client
+            .list_policies()
+            .scope(aws_sdk_iam::types::PolicyScopeType::Aws)
+            .only_attached(true)
+            .into_paginator()
+            .send();
+        while let Some(result) = paginator.next().await {
+            match result {
+                Ok(page) => {
+                    let batch: Vec<Box<dyn Resource>> = page
+                        .policies()
+                        .iter()
+                        .map(|p| Box::new(IamPolicy::from_sdk(p)) as Box<dyn Resource>)
+                        .collect();
+                    let count = batch.len();
+                    if count == 0 {
+                        continue;
+                    }
+                    total += count;
+                    let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                        service: service_type,
+                        resources: batch,
+                        progress: LoadProgress {
+                            loaded_count: total,
+                            total_count: None,
+                            status_message: Some("Loading AWS-managed policies...".to_string()),
+                        },
+                    });
+                }
+                Err(e) => {
+                    let _ = event_tx.send(Event::ResourceLoadWarning {
+                        service: service_type,
+                        warning: format!("AWS-managed policies: {}", crate::error::sdk_error_message(&e)),
+                    });
                     break;
                 }
             }
@@ -556,6 +602,12 @@ pub struct IamPolicy {
 }
 
 impl IamPolicy {
+    /// AWS's own policies live in the `aws` account (`arn:aws:iam::aws:…`,
+    /// in every partition). They can't be edited or tagged.
+    pub fn is_aws_managed(&self) -> bool {
+        is_aws_managed_policy_arn(&self.policy_arn)
+    }
+
     pub fn from_sdk(p: &aws_sdk_iam::types::Policy) -> Self {
         Self {
             policy_arn: p.arn().unwrap_or_default().to_string(),
@@ -616,7 +668,15 @@ impl Resource for IamPolicy {
     }
 
     fn search_text(&self) -> String {
-        format!("{} {}", self.policy_name, self.policy_arn)
+        if self.is_aws_managed() {
+            format!("{} {} aws-managed", self.policy_name, self.policy_arn)
+        } else {
+            format!("{} {}", self.policy_name, self.policy_arn)
+        }
+    }
+
+    fn list_summary(&self) -> Option<String> {
+        self.is_aws_managed().then(|| "AWS managed".to_string())
     }
 
     fn details(&self) -> Vec<(String, String)> {
@@ -1065,6 +1125,11 @@ pub struct IamPolicyDetails {
     pub tags: HashMap<String, String>,
 }
 
+/// Whether a policy ARN names one of AWS's own managed policies.
+pub fn is_aws_managed_policy_arn(arn: &str) -> bool {
+    arn.starts_with("arn:") && arn.contains(":iam::aws:policy/")
+}
+
 pub async fn fetch_iam_policy_details(
     client: IamClient,
     policy_arn: String,
@@ -1111,10 +1176,15 @@ pub async fn fetch_iam_policy_details(
     }
 
     // Best-effort — a denied ListPolicyTags leaves the Tags section empty
-    // rather than failing the document + attachments above.
-    let tags = match client.list_policy_tags().policy_arn(&policy_arn).send().await {
-        Ok(r) => tags_from_sdk(r.tags()),
-        Err(_) => HashMap::new(),
+    // rather than failing the document + attachments above. AWS-managed
+    // policies can't carry tags, so there's nothing to ask for.
+    let tags = if is_aws_managed_policy_arn(&policy_arn) {
+        HashMap::new()
+    } else {
+        match client.list_policy_tags().policy_arn(&policy_arn).send().await {
+            Ok(r) => tags_from_sdk(r.tags()),
+            Err(_) => HashMap::new(),
+        }
     };
 
     Ok(IamPolicyDetails {

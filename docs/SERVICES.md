@@ -1971,6 +1971,18 @@ the service you're touching.
   roles/users/policies, since eager per-entity Gets would be N extra calls per
   load. Don't "fix" a blank Tags section by reading the list output; it's
   empty by API design. Groups genuinely have no tags at all.
+  **AWS-managed policies**: the Policies tab lists customer-managed
+  policies (`Scope=Local`) plus the AWS-managed ones **attached to
+  something** here (`Scope=AWS, OnlyAttached=true`, phase 2b — not a core
+  phase). All ~1,400 AWS-managed policies were noise; the attached few are
+  what Permissions rows and pasted ARNs point at, and their panes work on any
+  policy ARN (`GetPolicyVersion`, `ListEntitiesForPolicy`, Access Advisor).
+  They list as `AWS managed` and search as `aws-managed`; a jump to one keeps
+  the **whole ARN** (its `id()`), so a customer policy named
+  `AdministratorAccess` can't take it. They can't be tagged, so the Tags
+  section says that and skips `ListPolicyTags`. An unattached one still
+  isn't listed — a jump to it lands on an empty filter (the role
+  Permissions row's inline expand reaches it via `GetPolicy`).
   **Credential report**: `iam:GenerateCredentialReport` is a **mutation**
   (it creates the report), so the read-only guard rejects it. A credential
   report view may only call `GetCredentialReport`, and must degrade to "no

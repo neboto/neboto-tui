@@ -19867,8 +19867,8 @@ impl App {
     /// On a Permissions row of a role / user / group, fetch the selected
     /// policy's document on demand and show it (viewer or `$EDITOR`). Managed
     /// policies go through `get_policy` — which works for **AWS-managed**
-    /// policies (e.g. `AdministratorAccess`) that aren't in our (Local-scope)
-    /// Policies list, so they can't be reached by a list jump. Returns `false`
+    /// policies (e.g. `AdministratorAccess`) too, attached or not; the
+    /// Policies list only holds the attached ones. Returns `false`
     /// Toggle IAM policy expansion inline. If already expanded, collapse
     /// instantly (no API call). If not expanded, fetch the document. Returns
     /// `true` if this was a policy row (handled), `false` otherwise.
@@ -28128,8 +28128,10 @@ impl App {
                         Ok(_) => {
                             self.success_message = Some(format!(
                                 "Copied: {}",
-                                if text_to_copy.len() > 50 {
-                                    format!("{}...", &text_to_copy[..50])
+                                // By chars: a byte cut panics inside a
+                                // multi-byte char (the flat view's `━━` rule).
+                                if text_to_copy.chars().count() > 50 {
+                                    format!("{}...", text_to_copy.chars().take(50).collect::<String>())
                                 } else {
                                     text_to_copy
                                 }
