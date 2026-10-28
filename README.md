@@ -399,6 +399,7 @@ template.
 | `watch`, `watch_interval` | Start in watch mode, and its cadence in seconds |
 | `detail_flat` | Start with the flat all-sections detail view |
 | `detail_wrap` | Start with long detail values wrapped onto continuation rows (`Ctrl-W` toggles) |
+| `syntax_highlight` | Colour templates, policies, definitions and user data in the detail pane (default `true`) |
 | `show_keys` | Show each key and what it did in a corner box (`--show-keys` for one run) |
 | `export_formats` | Which files exports write: any of `"json"`, `"csv"`, `"md"` (default all three) |
 | `export_dir` | Where exports go (default the working directory; `NEBOTO_EXPORT_DIR` overrides) |

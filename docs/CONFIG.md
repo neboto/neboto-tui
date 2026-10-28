@@ -9,6 +9,8 @@ is the reference; this is the annotated list.
   `detail_flat` (start in the flat all-section detail view),
   `log_wrap` (start log tail/search panes with long lines wrapped),
   `detail_wrap` (start the detail body with long values wrapped — `Ctrl-W`),
+  `syntax_highlight` (default true; colour JSON / YAML / shell blocks in the
+  detail body — `ui/syntax.rs`, render-only),
   `show_keys` (keycast: each key and what it did, in a corner box),
   `export_formats` (which of `json`/`csv`/`md` exports write, default all
   three — `export::ExportFormats`; bad values warn at startup, never fatal) +

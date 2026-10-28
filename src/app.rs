@@ -2110,6 +2110,9 @@ pub struct App {
     /// `ownership_ribbon`, default true). Display only — the change
     /// timeline still resolves ownership regardless.
     pub ownership_ribbon: bool,
+    /// Whether code in the detail body is syntax-coloured (config
+    /// `syntax_highlight`, default true; `ui::syntax`).
+    pub syntax_highlight: bool,
     /// Whether the once-a-day release check may run (config `update_check`
     /// after the CLI overlay; env / CI / demo are checked when it spawns).
     pub update_check_enabled: bool,
@@ -3111,6 +3114,7 @@ impl App {
                     .collect(),
             },
             ownership_ribbon: config.ownership_ribbon.unwrap_or(true),
+            syntax_highlight: config.syntax_highlight.unwrap_or(true),
             update_check_enabled: config.update_check.unwrap_or(true),
             update_available: None,
             controltower_audit,
