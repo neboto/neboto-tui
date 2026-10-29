@@ -3651,31 +3651,20 @@ impl App {
                 }
             }
             Event::DdbItemsLoaded {
+                generation,
                 items,
                 last_key,
                 scanned,
                 append} => {
-                let b = &mut self.ddb_browser;
-                if append {
-                    b.items.extend(items);
-                    b.scanned += scanned as usize;
-                } else {
-                    b.items = items;
-                    b.scanned = scanned as usize;
-                    b.selected_row = 0;
-                    b.detail_scroll = 0;
-                }
-                b.last_key = last_key;
-                b.loading = false;
-                b.error = None;
-                b.recompute_columns();
-                if b.selected_row >= b.items.len() {
-                    b.selected_row = b.items.len().saturating_sub(1);
+                if generation == self.ddb_browser.generation {
+                    self.ddb_browser.apply_page(items, last_key, scanned.max(0) as usize, append);
                 }
             }
-            Event::DdbItemsError { message } => {
-                self.ddb_browser.loading = false;
-                self.ddb_browser.error = Some(message);
+            Event::DdbItemsError { generation, message } => {
+                if generation == self.ddb_browser.generation {
+                    self.ddb_browser.loading = false;
+                    self.ddb_browser.error = Some(message);
+                }
             }
             Event::S3ObjectsLoaded {
                 bucket,
@@ -16625,6 +16614,8 @@ impl App {
             sk_value: b.sk_value.clone(),
             filter: b.filter.clone(),
             start_key: if append { b.last_key.clone() } else { None }};
+        self.ddb_browser.generation = self.ddb_browser.generation.wrapping_add(1);
+        let generation = self.ddb_browser.generation;
         self.ddb_browser.loading = true;
         self.ddb_browser.error = None;
         let client = self.aws_clients.dynamodb_client();
@@ -16633,6 +16624,7 @@ impl App {
             match crate::aws::services::dynamodb::run_ddb_read(client, spec).await {
                 Ok(page) => {
                     let _ = tx.send(crate::event::Event::DdbItemsLoaded {
+                        generation,
                         items: page.items,
                         last_key: page.last_key,
                         scanned: page.scanned,
@@ -16640,6 +16632,7 @@ impl App {
                 }
                 Err(e) => {
                     let _ = tx.send(crate::event::Event::DdbItemsError {
+                        generation,
                         message: e.to_string()});
                 }
             }
@@ -16671,6 +16664,8 @@ impl App {
 
         let mut run: Option<bool> = None; // Some(append)
         let mut toggle_layout = false;
+        let mut copy: Option<String> = None;
+        let mut edit: Option<String> = None;
         {
             let b = &mut self.ddb_browser;
             match b.focus {
@@ -16718,45 +16713,100 @@ impl App {
                     },
                     _ => {}
                 },
-                BrowserFocus::Results => match key.code {
-                    KeyCode::Esc => {
-                        if b.show_detail {
+                BrowserFocus::Results => {
+                    let page = 10;
+                    let detail_max = if b.show_detail { b.detail_len().saturating_sub(1) } else { 0 };
+                    match key.code {
+                        KeyCode::Esc => {
+                            if b.show_detail {
+                                b.show_detail = false;
+                            } else {
+                                b.close();
+                            }
+                        }
+                        KeyCode::Char('q') => b.close(),
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if b.show_detail {
+                                b.detail_scroll = b.detail_scroll.min(detail_max).saturating_sub(1);
+                            } else if b.selected_row > 0 {
+                                b.selected_row -= 1;
+                            }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if b.show_detail {
+                                b.detail_scroll = (b.detail_scroll + 1).min(detail_max);
+                            } else if b.selected_row + 1 < b.order.len() {
+                                b.selected_row += 1;
+                            }
+                        }
+                        KeyCode::PageUp => {
+                            if b.show_detail {
+                                b.detail_scroll = b.detail_scroll.min(detail_max).saturating_sub(page);
+                            } else {
+                                b.selected_row = b.selected_row.saturating_sub(page);
+                            }
+                        }
+                        KeyCode::PageDown => {
+                            if b.show_detail {
+                                b.detail_scroll = (b.detail_scroll + page).min(detail_max);
+                            } else {
+                                b.selected_row = (b.selected_row + page).min(b.order.len().saturating_sub(1));
+                            }
+                        }
+                        KeyCode::Char('g') | KeyCode::Home => {
+                            if b.show_detail {
+                                b.detail_scroll = 0;
+                            } else {
+                                b.selected_row = 0;
+                            }
+                        }
+                        KeyCode::Char('G') | KeyCode::End => {
+                            if b.show_detail {
+                                b.detail_scroll = detail_max;
+                            } else {
+                                b.selected_row = b.order.len().saturating_sub(1);
+                            }
+                        }
+                        KeyCode::Left | KeyCode::Char('h') => {
+                            b.col_cursor = b.col_cursor.saturating_sub(1);
+                        }
+                        KeyCode::Right | KeyCode::Char('l') => {
+                            if b.col_cursor + 1 < b.columns.len() {
+                                b.col_cursor += 1;
+                            }
+                        }
+                        KeyCode::Char('z') => b.cycle_sort(),
+                        KeyCode::Char('v') => {
+                            b.detail_view = b.detail_view.next();
+                            b.detail_scroll = 0;
+                            b.show_detail = b.selected_item().is_some();
+                        }
+                        KeyCode::Enter => {
+                            b.show_detail = !b.show_detail && b.selected_item().is_some();
+                            b.detail_scroll = 0;
+                        }
+                        KeyCode::Tab | KeyCode::Char('/') => {
+                            b.focus = BrowserFocus::Query;
                             b.show_detail = false;
-                        } else {
-                            b.close();
                         }
-                    }
-                    KeyCode::Char('q') => b.close(),
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if b.show_detail {
-                            b.detail_scroll = b.detail_scroll.saturating_sub(1);
-                        } else if b.selected_row > 0 {
-                            b.selected_row -= 1;
+                        KeyCode::Char('n') => {
+                            if b.last_key.is_some() && !b.loading {
+                                run = Some(true);
+                            }
                         }
+                        KeyCode::Char('y') => copy = b.selected_item_json(),
+                        KeyCode::Char('e') => edit = b.selected_item_json(),
+                        KeyCode::Char('Z') => toggle_layout = true,
+                        _ => {}
                     }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if b.show_detail {
-                            b.detail_scroll += 1;
-                        } else if b.selected_row + 1 < b.items.len() {
-                            b.selected_row += 1;
-                        }
-                    }
-                    KeyCode::Enter => {
-                        b.show_detail = !b.show_detail;
-                        b.detail_scroll = 0;
-                    }
-                    KeyCode::Tab | KeyCode::Char('/') => {
-                        b.focus = BrowserFocus::Query;
-                        b.show_detail = false;
-                    }
-                    KeyCode::Char('n') => {
-                        if b.last_key.is_some() && !b.loading {
-                            run = Some(true);
-                        }
-                    }
-                    KeyCode::Char('Z') => toggle_layout = true,
-                    _ => {}
                 }}
+        }
+        if let Some(json) = copy {
+            self.copy_to_clipboard(&json, "item JSON");
+        }
+        if let Some(json) = edit {
+            self.pending_editor_content = Some((json, ".json".to_string()));
+            self.editor_requested = true;
         }
         if toggle_layout {
             self.layout_mode = match self.layout_mode {

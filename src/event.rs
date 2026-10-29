@@ -410,7 +410,10 @@ pub enum Event {
         message: String,
     },
 
+    /// A page of item-browser results, stamped with the browser's
+    /// `generation` so a superseded query's late page is dropped.
     DdbItemsLoaded {
+        generation: u64,
         items: Vec<std::collections::HashMap<String, aws_sdk_dynamodb::types::AttributeValue>>,
         last_key:
             Option<std::collections::HashMap<String, aws_sdk_dynamodb::types::AttributeValue>>,
@@ -420,6 +423,7 @@ pub enum Event {
 
     /// The item browser query/scan failed.
     DdbItemsError {
+        generation: u64,
         message: String,
     },
 

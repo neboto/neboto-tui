@@ -171,6 +171,15 @@ in `any_pane_overlay_active` (which gates the mouse).
   expression queries and flags `math_error` rather than blanking the region.
 - **S3 object browser** (`o`): `s3_object_browser.rs` / `S3ObjectBrowserState`.
 - **DynamoDB item browser** (`i`): `ddb_item_browser.rs` / `DdbBrowserState`.
+  Columns are the key attributes (pinned left of a `│`) then every other
+  attribute, most common first, alphabetical among equals — never
+  `HashMap` order, which reshuffled them per open — with widths measured
+  from the data. `←`/`→` moves a column cursor and scrolls; `z` sorts the
+  *loaded* rows by it (no refetch). The item view (`⏎`) cycles typed rows /
+  JSON / DynamoDB JSON with `v`; `y`/`e` copy or edit the current flavour.
+  Results carry the browser's `generation` (bumped per read and on
+  open/close) and a stale one is dropped, so a slow page from a replaced
+  query can't overwrite the new one.
 - **AgentCore memory session browser** (`i`, on a memory store):
   `memory_browser.rs` / `MemoryBrowserState`. Actors → Sessions → Events
   (`t` toggles a Records mode over long-term memory). `i` is shared with the

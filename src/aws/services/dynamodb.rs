@@ -463,26 +463,52 @@ pub async fn fetch_ddb_tags(client: DdbClient, arn: String) -> Result<HashMap<St
 
 // ── AttributeValue → JSON (item browser) ──────────────────────────────────────
 
+/// An item as the browser holds it.
+pub type DdbItem = HashMap<String, AttributeValue>;
+
+/// A DynamoDB number as JSON: a real number when it survives the round trip
+/// (`42`, `1.5`), else the original string, so `12345678901234567890.123`
+/// keeps every digit instead of being rounded through an `f64`.
+fn number_json(n: &str) -> serde_json::Value {
+    use serde_json::Value;
+    if let Ok(i) = n.parse::<i64>() {
+        return Value::from(i);
+    }
+    if let Ok(u) = n.parse::<u64>() {
+        return Value::from(u);
+    }
+    match n.parse::<f64>().ok().and_then(serde_json::Number::from_f64) {
+        Some(num) if num.to_string() == n => Value::Number(num),
+        _ => Value::String(n.to_string()),
+    }
+}
+
+/// Map entries in a stable order (DynamoDB returns them unordered).
+fn sorted_entries(m: &HashMap<String, AttributeValue>) -> Vec<(&String, &AttributeValue)> {
+    let mut v: Vec<_> = m.iter().collect();
+    v.sort_by(|a, b| a.0.cmp(b.0));
+    v
+}
+
 /// Convert a DynamoDB `AttributeValue` into a `serde_json::Value` for display.
-/// Numbers stay strings (DynamoDB numbers are arbitrary precision); binary is
-/// shown as a `<binary N bytes>` placeholder.
+/// Numbers become JSON numbers where that loses nothing (see `number_json`);
+/// binary is shown as a `<binary N bytes>` placeholder.
 pub fn av_to_json(av: &AttributeValue) -> serde_json::Value {
     use serde_json::Value;
     match av {
         AttributeValue::S(s) => Value::String(s.clone()),
-        AttributeValue::N(n) => Value::String(n.clone()),
+        AttributeValue::N(n) => number_json(n),
         AttributeValue::Bool(b) => Value::Bool(*b),
         AttributeValue::Null(_) => Value::Null,
-        AttributeValue::M(m) => {
-            let map = m
-                .iter()
+        AttributeValue::M(m) => Value::Object(
+            sorted_entries(m)
+                .into_iter()
                 .map(|(k, v)| (k.clone(), av_to_json(v)))
-                .collect::<serde_json::Map<_, _>>();
-            Value::Object(map)
-        }
+                .collect(),
+        ),
         AttributeValue::L(l) => Value::Array(l.iter().map(av_to_json).collect()),
         AttributeValue::Ss(ss) => Value::Array(ss.iter().map(|s| Value::String(s.clone())).collect()),
-        AttributeValue::Ns(ns) => Value::Array(ns.iter().map(|n| Value::String(n.clone())).collect()),
+        AttributeValue::Ns(ns) => Value::Array(ns.iter().map(|n| number_json(n)).collect()),
         AttributeValue::B(b) => Value::String(format!("<binary {} bytes>", b.as_ref().len())),
         AttributeValue::Bs(bs) => Value::Array(
             bs.iter()
@@ -493,20 +519,120 @@ pub fn av_to_json(av: &AttributeValue) -> serde_json::Value {
     }
 }
 
-/// Compact single-cell rendering of an attribute for the results table.
-pub fn av_cell(av: &AttributeValue) -> String {
+/// The item in DynamoDB's own typed JSON (`{"S": "x"}`, `{"N": "1"}`), as
+/// `aws dynamodb get-item` prints it — what you paste into a `--key` or
+/// `--item`. Binary is base64, as on the wire.
+pub fn av_to_ddb_json(av: &AttributeValue) -> serde_json::Value {
+    use serde_json::{json, Value};
+    let b64 = |b: &aws_sdk_dynamodb::primitives::Blob| aws_smithy_types::base64::encode(b.as_ref());
     match av {
-        AttributeValue::S(s) => s.clone(),
-        AttributeValue::N(n) => n.clone(),
-        AttributeValue::Bool(b) => b.to_string(),
-        AttributeValue::Null(_) => "null".to_string(),
-        AttributeValue::M(m) => format!("{{{} keys}}", m.len()),
-        AttributeValue::L(l) => format!("[{} items]", l.len()),
-        AttributeValue::Ss(s) => format!("[{} strings]", s.len()),
-        AttributeValue::Ns(n) => format!("[{} numbers]", n.len()),
-        AttributeValue::B(_) | AttributeValue::Bs(_) => "<binary>".to_string(),
-        _ => String::new(),
+        AttributeValue::S(s) => json!({ "S": s }),
+        AttributeValue::N(n) => json!({ "N": n }),
+        AttributeValue::Bool(b) => json!({ "BOOL": b }),
+        AttributeValue::Null(_) => json!({ "NULL": true }),
+        AttributeValue::M(m) => json!({ "M": item_ddb_json(m) }),
+        AttributeValue::L(l) => json!({ "L": l.iter().map(av_to_ddb_json).collect::<Vec<_>>() }),
+        AttributeValue::Ss(ss) => json!({ "SS": ss }),
+        AttributeValue::Ns(ns) => json!({ "NS": ns }),
+        AttributeValue::B(b) => json!({ "B": b64(b) }),
+        AttributeValue::Bs(bs) => json!({ "BS": bs.iter().map(b64).collect::<Vec<_>>() }),
+        _ => Value::Null,
     }
+}
+
+/// `av_to_ddb_json` over a whole item, keys in stable order.
+pub fn item_ddb_json(m: &HashMap<String, AttributeValue>) -> serde_json::Value {
+    serde_json::Value::Object(
+        sorted_entries(m)
+            .into_iter()
+            .map(|(k, v)| (k.clone(), av_to_ddb_json(v)))
+            .collect(),
+    )
+}
+
+/// The DynamoDB type descriptor (`S`, `N`, `M`, …) the item view labels a row with.
+pub fn av_type(av: &AttributeValue) -> &'static str {
+    match av {
+        AttributeValue::S(_) => "S",
+        AttributeValue::N(_) => "N",
+        AttributeValue::Bool(_) => "BOOL",
+        AttributeValue::Null(_) => "NULL",
+        AttributeValue::M(_) => "M",
+        AttributeValue::L(_) => "L",
+        AttributeValue::Ss(_) => "SS",
+        AttributeValue::Ns(_) => "NS",
+        AttributeValue::B(_) => "B",
+        AttributeValue::Bs(_) => "BS",
+        _ => "?",
+    }
+}
+
+/// Past this many characters a nested preview stops descending; the cell
+/// truncates to its column anyway, this just bounds the work per cell.
+const PREVIEW_BUDGET: usize = 120;
+
+/// Compact single-cell rendering of an attribute for the results table.
+/// Nested values preview their contents (`{city: Perth, zip: 6000}`,
+/// `[a, b, c]`) rather than just a count.
+pub fn av_cell(av: &AttributeValue) -> String {
+    let mut out = String::new();
+    preview(av, &mut out);
+    out
+}
+
+fn preview(av: &AttributeValue, out: &mut String) {
+    fn seq<'a, T: 'a>(
+        out: &mut String,
+        open: char,
+        close: char,
+        items: impl ExactSizeIterator<Item = T>,
+        mut each: impl FnMut(T, &mut String),
+    ) {
+        out.push(open);
+        for (i, it) in items.enumerate() {
+            if out.len() >= PREVIEW_BUDGET {
+                out.push('…');
+                break;
+            }
+            if i > 0 {
+                out.push_str(", ");
+            }
+            each(it, out);
+        }
+        out.push(close);
+    }
+    match av {
+        AttributeValue::S(s) => out.push_str(s),
+        AttributeValue::N(n) => out.push_str(n),
+        AttributeValue::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        AttributeValue::Null(_) => out.push_str("null"),
+        AttributeValue::M(m) => {
+            let entries = sorted_entries(m);
+            seq(out, '{', '}', entries.into_iter(), |(k, v), out| {
+                out.push_str(k);
+                out.push_str(": ");
+                preview(v, out);
+            })
+        }
+        AttributeValue::L(l) => seq(out, '[', ']', l.iter(), preview),
+        AttributeValue::Ss(s) => seq(out, '[', ']', s.iter(), |s, out| out.push_str(s)),
+        AttributeValue::Ns(n) => seq(out, '[', ']', n.iter(), |n, out| out.push_str(n)),
+        AttributeValue::B(b) => out.push_str(&format!("<{} bytes>", b.as_ref().len())),
+        AttributeValue::Bs(bs) => out.push_str(&format!("<{} binaries>", bs.len())),
+        _ => {}
+    }
+}
+
+/// Order two attribute values for the browser's column sort: numbers
+/// numerically, everything else by its cell text. A missing value sorts
+/// last either way (the caller handles direction).
+pub fn av_cmp(a: &AttributeValue, b: &AttributeValue) -> std::cmp::Ordering {
+    if let (AttributeValue::N(x), AttributeValue::N(y)) = (a, b) {
+        if let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>()) {
+            return x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal);
+        }
+    }
+    av_cell(a).cmp(&av_cell(b))
 }
 
 // ── Query / Scan execution ────────────────────────────────────────────────────
@@ -796,11 +922,55 @@ mod tests {
             AttributeValue::L(vec![AttributeValue::S("x".into())]),
         );
         let v = av_to_json(&AttributeValue::M(m));
-        // Numbers stay strings (DynamoDB arbitrary precision).
-        assert_eq!(v["n"], json!("3"));
+        assert_eq!(v["n"], json!(3));
         assert_eq!(v["s"], json!("hi"));
         assert_eq!(v["b"], json!(true));
         assert_eq!(v["list"], json!(["x"]));
+    }
+
+    #[test]
+    fn numbers_keep_their_precision() {
+        use serde_json::json;
+        assert_eq!(av_to_json(&AttributeValue::N("1.5".into())), json!(1.5));
+        assert_eq!(av_to_json(&AttributeValue::N("-7".into())), json!(-7));
+        // Too precise for an f64: stays the exact string.
+        let big = "12345678901234567890.123";
+        assert_eq!(av_to_json(&AttributeValue::N(big.into())), json!(big));
+    }
+
+    #[test]
+    fn cells_preview_nested_values_in_stable_order() {
+        let mut m = HashMap::new();
+        m.insert("zip".to_string(), AttributeValue::S("6000".into()));
+        m.insert("city".to_string(), AttributeValue::S("Perth".into()));
+        assert_eq!(av_cell(&AttributeValue::M(m)), "{city: Perth, zip: 6000}");
+        let l = AttributeValue::L(vec![AttributeValue::N("1".into()), AttributeValue::Bool(true)]);
+        assert_eq!(av_cell(&l), "[1, true]");
+        let long = AttributeValue::L((0..200).map(|i| AttributeValue::N(i.to_string())).collect());
+        let cell = av_cell(&long);
+        assert!(cell.len() < 200 && cell.ends_with("…]"), "{cell}");
+    }
+
+    #[test]
+    fn ddb_json_is_typed_like_the_cli() {
+        use serde_json::json;
+        let mut item = HashMap::new();
+        item.insert("pk".to_string(), AttributeValue::S("p".into()));
+        item.insert("n".to_string(), AttributeValue::N("3".into()));
+        item.insert("tags".to_string(), AttributeValue::Ss(vec!["a".into()]));
+        item.insert("bin".to_string(), AttributeValue::B(aws_sdk_dynamodb::primitives::Blob::new(b"hi".to_vec())));
+        assert_eq!(
+            item_ddb_json(&item),
+            json!({"bin": {"B": "aGk="}, "n": {"N": "3"}, "pk": {"S": "p"}, "tags": {"SS": ["a"]}})
+        );
+    }
+
+    #[test]
+    fn sort_compares_numbers_numerically() {
+        let n = |v: &str| AttributeValue::N(v.into());
+        assert_eq!(av_cmp(&n("9"), &n("100")), std::cmp::Ordering::Less);
+        let s = |v: &str| AttributeValue::S(v.into());
+        assert_eq!(av_cmp(&s("9"), &s("100")), std::cmp::Ordering::Greater);
     }
 
     #[test]
