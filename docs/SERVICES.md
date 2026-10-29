@@ -767,6 +767,12 @@ the service you're touching.
     so the plan line shows them with `≈`.
   - History is per table **ARN** (`ddb_history.rs`), so a same-named table in
     another account keeps its own.
+  - `C` copies the read as `aws dynamodb query|scan` (and `get-item` for
+    the selected item). The CLI paginates by itself, so the command carries
+    `--max-items 50` (the browser's target) and `--page-size` (its `Limit`:
+    50 unfiltered, 1,000 filtered); without them a pasted Scan reads the
+    whole table. The 5,000-item budget has no CLI flag — the picker's note
+    says so for filtered reads.
   - Rejected: **PartiQL** (`ExecuteStatement`) as the search language. It is
     a new IAM action, and `SELECT * FROM t WHERE x = 1` on a non-key
     attribute is a full Scan with nothing on screen saying so; the compiler

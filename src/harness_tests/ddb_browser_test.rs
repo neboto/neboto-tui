@@ -55,3 +55,38 @@ async fn a_page_after_close_is_dropped() {
     assert!(app.ddb_browser.items.is_empty());
 }
 
+
+async fn key(app: &mut App, tx: &mpsc::UnboundedSender<Event>, c: char) {
+    let ev = crossterm::event::KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+    app.handle_event(Event::Key(ev), tx).await.unwrap();
+}
+
+/// `C` in the browser offers the read on screen and `get-item` for the
+/// selected item — `get-item` first once the item is open — each with the
+/// session's `--region` like every other copied command.
+#[tokio::test]
+async fn c_offers_the_read_and_get_item() {
+    use crate::ui::widgets::ddb_item_browser::{BrowserFocus, Page};
+    let (mut app, tx, _rx) = test_app().await;
+    app.ddb_browser.open(&DdbTable::test_table("orders"));
+    app.ddb_browser.query = "pk = u".into();
+    app.ddb_browser.ran = app.ddb_browser.plan().ok();
+    let item = [("pk", "u"), ("sk", "1")]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), AttributeValue::S(v.into())))
+        .collect();
+    app.ddb_browser.apply_page(Page { items: vec![item], last_key: None, scanned: 1, consumed: 0.5 }, false, true);
+    app.ddb_browser.focus = BrowserFocus::Results;
+
+    key(&mut app, &tx, 'C').await;
+    let picker = app.cli_picker.take().expect("picker with two rows");
+    let labels: Vec<&str> = picker.rows.iter().map(|r| r.label.as_str()).collect();
+    assert_eq!(labels, ["query", "get-item"]);
+    assert!(picker.rows[0].command.starts_with("aws dynamodb query --table-name orders"));
+    assert!(picker.rows[0].command.contains("--region "));
+
+    app.ddb_browser.show_detail = true;
+    key(&mut app, &tx, 'C').await;
+    let picker = app.cli_picker.take().expect("picker");
+    assert_eq!(picker.rows[0].label, "get-item");
+}

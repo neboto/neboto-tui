@@ -16719,6 +16719,7 @@ impl App {
         let mut copy: Option<(String, String)> = None; // (text, label)
         let mut edit: Option<String> = None;
         let mut stop = false;
+        let mut cli = false;
         // Page sizes come from what the last frame drew.
         let (list_h, body_h) = {
             let hits = self.popup_hits.borrow();
@@ -16837,6 +16838,7 @@ impl App {
                         }
                         KeyCode::Char('y') | KeyCode::Char('c') => copy = b.detail_copy(),
                         KeyCode::Char('Y') => copy = b.selected_item_json().map(|j| (j, "item JSON".to_string())),
+                        KeyCode::Char('C') => cli = true,
                         KeyCode::Char('e') => edit = b.selected_item_json(),
                         KeyCode::Char('Z') => toggle_layout = true,
                         _ => {}
@@ -16893,6 +16895,7 @@ impl App {
                             }
                         }
                         KeyCode::Char('y') => copy = b.selected_item_json().map(|j| (j, "item JSON".to_string())),
+                        KeyCode::Char('C') => cli = true,
                         KeyCode::Char('e') => edit = b.selected_item_json(),
                         KeyCode::Char('Z') => toggle_layout = true,
                         _ => {}
@@ -16906,6 +16909,9 @@ impl App {
         }
         if let Some((text, label)) = copy {
             self.copy_to_clipboard(&text, &label);
+        }
+        if cli {
+            self.copy_ddb_cli_command();
         }
         if let Some(json) = edit {
             self.pending_editor_content = Some((json, ".json".to_string()));
@@ -28421,6 +28427,37 @@ impl App {
             rows,
             selected: 0,
         });
+    }
+
+    /// `C` in the DynamoDB item browser: the read on screen as an `aws
+    /// dynamodb query`/`scan`, and `get-item` for the selected item — the
+    /// latter first while the item view is open. Same picker and suffix
+    /// (`--region`/`--profile`/`--endpoint-url`) as `C` everywhere else.
+    fn copy_ddb_cli_command(&mut self) {
+        use crate::aws::cli_actions::{picker_rows, CliPickerState};
+        use crate::aws::services::dynamodb::{get_item_cli_action, plan_cli_action};
+        let b = &self.ddb_browser;
+        let read = b.ran.clone().or_else(|| b.plan().ok()).map(|p| plan_cli_action(&b.table, &p));
+        let get = b
+            .selected_item()
+            .zip(b.indexes.first())
+            .and_then(|(item, base)| get_item_cli_action(&b.table, item, base));
+        let mut actions: Vec<_> = if b.show_detail { [get, read] } else { [read, get] }
+            .into_iter()
+            .flatten()
+            .collect();
+        if actions.is_empty() {
+            self.error_message = Some("Nothing to copy — run a query first".to_string());
+            return;
+        }
+        let subject = b.table.clone();
+        let rows = picker_rows(std::mem::take(&mut actions), &self.cli_context());
+        if rows.len() == 1 {
+            let row = rows.into_iter().next().expect("one row");
+            self.copy_cli_row(&row);
+            return;
+        }
+        self.cli_picker = Some(CliPickerState { subject, rows, selected: 0 });
     }
 
     /// Where copied commands point. A profile flag only reproduces the *base*

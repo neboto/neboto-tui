@@ -714,11 +714,11 @@ pub fn render_ddb_item_browser(app: &crate::app::App, area: Rect, frame: &mut Fr
     let hint = if st.focus == BrowserFocus::Query {
         " ⏎ run · ↑/↓ history · Ctrl-N index · Tab results · ? help · Esc close "
     } else if st.show_detail {
-        " j/k · Ctrl-D/U · V select · y copy · Y whole item · v view · e editor · ⏎/Esc back · Shift-drag: native "
+        " j/k · Ctrl-D/U · V select · y copy · Y whole item · C CLI · v view · e editor · ⏎/Esc back "
     } else if st.loading {
         " Esc stop reading · ←/→ columns · z sort · f filter rows · ? help "
     } else {
-        " Tab query · ⏎ item · ←/→ columns · z sort · f filter rows · n more · y copy · ? help · Esc close "
+        " Tab query · ⏎ item · ←/→ columns · z sort · f filter rows · n more · y copy · C CLI · ? help · Esc close "
     };
     let block = theme::popup_block(&format!("Items — {}", st.table)).title_bottom(
         Line::from(Span::styled(hint, Style::default().fg(theme::text_dim()))).centered(),
@@ -778,7 +778,7 @@ pub fn render_ddb_item_browser(app: &crate::app::App, area: Rect, frame: &mut Fr
 /// Centered examples/cheat-sheet popup (`?` toggles it).
 fn render_help(area: Rect, frame: &mut Frame) {
     let w = 64u16.min(area.width.saturating_sub(4));
-    let h = 24u16.min(area.height.saturating_sub(2));
+    let h = 25u16.min(area.height.saturating_sub(2));
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     let popup = Rect { x, y, width: w, height: h };
@@ -825,6 +825,7 @@ fn render_help(area: Rect, frame: &mut Frame) {
         dim("reads stop at 50 matches or 5,000 items scanned · n for more"),
         dim("f filters loaded rows · ←/→ columns · z sort · ⏎ item"),
         dim("v typed / JSON / DynamoDB JSON · y copy · e $EDITOR"),
+        dim("C copies the read as `aws dynamodb query|scan`, or get-item"),
     ];
     frame.render_widget(Paragraph::new(lines), inner);
 }
