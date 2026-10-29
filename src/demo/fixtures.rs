@@ -53,6 +53,12 @@
 //!   — DataProcessing-Bytes, i.e. log ingestion, and `nightly-report`'s
 //!   never-expiring group is the story behind it — plus Fargate vCPU from
 //!   the `orders-worker` restart loop; a closed EC2 spike was marked planned
+//! - DynamoDB (`ddb.rs`): `orders` — the table `orders-api` throttles on,
+//!   provisioned 5/5 — is a single-table design (`USER#n` / `PROFILE`,
+//!   `ORDER#…`) with a sparse `byStatus` GSI and a KEYS_ONLY `byEmail`; three
+//!   legacy-imported orders store `total` as a string, so `total > 100`
+//!   misses them. `catalog` is AppSync's `CatalogTable`. Query and Scan
+//!   evaluate their expressions, so the item browser's queries really filter
 //! - Cost's `5` / `6` pickers list the `team` tag (plus `env`, `CostCenter`)
 //!   and a `Team` cost category over the same three teams
 //!
@@ -357,6 +363,14 @@ pub static FIXTURES: &[Fixture] = &[
     // One `GetResources` per wrapped service load, told apart by its
     // `ResourceTypeFilters`; the others fall through to an empty success.
     fx!("tagging", "GetResources", when ["\"cloudwatch\""], "GetResources-cloudwatch.json"),
+    // ── DynamoDB (awsJson 1.0) — DescribeTable, Query and Scan are generated
+    //    (`ddb.rs`); these are the calls whose answer doesn't depend on the items.
+    fx!("dynamodb", "ListTables", "ListTables.json"),
+    fx!("dynamodb", "DescribeTimeToLive", when ["\"orders\""], "DescribeTimeToLive-orders.json"),
+    fx!("dynamodb", "DescribeTimeToLive", "DescribeTimeToLive.json"),
+    fx!("dynamodb", "ListTagsOfResource", when ["table/orders"], "ListTagsOfResource-orders.json"),
+    fx!("dynamodb", "ListTagsOfResource", "ListTagsOfResource.json"),
+
     // ── CloudWatch Logs ──────────────────────────────────────────────────────
     // FilterLogEvents for the scripted groups is generated (see generate.rs).
     fx!("logs", "DescribeLogGroups", "DescribeLogGroups.json"),

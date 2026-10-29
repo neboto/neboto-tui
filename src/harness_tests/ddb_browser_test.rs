@@ -55,7 +55,6 @@ async fn a_page_after_close_is_dropped() {
     assert!(app.ddb_browser.items.is_empty());
 }
 
-
 async fn key(app: &mut App, tx: &mpsc::UnboundedSender<Event>, c: char) {
     let ev = crossterm::event::KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
     app.handle_event(Event::Key(ev), tx).await.unwrap();
@@ -89,4 +88,54 @@ async fn c_offers_the_read_and_get_item() {
     key(&mut app, &tx, 'C').await;
     let picker = app.cli_picker.take().expect("picker");
     assert_eq!(picker.rows[0].label, "get-item");
+}
+
+async fn press(app: &mut App, tx: &mpsc::UnboundedSender<Event>, code: KeyCode) {
+    let ev = crossterm::event::KeyEvent::new(code, KeyModifiers::NONE);
+    app.handle_event(Event::Key(ev), tx).await.unwrap();
+}
+
+/// `/` searches what's on screen, as everywhere in neboto: the loaded rows
+/// in the results, the lines of the item in the item view. Only `Tab` goes
+/// to the query line (which runs a read).
+#[tokio::test]
+async fn slash_searches_the_screen_and_tab_goes_to_the_query() {
+    use crate::ui::widgets::ddb_item_browser::{BrowserFocus, Page};
+    let (mut app, tx, _rx) = test_app().await;
+    app.ddb_browser.open(&DdbTable::test_table("orders"));
+    let mk = |pk: &str, email: &str| -> std::collections::HashMap<String, AttributeValue> {
+        [("pk", pk), ("sk", "1"), ("email", email)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), AttributeValue::S(v.into())))
+            .collect()
+    };
+    let items = vec![mk("a", "x@ex.com"), mk("b", "legacy@ex.com")];
+    app.ddb_browser.apply_page(Page { items, last_key: None, scanned: 2, consumed: 0.0 }, false, true);
+    app.ddb_browser.focus = BrowserFocus::Results;
+
+    press(&mut app, &tx, KeyCode::Char('/')).await;
+    for c in "legacy".chars() {
+        press(&mut app, &tx, KeyCode::Char(c)).await;
+    }
+    assert_eq!(app.ddb_browser.focus, BrowserFocus::Results, "`/` doesn't leave the results");
+    assert_eq!(app.ddb_browser.order.len(), 1);
+    assert!(app.ddb_browser.query.is_empty(), "nothing typed into the query line");
+    press(&mut app, &tx, KeyCode::Enter).await;
+    assert!(!app.ddb_browser.local_editing);
+
+    // Item view: `/` finds a line, `n` moves on.
+    press(&mut app, &tx, KeyCode::Enter).await;
+    assert!(app.ddb_browser.show_detail);
+    press(&mut app, &tx, KeyCode::Char('/')).await;
+    press(&mut app, &tx, KeyCode::Char('e')).await;
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    assert!(app.ddb_browser.item_searching);
+    assert!(!app.ddb_browser.item_matches().is_empty());
+    let on = app.ddb_browser.detail_cursor;
+    assert!(app.ddb_browser.item_matches().contains(&on));
+    press(&mut app, &tx, KeyCode::Enter).await;
+    assert!(app.ddb_browser.show_detail, "Enter ends the search, not the item view");
+
+    press(&mut app, &tx, KeyCode::Tab).await;
+    assert_eq!(app.ddb_browser.focus, BrowserFocus::Query);
 }

@@ -1,5 +1,5 @@
-//! Responses computed per request instead of stored: log events and
-//! metric series.
+//! Responses computed per request instead of stored: log events, metric
+//! series, and DynamoDB's tables (`ddb.rs`).
 //!
 //! A stored `FilterLogEvents` body can't drive a live tail — the tail asks
 //! for everything after its cursor, and a fixed body either repeats or never
@@ -19,6 +19,7 @@ pub fn respond(req: &DemoRequest, now_ms: i64) -> Option<String> {
     match (req.service.as_str(), req.operation.as_str()) {
         ("logs", "FilterLogEvents") => filter_log_events(&req.body, now_ms),
         ("monitoring", "GetMetricData") => get_metric_data(&req.body, now_ms / 1000),
+        ("dynamodb", _) => super::ddb::respond(req, now_ms / 1000),
         _ => None,
     }
 }
@@ -161,6 +162,13 @@ fn metric_value(name: &str, resource: &str, seed: i64, t: i64, period: i64, now:
         "Errors" if resource == "orders-api" && now - t < 2_400 => (9.0 * per, 3.0 * per, 3.0 * per),
         "Errors" => (0.4 * per, 0.4 * per, 0.6 * per),
         "Throttles" => (0.0, 0.0, 0.0),
+        // `orders` runs at its provisioned 5 WCU (300 a minute), and the
+        // writes over it throttle — the `orders-api` log tail's story.
+        "ConsumedWriteCapacityUnits" if resource == "orders" => (285.0 * per, 12.0 * per, 10.0 * per),
+        "ConsumedReadCapacityUnits" if resource == "orders" => (160.0 * per, 50.0 * per, 25.0 * per),
+        "WriteThrottleEvents" if resource == "orders" => (3.5 * per, 1.5 * per, 2.0 * per),
+        "ConsumedReadCapacityUnits" | "ConsumedWriteCapacityUnits" => (12.0 * per, 5.0 * per, 4.0 * per),
+        "ReadThrottleEvents" | "WriteThrottleEvents" => (0.0, 0.0, 0.0),
         "Duration" => (180.0, 40.0, 50.0),
         "ConcurrentExecutions" => (4.0, 2.0, 2.0),
         "DatabaseConnections" => (42.0, 8.0, 4.0),

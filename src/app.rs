@@ -16773,6 +16773,24 @@ impl App {
                     }
                     _ => {}
                 },
+                // `/` in the item view: type to jump to the first line at or
+                // after the cursor that contains the text.
+                BrowserFocus::Results if b.show_detail && b.item_searching => match key.code {
+                    KeyCode::Esc => {
+                        b.item_searching = false;
+                        b.item_search.clear();
+                    }
+                    KeyCode::Enter | KeyCode::Tab => b.item_searching = false,
+                    KeyCode::Backspace => {
+                        b.item_search.pop();
+                        b.item_search_jump(0, body_h);
+                    }
+                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        b.item_search.push(c);
+                        b.item_search_jump(0, body_h);
+                    }
+                    _ => {}
+                },
                 // The item view (`⏎` on a row): a line cursor with vim-style
                 // motion and a linewise selection, like the detail pane.
                 BrowserFocus::Results if b.show_detail => {
@@ -16786,10 +16804,18 @@ impl App {
                         KeyCode::Esc => {
                             if b.detail_anchor.is_some() {
                                 b.detail_anchor = None;
+                            } else if !b.item_search.is_empty() {
+                                b.item_search.clear();
                             } else {
                                 b.show_detail = false;
                             }
                         }
+                        KeyCode::Char('/') => {
+                            b.item_search.clear();
+                            b.item_searching = true;
+                        }
+                        KeyCode::Char('n') => b.item_search_jump(1, h),
+                        KeyCode::Char('N') => b.item_search_jump(-1, h),
                         KeyCode::Char('q') => b.close(),
                         KeyCode::Char('d') if ctrl => b.detail_move(h as isize / 2, h),
                         KeyCode::Char('u') if ctrl => b.detail_move(-(h as isize / 2), h),
@@ -16832,7 +16858,7 @@ impl App {
                             b.reset_detail();
                         }
                         KeyCode::Enter | KeyCode::Char('h') | KeyCode::Left => b.show_detail = false,
-                        KeyCode::Tab | KeyCode::Char('/') => {
+                        KeyCode::Tab => {
                             b.focus = BrowserFocus::Query;
                             b.show_detail = false;
                         }
@@ -16863,7 +16889,9 @@ impl App {
                         KeyCode::Char('u') if ctrl => b.selected_row = b.selected_row.saturating_sub(page / 2),
                         KeyCode::Char(_) if ctrl => {}
                         KeyCode::Char('q') => b.close(),
-                        KeyCode::Char('f') => b.local_editing = true,
+                        // `/` searches what's on screen, as everywhere in
+                        // neboto: here, the loaded rows. `f` is the old key.
+                        KeyCode::Char('/') | KeyCode::Char('f') => b.local_editing = true,
                         KeyCode::Up | KeyCode::Char('k') => b.selected_row = b.selected_row.saturating_sub(1),
                         KeyCode::Down | KeyCode::Char('j') => b.selected_row = (b.selected_row + 1).min(last),
                         KeyCode::PageUp => b.selected_row = b.selected_row.saturating_sub(page),
@@ -16888,7 +16916,7 @@ impl App {
                             b.reset_detail();
                             b.show_detail = b.selected_item().is_some();
                         }
-                        KeyCode::Tab | KeyCode::Char('/') => b.focus = BrowserFocus::Query,
+                        KeyCode::Tab => b.focus = BrowserFocus::Query,
                         KeyCode::Char('n') => {
                             if b.last_key.is_some() && !b.loading {
                                 run = Some(true);

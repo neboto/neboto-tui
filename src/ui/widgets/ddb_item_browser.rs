@@ -126,6 +126,10 @@ pub struct DdbBrowserState {
     pub detail_cursor: usize,
     pub detail_anchor: Option<usize>,
     pub detail_drag: Option<usize>,
+    /// `/` in the item view: the text, and whether it's still being typed.
+    /// Kept across items, so the same attribute is found in the next one.
+    pub item_search: String,
+    pub item_searching: bool,
     pub show_help: bool,
 }
 
@@ -168,6 +172,8 @@ impl DdbBrowserState {
             detail_cursor: 0,
             detail_anchor: None,
             detail_drag: None,
+            item_search: String::new(),
+            item_searching: false,
             show_help: false,
         }
     }
@@ -532,6 +538,36 @@ impl DdbBrowserState {
         }
     }
 
+    /// Lines of the item view containing the `/` text (case-insensitive).
+    pub fn item_matches(&self) -> Vec<usize> {
+        let needle = self.item_search.to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        self.detail_texts()
+            .iter()
+            .enumerate()
+            .filter(|(_, (line, _))| line.to_lowercase().contains(&needle))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Put the cursor on a match: `0` the first at or after the cursor (as
+    /// you type), `1` the next, `-1` the previous — wrapping both ways.
+    pub fn item_search_jump(&mut self, dir: isize, height: usize) {
+        let m = self.item_matches();
+        let c = self.detail_cursor;
+        let target = match dir {
+            0 => m.iter().find(|&&i| i >= c).or(m.first()),
+            d if d > 0 => m.iter().find(|&&i| i > c).or(m.first()),
+            _ => m.iter().rev().find(|&&i| i < c).or(m.last()),
+        };
+        if let Some(&t) = target {
+            self.detail_anchor = None;
+            self.detail_move(t as isize - c as isize, height);
+        }
+    }
+
     /// What `y` copies, with the toast's label: the selected lines (common
     /// indent removed), or the cursor line's value.
     pub fn detail_copy(&self) -> Option<(String, String)> {
@@ -714,11 +750,11 @@ pub fn render_ddb_item_browser(app: &crate::app::App, area: Rect, frame: &mut Fr
     let hint = if st.focus == BrowserFocus::Query {
         " ⏎ run · ↑/↓ history · Ctrl-N index · Tab results · ? help · Esc close "
     } else if st.show_detail {
-        " j/k · Ctrl-D/U · V select · y copy · Y whole item · C CLI · v view · e editor · ⏎/Esc back "
+        " j/k · Ctrl-D/U · / search · V select · y copy · Y whole item · C CLI · v view · e editor · ⏎/Esc back "
     } else if st.loading {
-        " Esc stop reading · ←/→ columns · z sort · f filter rows · ? help "
+        " Esc stop reading · ←/→ columns · z sort · / filter rows · ? help "
     } else {
-        " Tab query · ⏎ item · ←/→ columns · z sort · f filter rows · n more · y copy · C CLI · ? help · Esc close "
+        " Tab query · ⏎ item · / filter rows · ←/→ columns · z sort · n more · y copy · C CLI · ? help · Esc close "
     };
     let block = theme::popup_block(&format!("Items — {}", st.table)).title_bottom(
         Line::from(Span::styled(hint, Style::default().fg(theme::text_dim()))).centered(),
@@ -823,7 +859,8 @@ fn render_help(area: Rect, frame: &mut Frame) {
         Line::raw(""),
         head("Results"),
         dim("reads stop at 50 matches or 5,000 items scanned · n for more"),
-        dim("f filters loaded rows · ←/→ columns · z sort · ⏎ item"),
+        dim("/ filters loaded rows (free) · ←/→ columns · z sort · ⏎ item"),
+        dim("in an item, / finds a line · n/N next/previous"),
         dim("v typed / JSON / DynamoDB JSON · y copy · e $EDITOR"),
         dim("C copies the read as `aws dynamodb query|scan`, or get-item"),
     ];
@@ -1012,6 +1049,23 @@ fn render_results(st: &DdbBrowserState, area: Rect, hits: &std::cell::RefCell<cr
         return;
     }
 
+    if st.order.is_empty() {
+        // The local filter hid every row. Say that it only looked at what's
+        // loaded — a miss here isn't a miss in the table.
+        let more = if st.last_key.is_some() { " — n reads more, or Tab to query the table" } else { "" };
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::styled(
+                    format!("  No match for \"{}\" in the {} loaded rows{}.", st.local_filter, st.items.len(), more),
+                    Style::default().fg(theme::text_dim()),
+                ),
+                Line::styled("  Esc clears the filter.", Style::default().fg(theme::text_dim())),
+            ]),
+            area,
+        );
+        return;
+    }
+
     let focused = st.focus == BrowserFocus::Results;
     let cols = visible_columns(st, (area.width as usize).saturating_sub(1));
     let sep = |i: usize| -> Span<'static> {
@@ -1092,9 +1146,21 @@ fn render_item_detail(
     let selecting = st.detail_anchor.is_some();
     let pos = if len > height { format!(" · {}/{}", st.detail_cursor + 1, len) } else { String::new() };
     let sel = if selecting { format!(" · {} lines selected (y copies)", hi - lo + 1) } else { String::new() };
+    let matches = st.item_matches();
+    let search = if st.item_searching || !st.item_search.is_empty() {
+        let at = matches.iter().position(|&m| m == st.detail_cursor).map_or("–".to_string(), |p| (p + 1).to_string());
+        let caret = if st.item_searching { "▏" } else { "" };
+        if matches.is_empty() && !st.item_search.is_empty() {
+            format!(" · /{}{} no match", st.item_search, caret)
+        } else {
+            format!(" · /{}{} {}/{} (n/N)", st.item_search, caret, at, matches.len())
+        }
+    } else {
+        String::new()
+    };
     frame.render_widget(
         Paragraph::new(Line::styled(
-            format!(" {} · v to switch{}{}", st.detail_view.label(), pos, sel),
+            format!(" {} · v to switch{}{}{}", st.detail_view.label(), pos, sel, search),
             Style::default().fg(theme::text_dim()),
         )),
         header,
@@ -1152,7 +1218,12 @@ fn render_item_detail(
         .map(|(i, spans)| {
             let n = scroll + i;
             let marked = if selecting { n >= lo && n <= hi } else { n == st.detail_cursor };
-            let mut l = vec![Span::raw("  ")];
+            let gutter = if matches.contains(&n) {
+                Span::styled("› ", Style::default().fg(theme::accent()).add_modifier(Modifier::BOLD))
+            } else {
+                Span::raw("  ")
+            };
+            let mut l = vec![gutter];
             l.extend(spans);
             let line = Line::from(l);
             if marked && focused {
@@ -1188,7 +1259,7 @@ fn render_status(st: &DdbBrowserState, area: Rect, frame: &mut Frame) {
     };
     let mut spans = Vec::new();
     if st.local_editing || !st.local_filter.is_empty() {
-        spans.push(Span::styled(" f ", Style::default().fg(theme::accent()).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(" / ", Style::default().fg(theme::accent()).add_modifier(Modifier::BOLD)));
         spans.push(Span::styled(
             format!("{}{}", st.local_filter, if st.local_editing { "▏" } else { "" }),
             Style::default().fg(theme::text_primary()),
@@ -1510,5 +1581,32 @@ mod tests {
         st.detail_scroll_by(-100, 10);
         assert_eq!(st.detail_scroll, 0);
         assert!(st.detail_cursor < 10);
+    }
+
+    #[test]
+    fn item_search_jumps_between_matching_lines_and_wraps() {
+        let st_items = vec![item(&[
+            ("pk", s("p")),
+            ("sk", s("1")),
+            ("email", s("a@b.com")),
+            ("note", s("no")),
+            ("alt_email", s("c@d.com")),
+        ])];
+        let mut st = browser(st_items);
+        st.show_detail = true;
+        // Typed rows: pk, sk, alt_email, email, note.
+        st.item_search = "EMAIL".into();
+        assert_eq!(st.item_matches(), [2, 3]);
+        st.item_search_jump(0, 10);
+        assert_eq!(st.detail_cursor, 2);
+        st.item_search_jump(1, 10);
+        assert_eq!(st.detail_cursor, 3);
+        st.item_search_jump(1, 10);
+        assert_eq!(st.detail_cursor, 2, "wraps forward");
+        st.item_search_jump(-1, 10);
+        assert_eq!(st.detail_cursor, 3, "wraps back");
+        st.item_search = "zzz".into();
+        st.item_search_jump(1, 10);
+        assert_eq!(st.detail_cursor, 3, "no match leaves the cursor");
     }
 }
