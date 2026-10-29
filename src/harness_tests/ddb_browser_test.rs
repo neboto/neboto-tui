@@ -55,7 +55,6 @@ async fn a_page_after_close_is_dropped() {
     assert!(app.ddb_browser.items.is_empty());
 }
 
-
 async fn key(app: &mut App, tx: &mpsc::UnboundedSender<Event>, c: char) {
     let ev = crossterm::event::KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
     app.handle_event(Event::Key(ev), tx).await.unwrap();
@@ -89,6 +88,7 @@ async fn c_offers_the_read_and_get_item() {
     key(&mut app, &tx, 'C').await;
     let picker = app.cli_picker.take().expect("picker");
     assert_eq!(picker.rows[0].label, "get-item");
+}
 
 async fn press(app: &mut App, tx: &mpsc::UnboundedSender<Event>, code: KeyCode) {
     let ev = crossterm::event::KeyEvent::new(code, KeyModifiers::NONE);
