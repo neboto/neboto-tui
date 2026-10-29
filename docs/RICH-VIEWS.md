@@ -183,7 +183,10 @@ in `any_pane_overlay_active` (which gates the mouse).
   The query line is the one-line language in `dynamodb/query.rs`; one
   read loops pages (`ddb_task`, aborted by `Esc`, a new read or closing).
   `n` continues the plan that **ran** (`DdbBrowserState::ran`), not the
-  text in the line. `f` filters the loaded rows locally. The item view
+  text in the line. `/` searches what's on screen, as everywhere else: in
+  the results it filters the loaded rows (no API call; `f` is an alias, and
+  a miss says it only looked at what's loaded), in the item view it finds
+  lines (`n`/`N`). Only `Tab` reaches the query line. The item view
   has its own line cursor (`detail_cursor`, half-page `Ctrl-D`/`Ctrl-U`,
   `V`/`J`/`K` selection; `y` copies the cursor line's *value* or the
   selection, `Y` the whole item) and its own mouse path
