@@ -241,7 +241,7 @@ Each takes over the keymap while open; `Esc` closes, `Z` goes full-width.
 | `U` | Referenced by — the loaded resources that mention this one; `⏎` jumps to one |
 | `N` | Network access — the effective security group rules across every attached group, then the subnet NACLs; `t` cycles inbound / outbound |
 | `o` | S3 object browser — folders, `/` filter, `V` version history incl. delete markers, `i` metadata, `v`/`e` preview, `d` download, `p` presigned URL; `t` on a `.tfstate` opens the Terraform state viewer (one row per instance, `Enter` jumps to the live resource) |
-| `i` | DynamoDB item browser (Scan / Query, filters, GSI/LSI) · AgentCore memory session browser |
+| `i` | DynamoDB item browser (one-line queries — picks Query vs Scan and the index for you, shows the cost) · AgentCore memory session browser |
 | `s` | SSM Session Manager · ECS Exec · assume an org member-account role |
 | `x` / `Y` | Reveal / copy a secret or SSM parameter value (never cached); on a Route 53 record's Test answer section, `x` asks Route 53 what it answers (again on each press) |
 | `O` | Open this resource in the AWS Console |
@@ -260,7 +260,7 @@ the faster route, but nothing needs it.
 | Click the detail pane's title bar | Full width (`Z`) |
 | Click `←` / `→` at the service strip's left edge | Back / forward through history |
 | Wheel | Scroll the list, the detail body, a picker, or an in-pane view (the log tail pauses following, as `k` does) |
-| Drag | Select a range of rows (then `y` copies it) |
+| Drag | Select a range of rows (then `y` copies it) — also lines in the DynamoDB item view |
 | Right-click | Back (`Ctrl-O`); in a popup or an in-pane view (`m`, `t`, `o`, `i`, `W`, `U`, `N`), close it |
 | Click outside a popup | Close it (`Esc`) |
 

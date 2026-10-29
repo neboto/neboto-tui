@@ -741,6 +741,36 @@ the service you're touching.
   API server) are deliberately out of scope. Add-on "update-available" costs one
   `DescribeAddonVersions` per add-on; Insights (`UPGRADE_READINESS`) is the
   headline. `t` tails `/aws/eks/<name>/cluster`.
+- **DynamoDB item browser** (`i`, `ddb_item_browser.rs`; the language is
+  `dynamodb/query.rs`) — one query line, compiled per keystroke into a Query
+  or a Scan; the plan line under it shows which and why. Things the API
+  makes you learn the hard way, all handled in the compiler:
+  - A Query's `FilterExpression` **can't read the queried index's key
+    attributes**, and a key condition takes **one** sort-key clause. So
+    `sk >= a and sk <= b` is merged into `BETWEEN`; any other second
+    sort-key clause (`sk > a and sk < b`, or a key inside an `or`) is a
+    compile error that says to use `between`, not a fallback to Scan.
+  - A GSI with `KEYS_ONLY`/`INCLUDE` projection only returns projected
+    attributes, so a filter on anything else matches nothing. Auto index
+    choice skips such an index when the query reads an unprojected attribute
+    (the Scan's reason names it); pinning it with `Ctrl-N` still works.
+  - `Limit` caps items **evaluated**, before the filter. One page of a
+    selective filter is usually empty with more to read, which is why one read
+    loops pages until `READ_TARGET` (50) matches or `READ_BUDGET` (5,000)
+    evaluated. The budget is what bounds the cost of one `⏎`/`n`; the plan
+    line's `≤ N RCU` estimate is based on it (0.5 RCU per 4 KB at the table's
+    average item size).
+  - A key attribute's declared type decides a value's type (`year = 2024` on
+    an `S` key sends a string); sending the wrong type is a
+    `ValidationException` about the key condition, not an empty result.
+  - `ItemCount` / `TableSizeBytes` are refreshed by AWS about every six hours,
+    so the plan line shows them with `≈`.
+  - History is per table **ARN** (`ddb_history.rs`), so a same-named table in
+    another account keeps its own.
+  - Rejected: **PartiQL** (`ExecuteStatement`) as the search language. It is
+    a new IAM action, and `SELECT * FROM t WHERE x = 1` on a non-key
+    attribute is a full Scan with nothing on screen saying so; the compiler
+    exists to show that.
 - **RAM** (`@ram`) — owner-scope toggle (`t`, SELF/OTHER-ACCOUNTS), variant-cached.
 - **Trusted Advisor** (`@ta`, `trusted_advisor.rs`) — single-list of
   checks (legacy Support API, us-east-1, Business/Enterprise plan required),

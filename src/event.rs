@@ -418,7 +418,12 @@ pub enum Event {
         last_key:
             Option<std::collections::HashMap<String, aws_sdk_dynamodb::types::AttributeValue>>,
         scanned: i32,
+        /// Read capacity the page consumed.
+        consumed: f64,
         append: bool,
+        /// The last page of this read (it reached its target, its budget or
+        /// the end of the table).
+        done: bool,
     },
 
     /// The item browser query/scan failed.

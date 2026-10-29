@@ -5,6 +5,7 @@
 //! filter and run it, replacing the fresh results with the old ones.
 
 use super::*;
+use crate::aws::services::dynamodb::DdbTable;
 use aws_sdk_dynamodb::types::AttributeValue;
 
 fn page(generation: u64, pk: &str) -> Event {
@@ -13,14 +14,16 @@ fn page(generation: u64, pk: &str) -> Event {
         items: vec![[("pk".to_string(), AttributeValue::S(pk.into()))].into_iter().collect()],
         last_key: None,
         scanned: 1,
+        consumed: 0.5,
         append: false,
+        done: true,
     }
 }
 
 #[tokio::test]
 async fn a_superseded_page_is_dropped() {
     let (mut app, tx, _rx) = test_app().await;
-    app.ddb_browser.open("orders".into(), vec![]);
+    app.ddb_browser.open(&DdbTable::test_table("orders"));
     let stale = app.ddb_browser.generation;
     app.ddb_browser.generation += 1; // a newer query was run
     let fresh = app.ddb_browser.generation;
@@ -43,10 +46,10 @@ async fn a_superseded_page_is_dropped() {
 #[tokio::test]
 async fn a_page_after_close_is_dropped() {
     let (mut app, tx, _rx) = test_app().await;
-    app.ddb_browser.open("orders".into(), vec![]);
+    app.ddb_browser.open(&DdbTable::test_table("orders"));
     let in_flight = app.ddb_browser.generation;
     app.ddb_browser.close();
-    app.ddb_browser.open("customers".into(), vec![]);
+    app.ddb_browser.open(&DdbTable::test_table("customers"));
 
     app.handle_event(page(in_flight, "orders-item"), &tx).await.unwrap();
     assert!(app.ddb_browser.items.is_empty());

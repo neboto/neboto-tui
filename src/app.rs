@@ -209,6 +209,10 @@ enum Modal {
 pub struct PopupHits {
     pub area: Option<Rect>,
     pub rows: Vec<(usize, Rect)>,
+    /// A second, scrollable body under the rows (the DynamoDB item view):
+    /// its rect, and each drawn line with its index.
+    pub body: Option<Rect>,
+    pub body_rows: Vec<(usize, Rect)>,
 }
 
 impl PopupHits {
@@ -229,6 +233,17 @@ impl PopupHits {
                 let rect = Rect { x: list.x, y: list.y + line as u16, width: list.width, height: 1 };
                 (idx, rect)
             })
+            .collect();
+    }
+
+    /// Record the second body (see `body`): `area` drawn from line `offset`
+    /// of `len`.
+    pub fn record_body(&mut self, area: Rect, offset: usize, len: usize) {
+        self.body = Some(area);
+        self.body_rows = (offset..len)
+            .take(area.height as usize)
+            .enumerate()
+            .map(|(line, idx)| (idx, Rect { x: area.x, y: area.y + line as u16, width: area.width, height: 1 }))
             .collect();
     }
 
@@ -2070,6 +2085,9 @@ pub struct App {
     /// from landing — without the abort its fetch keeps paging AWS in the
     /// background, spending rate limit the new view is about to need (#115).
     load_task: Option<tokio::task::AbortHandle>,
+    /// The item browser's in-flight read (several pages toward its target);
+    /// aborted by a new read, `Esc` and closing the browser.
+    ddb_task: Option<tokio::task::AbortHandle>,
     /// Watch mode (`w`): periodic auto-refresh of the current view.
     pub watch: WatchState,
     /// While a watch-mode refresh streams in, batches divert here instead of
@@ -3082,6 +3100,7 @@ impl App {
             audit_facts: None,
             audit_facts_loading: false,
             load_task: None,
+            ddb_task: None,
             watch: WatchState::new(config.watch.unwrap_or(false), config.watch_interval),
             watch_staging: None,
             switching_region: None,
@@ -3655,9 +3674,17 @@ impl App {
                 items,
                 last_key,
                 scanned,
-                append} => {
+                consumed,
+                append,
+                done} => {
                 if generation == self.ddb_browser.generation {
-                    self.ddb_browser.apply_page(items, last_key, scanned.max(0) as usize, append);
+                    let page = crate::ui::widgets::ddb_item_browser::Page {
+                        items,
+                        last_key,
+                        scanned: scanned.max(0) as usize,
+                        consumed,
+                    };
+                    self.ddb_browser.apply_page(page, append, done);
                 }
             }
             Event::DdbItemsError { generation, message } => {
@@ -16577,66 +16604,91 @@ impl App {
     }
 
     fn open_ddb_browser(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(t) = self.selected_ddb_table() {
-            let table = t.name.clone();
-            let indexes = t.queryable_indexes();
-            self.ddb_browser.open(table, indexes);
-            // Auto-run a first-page Scan so items show immediately.
-            self.ddb_browser.focus =
-                crate::ui::widgets::ddb_item_browser::BrowserFocus::Results;
-            self.trigger_ddb_query(event_tx, false);
-        }
-    }
-
-    /// Execute the browser's current Scan/Query (or fetch the next page).
-    fn trigger_ddb_query(&mut self, event_tx: &mpsc::UnboundedSender<Event>, append: bool) {
-        use crate::aws::services::dynamodb::DdbQuerySpec;
-        let b = &self.ddb_browser;
-        let Some(idx) = b.current_index() else {
+        let Some(t) = self.selected_ddb_table() else {
             return;
         };
-        // A Query needs a partition-key value; fall back to Scan otherwise.
-        let query = b.query_mode && !b.pk_value.trim().is_empty();
-        let spec = DdbQuerySpec {
-            table: b.table.clone(),
-            index_name: if idx.name.is_empty() {
-                None
-            } else {
-                Some(idx.name.clone())
-            },
-            query,
-            pk_name: idx.pk_name.clone(),
-            pk_type: idx.pk_type.clone(),
-            pk_value: b.pk_value.trim().to_string(),
-            sk_name: idx.sk_name.clone(),
-            sk_type: idx.sk_type.clone(),
-            sk_op: b.sk_op,
-            sk_value: b.sk_value.clone(),
-            filter: b.filter.clone(),
-            start_key: if append { b.last_key.clone() } else { None }};
+        let t = t.clone();
+        self.ddb_browser.open(&t);
+        // Auto-run a first page so items show immediately — an unfiltered
+        // read stops at 50 items, so this costs a few RCU at most.
+        self.ddb_browser.focus = crate::ui::widgets::ddb_item_browser::BrowserFocus::Results;
+        self.trigger_ddb_query(event_tx, false);
+    }
+
+    fn stop_ddb_read(&mut self) {
+        if let Some(task) = self.ddb_task.take() {
+            task.abort();
+        }
         self.ddb_browser.generation = self.ddb_browser.generation.wrapping_add(1);
+        self.ddb_browser.loading = false;
+    }
+
+    /// Run the query line (or, with `append`, continue the read on screen).
+    /// One read fetches pages until it has `READ_TARGET` matches, runs out
+    /// of table, or has evaluated `READ_BUDGET` items — so a selective
+    /// filter doesn't come back "no items" after one page.
+    fn trigger_ddb_query(&mut self, event_tx: &mpsc::UnboundedSender<Event>, append: bool) {
+        use crate::aws::services::dynamodb::{next_page_limit, read_done, read_page};
+        let (plan, start_key) = if append {
+            match (&self.ddb_browser.ran, &self.ddb_browser.last_key) {
+                (Some(p), Some(k)) => (p.clone(), Some(k.clone())),
+                _ => return,
+            }
+        } else {
+            match self.ddb_browser.plan() {
+                Ok(p) => (p, None),
+                Err(e) => {
+                    self.ddb_browser.error = Some(e.message);
+                    return;
+                }
+            }
+        };
+        if !append {
+            self.ddb_browser.remember_query();
+            self.ddb_browser.ran = Some(plan.clone());
+        }
+        self.stop_ddb_read();
         let generation = self.ddb_browser.generation;
         self.ddb_browser.loading = true;
         self.ddb_browser.error = None;
         let client = self.aws_clients.dynamodb_client();
+        let table = self.ddb_browser.table.clone();
         let tx = event_tx.clone();
-        tokio::spawn(async move {
-            match crate::aws::services::dynamodb::run_ddb_read(client, spec).await {
-                Ok(page) => {
-                    let _ = tx.send(crate::event::Event::DdbItemsLoaded {
-                        generation,
-                        items: page.items,
-                        last_key: page.last_key,
-                        scanned: page.scanned,
-                        append});
-                }
-                Err(e) => {
-                    let _ = tx.send(crate::event::Event::DdbItemsError {
-                        generation,
-                        message: e.to_string()});
+        let task = tokio::spawn(async move {
+            let filtered = plan.filter.is_some();
+            let (mut matched, mut scanned) = (0usize, 0usize);
+            let mut key = start_key;
+            let mut first = true;
+            loop {
+                let limit = next_page_limit(filtered, matched, scanned);
+                match read_page(&client, &table, &plan, key, limit).await {
+                    Ok(page) => {
+                        matched += page.items.len();
+                        scanned += page.scanned.max(0) as usize;
+                        let done = read_done(page.last_key.is_some(), matched, scanned);
+                        key = page.last_key.clone();
+                        let _ = tx.send(Event::DdbItemsLoaded {
+                            generation,
+                            items: page.items,
+                            last_key: page.last_key,
+                            scanned: page.scanned,
+                            consumed: page.consumed,
+                            append: append || !first,
+                            done,
+                        });
+                        if done {
+                            break;
+                        }
+                        first = false;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Event::DdbItemsError { generation, message: e.to_string() });
+                        break;
+                    }
                 }
             }
         });
+        self.ddb_task = Some(task.abort_handle());
     }
 
     /// All key handling for the DynamoDB item browser overlay. Splits between
@@ -16646,7 +16698,7 @@ impl App {
         key: crossterm::event::KeyEvent,
         event_tx: &mpsc::UnboundedSender<Event>,
     ) {
-        use crate::ui::widgets::ddb_item_browser::{BrowserFocus, QueryField};
+        use crate::ui::widgets::ddb_item_browser::BrowserFocus;
         use crossterm::event::KeyCode;
 
         // `?` toggles the examples cheat-sheet from anywhere; while it's open,
@@ -16664,109 +16716,158 @@ impl App {
 
         let mut run: Option<bool> = None; // Some(append)
         let mut toggle_layout = false;
-        let mut copy: Option<String> = None;
+        let mut copy: Option<(String, String)> = None; // (text, label)
         let mut edit: Option<String> = None;
+        let mut stop = false;
+        // Page sizes come from what the last frame drew.
+        let (list_h, body_h) = {
+            let hits = self.popup_hits.borrow();
+            (hits.rows.len(), hits.body.map_or(10, |r| r.height as usize).max(1))
+        };
         {
             let b = &mut self.ddb_browser;
             match b.focus {
-                BrowserFocus::Query => match key.code {
-                    KeyCode::Esc => b.close(),
-                    KeyCode::Enter => {
-                        b.focus = BrowserFocus::Results;
-                        run = Some(false);
+                BrowserFocus::Query => {
+                    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                    match key.code {
+                        KeyCode::Esc => b.close(),
+                        KeyCode::Enter => {
+                            b.focus = BrowserFocus::Results;
+                            run = Some(false);
+                        }
+                        KeyCode::Tab | KeyCode::BackTab => b.focus = BrowserFocus::Results,
+                        KeyCode::Up => b.history_prev(),
+                        KeyCode::Down => b.history_next(),
+                        KeyCode::Left => b.cursor_left(),
+                        KeyCode::Right => b.cursor_right(),
+                        KeyCode::Home => b.cursor_home(),
+                        KeyCode::End => b.cursor_end(),
+                        KeyCode::Backspace => b.backspace(),
+                        KeyCode::Delete => b.delete(),
+                        KeyCode::Char('a') if ctrl => b.cursor_home(),
+                        KeyCode::Char('e') if ctrl => b.cursor_end(),
+                        KeyCode::Char('w') if ctrl => b.delete_word(),
+                        KeyCode::Char('u') if ctrl => b.delete_to_start(),
+                        KeyCode::Char('k') if ctrl => b.delete_to_end(),
+                        KeyCode::Char('n') if ctrl => b.cycle_pinned_index(),
+                        KeyCode::Char(_) if ctrl => {}
+                        KeyCode::Char(c) => b.insert_char(c),
+                        _ => {}
                     }
-                    KeyCode::Tab => b.next_field(),
-                    KeyCode::Down => b.focus = BrowserFocus::Results,
-                    KeyCode::Left | KeyCode::Right => match b.active_field {
-                        QueryField::Mode => b.query_mode = !b.query_mode,
-                        QueryField::Index => {
-                            let n = b.indexes.len();
-                            if n > 0 {
-                                let fwd = key.code == KeyCode::Right;
-                                b.index_sel = if fwd {
-                                    (b.index_sel + 1) % n
-                                } else {
-                                    (b.index_sel + n - 1) % n
-                                };
-                            }
-                        }
-                        QueryField::SkOp => b.sk_op = b.sk_op.next(),
-                        _ => {}
-                    },
-                    KeyCode::Backspace => match b.active_field {
-                        QueryField::Pk => {
-                            b.pk_value.pop();
-                        }
-                        QueryField::Sk => {
-                            b.sk_value.pop();
-                        }
-                        QueryField::Filter => {
-                            b.filter.pop();
-                        }
-                        _ => {}
-                    },
-                    KeyCode::Char(c) => match b.active_field {
-                        QueryField::Pk => b.pk_value.push(c),
-                        QueryField::Sk => b.sk_value.push(c),
-                        QueryField::Filter => b.filter.push(c),
-                        _ => {}
-                    },
+                }
+                BrowserFocus::Results if b.local_editing => match key.code {
+                    KeyCode::Esc => {
+                        b.local_editing = false;
+                        b.local_filter.clear();
+                        b.apply_sort();
+                    }
+                    KeyCode::Enter | KeyCode::Tab | KeyCode::Down | KeyCode::Up => b.local_editing = false,
+                    KeyCode::Backspace => {
+                        b.local_filter.pop();
+                        b.apply_sort();
+                    }
+                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        b.local_filter.push(c);
+                        b.apply_sort();
+                    }
                     _ => {}
                 },
-                BrowserFocus::Results => {
-                    let page = 10;
-                    let detail_max = if b.show_detail { b.detail_len().saturating_sub(1) } else { 0 };
+                // The item view (`⏎` on a row): a line cursor with vim-style
+                // motion and a linewise selection, like the detail pane.
+                BrowserFocus::Results if b.show_detail => {
+                    let h = body_h;
+                    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+                    let extend = |b: &mut crate::ui::widgets::ddb_item_browser::DdbBrowserState| {
+                        b.detail_anchor.get_or_insert(b.detail_cursor);
+                    };
                     match key.code {
                         KeyCode::Esc => {
-                            if b.show_detail {
+                            if b.detail_anchor.is_some() {
+                                b.detail_anchor = None;
+                            } else {
                                 b.show_detail = false;
+                            }
+                        }
+                        KeyCode::Char('q') => b.close(),
+                        KeyCode::Char('d') if ctrl => b.detail_move(h as isize / 2, h),
+                        KeyCode::Char('u') if ctrl => b.detail_move(-(h as isize / 2), h),
+                        KeyCode::Char('f') if ctrl => b.detail_move(h as isize, h),
+                        KeyCode::Char('b') if ctrl => b.detail_move(-(h as isize), h),
+                        KeyCode::Char('a') if ctrl => {
+                            b.detail_anchor = Some(0);
+                            b.detail_move(isize::MAX, h);
+                        }
+                        KeyCode::Down if shift => {
+                            extend(b);
+                            b.detail_move(1, h);
+                        }
+                        KeyCode::Up if shift => {
+                            extend(b);
+                            b.detail_move(-1, h);
+                        }
+                        KeyCode::Char('J') => {
+                            extend(b);
+                            b.detail_move(1, h);
+                        }
+                        KeyCode::Char('K') => {
+                            extend(b);
+                            b.detail_move(-1, h);
+                        }
+                        KeyCode::Char('V') => {
+                            b.detail_anchor = match b.detail_anchor {
+                                Some(_) => None,
+                                None => Some(b.detail_cursor),
+                            };
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => b.detail_move(1, h),
+                        KeyCode::Up | KeyCode::Char('k') => b.detail_move(-1, h),
+                        KeyCode::PageDown => b.detail_move(h as isize, h),
+                        KeyCode::PageUp => b.detail_move(-(h as isize), h),
+                        KeyCode::Char('g') | KeyCode::Home => b.detail_move(isize::MIN, h),
+                        KeyCode::Char('G') | KeyCode::End => b.detail_move(isize::MAX, h),
+                        KeyCode::Char('v') => {
+                            b.detail_view = b.detail_view.next();
+                            b.reset_detail();
+                        }
+                        KeyCode::Enter | KeyCode::Char('h') | KeyCode::Left => b.show_detail = false,
+                        KeyCode::Tab | KeyCode::Char('/') => {
+                            b.focus = BrowserFocus::Query;
+                            b.show_detail = false;
+                        }
+                        KeyCode::Char('y') | KeyCode::Char('c') => copy = b.detail_copy(),
+                        KeyCode::Char('Y') => copy = b.selected_item_json().map(|j| (j, "item JSON".to_string())),
+                        KeyCode::Char('e') => edit = b.selected_item_json(),
+                        KeyCode::Char('Z') => toggle_layout = true,
+                        _ => {}
+                    }
+                }
+                BrowserFocus::Results => {
+                    let page = list_h.max(2);
+                    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                    let last = b.order.len().saturating_sub(1);
+                    match key.code {
+                        KeyCode::Esc => {
+                            if b.loading {
+                                stop = true;
+                            } else if !b.local_filter.is_empty() {
+                                b.local_filter.clear();
+                                b.apply_sort();
                             } else {
                                 b.close();
                             }
                         }
+                        KeyCode::Char('d') if ctrl => b.selected_row = (b.selected_row + page / 2).min(last),
+                        KeyCode::Char('u') if ctrl => b.selected_row = b.selected_row.saturating_sub(page / 2),
+                        KeyCode::Char(_) if ctrl => {}
                         KeyCode::Char('q') => b.close(),
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if b.show_detail {
-                                b.detail_scroll = b.detail_scroll.min(detail_max).saturating_sub(1);
-                            } else if b.selected_row > 0 {
-                                b.selected_row -= 1;
-                            }
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if b.show_detail {
-                                b.detail_scroll = (b.detail_scroll + 1).min(detail_max);
-                            } else if b.selected_row + 1 < b.order.len() {
-                                b.selected_row += 1;
-                            }
-                        }
-                        KeyCode::PageUp => {
-                            if b.show_detail {
-                                b.detail_scroll = b.detail_scroll.min(detail_max).saturating_sub(page);
-                            } else {
-                                b.selected_row = b.selected_row.saturating_sub(page);
-                            }
-                        }
-                        KeyCode::PageDown => {
-                            if b.show_detail {
-                                b.detail_scroll = (b.detail_scroll + page).min(detail_max);
-                            } else {
-                                b.selected_row = (b.selected_row + page).min(b.order.len().saturating_sub(1));
-                            }
-                        }
-                        KeyCode::Char('g') | KeyCode::Home => {
-                            if b.show_detail {
-                                b.detail_scroll = 0;
-                            } else {
-                                b.selected_row = 0;
-                            }
-                        }
-                        KeyCode::Char('G') | KeyCode::End => {
-                            if b.show_detail {
-                                b.detail_scroll = detail_max;
-                            } else {
-                                b.selected_row = b.order.len().saturating_sub(1);
-                            }
-                        }
+                        KeyCode::Char('f') => b.local_editing = true,
+                        KeyCode::Up | KeyCode::Char('k') => b.selected_row = b.selected_row.saturating_sub(1),
+                        KeyCode::Down | KeyCode::Char('j') => b.selected_row = (b.selected_row + 1).min(last),
+                        KeyCode::PageUp => b.selected_row = b.selected_row.saturating_sub(page),
+                        KeyCode::PageDown => b.selected_row = (b.selected_row + page).min(last),
+                        KeyCode::Char('g') | KeyCode::Home => b.selected_row = 0,
+                        KeyCode::Char('G') | KeyCode::End => b.selected_row = last,
                         KeyCode::Left | KeyCode::Char('h') => {
                             b.col_cursor = b.col_cursor.saturating_sub(1);
                         }
@@ -16778,31 +16879,33 @@ impl App {
                         KeyCode::Char('z') => b.cycle_sort(),
                         KeyCode::Char('v') => {
                             b.detail_view = b.detail_view.next();
-                            b.detail_scroll = 0;
+                            b.reset_detail();
                             b.show_detail = b.selected_item().is_some();
                         }
                         KeyCode::Enter => {
-                            b.show_detail = !b.show_detail && b.selected_item().is_some();
-                            b.detail_scroll = 0;
+                            b.reset_detail();
+                            b.show_detail = b.selected_item().is_some();
                         }
-                        KeyCode::Tab | KeyCode::Char('/') => {
-                            b.focus = BrowserFocus::Query;
-                            b.show_detail = false;
-                        }
+                        KeyCode::Tab | KeyCode::Char('/') => b.focus = BrowserFocus::Query,
                         KeyCode::Char('n') => {
                             if b.last_key.is_some() && !b.loading {
                                 run = Some(true);
                             }
                         }
-                        KeyCode::Char('y') => copy = b.selected_item_json(),
+                        KeyCode::Char('y') => copy = b.selected_item_json().map(|j| (j, "item JSON".to_string())),
                         KeyCode::Char('e') => edit = b.selected_item_json(),
                         KeyCode::Char('Z') => toggle_layout = true,
                         _ => {}
                     }
                 }}
         }
-        if let Some(json) = copy {
-            self.copy_to_clipboard(&json, "item JSON");
+        // Stopping bumps the generation too: pages already queued would
+        // otherwise land and set `loading` again.
+        if stop || (!self.ddb_browser.visible && self.ddb_task.is_some()) {
+            self.stop_ddb_read();
+        }
+        if let Some((text, label)) = copy {
+            self.copy_to_clipboard(&text, &label);
         }
         if let Some(json) = edit {
             self.pending_editor_content = Some((json, ".json".to_string()));
@@ -33122,9 +33225,11 @@ impl App {
             }
             PaneView::Ddb => {
                 let b = &mut self.ddb_browser;
+                if b.selected_row != idx {
+                    b.reset_detail();
+                }
                 b.selected_row = idx;
                 b.focus = crate::ui::widgets::ddb_item_browser::BrowserFocus::Results;
-                b.detail_scroll = 0;
             }
             PaneView::S3 => {
                 let b = &mut self.s3_object_browser;
@@ -33175,6 +33280,9 @@ impl App {
         event_tx: &mpsc::UnboundedSender<Event>,
     ) -> Result<bool> {
         let Some(view) = self.open_pane_view() else { return Ok(false) };
+        if view == PaneView::Ddb && self.ddb_browser.show_detail && self.handle_ddb_item_mouse(mouse) {
+            return Ok(true);
+        }
         let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
         let (col, row) = (mouse.column, mouse.row);
         let (inside, hit) = {
@@ -33204,6 +33312,73 @@ impl App {
             _ => {}
         }
         Ok(true)
+    }
+
+    /// Mouse on the DynamoDB item view: wheel scrolls it, a click puts the
+    /// cursor on a line, a drag selects lines (anchored at the press) and a
+    /// double-click copies the line. Wheel and clicks over the results above
+    /// fall through to the generic handler. Returns whether it was consumed.
+    fn handle_ddb_item_mouse(&mut self, mouse: MouseEvent) -> bool {
+        let (col, row) = (mouse.column, mouse.row);
+        let (body, hit, over_rows) = {
+            let hits = self.popup_hits.borrow();
+            let Some(body) = hits.body else { return false };
+            (
+                body,
+                hits.body_rows.iter().find(|(_, r)| point_in(*r, col, row)).map(|(i, _)| *i),
+                hits.rows.iter().any(|(_, r)| point_in(*r, col, row)),
+            )
+        };
+        let h = body.height as usize;
+        let b = &mut self.ddb_browser;
+        match mouse.kind {
+            // Over the results above, the wheel steps between items — the
+            // keys would move the item view's cursor instead.
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if over_rows => {
+                let last = b.order.len().saturating_sub(1);
+                b.selected_row = if mouse.kind == MouseEventKind::ScrollDown {
+                    (b.selected_row + 1).min(last)
+                } else {
+                    b.selected_row.saturating_sub(1)
+                };
+                b.reset_detail();
+            }
+            MouseEventKind::ScrollDown if point_in(body, col, row) => b.detail_scroll_by(3, h),
+            MouseEventKind::ScrollUp if point_in(body, col, row) => b.detail_scroll_by(-3, h),
+            MouseEventKind::Down(MouseButton::Left) => {
+                let Some(idx) = hit else { return false };
+                b.focus = crate::ui::widgets::ddb_item_browser::BrowserFocus::Results;
+                b.detail_anchor = None;
+                b.detail_cursor = idx;
+                b.detail_drag = Some(idx);
+                if self.note_left_click(col, row) {
+                    if let Some((text, label)) = self.ddb_browser.detail_copy() {
+                        self.copy_to_clipboard(&text, &label);
+                    }
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                let Some(anchor) = b.detail_drag else { return false };
+                // Dragging past the edge scrolls, so a selection can run past
+                // what's on screen.
+                let target = match hit {
+                    Some(i) => i,
+                    None if row < body.y => b.detail_cursor.saturating_sub(1),
+                    None if row >= body.y + body.height => b.detail_cursor + 1,
+                    None => return true,
+                };
+                let delta = target as isize - b.detail_cursor as isize;
+                b.detail_move(delta, h);
+                b.detail_anchor = (b.detail_cursor != anchor).then_some(anchor);
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if b.detail_drag.take().is_none() {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Mouse on the charted dashboard: click a widget to put the cursor on it,
