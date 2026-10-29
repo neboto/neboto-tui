@@ -768,6 +768,78 @@ pub fn estimate_rcu(items: usize, table_items: i64, table_bytes: i64) -> Option<
     Some(((n * avg) / 4096.0).ceil().max(1.0) * 0.5)
 }
 
+// ── CLI commands (`C` in the item browser) ────────────────────────────────────
+
+/// JSON object with sorted keys, so a copied command is the same every time.
+fn sorted_json<V: serde::Serialize>(m: impl IntoIterator<Item = (String, V)>) -> String {
+    let m: std::collections::BTreeMap<String, V> = m.into_iter().collect();
+    serde_json::to_string(&m).unwrap_or_default()
+}
+
+/// The AWS CLI read that matches `plan` as the browser runs it.
+///
+/// The CLI paginates on its own, so a bare `scan` would read the whole
+/// table; `--max-items` stops it at the browser's 50 and `--page-size` is the
+/// `Limit` per call (50 unfiltered, so it reads no more than it shows). The
+/// browser's 5,000-item read budget has no CLI flag, which the note says.
+pub fn plan_cli_action(table: &str, plan: &query::Plan) -> crate::aws::cli_actions::CliAction {
+    use crate::aws::cli_actions::{CliAction, CliTier};
+    use crate::aws::resource::shell_quote;
+    let op = if plan.query { "query" } else { "scan" };
+    let mut c = format!("aws dynamodb {} --table-name {}", op, shell_quote(table));
+    if let Some(i) = &plan.index_name {
+        c.push_str(&format!(" --index-name {}", shell_quote(i)));
+    }
+    if let Some(k) = &plan.key_condition {
+        c.push_str(&format!(" --key-condition-expression {}", shell_quote(k)));
+    }
+    if let Some(f) = &plan.filter {
+        c.push_str(&format!(" --filter-expression {}", shell_quote(f)));
+    }
+    if !plan.names.is_empty() {
+        let names = sorted_json(plan.names.iter().map(|(k, v)| (k.clone(), v.clone())));
+        c.push_str(&format!(" --expression-attribute-names {}", shell_quote(&names)));
+    }
+    if !plan.values.is_empty() {
+        let values = sorted_json(plan.values.iter().map(|(k, v)| (k.clone(), av_to_ddb_json(v))));
+        c.push_str(&format!(" --expression-attribute-values {}", shell_quote(&values)));
+    }
+    let page = if plan.filter.is_some() { FILTER_PAGE } else { READ_TARGET };
+    c.push_str(&format!(" --max-items {} --page-size {}", READ_TARGET, page));
+    let mut action = CliAction::new(CliTier::Inspect, op, c);
+    if plan.filter.is_some() {
+        action.note = Some(format!(
+            "pages until {} matches with no cap on items read — neboto stops at {}",
+            READ_TARGET, READ_BUDGET
+        ));
+    } else if !plan.query {
+        action.note = Some(format!("first {} items, as the browser reads them", READ_TARGET));
+    }
+    action
+}
+
+/// `get-item` for one item by the base table's key — `None` when the item
+/// lacks a key attribute (it can't, from the table; a defensive check for
+/// odd index projections).
+pub fn get_item_cli_action(
+    table: &str,
+    item: &DdbItem,
+    base: &DdbIndex,
+) -> Option<crate::aws::cli_actions::CliAction> {
+    use crate::aws::cli_actions::{CliAction, CliTier};
+    use crate::aws::resource::shell_quote;
+    let mut key = vec![(base.pk_name.clone(), av_to_ddb_json(item.get(&base.pk_name)?))];
+    if let Some(sk) = &base.sk_name {
+        key.push((sk.clone(), av_to_ddb_json(item.get(sk)?)));
+    }
+    let c = format!(
+        "aws dynamodb get-item --table-name {} --key {}",
+        shell_quote(table),
+        shell_quote(&sorted_json(key))
+    );
+    Some(CliAction::new(CliTier::Inspect, "get-item", c))
+}
+
 fn friendly_query_error(raw: &str) -> String {
     let low = raw.to_lowercase();
     if low.contains("validationexception") && low.contains("key condition") {
@@ -878,6 +950,57 @@ mod tests {
             item_ddb_json(&item),
             json!({"bin": {"B": "aGk="}, "n": {"N": "3"}, "pk": {"S": "p"}, "tags": {"SS": ["a"]}})
         );
+    }
+
+    fn base_index() -> DdbIndex {
+        DdbTable::test_table("t").queryable_indexes().remove(0)
+    }
+
+    #[test]
+    fn a_query_copies_as_a_paste_ready_cli_command() {
+        let plan = query::plan(
+            r#"pk = "USER#42" and sk begins_with ORDER# and total > 100"#,
+            &[base_index()],
+            None,
+        )
+        .unwrap();
+        let a = plan_cli_action("orders", &plan);
+        assert_eq!(
+            a.command,
+            "aws dynamodb query --table-name orders \
+             --key-condition-expression '#n0 = :v0 AND begins_with(#n1, :v1)' \
+             --filter-expression '#n2 > :v2' \
+             --expression-attribute-names '{\"#n0\":\"pk\",\"#n1\":\"sk\",\"#n2\":\"total\"}' \
+             --expression-attribute-values '{\":v0\":{\"S\":\"USER#42\"},\":v1\":{\"S\":\"ORDER#\"},\":v2\":{\"N\":\"100\"}}' \
+             --max-items 50 --page-size 1000"
+        );
+        assert!(a.note.unwrap().contains("5000"));
+    }
+
+    #[test]
+    fn an_unfiltered_scan_reads_no_more_than_it_shows() {
+        let plan = query::plan("", &[base_index()], None).unwrap();
+        let a = plan_cli_action("my table", &plan);
+        assert_eq!(a.command, "aws dynamodb scan --table-name 'my table' --max-items 50 --page-size 50");
+    }
+
+    #[test]
+    fn values_with_quotes_survive_shell_quoting() {
+        let plan = query::plan(r#"note = "it's""#, &[base_index()], None).unwrap();
+        let a = plan_cli_action("t", &plan);
+        assert!(a.command.contains(r#"'{":v0":{"S":"it'\''s"}}'"#), "{}", a.command);
+    }
+
+    #[test]
+    fn get_item_uses_the_base_table_key() {
+        let mut item = HashMap::new();
+        item.insert("pk".to_string(), AttributeValue::S("p".into()));
+        item.insert("sk".to_string(), AttributeValue::S("s".into()));
+        item.insert("other".to_string(), AttributeValue::N("1".into()));
+        let a = get_item_cli_action("t", &item, &base_index()).unwrap();
+        assert_eq!(a.command, r#"aws dynamodb get-item --table-name t --key '{"pk":{"S":"p"},"sk":{"S":"s"}}'"#);
+        item.remove("sk");
+        assert!(get_item_cli_action("t", &item, &base_index()).is_none());
     }
 
     #[test]
