@@ -159,7 +159,7 @@ pub(super) fn render_iam_role_split(app: &App, role: &IamRole, area: Rect, frame
         app,
         focused,
         crate::aws::services::iam::IAM_ROLE_SECTIONS.len(),
-        if on_policy_row { "⏎ expand · e edit" } else { "e edit" },
+        if on_policy_row { "⏎ open · e edit" } else { "e edit" },
     );
 
     let mut block = theme::pane_block("IAM Role", focused);
@@ -446,10 +446,11 @@ pub(super) fn iam_role_trust_policy_lines(role: &IamRole) -> Vec<(String, String
     rows
 }
 
-/// What a selected row in the Permissions section refers to, so the caller
-/// can fetch that specific policy's document on demand (`⏎`/`e`).
+/// What a selected row in the Permissions section refers to: `e` fetches
+/// that policy's document, `⏎` goes to it (a managed row's `→` jump, an
+/// inline row's document in the Policies section).
 pub enum IamPermissionsRowTarget {
-    Managed { name: String, arn: String },
+    Managed { arn: String },
     Inline { name: String },
 }
 
@@ -467,10 +468,7 @@ pub fn iam_permissions_row_target(key: &str, value: &str) -> Option<IamPermissio
         return None;
     }
     if value.starts_with("arn:") {
-        Some(IamPermissionsRowTarget::Managed {
-            name,
-            arn: value.to_string(),
-        })
+        Some(IamPermissionsRowTarget::Managed { arn: value.to_string() })
     } else if value == "inline" {
         Some(IamPermissionsRowTarget::Inline { name })
     } else {
@@ -598,6 +596,9 @@ pub fn iam_policy_section_lines(
         IamPolicyDetailSection::Overview => iam_policy_overview_lines(policy),
         IamPolicyDetailSection::Document => iam_policy_document_lines(details_state),
         IamPolicyDetailSection::AttachedTo => iam_policy_attached_to_lines(details_state),
+        IamPolicyDetailSection::Tags if policy.is_aws_managed() => {
+            vec![("  AWS-managed policies can't be tagged".to_string(), "".to_string())]
+        }
         IamPolicyDetailSection::Tags => lazy_tag_lines(details_state, |d| &d.tags),
         IamPolicyDetailSection::LastAccessed => iam_last_accessed_lines(last_accessed, &policy.policy_arn),
     }
@@ -612,6 +613,10 @@ pub(super) fn iam_policy_overview_lines(policy: &IamPolicy) -> Vec<(String, Stri
         ("  ARN".to_string(), policy.policy_arn.clone()),
         ("  Policy ID".to_string(), policy.policy_id.clone()),
         ("  Path".to_string(), policy.path.clone()),
+        (
+            "  Managed By".to_string(),
+            if policy.is_aws_managed() { "AWS" } else { "this account" }.to_string(),
+        ),
     ];
     if let Some(desc) = policy.description.as_deref().filter(|d| !d.is_empty()) {
         rows.push(("  Description".to_string(), desc.to_string()));
@@ -1461,7 +1466,7 @@ mod iam_permissions_tests {
 
     #[test]
     fn classifier_finds_exactly_the_policy_rows() {
-        // The Permissions rows and the Enter-to-expand classifier are keyed
+        // The Permissions rows and the Enter/`e` classifier are keyed
         // on each other's shape; this is the contract between them.
         let rows = iam_policy_attachment_rows(
             &[("orders-dynamodb".into(), "arn:aws:iam::1:policy/orders-dynamodb".into())],
@@ -1470,11 +1475,11 @@ mod iam_permissions_tests {
         let hits: Vec<String> = rows
             .iter()
             .filter_map(|(k, v)| match iam_permissions_row_target(k, v)? {
-                IamPermissionsRowTarget::Managed { name, .. } => Some(format!("managed {name}")),
+                IamPermissionsRowTarget::Managed { arn } => Some(format!("managed {arn}")),
                 IamPermissionsRowTarget::Inline { name } => Some(format!("inline {name}")),
             })
             .collect();
-        assert_eq!(hits, ["managed orders-dynamodb", "inline sqs-consume-orders"]);
+        assert_eq!(hits, ["managed arn:aws:iam::1:policy/orders-dynamodb", "inline sqs-consume-orders"]);
         // Headers carry no count, so export keys are stable.
         assert!(rows.contains(&("Managed Policies".into(), "".into())));
         assert!(rows.contains(&("Inline Policies".into(), "".into())));

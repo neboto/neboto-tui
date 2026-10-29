@@ -2641,8 +2641,9 @@ pub struct App {
 
     // IAM sub-tab and detail section state
     pub iam_view: IamView,
-    // Expanded policy documents shown inline in the Permissions section (key = policy name)
-    pub iam_expanded_docs: HashMap<String, String>,
+    // An inline policy whose document Enter on a Permissions row is heading
+    // for in the Policies section — held until those documents load.
+    pub iam_pending_policy_doc: Option<String>,
 
     // Organizations sub-tab and detail section state
     pub org_view: OrgView,
@@ -3339,7 +3340,7 @@ impl App {
             cfn_events_progress: false,
             cfn_progress_poll_last: None,
             iam_view: IamView::Roles,
-            iam_expanded_docs: HashMap::new(),
+            iam_pending_policy_doc: None,
             org_view: OrgView::Overview,
             cost_group_by: crate::aws::services::cost::CostGroupBy::Service,
             cost_period: crate::aws::services::cost::CostPeriod::Mtd,
@@ -3515,6 +3516,7 @@ impl App {
                 // fresh store (docs/adr/0001-apply-closure-lazy-event.md).
                 if a.epoch == self.lazy.epoch() {
                     (a.apply)(self);
+                    self.resolve_iam_pending_policy_doc();
                 }
             }
             Event::MskMetricsLoaded { arn, data } => {
@@ -3850,17 +3852,9 @@ impl App {
             Event::UpdateAvailable(latest) => {
                 self.update_available = Some(latest);
             }
-            Event::IamPolicyDocumentLoaded {
-                title,
-                content,
-                open_editor} => {
-                if open_editor {
-                    self.pending_editor_content = Some((content, ".json".to_string()));
-                    self.editor_requested = true;
-                } else {
-                    // Insert for inline display (collapse is handled in the key handler)
-                    self.iam_expanded_docs.insert(title, content);
-                }
+            Event::IamPolicyDocumentLoaded { content } => {
+                self.pending_editor_content = Some((content, ".json".to_string()));
+                self.editor_requested = true;
             }
             Event::OrgScpDocumentLoaded { content } => {
                 self.pending_editor_content = Some((content, ".json".to_string()));
@@ -3924,6 +3918,7 @@ impl App {
         // moved on. (The jump/restore triggers below re-arm it after this.)
         self.pending_jump_focus_details = false;
         self.pending_jump_section = None;
+        self.iam_pending_policy_doc = None;
 
         // Stash the key for the recorder before anything can consume it — the
         // search query in particular is cleared by `Esc` further down.
@@ -5261,7 +5256,7 @@ impl App {
                             return Ok(());
                         }
                     }
-                    if !self.trigger_iam_permissions_document_fetch(event_tx, true)
+                    if !self.trigger_iam_permissions_document_fetch(event_tx)
                         && !self.trigger_org_account_scp_document_fetch(event_tx)
                         && !self.trigger_org_scp_document_open()
                         && !self.trigger_ecs_task_logs_fetch(event_tx)
@@ -5380,7 +5375,7 @@ impl App {
                     // referenced resource (incl. cross-service).
                     if self.selected_log_stream_name().is_some() {
                         self.open_log_tail(event_tx);
-                    } else if !self.try_toggle_iam_expanded(event_tx)
+                    } else if !self.try_iam_inline_policy_open(event_tx)
                         && !self.try_toggle_cfn_op_results(event_tx)
                         && !self.try_cc_branch_commits(event_tx)
                         && !self.trigger_s3_bucket_policy_open()
@@ -19864,91 +19859,113 @@ impl App {
         }
     }
 
-    /// Trigger an on-demand fetch of the policy document for whichever
-    /// managed/inline policy row is selected in the Permissions section.
-    /// Returns `false` (no fetch started) if the selected row isn't a
-    /// policy row, so callers can fall back to default `v`/`e` behavior.
-    /// On a Permissions row of a role / user / group, fetch the selected
-    /// policy's document on demand and show it (viewer or `$EDITOR`). Managed
-    /// policies go through `get_policy` — which works for **AWS-managed**
-    /// policies (e.g. `AdministratorAccess`) that aren't in our (Local-scope)
-    /// Policies list, so they can't be reached by a list jump. Returns `false`
-    /// Toggle IAM policy expansion inline. If already expanded, collapse
-    /// instantly (no API call). If not expanded, fetch the document. Returns
-    /// `true` if this was a policy row (handled), `false` otherwise.
-    fn try_toggle_iam_expanded(&mut self, event_tx: &mpsc::UnboundedSender<Event>) -> bool {
-        // Check if we're on a permissions section with a policy row
+    /// Enter on an **inline** policy row of a Permissions section: move to
+    /// the Policies section, onto that policy's document. An inline policy
+    /// has no pane of its own to jump to (a managed row's `→` jump handles
+    /// those). Returns `false` on any other row.
+    fn try_iam_inline_policy_open(&mut self, event_tx: &mpsc::UnboundedSender<Event>) -> bool {
+        use crate::ui::widgets::details_pane::{iam_permissions_row_target, IamPermissionsRowTarget};
+        if !self.iam_permissions_row_selected() {
+            return false;
+        }
         let rows = self.get_detail_lines_filtered();
-        let (key, value) = match self.details_selected_index.and_then(|i| rows.get(i)) {
-            Some(pair) => pair.clone(),
-            None => return false};
-        let target = crate::ui::widgets::details_pane::iam_permissions_row_target(&key, &value);
-        if target.is_none() {
+        let Some(IamPermissionsRowTarget::Inline { name }) = self
+            .details_selected_index
+            .and_then(|i| rows.get(i))
+            .and_then(|(k, v)| iam_permissions_row_target(k, v))
+        else {
             return false;
-        }
-        let name = key.trim().to_string();
-        // If already expanded, collapse instantly
-        let managed_key = format!("Policy: {}", name);
-        let inline_key = format!("Inline Policy: {}", name);
-        if self.iam_expanded_docs.remove(&managed_key).is_some()
-            || self.iam_expanded_docs.remove(&inline_key).is_some()
-        {
-            return true;
-        }
-        // Otherwise, fetch (will insert on arrival) and show a loading state —
-        // but only once the fetch has started: it refuses rows outside a
-        // Permissions section (a group's Members, the Policies section's ARN
-        // row), and a placeholder recorded first would be stranded there.
-        let loading_key = match target {
-            Some(crate::ui::widgets::details_pane::IamPermissionsRowTarget::Inline { .. }) => inline_key,
-            _ => managed_key,
         };
-        if !self.trigger_iam_permissions_document_fetch(event_tx, false) {
-            return false;
+        self.iam_pending_policy_doc = Some(name);
+        if !self.detail_flat_mode {
+            let idx = self
+                .selected_descriptor()
+                .and_then(|d| d.sections.iter().position(|s| s.label == "Policies"));
+            if let Some(idx) = idx {
+                self.set_detail_section(idx, event_tx);
+            }
         }
-        self.iam_expanded_docs.insert(loading_key, "Loading…".to_string());
+        self.resolve_iam_pending_policy_doc();
         true
     }
 
-    /// Inject expanded policy document lines after matching policy rows.
-    /// A policy row looks like `("  PolicyName", "arn:...")` or `("  PolicyName", "inline")`.
-    fn inject_expanded_policy_docs(
-        &self,
-        lines: Vec<(String, String)>,
-    ) -> Vec<(String, String)> {
-        if self.iam_expanded_docs.is_empty() {
-            return lines;
+    /// Whether the cursor is in a role / user / group Permissions section —
+    /// in the flat view, under its `━━ Permissions` header.
+    fn iam_permissions_row_selected(&self) -> bool {
+        use crate::aws::services::iam::{
+            IamGroup, IamGroupDetailSection, IamRole, IamRoleDetailSection, IamUser, IamUserDetailSection,
+        };
+        let Some(r) = self.get_selected_resource().map(|r| r.as_any()) else {
+            return false;
+        };
+        if !(r.is::<IamRole>() || r.is::<IamUser>() || r.is::<IamGroup>()) {
+            return false;
         }
-        let mut result = Vec::with_capacity(lines.len());
-        for (key, value) in lines {
-            result.push((key.clone(), value.clone()));
-            // Policy rows start with "  " and the name is the trimmed key
-            let trimmed = key.trim_start();
-            if key.starts_with("  ") && !trimmed.is_empty() && !trimmed.starts_with('(') {
-                // Check all key variants: "Policy: X" and "Inline Policy: X"
-                let found = self
-                    .iam_expanded_docs
-                    .get(&format!("Policy: {}", trimmed))
-                    .or_else(|| self.iam_expanded_docs.get(&format!("Inline Policy: {}", trimmed)));
-                if let Some(doc) = found {
-                    result.push(("".to_string(), "".to_string()));
-                    for line in doc.lines() {
-                        result.push((format!("    {}", line), "".to_string()));
-                    }
-                    result.push(("".to_string(), "".to_string()));
-                }
-            }
+        if self.detail_flat_mode {
+            let rows = self.get_detail_lines_filtered();
+            let cursor = self.details_selected_index.unwrap_or(0).min(rows.len().saturating_sub(1));
+            return rows[..=cursor.min(rows.len().saturating_sub(1))]
+                .iter()
+                .rev()
+                .find_map(|(k, _)| Self::flat_header_name(k))
+                == Some("Permissions");
         }
-        result
+        let idx = self.detail_section_idx;
+        (r.is::<IamRole>() && IamRoleDetailSection::from_index(idx) == IamRoleDetailSection::Permissions)
+            || (r.is::<IamUser>() && IamUserDetailSection::from_index(idx) == IamUserDetailSection::Permissions)
+            || (r.is::<IamGroup>() && IamGroupDetailSection::from_index(idx) == IamGroupDetailSection::Permissions)
     }
 
-    /// `Enter` / `e` on a policy row in the Permissions section. Returns `false`
+    /// Put the cursor on the inline policy `try_iam_inline_policy_open` is
+    /// heading for, once the Policies section has its documents. Gives up
+    /// quietly when they've loaded without it (past `MAX_POLICY_DOCS` — the
+    /// section says so) or the cursor has left the section.
+    fn resolve_iam_pending_policy_doc(&mut self) {
+        let Some(name) = self.iam_pending_policy_doc.clone() else {
+            return;
+        };
+        let rows = self.get_detail_lines_filtered();
+        let header = |k: &str| Self::flat_header_name(k).is_some();
+        let (start, end) = if self.detail_flat_mode {
+            // The flat body is rebuilt a tick after the documents land; until
+            // it holds the Policies header, keep waiting.
+            let Some(start) = rows.iter().position(|(k, _)| Self::flat_header_name(k) == Some("Policies")) else {
+                return;
+            };
+            let end = rows[start + 1..].iter().position(|(k, _)| header(k)).map_or(rows.len(), |p| start + 1 + p);
+            (start, end)
+        } else {
+            let on_policies = self
+                .selected_descriptor()
+                .and_then(|d| d.sections.get(self.detail_section_idx))
+                .is_some_and(|s| s.label == "Policies");
+            if !on_policies {
+                self.iam_pending_policy_doc = None;
+                return;
+            }
+            (0, rows.len())
+        };
+        let section = &rows[start..end];
+        // An inline document is its name as a group header over `Type: Inline`
+        // (`iam_policy_docs_lines`) — a managed policy may share the name.
+        let found = section.windows(2).position(|w| {
+            w[0].0 == name && w[0].1.is_empty() && w[1].0 == "  Type" && w[1].1 == "Inline"
+        });
+        if let Some(p) = found {
+            self.clear_detail_visual();
+            self.details_selected_index = Some(start + p);
+            self.iam_pending_policy_doc = None;
+        } else if !section.iter().any(|(_, v)| v.starts_with("Loading")) {
+            self.iam_pending_policy_doc = None;
+        }
+    }
+
+    /// `e` on a policy row in the Permissions section. Returns `false`
     /// when the selection/section/row isn't an IAM permissions policy row, so
     /// callers can fall through (to the editor default, or the resource jump).
     fn trigger_iam_permissions_document_fetch(
         &self,
         event_tx: &mpsc::UnboundedSender<Event>,
-        open_editor: bool,
     ) -> bool {
         use crate::aws::services::iam::{IamGroup, IamRole, IamUser};
 
@@ -19994,16 +20011,13 @@ impl App {
         let client = self.aws_clients.iam_client();
         let tx = event_tx.clone();
         match target {
-            crate::ui::widgets::details_pane::IamPermissionsRowTarget::Managed { name, arn } => {
+            crate::ui::widgets::details_pane::IamPermissionsRowTarget::Managed { arn } => {
                 tokio::spawn(async move {
                     match crate::aws::services::iam::fetch_managed_policy_document(client, arn)
                         .await
                     {
                         Ok(content) => {
-                            let _ = tx.send(crate::event::Event::IamPolicyDocumentLoaded {
-                                title: format!("Policy: {}", name),
-                                content,
-                                open_editor});
+                            let _ = tx.send(crate::event::Event::IamPolicyDocumentLoaded { content });
                         }
                         Err(e) => {
                             let _ = tx.send(crate::event::Event::ResourceLoadError {
@@ -20029,15 +20043,11 @@ impl App {
                                 .await
                         }
                     }
-                    .map(|content| (name, content))
                 };
                 tokio::spawn(async move {
                     match fetch.await {
-                        Ok((name, content)) => {
-                            let _ = tx.send(crate::event::Event::IamPolicyDocumentLoaded {
-                                title: format!("Inline Policy: {}", name),
-                                content,
-                                open_editor});
+                        Ok(content) => {
+                            let _ = tx.send(crate::event::Event::IamPolicyDocumentLoaded { content });
                         }
                         Err(e) => {
                             let _ = tx.send(crate::event::Event::ResourceLoadError {
@@ -20574,6 +20584,18 @@ impl App {
     /// A `Build ID` only means anything next to the project's build list, so
     /// that jump opens Builds rather than the project's default section.
     fn jump_landing_section(&self, target: &JumpTarget, key: &str) -> Option<String> {
+        // From a role / user / group's policy rows, the document is what
+        // you came for.
+        if matches!(target.view, JumpView::Iam(IamView::Policies))
+            && self.get_selected_resource().is_some_and(|r| {
+                let r = r.as_any();
+                r.is::<crate::aws::services::iam::IamRole>()
+                    || r.is::<crate::aws::services::iam::IamUser>()
+                    || r.is::<crate::aws::services::iam::IamGroup>()
+            })
+        {
+            return Some("Document".to_string());
+        }
         (target.service == ServiceType::Code
             && matches!(target.view, JumpView::Code(CodeView::BuildProjects))
             && key.trim() == "Build ID")
@@ -27780,7 +27802,7 @@ impl App {
                 let docs_state = self.lazy.iam_policy_docs.get(
                     &crate::aws::services::iam::IamPrincipalKind::Role.docs_key(&role.role_name),
                 );
-                let mut lines = crate::ui::widgets::details_pane::iam_role_section_lines(
+                return crate::ui::widgets::details_pane::iam_role_section_lines(
                     role,
                     crate::aws::services::iam::IamRoleDetailSection::from_index(self.detail_section_idx),
                     details_state,
@@ -27788,10 +27810,6 @@ impl App {
                     &self.instance_profiles_for_role(&role.arn),
                     self.lazy.iam_last_accessed.get(&role.arn),
                 );
-                if crate::aws::services::iam::IamRoleDetailSection::from_index(self.detail_section_idx) == IamRoleDetailSection::Permissions {
-                    lines = self.inject_expanded_policy_docs(lines);
-                }
-                return lines;
             }
             if let Some(finding) = resource
                 .as_any()
@@ -27843,17 +27861,13 @@ impl App {
                 let docs_state = self.lazy.iam_policy_docs.get(
                     &crate::aws::services::iam::IamPrincipalKind::User.docs_key(&user.user_name),
                 );
-                let mut lines = crate::ui::widgets::details_pane::iam_user_section_lines(
+                return crate::ui::widgets::details_pane::iam_user_section_lines(
                     user,
                     crate::aws::services::iam::IamUserDetailSection::from_index(self.detail_section_idx),
                     details_state,
                     docs_state,
                     self.lazy.iam_last_accessed.get(&user.arn),
                 );
-                if crate::aws::services::iam::IamUserDetailSection::from_index(self.detail_section_idx) == IamUserDetailSection::Permissions {
-                    lines = self.inject_expanded_policy_docs(lines);
-                }
-                return lines;
             }
             if let Some(group) = resource
                 .as_any()
@@ -27863,17 +27877,13 @@ impl App {
                 let docs_state = self.lazy.iam_policy_docs.get(
                     &crate::aws::services::iam::IamPrincipalKind::Group.docs_key(&group.group_name),
                 );
-                let mut lines = crate::ui::widgets::details_pane::iam_group_section_lines(
+                return crate::ui::widgets::details_pane::iam_group_section_lines(
                     group,
                     crate::aws::services::iam::IamGroupDetailSection::from_index(self.detail_section_idx),
                     details_state,
                     docs_state,
                     self.lazy.iam_last_accessed.get(&group.arn),
                 );
-                if crate::aws::services::iam::IamGroupDetailSection::from_index(self.detail_section_idx) == IamGroupDetailSection::Permissions {
-                    lines = self.inject_expanded_policy_docs(lines);
-                }
-                return lines;
             }
             if let Some(account) = resource
                 .as_any()
@@ -28132,8 +28142,10 @@ impl App {
                         Ok(_) => {
                             self.success_message = Some(format!(
                                 "Copied: {}",
-                                if text_to_copy.len() > 50 {
-                                    format!("{}...", &text_to_copy[..50])
+                                // By chars: a byte cut panics inside a
+                                // multi-byte char (the flat view's `━━` rule).
+                                if text_to_copy.chars().count() > 50 {
+                                    format!("{}...", text_to_copy.chars().take(50).collect::<String>())
                                 } else {
                                     text_to_copy
                                 }

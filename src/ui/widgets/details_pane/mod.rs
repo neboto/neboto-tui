@@ -3095,6 +3095,15 @@ pub fn resource_jump_target(
                     .split(|c: char| c.is_whitespace() || c == '"' || c == ',')
                     .next()
                     .unwrap_or("");
+                // An AWS-managed policy jumps by its whole ARN (its `id()`):
+                // by name, a customer policy that copied the name (say
+                // `AdministratorAccess`) could take the jump instead.
+                if marker == ":policy/" && field[..idx].ends_with(":iam::aws") && !raw.is_empty() {
+                    if let Some(start) = field[..idx].rfind("arn:") {
+                        let arn = &field[start..idx + marker.len() + raw.len()];
+                        return mk(ServiceType::IAM, view, arn);
+                    }
+                }
                 // Strip any IAM path; the role/policy *name* is the last segment.
                 let name = if strip_path {
                     raw.rsplit('/').next().unwrap_or(raw)
@@ -5270,6 +5279,24 @@ mod ecr_jump_tests {
         }
         // Empty value: no target.
         assert!(resource_jump_target("aws:cloudformation:stack-name", " ", ServiceType::EC2).is_none());
+    }
+
+    #[test]
+    fn aws_managed_policy_jumps_by_arn_customer_policy_by_name() {
+        for (value, want) in [
+            ("arn:aws:iam::aws:policy/AdministratorAccess", "arn:aws:iam::aws:policy/AdministratorAccess"),
+            (
+                "\"arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole\",",
+                "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+            ),
+            ("arn:aws-us-gov:iam::aws:policy/ReadOnlyAccess", "arn:aws-us-gov:iam::aws:policy/ReadOnlyAccess"),
+            ("arn:aws:iam::123456789012:policy/team/AdministratorAccess", "AdministratorAccess"),
+        ] {
+            let t = resource_jump_target("  Policy", value, ServiceType::EC2).expect(value);
+            assert_eq!(t.service, ServiceType::IAM);
+            assert!(matches!(t.view, JumpView::Iam(crate::app::IamView::Policies)));
+            assert_eq!(t.id, want);
+        }
     }
 
     #[test]
