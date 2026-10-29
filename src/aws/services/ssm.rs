@@ -739,6 +739,15 @@ impl Resource for SsmDocument {
 
 // ── SsmManagedInstance (Fleet) ────────────────────────────────────────────────
 
+/// The first hybrid managed-node id (`mi-` + 17 hex) in `s`. These have no
+/// EC2 instance behind them, so the Fleet tab is the only place they lead.
+pub fn hybrid_node_id(s: &str) -> Option<&str> {
+    s.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).find(|tok| {
+        tok.strip_prefix("mi-")
+            .is_some_and(|hex| hex.len() == 17 && hex.chars().all(|c| c.is_ascii_hexdigit()))
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct SsmManagedInstance {
     pub instance_id: String,

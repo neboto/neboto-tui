@@ -113,6 +113,9 @@ pub(super) fn ssm_param_details_lines(param: &SsmParameter) -> Vec<(String, Stri
         "None (plaintext)".to_string()
     };
     rows.push(("Encryption".to_string(), encryption));
+    if let Some(k) = param.kms_key_id.as_ref().filter(|_| param.is_secure()) {
+        rows.push(("KMS Key".to_string(), k.clone()));
+    }
     if let Some(desc) = &param.description {
         rows.push(("Description".to_string(), desc.clone()));
     }
@@ -697,9 +700,12 @@ pub fn ssm_fleet_section_lines(
 pub(super) fn ssm_fleet_overview_lines(inst: &SsmManagedInstance) -> Vec<(String, String)> {
     let mut rows = vec![
         ("Instance ID".to_string(), inst.instance_id.clone()),
-        ("Kind".to_string(), inst.instance_kind.clone()),
-        ("Ping Status".to_string(), inst.ping_status.clone()),
     ];
+    if let Some(n) = &inst.node_name {
+        rows.push(("Name".to_string(), n.clone()));
+    }
+    rows.push(("Kind".to_string(), inst.instance_kind.clone()));
+    rows.push(("Ping Status".to_string(), inst.ping_status.clone()));
     if !inst.last_ping.is_empty() {
         rows.push(("Last Ping".to_string(), inst.last_ping.clone()));
     }

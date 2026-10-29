@@ -140,7 +140,15 @@ the service you're touching.
   Documents tab from any SSM pane incl. commands/automations, "Parent
   Execution" → Automation tab, and a Patch-compliance row's "Instance ID" →
   Fleet — the
-  drill from red compliance row to the actual missing-patch list). `s` opens the SSM
+  drill from red compliance row to the actual missing-patch list). The same
+  fn also routes what the generic classifier can't: a Fleet node's own `i-`
+  "Instance ID" → EC2 (the generic arm's self-jump filter drops it, since the
+  node's `id()` *is* the instance id), and bare names — the node's "IAM
+  Role", a command's "Log Group", a maintenance-window "Task" document
+  (ARN tasks fall through), a related "OpsItem", a parameter's bare-UUID
+  "KMS Key". **`mi-` hybrid node** ids (`hybrid_node_id`: `mi-` + 17 hex;
+  no EC2 instance behind them) → Fleet from **any** service via the generic
+  `resource_jump_target` arm, beside `i-`→EC2. `s` opens the SSM
   session modal on an EC2/Fleet instance (shell/port-forward/remote-host); ECS
   Exec is `s` on an ECS task — all share the tiered `spawn_aws_session` launcher
   (tmux window → new OS window → suspend-TUI inline; clipboard fallback when
