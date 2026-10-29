@@ -3024,7 +3024,7 @@ pub fn resource_jump_target(
     value: &str,
     current: crate::aws::service::ServiceType,
 ) -> Option<crate::app::JumpTarget> {
-    use crate::app::{CfnView, DxView, Ec2View, IamView, JumpTarget, JumpView, OrgView, ResolverView, TgwView, VpcView};
+    use crate::app::{CfnView, DxView, Ec2View, IamView, JumpTarget, JumpView, OrgView, ResolverView, SsmView, TgwView, VpcView};
     use crate::aws::service::ServiceType;
 
     let mk = |service, view, id: &str| {
@@ -3206,6 +3206,11 @@ pub fn resource_jump_target(
             // "igw-"/"ami-"/other tokens that merely start with 'i' don't hit this.
             if after("i-") {
                 return mk(ServiceType::EC2, JumpView::Ec2(Ec2View::Instances), tok);
+            }
+            // Hybrid (on-prem) SSM managed node (mi-…): no EC2 instance
+            // behind it, so the SSM Fleet tab is its only home.
+            if crate::aws::services::ssm::hybrid_node_id(tok) == Some(tok) {
+                return mk(ServiceType::Ssm, JumpView::Ssm(SsmView::Fleet), tok);
             }
             if after("eni-") {
                 return mk(

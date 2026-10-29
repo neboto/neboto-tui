@@ -21907,9 +21907,53 @@ impl App {
     /// the Associations tab, "Document" to the Documents tab. A patch
     /// compliance row's "Instance ID" jumps to the instance in the Fleet tab
     /// (where the Patches section has the actual missing/failed list).
+    ///
+    /// Also the rows the generic classifier can't route: a Fleet node's own
+    /// `i-` id (the self-jump filter drops it, though the EC2 instance is a
+    /// different resource) and bare names — the node's IAM role, a command's
+    /// log group, a maintenance-window task's document, a related OpsItem, a
+    /// parameter's KMS key id.
     pub fn ssm_row_jump_target(&self, key: &str, value: &str) -> Option<JumpTarget> {
-        if value.is_empty() {
+        if self.current_service != Some(ServiceType::Ssm) {
             return None;
+        }
+        let key = key.trim_start();
+        let v = value.trim();
+        let mk = |service, view, id: &str| {
+            Some(JumpTarget { service, view, id: id.to_string() })
+        };
+        if v.is_empty() {
+            return None;
+        }
+        if self.is_selected_ssm_managed_instance() {
+            match key {
+                "Instance ID" if v.starts_with("i-") => {
+                    return mk(ServiceType::EC2, JumpView::Ec2(Ec2View::Instances), v);
+                }
+                "IAM Role" if !v.starts_with("arn:") => {
+                    return mk(ServiceType::IAM, JumpView::Iam(IamView::Roles), v);
+                }
+                _ => {}
+            }
+        }
+        if self.is_selected_ssm_command() && key == "Log Group" {
+            return mk(ServiceType::CloudWatch, JumpView::Cw(CwView::LogGroups), v);
+        }
+        // Run Command / Automation tasks name a document; Lambda and Step
+        // Functions tasks are ARNs the generic classifier already routes.
+        if self.is_selected_ssm_maint_window() && key == "Task" && !v.starts_with("arn:") {
+            return mk(ServiceType::Ssm, JumpView::Ssm(SsmView::Documents), v);
+        }
+        if self.is_selected_ssm_ops_item() && key == "OpsItem" {
+            return mk(ServiceType::Ssm, JumpView::Ssm(SsmView::OpsItems), v);
+        }
+        // A bare key id (aliases and ARNs go through the generic classifier).
+        if self.is_selected_ssm_parameter()
+            && key == "KMS Key"
+            && !v.starts_with("alias/")
+            && !v.starts_with("arn:")
+        {
+            return mk(ServiceType::Kms, JumpView::None, v);
         }
         let view = if self.is_selected_ssm_association()
             || self.is_selected_ssm_managed_instance()
