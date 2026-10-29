@@ -27,6 +27,7 @@ use ratatui::Terminal;
 mod deep_export_test;
 mod ssm_jump_test;
 mod iam_permissions_test;
+mod ddb_browser_test;
 mod load_stream_test;
 mod macros_test;
 mod keycast_test;

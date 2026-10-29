@@ -119,3 +119,55 @@ async fn metrics_takes_only_the_right_click() {
     mouse(&mut app, &tx, MouseEventKind::Down(MouseButton::Right), mid).await;
     assert!(app.metrics_in_pane.is_none());
 }
+
+/// The DynamoDB item view: a click puts the cursor on a line, a drag selects
+/// lines, the wheel scrolls the item, and over the results table it steps
+/// between items instead.
+#[tokio::test]
+async fn ddb_item_view_click_drag_and_wheel() {
+    use crate::aws::services::dynamodb::DdbTable;
+    use crate::ui::widgets::ddb_item_browser::{BrowserFocus, Page};
+    use aws_sdk_dynamodb::types::AttributeValue;
+
+    let (mut app, tx, _rx) = test_app().await;
+    let table = DdbTable::test_table("orders");
+    select_mock(&mut app, ServiceType::DynamoDb, Box::new(table.clone()));
+    app.ddb_browser.open(&table);
+    let items = (0..3)
+        .map(|n| {
+            (0..30)
+                .map(|i| (format!("a{:02}", i), AttributeValue::S(format!("v{}", n))))
+                .chain([("pk".to_string(), AttributeValue::S(format!("p{}", n)))])
+                .collect()
+        })
+        .collect();
+    app.ddb_browser.apply_page(Page { items, last_key: None, scanned: 3, consumed: 0.0 }, false, true);
+    app.ddb_browser.focus = BrowserFocus::Results;
+    app.ddb_browser.show_detail = true;
+    draw(&app);
+
+    let line = |app: &App, idx: usize| {
+        let hits = app.popup_hits.borrow();
+        let r = hits.body_rows.iter().find(|(i, _)| *i == idx).expect("body line").1;
+        (r.x + 4, r.y)
+    };
+    let at = line(&app, 2);
+    mouse(&mut app, &tx, LEFT, at).await;
+    assert_eq!(app.ddb_browser.detail_cursor, 2);
+    assert_eq!(app.ddb_browser.detail_anchor, None);
+
+    let to = line(&app, 4);
+    mouse(&mut app, &tx, MouseEventKind::Drag(MouseButton::Left), to).await;
+    mouse(&mut app, &tx, MouseEventKind::Up(MouseButton::Left), to).await;
+    assert_eq!(app.ddb_browser.detail_range(), (2, 4));
+
+    let body = app.popup_hits.borrow().body.unwrap();
+    mouse(&mut app, &tx, MouseEventKind::ScrollDown, (body.x + 4, body.y + 1)).await;
+    assert_eq!(app.ddb_browser.detail_scroll, 3);
+    assert_eq!(app.ddb_browser.selected_row, 0, "wheel over the item doesn't change item");
+
+    let over_table = row(&app, 0);
+    mouse(&mut app, &tx, MouseEventKind::ScrollDown, over_table).await;
+    assert_eq!(app.ddb_browser.selected_row, 1);
+    assert_eq!(app.ddb_browser.detail_scroll, 0, "a new item starts at the top");
+}

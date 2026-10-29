@@ -10,6 +10,8 @@ use std::any::Any;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
+pub mod query;
+
 
 pub struct DynamoDbService {
     client: DdbClient,
@@ -461,28 +463,81 @@ pub async fn fetch_ddb_tags(client: DdbClient, arn: String) -> Result<HashMap<St
     Ok(tags)
 }
 
+#[cfg(test)]
+impl DdbTable {
+    /// A table keyed `pk` (S) / `sk` (S) with no indexes, for tests.
+    pub fn test_table(name: &str) -> Self {
+        DdbTable {
+            name: name.into(),
+            arn: format!("arn:aws:dynamodb:us-east-1:123456789012:table/{}", name),
+            status: "ACTIVE".into(),
+            item_count: 0,
+            size_bytes: 0,
+            billing_mode: "PAY_PER_REQUEST".into(),
+            read_capacity: None,
+            write_capacity: None,
+            partition_key: "pk".into(),
+            partition_key_type: "S".into(),
+            sort_key: Some("sk".into()),
+            sort_key_type: Some("S".into()),
+            gsis: Vec::new(),
+            lsis: Vec::new(),
+            stream_enabled: false,
+            stream_view_type: None,
+            created: None,
+            tags: HashMap::new(),
+        }
+    }
+}
+
 // ── AttributeValue → JSON (item browser) ──────────────────────────────────────
 
+/// An item as the browser holds it.
+pub type DdbItem = HashMap<String, AttributeValue>;
+
+/// A DynamoDB number as JSON: a real number when it survives the round trip
+/// (`42`, `1.5`), else the original string, so `12345678901234567890.123`
+/// keeps every digit instead of being rounded through an `f64`.
+fn number_json(n: &str) -> serde_json::Value {
+    use serde_json::Value;
+    if let Ok(i) = n.parse::<i64>() {
+        return Value::from(i);
+    }
+    if let Ok(u) = n.parse::<u64>() {
+        return Value::from(u);
+    }
+    match n.parse::<f64>().ok().and_then(serde_json::Number::from_f64) {
+        Some(num) if num.to_string() == n => Value::Number(num),
+        _ => Value::String(n.to_string()),
+    }
+}
+
+/// Map entries in a stable order (DynamoDB returns them unordered).
+fn sorted_entries(m: &HashMap<String, AttributeValue>) -> Vec<(&String, &AttributeValue)> {
+    let mut v: Vec<_> = m.iter().collect();
+    v.sort_by(|a, b| a.0.cmp(b.0));
+    v
+}
+
 /// Convert a DynamoDB `AttributeValue` into a `serde_json::Value` for display.
-/// Numbers stay strings (DynamoDB numbers are arbitrary precision); binary is
-/// shown as a `<binary N bytes>` placeholder.
+/// Numbers become JSON numbers where that loses nothing (see `number_json`);
+/// binary is shown as a `<binary N bytes>` placeholder.
 pub fn av_to_json(av: &AttributeValue) -> serde_json::Value {
     use serde_json::Value;
     match av {
         AttributeValue::S(s) => Value::String(s.clone()),
-        AttributeValue::N(n) => Value::String(n.clone()),
+        AttributeValue::N(n) => number_json(n),
         AttributeValue::Bool(b) => Value::Bool(*b),
         AttributeValue::Null(_) => Value::Null,
-        AttributeValue::M(m) => {
-            let map = m
-                .iter()
+        AttributeValue::M(m) => Value::Object(
+            sorted_entries(m)
+                .into_iter()
                 .map(|(k, v)| (k.clone(), av_to_json(v)))
-                .collect::<serde_json::Map<_, _>>();
-            Value::Object(map)
-        }
+                .collect(),
+        ),
         AttributeValue::L(l) => Value::Array(l.iter().map(av_to_json).collect()),
         AttributeValue::Ss(ss) => Value::Array(ss.iter().map(|s| Value::String(s.clone())).collect()),
-        AttributeValue::Ns(ns) => Value::Array(ns.iter().map(|n| Value::String(n.clone())).collect()),
+        AttributeValue::Ns(ns) => Value::Array(ns.iter().map(|n| number_json(n)).collect()),
         AttributeValue::B(b) => Value::String(format!("<binary {} bytes>", b.as_ref().len())),
         AttributeValue::Bs(bs) => Value::Array(
             bs.iter()
@@ -493,213 +548,230 @@ pub fn av_to_json(av: &AttributeValue) -> serde_json::Value {
     }
 }
 
-/// Compact single-cell rendering of an attribute for the results table.
-pub fn av_cell(av: &AttributeValue) -> String {
+/// The item in DynamoDB's own typed JSON (`{"S": "x"}`, `{"N": "1"}`), as
+/// `aws dynamodb get-item` prints it — what you paste into a `--key` or
+/// `--item`. Binary is base64, as on the wire.
+pub fn av_to_ddb_json(av: &AttributeValue) -> serde_json::Value {
+    use serde_json::{json, Value};
+    let b64 = |b: &aws_sdk_dynamodb::primitives::Blob| aws_smithy_types::base64::encode(b.as_ref());
     match av {
-        AttributeValue::S(s) => s.clone(),
-        AttributeValue::N(n) => n.clone(),
-        AttributeValue::Bool(b) => b.to_string(),
-        AttributeValue::Null(_) => "null".to_string(),
-        AttributeValue::M(m) => format!("{{{} keys}}", m.len()),
-        AttributeValue::L(l) => format!("[{} items]", l.len()),
-        AttributeValue::Ss(s) => format!("[{} strings]", s.len()),
-        AttributeValue::Ns(n) => format!("[{} numbers]", n.len()),
-        AttributeValue::B(_) | AttributeValue::Bs(_) => "<binary>".to_string(),
-        _ => String::new(),
+        AttributeValue::S(s) => json!({ "S": s }),
+        AttributeValue::N(n) => json!({ "N": n }),
+        AttributeValue::Bool(b) => json!({ "BOOL": b }),
+        AttributeValue::Null(_) => json!({ "NULL": true }),
+        AttributeValue::M(m) => json!({ "M": item_ddb_json(m) }),
+        AttributeValue::L(l) => json!({ "L": l.iter().map(av_to_ddb_json).collect::<Vec<_>>() }),
+        AttributeValue::Ss(ss) => json!({ "SS": ss }),
+        AttributeValue::Ns(ns) => json!({ "NS": ns }),
+        AttributeValue::B(b) => json!({ "B": b64(b) }),
+        AttributeValue::Bs(bs) => json!({ "BS": bs.iter().map(b64).collect::<Vec<_>>() }),
+        _ => Value::Null,
     }
+}
+
+/// `av_to_ddb_json` over a whole item, keys in stable order.
+pub fn item_ddb_json(m: &HashMap<String, AttributeValue>) -> serde_json::Value {
+    serde_json::Value::Object(
+        sorted_entries(m)
+            .into_iter()
+            .map(|(k, v)| (k.clone(), av_to_ddb_json(v)))
+            .collect(),
+    )
+}
+
+/// The DynamoDB type descriptor (`S`, `N`, `M`, …) the item view labels a row with.
+pub fn av_type(av: &AttributeValue) -> &'static str {
+    match av {
+        AttributeValue::S(_) => "S",
+        AttributeValue::N(_) => "N",
+        AttributeValue::Bool(_) => "BOOL",
+        AttributeValue::Null(_) => "NULL",
+        AttributeValue::M(_) => "M",
+        AttributeValue::L(_) => "L",
+        AttributeValue::Ss(_) => "SS",
+        AttributeValue::Ns(_) => "NS",
+        AttributeValue::B(_) => "B",
+        AttributeValue::Bs(_) => "BS",
+        _ => "?",
+    }
+}
+
+/// Past this many characters a nested preview stops descending; the cell
+/// truncates to its column anyway, this just bounds the work per cell.
+const PREVIEW_BUDGET: usize = 120;
+
+/// Compact single-cell rendering of an attribute for the results table.
+/// Nested values preview their contents (`{city: Perth, zip: 6000}`,
+/// `[a, b, c]`) rather than just a count.
+pub fn av_cell(av: &AttributeValue) -> String {
+    let mut out = String::new();
+    preview(av, &mut out);
+    out
+}
+
+fn preview(av: &AttributeValue, out: &mut String) {
+    fn seq<'a, T: 'a>(
+        out: &mut String,
+        open: char,
+        close: char,
+        items: impl ExactSizeIterator<Item = T>,
+        mut each: impl FnMut(T, &mut String),
+    ) {
+        out.push(open);
+        for (i, it) in items.enumerate() {
+            if out.len() >= PREVIEW_BUDGET {
+                out.push('…');
+                break;
+            }
+            if i > 0 {
+                out.push_str(", ");
+            }
+            each(it, out);
+        }
+        out.push(close);
+    }
+    match av {
+        AttributeValue::S(s) => out.push_str(s),
+        AttributeValue::N(n) => out.push_str(n),
+        AttributeValue::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        AttributeValue::Null(_) => out.push_str("null"),
+        AttributeValue::M(m) => {
+            let entries = sorted_entries(m);
+            seq(out, '{', '}', entries.into_iter(), |(k, v), out| {
+                out.push_str(k);
+                out.push_str(": ");
+                preview(v, out);
+            })
+        }
+        AttributeValue::L(l) => seq(out, '[', ']', l.iter(), preview),
+        AttributeValue::Ss(s) => seq(out, '[', ']', s.iter(), |s, out| out.push_str(s)),
+        AttributeValue::Ns(n) => seq(out, '[', ']', n.iter(), |n, out| out.push_str(n)),
+        AttributeValue::B(b) => out.push_str(&format!("<{} bytes>", b.as_ref().len())),
+        AttributeValue::Bs(bs) => out.push_str(&format!("<{} binaries>", bs.len())),
+        _ => {}
+    }
+}
+
+/// Order two attribute values for the browser's column sort: numbers
+/// numerically, everything else by its cell text. A missing value sorts
+/// last either way (the caller handles direction).
+pub fn av_cmp(a: &AttributeValue, b: &AttributeValue) -> std::cmp::Ordering {
+    if let (AttributeValue::N(x), AttributeValue::N(y)) = (a, b) {
+        if let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>()) {
+            return x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal);
+        }
+    }
+    av_cell(a).cmp(&av_cell(b))
 }
 
 // ── Query / Scan execution ────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SkOp {
-    Eq,
-    BeginsWith,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-}
-
-impl SkOp {
-    pub fn label(self) -> &'static str {
-        match self {
-            SkOp::Eq => "=",
-            SkOp::BeginsWith => "begins_with",
-            SkOp::Lt => "<",
-            SkOp::Le => "<=",
-            SkOp::Gt => ">",
-            SkOp::Ge => ">=",
-        }
-    }
-    pub fn next(self) -> Self {
-        match self {
-            SkOp::Eq => SkOp::BeginsWith,
-            SkOp::BeginsWith => SkOp::Lt,
-            SkOp::Lt => SkOp::Le,
-            SkOp::Le => SkOp::Gt,
-            SkOp::Gt => SkOp::Ge,
-            SkOp::Ge => SkOp::Eq,
-        }
-    }
-}
-
 /// One page of an item read, plus the cursor to fetch the next page.
 pub struct DdbPage {
-    pub items: Vec<HashMap<String, AttributeValue>>,
-    pub last_key: Option<HashMap<String, AttributeValue>>,
+    pub items: Vec<DdbItem>,
+    pub last_key: Option<DdbItem>,
     pub scanned: i32,
+    /// Read capacity the page consumed (`ReturnConsumedCapacity=TOTAL`).
+    pub consumed: f64,
 }
 
-/// Build a typed `AttributeValue` from user text + the DynamoDB scalar type.
-fn make_av(value: &str, ty: &str) -> AttributeValue {
-    match ty {
-        "N" => AttributeValue::N(value.to_string()),
-        "B" => AttributeValue::S(value.to_string()), // binary literals unsupported; treat as string
-        _ => AttributeValue::S(value.to_string()),
-    }
-}
-
-/// Parse a simple filter `attr=value` (equals) or `attr~value` (contains) into
-/// a FilterExpression + names/values. Numeric values use `N`.
-fn build_filter(
-    filter: &str,
-    names: &mut HashMap<String, String>,
-    values: &mut HashMap<String, AttributeValue>,
-) -> Option<String> {
-    let filter = filter.trim();
-    if filter.is_empty() {
-        return None;
-    }
-    let (attr, op_contains, val) = if let Some((a, v)) = filter.split_once('~') {
-        (a.trim(), true, v.trim())
-    } else if let Some((a, v)) = filter.split_once('=') {
-        (a.trim(), false, v.trim())
-    } else {
-        return None;
-    };
-    if attr.is_empty() {
-        return None;
-    }
-    names.insert("#f".to_string(), attr.to_string());
-    // Numeric literal → N, else S.
-    let av = if val.parse::<f64>().is_ok() {
-        AttributeValue::N(val.to_string())
-    } else {
-        AttributeValue::S(val.to_string())
-    };
-    values.insert(":fval".to_string(), av);
-    if op_contains {
-        Some("contains(#f, :fval)".to_string())
-    } else {
-        Some("#f = :fval".to_string())
-    }
-}
-
-/// Full spec for one item read (built from the browser state on `App`).
-pub struct DdbQuerySpec {
-    pub table: String,
-    pub index_name: Option<String>, // None = base table
-    pub query: bool,                // true = Query, false = Scan
-    pub pk_name: String,
-    pub pk_type: String,
-    pub pk_value: String,
-    pub sk_name: Option<String>,
-    pub sk_type: Option<String>,
-    pub sk_op: SkOp,
-    pub sk_value: String,
-    pub filter: String,
-    pub start_key: Option<HashMap<String, AttributeValue>>,
-}
-
-const PAGE_LIMIT: i32 = 50;
-
-pub async fn run_ddb_read(client: DdbClient, spec: DdbQuerySpec) -> Result<DdbPage> {
-    let mut names: HashMap<String, String> = HashMap::new();
-    let mut values: HashMap<String, AttributeValue> = HashMap::new();
-
-    if spec.query {
-        // Key condition: #pk = :pkval [AND <sk op>]
-        names.insert("#pk".to_string(), spec.pk_name.clone());
-        values.insert(":pkval".to_string(), make_av(&spec.pk_value, &spec.pk_type));
-        let mut cond = "#pk = :pkval".to_string();
-
-        if let (Some(sk_name), Some(sk_type)) = (&spec.sk_name, &spec.sk_type) {
-            if !spec.sk_value.trim().is_empty() {
-                names.insert("#sk".to_string(), sk_name.clone());
-                values.insert(":skval".to_string(), make_av(spec.sk_value.trim(), sk_type));
-                let clause = match spec.sk_op {
-                    SkOp::Eq => "#sk = :skval",
-                    SkOp::BeginsWith => "begins_with(#sk, :skval)",
-                    SkOp::Lt => "#sk < :skval",
-                    SkOp::Le => "#sk <= :skval",
-                    SkOp::Gt => "#sk > :skval",
-                    SkOp::Ge => "#sk >= :skval",
-                };
-                cond.push_str(" AND ");
-                cond.push_str(clause);
-            }
-        }
-
-        let filter = build_filter(&spec.filter, &mut names, &mut values);
-
-        let mut req = client
+/// Read one page of a compiled plan. `limit` caps the items *evaluated*
+/// (DynamoDB applies the filter after), which is what bounds the cost.
+pub async fn read_page(
+    client: &DdbClient,
+    table: &str,
+    plan: &query::Plan,
+    start_key: Option<DdbItem>,
+    limit: i32,
+) -> Result<DdbPage> {
+    use aws_sdk_dynamodb::types::ReturnConsumedCapacity;
+    let names = (!plan.names.is_empty()).then(|| plan.names.clone());
+    let values = (!plan.values.is_empty()).then(|| plan.values.clone());
+    let err = |e: String| crate::error::Error::AwsSdk(friendly_query_error(&e));
+    if plan.query {
+        let resp = client
             .query()
-            .table_name(&spec.table)
-            .key_condition_expression(cond)
-            .limit(PAGE_LIMIT)
-            .set_expression_attribute_names(Some(names))
-            .set_expression_attribute_values(Some(values));
-        if let Some(idx) = &spec.index_name {
-            req = req.index_name(idx);
-        }
-        if let Some(f) = filter {
-            req = req.filter_expression(f);
-        }
-        if let Some(sk) = spec.start_key {
-            req = req.set_exclusive_start_key(Some(sk));
-        }
-
-        let resp = req
+            .table_name(table)
+            .set_index_name(plan.index_name.clone())
+            .set_key_condition_expression(plan.key_condition.clone())
+            .set_filter_expression(plan.filter.clone())
+            .set_expression_attribute_names(names)
+            .set_expression_attribute_values(values)
+            .set_exclusive_start_key(start_key)
+            .limit(limit)
+            .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
             .await
-            .map_err(|e| crate::error::Error::AwsSdk(friendly_query_error(&crate::error::sdk_error_message(&e))))?;
+            .map_err(|e| err(crate::error::sdk_error_message(&e)))?;
         Ok(DdbPage {
             items: resp.items().to_vec(),
             last_key: resp.last_evaluated_key().cloned(),
             scanned: resp.scanned_count(),
+            consumed: resp.consumed_capacity().and_then(|c| c.capacity_units()).unwrap_or(0.0),
         })
     } else {
-        let filter = build_filter(&spec.filter, &mut names, &mut values);
-        let mut req = client.scan().table_name(&spec.table).limit(PAGE_LIMIT);
-        if let Some(idx) = &spec.index_name {
-            req = req.index_name(idx);
-        }
-        if let Some(f) = filter {
-            req = req
-                .filter_expression(f)
-                .set_expression_attribute_names(Some(names))
-                .set_expression_attribute_values(Some(values));
-        }
-        if let Some(sk) = spec.start_key {
-            req = req.set_exclusive_start_key(Some(sk));
-        }
-        let resp = req
+        let resp = client
+            .scan()
+            .table_name(table)
+            .set_index_name(plan.index_name.clone())
+            .set_filter_expression(plan.filter.clone())
+            .set_expression_attribute_names(names)
+            .set_expression_attribute_values(values)
+            .set_exclusive_start_key(start_key)
+            .limit(limit)
+            .return_consumed_capacity(ReturnConsumedCapacity::Total)
             .send()
             .await
-            .map_err(|e| crate::error::Error::AwsSdk(friendly_query_error(&crate::error::sdk_error_message(&e))))?;
+            .map_err(|e| err(crate::error::sdk_error_message(&e)))?;
         Ok(DdbPage {
             items: resp.items().to_vec(),
             last_key: resp.last_evaluated_key().cloned(),
             scanned: resp.scanned_count(),
+            consumed: resp.consumed_capacity().and_then(|c| c.capacity_units()).unwrap_or(0.0),
         })
     }
+}
+
+/// Matches one `n` press aims for before it stops reading.
+pub const READ_TARGET: usize = 50;
+/// Items one `n` press may evaluate, matched or not. A filter that matches
+/// rarely would otherwise read the whole table on one key; this is what the
+/// plan line's RCU estimate is based on.
+pub const READ_BUDGET: usize = 5_000;
+/// Per-page `Limit` while filtering (DynamoDB also stops a page at 1 MB).
+const FILTER_PAGE: usize = 1_000;
+
+/// The `Limit` for the next page of a read: just enough items when nothing
+/// filters them, else a big page bounded by what's left of the budget.
+pub fn next_page_limit(filtered: bool, matched: usize, scanned: usize) -> i32 {
+    if filtered {
+        FILTER_PAGE.min(READ_BUDGET.saturating_sub(scanned)).max(1) as i32
+    } else {
+        READ_TARGET.saturating_sub(matched).max(1) as i32
+    }
+}
+
+/// Whether a read should stop after a page.
+pub fn read_done(more: bool, matched: usize, scanned: usize) -> bool {
+    !more || matched >= READ_TARGET || scanned >= READ_BUDGET
+}
+
+/// Eventually-consistent read units to evaluate `items` items of the table's
+/// average size: 0.5 RCU per 4 KB. A Scan rounds per page, not per item, so
+/// this is close for a Scan and an upper bound for small Query pages.
+pub fn estimate_rcu(items: usize, table_items: i64, table_bytes: i64) -> Option<f64> {
+    if table_items <= 0 || table_bytes <= 0 {
+        return None;
+    }
+    let avg = table_bytes as f64 / table_items as f64;
+    let n = (items as f64).min(table_items as f64);
+    Some(((n * avg) / 4096.0).ceil().max(1.0) * 0.5)
 }
 
 fn friendly_query_error(raw: &str) -> String {
     let low = raw.to_lowercase();
     if low.contains("validationexception") && low.contains("key condition") {
-        "Query needs a partition-key value (or switch to Scan).".to_string()
+        format!("{} — check the key condition's attribute types.", raw)
     } else if low.contains("accessdenied") || low.contains("not authorized") {
         "Access denied — need dynamodb:Query / dynamodb:Scan.".to_string()
     } else {
@@ -754,37 +826,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_filter_equals_and_contains() {
-        let mut names = HashMap::new();
-        let mut values = HashMap::new();
-        let expr = build_filter("status=active", &mut names, &mut values).unwrap();
-        assert_eq!(expr, "#f = :fval");
-        assert_eq!(names.get("#f").unwrap(), "status");
-        assert!(matches!(values.get(":fval"), Some(AttributeValue::S(s)) if s == "active"));
-
-        let mut names = HashMap::new();
-        let mut values = HashMap::new();
-        let expr = build_filter("name~smith", &mut names, &mut values).unwrap();
-        assert_eq!(expr, "contains(#f, :fval)");
-    }
-
-    #[test]
-    fn build_filter_numeric_value_uses_n() {
-        let mut names = HashMap::new();
-        let mut values = HashMap::new();
-        build_filter("age=42", &mut names, &mut values).unwrap();
-        assert!(matches!(values.get(":fval"), Some(AttributeValue::N(n)) if n == "42"));
-    }
-
-    #[test]
-    fn build_filter_empty_or_malformed_is_none() {
-        let mut n = HashMap::new();
-        let mut v = HashMap::new();
-        assert!(build_filter("", &mut n, &mut v).is_none());
-        assert!(build_filter("noseparator", &mut n, &mut v).is_none());
-    }
-
-    #[test]
     fn av_to_json_handles_scalars_and_nesting() {
         use serde_json::json;
         let mut m = HashMap::new();
@@ -796,22 +837,74 @@ mod tests {
             AttributeValue::L(vec![AttributeValue::S("x".into())]),
         );
         let v = av_to_json(&AttributeValue::M(m));
-        // Numbers stay strings (DynamoDB arbitrary precision).
-        assert_eq!(v["n"], json!("3"));
+        assert_eq!(v["n"], json!(3));
         assert_eq!(v["s"], json!("hi"));
         assert_eq!(v["b"], json!(true));
         assert_eq!(v["list"], json!(["x"]));
     }
 
     #[test]
-    fn sk_op_cycles_and_labels() {
-        assert_eq!(SkOp::Eq.label(), "=");
-        assert_eq!(SkOp::BeginsWith.label(), "begins_with");
-        // Cycling visits every variant and returns to start.
-        let mut op = SkOp::Eq;
-        for _ in 0..6 {
-            op = op.next();
-        }
-        assert_eq!(op, SkOp::Eq);
+    fn numbers_keep_their_precision() {
+        use serde_json::json;
+        assert_eq!(av_to_json(&AttributeValue::N("1.5".into())), json!(1.5));
+        assert_eq!(av_to_json(&AttributeValue::N("-7".into())), json!(-7));
+        // Too precise for an f64: stays the exact string.
+        let big = "12345678901234567890.123";
+        assert_eq!(av_to_json(&AttributeValue::N(big.into())), json!(big));
+    }
+
+    #[test]
+    fn cells_preview_nested_values_in_stable_order() {
+        let mut m = HashMap::new();
+        m.insert("zip".to_string(), AttributeValue::S("6000".into()));
+        m.insert("city".to_string(), AttributeValue::S("Perth".into()));
+        assert_eq!(av_cell(&AttributeValue::M(m)), "{city: Perth, zip: 6000}");
+        let l = AttributeValue::L(vec![AttributeValue::N("1".into()), AttributeValue::Bool(true)]);
+        assert_eq!(av_cell(&l), "[1, true]");
+        let long = AttributeValue::L((0..200).map(|i| AttributeValue::N(i.to_string())).collect());
+        let cell = av_cell(&long);
+        assert!(cell.len() < 200 && cell.ends_with("…]"), "{cell}");
+    }
+
+    #[test]
+    fn ddb_json_is_typed_like_the_cli() {
+        use serde_json::json;
+        let mut item = HashMap::new();
+        item.insert("pk".to_string(), AttributeValue::S("p".into()));
+        item.insert("n".to_string(), AttributeValue::N("3".into()));
+        item.insert("tags".to_string(), AttributeValue::Ss(vec!["a".into()]));
+        item.insert("bin".to_string(), AttributeValue::B(aws_sdk_dynamodb::primitives::Blob::new(b"hi".to_vec())));
+        assert_eq!(
+            item_ddb_json(&item),
+            json!({"bin": {"B": "aGk="}, "n": {"N": "3"}, "pk": {"S": "p"}, "tags": {"SS": ["a"]}})
+        );
+    }
+
+    #[test]
+    fn reads_stop_at_the_target_or_the_budget() {
+        assert_eq!(next_page_limit(false, 0, 0), 50);
+        assert_eq!(next_page_limit(false, 30, 30), 20);
+        assert_eq!(next_page_limit(true, 0, 4_500), 500);
+        assert!(!read_done(true, 10, 1_000));
+        assert!(read_done(true, 50, 1_000));
+        assert!(read_done(true, 3, READ_BUDGET));
+        assert!(read_done(false, 0, 0));
+    }
+
+    #[test]
+    fn rcu_estimate_uses_the_average_item_size() {
+        // 1 KB items: 5,000 of them is 5,000 KB / 4 KB = 1,221 units × 0.5.
+        assert_eq!(estimate_rcu(5_000, 10_000, 10_240_000), Some(625.0));
+        assert_eq!(estimate_rcu(5_000, 0, 0), None);
+        // Never more than the table holds.
+        assert_eq!(estimate_rcu(5_000, 10, 40_960), Some(5.0));
+    }
+
+    #[test]
+    fn sort_compares_numbers_numerically() {
+        let n = |v: &str| AttributeValue::N(v.into());
+        assert_eq!(av_cmp(&n("9"), &n("100")), std::cmp::Ordering::Less);
+        let s = |v: &str| AttributeValue::S(v.into());
+        assert_eq!(av_cmp(&s("9"), &s("100")), std::cmp::Ordering::Greater);
     }
 }

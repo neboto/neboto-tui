@@ -38,7 +38,7 @@ pub fn render_message_log(app: &App, frame: &mut Frame) {
         .enumerate()
         .map(|(n, i)| (i, Rect { x: inner.x, y: inner.y + n as u16, width: inner.width, height: 1 }))
         .collect();
-    *app.popup_hits.borrow_mut() = PopupHits { area: Some(area), rows };
+    *app.popup_hits.borrow_mut() = PopupHits { area: Some(area), rows, ..Default::default() };
 
     if total == 0 {
         frame.render_widget(

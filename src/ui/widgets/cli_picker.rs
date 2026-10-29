@@ -96,7 +96,7 @@ fn record_hits(
         }
         y = y.saturating_add(h);
     }
-    *app.popup_hits.borrow_mut() = PopupHits { area: Some(area), rows };
+    *app.popup_hits.borrow_mut() = PopupHits { area: Some(area), rows, ..Default::default() };
 }
 
 /// Tier headings + numbered rows, and for each line the picker row it shows

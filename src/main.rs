@@ -5,6 +5,7 @@ mod bookmarks;
 mod cli;
 mod commands;
 mod config;
+mod ddb_history;
 mod demo;
 mod editor;
 mod error;
