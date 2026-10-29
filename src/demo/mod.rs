@@ -15,6 +15,7 @@
 //! success, so an uncovered service shows an empty list, never an error.
 
 mod cbor;
+mod ddb;
 pub mod fixtures;
 mod generate;
 

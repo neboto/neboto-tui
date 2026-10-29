@@ -36,7 +36,11 @@ Fixtures live in `src/demo/fixtures/<service>/` and are registered in
   computed per request from a fixed clock, so a live tail keeps moving and a
   search finds the same lines; so is a `GetMetricData` made of plain
   `MetricStat` queries (the spec-charted kinds), so `m` draws moving
-  series. Expression queries (SEARCH, math) still need fixtures.
+  series. Expression queries (SEARCH, math) still need fixtures. DynamoDB's
+  `DescribeTable` / `Query` / `Scan` are generated too (`ddb.rs`): two
+  tables built from a seed, with each read's expressions **evaluated** by
+  the item browser's own parser — a stored Query body would answer every
+  query with the same items. Add DynamoDB data there, not as fixtures.
 - **No fixture:** an unmatched operation returns a protocol-correct *empty*
   success, so the service lists empty and `resource_list.rs` says "Not in the
   demo dataset yet". Except restXml (S3, Route 53, CloudFront): an empty

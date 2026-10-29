@@ -569,6 +569,38 @@ pub fn av_to_ddb_json(av: &AttributeValue) -> serde_json::Value {
     }
 }
 
+/// The inverse of `av_to_ddb_json`: DynamoDB's typed JSON back to an
+/// `AttributeValue` (what a request's `ExpressionAttributeValues` and
+/// `ExclusiveStartKey` carry). `None` for anything that isn't one.
+pub fn av_from_ddb_json(v: &serde_json::Value) -> Option<AttributeValue> {
+    use aws_sdk_dynamodb::primitives::Blob;
+    let (ty, inner) = v.as_object()?.iter().next()?;
+    let strs = |x: &serde_json::Value| -> Option<Vec<String>> {
+        x.as_array()?.iter().map(|s| s.as_str().map(str::to_string)).collect()
+    };
+    let blob = |x: &serde_json::Value| -> Option<Blob> {
+        aws_smithy_types::base64::decode(x.as_str()?).ok().map(Blob::new)
+    };
+    Some(match ty.as_str() {
+        "S" => AttributeValue::S(inner.as_str()?.to_string()),
+        "N" => AttributeValue::N(inner.as_str()?.to_string()),
+        "BOOL" => AttributeValue::Bool(inner.as_bool()?),
+        "NULL" => AttributeValue::Null(true),
+        "M" => AttributeValue::M(item_from_ddb_json(inner)?),
+        "L" => AttributeValue::L(inner.as_array()?.iter().map(av_from_ddb_json).collect::<Option<_>>()?),
+        "SS" => AttributeValue::Ss(strs(inner)?),
+        "NS" => AttributeValue::Ns(strs(inner)?),
+        "B" => AttributeValue::B(blob(inner)?),
+        "BS" => AttributeValue::Bs(inner.as_array()?.iter().map(blob).collect::<Option<_>>()?),
+        _ => return None,
+    })
+}
+
+/// `av_from_ddb_json` over a whole item.
+pub fn item_from_ddb_json(v: &serde_json::Value) -> Option<DdbItem> {
+    v.as_object()?.iter().map(|(k, v)| Some((k.clone(), av_from_ddb_json(v)?))).collect()
+}
+
 /// `av_to_ddb_json` over a whole item, keys in stable order.
 pub fn item_ddb_json(m: &HashMap<String, AttributeValue>) -> serde_json::Value {
     serde_json::Value::Object(
@@ -1021,6 +1053,20 @@ mod tests {
         assert_eq!(estimate_rcu(5_000, 0, 0), None);
         // Never more than the table holds.
         assert_eq!(estimate_rcu(5_000, 10, 40_960), Some(5.0));
+    }
+
+    #[test]
+    fn ddb_json_round_trips() {
+        let mut inner = HashMap::new();
+        inner.insert("city".to_string(), AttributeValue::S("Perth".into()));
+        let mut item = HashMap::new();
+        item.insert("m".to_string(), AttributeValue::M(inner));
+        item.insert("l".to_string(), AttributeValue::L(vec![AttributeValue::N("1".into()), AttributeValue::Null(true)]));
+        item.insert("ss".to_string(), AttributeValue::Ss(vec!["a".into()]));
+        item.insert("b".to_string(), AttributeValue::B(aws_sdk_dynamodb::primitives::Blob::new(b"hi".to_vec())));
+        item.insert("t".to_string(), AttributeValue::Bool(true));
+        assert_eq!(item_from_ddb_json(&item_ddb_json(&item)), Some(item));
+        assert_eq!(av_from_ddb_json(&serde_json::json!({"X": 1})), None);
     }
 
     #[test]

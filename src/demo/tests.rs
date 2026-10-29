@@ -415,3 +415,49 @@ async fn s3control_routes_past_the_account_id_host_label() {
     .expect("ListAccessPoints");
     assert!(aps.is_empty());
 }
+
+/// DynamoDB end to end: a real SDK client through the demo connector, with
+/// the item browser's own compiler and page reader — so a query typed in
+/// `--demo` really filters (`ddb.rs`), and every response deserializes.
+#[tokio::test]
+async fn dynamodb_tables_and_queries_through_the_sdk() {
+    use crate::aws::services::dynamodb::{query, read_page, DdbTable};
+    use aws_sdk_dynamodb::types::AttributeValue;
+    let ddb = aws_sdk_dynamodb::Client::new(&demo_config().await);
+
+    let names = ddb.list_tables().send().await.expect("ListTables");
+    assert_eq!(names.table_names(), ["catalog", "orders"]);
+    let desc = ddb.describe_table().table_name("orders").send().await.expect("DescribeTable");
+    let table = DdbTable::from_sdk(desc.table().expect("table"));
+    assert_eq!(table.gsis.len(), 2);
+    assert_eq!(table.read_capacity, Some(5));
+    let ttl = ddb.describe_time_to_live().table_name("orders").send().await.expect("TTL");
+    assert_eq!(ttl.time_to_live_description().and_then(|t| t.attribute_name()), Some("expiresAt"));
+    let missing = ddb.describe_table().table_name("nope").send().await;
+    assert!(missing.is_err(), "an unknown table is ResourceNotFound, not an empty table");
+
+    let indexes = table.queryable_indexes();
+    let plan = query::plan(r#"pk = "USER#42" and sk begins_with "ORDER#" and total > 100"#, &indexes, None).unwrap();
+    assert!(plan.query);
+    let page = read_page(&ddb, "orders", &plan, None, 1_000).await.expect("Query");
+    assert_eq!(page.scanned, 6, "USER#42's six orders, filtered after");
+    assert!(page.consumed > 0.0);
+    for item in &page.items {
+        let Some(AttributeValue::N(total)) = item.get("total") else { panic!("numeric total") };
+        assert!(total.parse::<f64>().unwrap() > 100.0);
+    }
+
+    // The planner sends `status = …` to the byStatus GSI.
+    let plan = query::plan("status = pending", &indexes, None).unwrap();
+    assert_eq!(plan.index_name.as_deref(), Some("byStatus"));
+    let page = read_page(&ddb, "orders", &plan, None, 50).await.expect("Query byStatus");
+    assert!(!page.items.is_empty());
+    assert!(page.items.iter().all(|i| i.get("status") == Some(&AttributeValue::S("pending".into()))));
+
+    // A Scan pages with a cursor.
+    let plan = query::plan("", &indexes, None).unwrap();
+    let first = read_page(&ddb, "orders", &plan, None, 50).await.expect("Scan");
+    assert_eq!(first.items.len(), 50);
+    let next = read_page(&ddb, "orders", &plan, first.last_key.clone(), 50).await.expect("Scan page 2");
+    assert!(next.items.iter().all(|i| !first.items.contains(i)));
+}
