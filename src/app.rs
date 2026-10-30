@@ -1243,9 +1243,72 @@ pub struct NavLocation {
     /// existed — those restore in whichever region is current, as they
     /// always did. Restoring one from another region switches there first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub region: Option<String>}
+    pub region: Option<String>,
+    /// The credentials the location was captured under; `None` for history
+    /// and bookmarks written before this existed — those restore under
+    /// whichever credentials are current, as they always did. Restoring one
+    /// from another account switches profile / assumes the role first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials: Option<NavCredentials>}
+
+/// Whose credentials a `NavLocation` was captured under: the base profile
+/// (`None` = the startup credential chain, no named profile) and the org
+/// member role assumed on top of it, if any.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NavCredentials {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assumed: Option<NavAssumedRole>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NavAssumedRole {
+    pub account_id: String,
+    #[serde(default)]
+    pub account_name: String,
+    pub role_name: String,
+}
+
+/// See `App::pending_credential_restore`.
+#[derive(Debug, Clone)]
+pub struct CredentialRestore {
+    pub loc: NavLocation,
+    /// `nav_cursor` before the history step, put back if the switch fails;
+    /// `None` when the restore wasn't a history step (a bookmark).
+    cursor_before: Option<Option<usize>>,
+}
+
+impl NavCredentials {
+    /// Same session: same profile, same assumed account + role. The account
+    /// name is display-only (it can be renamed).
+    pub fn same_as(&self, other: &NavCredentials) -> bool {
+        self.profile == other.profile
+            && match (&self.assumed, &other.assumed) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.account_id == b.account_id && a.role_name == b.role_name,
+                _ => false,
+            }
+    }
+
+    /// What the jump list names beside a place from another session: the
+    /// member account, else the profile.
+    pub fn label(&self) -> String {
+        match (&self.assumed, &self.profile) {
+            (Some(a), _) if a.account_name.is_empty() => a.account_id.clone(),
+            (Some(a), _) => format!("{} ({})", a.account_name, a.account_id),
+            (None, Some(p)) => format!("profile {p}"),
+            (None, None) => "startup credentials".to_string(),
+        }
+    }
+}
 
 impl NavLocation {
+    /// The captured credentials, when they aren't `current`.
+    pub fn other_credentials(&self, current: &NavCredentials) -> Option<&NavCredentials> {
+        self.credentials.as_ref().filter(|c| !c.same_as(current))
+    }
+
     /// The captured region, when it isn't `current` — what the footer hint,
     /// the jump list and the bookmark list name beside the place.
     pub fn other_region(&self, current: Region) -> Option<Region> {
@@ -2240,6 +2303,11 @@ pub struct App {
     /// region's service load — `resolve_pending_jump` won't resolve until
     /// `current_region` matches, so the stale old-region load can't claim the jump.
     pub pending_jump_region: Option<crate::aws::region::Region>,
+    /// A location from another account (`NavLocation.credentials`) waiting
+    /// on the profile / role switch that restoring it needs. The view isn't
+    /// touched until the switch succeeds, so a failed one (role gone,
+    /// `AssumeRole` denied) leaves you exactly where you were.
+    pub pending_credential_restore: Option<CredentialRestore>,
     /// Focus the detail pane once `pending_jump` resolves to an **exact** id
     /// (or name) match (the `Enter` "follow link" jump, the S3 cross-region
     /// drill, and nav/bookmark restores captured at detail depth). Query-style
@@ -3181,6 +3249,7 @@ impl App {
             pending_reselect_id: None,
             load_warnings: Vec::new(),
             pending_jump_region: None,
+            pending_credential_restore: None,
             pending_jump_focus_details: false,
             pending_jump_section: None,
             nav_history: Vec::new(),
@@ -3459,7 +3528,13 @@ impl App {
                 }
             }
             Event::ProfileSwitchRequested { profile } => {
-                self.switch_profile(profile, event_tx).await?;
+                // A history / bookmark restore's switch failing is an
+                // outcome, reported in the status bar — not fatal.
+                let restoring = self.pending_credential_restore.is_some();
+                let result = self.switch_profile(profile, event_tx).await;
+                if !restoring {
+                    result?;
+                }
             }
             // Failure is an expected outcome here (invited accounts lack the
             // role; sts:AssumeRole may be denied) — handled as a status-bar
@@ -9929,6 +10004,9 @@ impl App {
         profile: String,
         event_tx: &mpsc::UnboundedSender<Event>,
     ) -> Result<()> {
+        // "Here", for `Ctrl-O` to come back to — recorded once the switch
+        // works. A history restore's switch records nothing (it is the step).
+        let here = self.pending_credential_restore.is_none().then(|| self.current_location()).flatten();
         self.loading = true;
         self.load_started_at = Some(Instant::now());
         // Same as switch_region: the old credentials' in-flight stream is
@@ -9941,15 +10019,24 @@ impl App {
 
         match self.aws_clients.switch_profile(profile.clone()).await {
             Ok(new_clients) => {
+                let landing = NavCredentials { profile: Some(profile.clone()), assumed: None };
+                if let Some(land) = self.credential_restore_landing(&landing) {
+                    self.prepare_service_view(land);
+                }
+                if let Some(loc) = here {
+                    self.record_captured(loc);
+                }
                 self.install_new_clients(new_clients, event_tx);
                 self.success_message = Some(format!("Switched to profile {}", profile));
                 self.success_message_time = Some(Instant::now());
                 self.error_message = None;
+                self.resume_credential_restore(true, event_tx);
                 Ok(())
             }
             Err(e) => {
                 self.loading = false;
                 self.error_message = Some(format!("Failed to switch profile: {}", e));
+                self.resume_credential_restore(false, event_tx);
                 Err(e)
             }
         }
@@ -9967,6 +10054,8 @@ impl App {
         role_name: String,
         event_tx: &mpsc::UnboundedSender<Event>,
     ) {
+        // See switch_profile.
+        let here = self.pending_credential_restore.is_none().then(|| self.current_location()).flatten();
         self.loading = true;
         self.load_started_at = Some(Instant::now());
 
@@ -9987,10 +10076,24 @@ impl App {
                 // view that launched the switch is management-account-only
                 // and would greet you with an access error. No configured
                 // default (splash-at-startup users) falls back to EC2 so the
-                // jump always happens.
-                let land = self.default_service.unwrap_or(ServiceType::EC2);
+                // jump always happens. A history restore lands where it's
+                // going instead.
+                let landing = NavCredentials {
+                    profile: self.aws_clients.current_profile().map(str::to_string),
+                    assumed: Some(NavAssumedRole {
+                        account_id: account_id.clone(),
+                        account_name: account_name.clone(),
+                        role_name: role_name.clone(),
+                    }),
+                };
+                let land = self
+                    .credential_restore_landing(&landing)
+                    .unwrap_or(self.default_service.unwrap_or(ServiceType::EC2));
                 if land.is_virtual() || self.services.contains_key(&land) {
                     self.prepare_service_view(land);
+                }
+                if let Some(loc) = here {
+                    self.record_captured(loc);
                 }
                 self.details_focused = false;
                 self.details_selected_index = None;
@@ -10006,6 +10109,7 @@ impl App {
                 ));
                 self.success_message_time = Some(Instant::now());
                 self.error_message = None;
+                self.resume_credential_restore(true, event_tx);
             }
             Err(e) => {
                 self.loading = false;
@@ -10014,6 +10118,7 @@ impl App {
                     &account_id,
                     &e.to_string(),
                 ));
+                self.resume_credential_restore(false, event_tx);
             }
         }
     }
@@ -10021,8 +10126,11 @@ impl App {
     /// Drop the assumed member-account role and return to base credentials.
     pub async fn exit_org_role(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if self.aws_clients.current_assumed_role().is_none() {
+            self.resume_credential_restore(true, event_tx);
             return;
         }
+        // See switch_profile.
+        let here = self.pending_credential_restore.is_none().then(|| self.current_location()).flatten();
         self.loading = true;
         self.load_started_at = Some(Instant::now());
         tokio::task::yield_now().await;
@@ -10032,9 +10140,20 @@ impl App {
                 self.reset_account_scoped_state();
                 // Land back on the Organizations account list — the switch
                 // started there, and the common loop is assume → inspect →
-                // exit → assume the next account.
-                if self.services.contains_key(&ServiceType::Organizations) {
-                    self.prepare_service_view(ServiceType::Organizations);
+                // exit → assume the next account. A history restore lands
+                // where it's going instead.
+                let landing = NavCredentials {
+                    profile: self.aws_clients.current_profile().map(str::to_string),
+                    assumed: None,
+                };
+                let land = self
+                    .credential_restore_landing(&landing)
+                    .unwrap_or(ServiceType::Organizations);
+                if self.services.contains_key(&land) {
+                    self.prepare_service_view(land);
+                }
+                if let Some(loc) = here {
+                    self.record_captured(loc);
                 }
                 self.details_focused = false;
                 self.details_selected_index = None;
@@ -10042,10 +10161,12 @@ impl App {
                 self.success_message = Some("Returned to base account".to_string());
                 self.success_message_time = Some(Instant::now());
                 self.error_message = None;
+                self.resume_credential_restore(true, event_tx);
             }
             Err(e) => {
                 self.loading = false;
                 self.error_message = Some(format!("Failed to return to base account: {}", e));
+                self.resume_credential_restore(false, event_tx);
             }
         }
     }
@@ -19427,7 +19548,8 @@ impl App {
                 s3_object_path: Some((bucket, key)),
                 details_focused: false,
                 detail_section: None,
-                region: Some(self.current_region.as_str().to_string())};
+                region: Some(self.current_region.as_str().to_string()),
+                credentials: Some(self.current_credentials())};
             self.bookmarks.push(loc);
             self.s3_object_browser.message = Some("Bookmarked".to_string());
         }
@@ -21094,7 +21216,26 @@ impl App {
             s3_object_path: None,
             details_focused,
             detail_section,
-            region: self.location_region(service)})
+            region: self.location_region(service),
+            credentials: Some(self.current_credentials())})
+    }
+
+    /// The session locations are captured under (`NavLocation.credentials`).
+    pub(crate) fn current_credentials(&self) -> NavCredentials {
+        NavCredentials {
+            profile: self.aws_clients.current_profile().map(str::to_string),
+            assumed: self.aws_clients.current_assumed_role().map(|r| NavAssumedRole {
+                account_id: r.account_id.clone(),
+                account_name: r.account_name.clone(),
+                role_name: r.role_name.clone(),
+            }),
+        }
+    }
+
+    /// Whether `c` (a location's captured credentials) is this session —
+    /// `None`, from before credentials were captured, always is.
+    fn is_current_credentials(&self, c: Option<&NavCredentials>) -> bool {
+        c.is_none_or(|c| c.same_as(&self.current_credentials()))
     }
 
     /// The region a location in `service` is captured in: the current one,
@@ -21113,6 +21254,10 @@ impl App {
                 && top.query == loc.query
                 && top.selected_id == loc.selected_id
                 && top.region == loc.region
+                && match (&top.credentials, &loc.credentials) {
+                    (Some(a), Some(b)) => a.same_as(b),
+                    (a, b) => a.is_none() == b.is_none(),
+                }
         })
     }
 
@@ -21127,6 +21272,7 @@ impl App {
                 && top.query == self.location_query(service)
                 && top.selected_id == id
                 && top.region == self.location_region(service)
+                && self.is_current_credentials(top.credentials.as_ref())
         })
     }
 
@@ -21171,9 +21317,17 @@ impl App {
         if self.suppress_nav_record {
             return;
         }
-        let Some(loc) = self.current_location() else {
+        if let Some(loc) = self.current_location() {
+            self.record_captured(loc);
+        }
+    }
+
+    /// `record_location` for a place captured earlier — a credential switch
+    /// captures "here" before the switch and records it only once it worked.
+    fn record_captured(&mut self, loc: NavLocation) {
+        if self.suppress_nav_record {
             return;
-        };
+        }
         let is_dup_top = self.is_history_top(&loc);
         record_into(
             &mut self.nav_history,
@@ -21186,8 +21340,14 @@ impl App {
 
     /// Restore a captured location (list-row depth): switch service/sub-tab,
     /// restore the query, and re-select the resource by id. Suppresses recording
-    /// so going back doesn't itself land on the history.
-    fn jump_to_location(&mut self, loc: NavLocation, event_tx: &mpsc::UnboundedSender<Event>) {
+    /// so going back doesn't itself land on the history. A location from
+    /// another account switches credentials first (`start_credential_restore`).
+    /// `false`: it couldn't be restored, and nothing changed.
+    fn jump_to_location(&mut self, loc: NavLocation, event_tx: &mpsc::UnboundedSender<Event>) -> bool {
+        if let Some(want) = loc.other_credentials(&self.current_credentials()).cloned() {
+            self.jump_list_visible = false;
+            return self.start_credential_restore(loc, want, None, event_tx);
+        }
         self.suppress_nav_record = true;
         self.jump_list_visible = false;
         self.details_focused = false;
@@ -21260,6 +21420,92 @@ impl App {
         }
 
         self.suppress_nav_record = false;
+        true
+    }
+
+    /// Restoring `loc` needs the `want` session: ask for the next switch it
+    /// takes (the profile, then the member role) and stash the location.
+    /// Each switch ends in `resume_credential_restore`, which asks for the
+    /// next or, once the credentials match, replays the restore. Every step
+    /// is the switch `P` / `s` / exit would make — the same events.
+    fn start_credential_restore(
+        &mut self,
+        loc: NavLocation,
+        want: NavCredentials,
+        cursor_before: Option<Option<usize>>,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> bool {
+        let current = self.current_credentials();
+        let event = if want.profile != current.profile {
+            match &want.profile {
+                // Switching profile drops any assumed role; the role is the
+                // next step.
+                Some(profile) => Event::ProfileSwitchRequested { profile: profile.clone() },
+                // Captured before a `P` switch, under the credentials neboto
+                // started with: no profile name to switch back to.
+                None => {
+                    self.error_message = Some(format!(
+                        "{} is under the startup credentials — no profile to switch back to",
+                        loc.service.short_name()
+                    ));
+                    return false;
+                }
+            }
+        } else {
+            match &want.assumed {
+                Some(role) => Event::OrgRoleSwitchRequested {
+                    account_id: role.account_id.clone(),
+                    account_name: role.account_name.clone(),
+                    role_name: role.role_name.clone(),
+                },
+                None => Event::OrgRoleExitRequested,
+            }
+        };
+        self.pending_credential_restore = Some(CredentialRestore { loc, cursor_before });
+        let _ = event_tx.send(event);
+        true
+    }
+
+    /// The end of every profile / role switch: carry on with a pending
+    /// credential restore. `ok == false` (the switch failed and said why)
+    /// drops it and puts the history cursor back.
+    fn resume_credential_restore(&mut self, ok: bool, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(CredentialRestore { loc, cursor_before }) = self.pending_credential_restore.take() else {
+            return;
+        };
+        let current = self.current_credentials();
+        let want = loc.credentials.clone().unwrap_or_else(|| current.clone());
+        if ok && want.same_as(&current) {
+            self.jump_to_location(loc, event_tx);
+        } else if ok && want.profile == current.profile {
+            self.start_credential_restore(loc, want, cursor_before, event_tx);
+        } else if let Some(cursor) = cursor_before {
+            self.nav_cursor = cursor;
+        }
+    }
+
+    /// Where a switch with a credential restore pending lands: the restored
+    /// place's service, so the reload the switch fires is the one the
+    /// restore wants. `None` without one (or while another step remains).
+    fn credential_restore_landing(&self, landing: &NavCredentials) -> Option<ServiceType> {
+        self.pending_credential_restore
+            .as_ref()
+            .filter(|r| r.loc.credentials.as_ref().is_some_and(|c| c.same_as(landing)))
+            .map(|r| r.loc.service)
+    }
+
+    /// Move the history cursor to `idx` and restore that entry. A restore
+    /// that waits on a credential switch remembers the cursor it moved, for
+    /// a failed switch to put back.
+    fn step_history(&mut self, idx: usize, event_tx: &mpsc::UnboundedSender<Event>) {
+        let before = self.nav_cursor;
+        self.nav_cursor = Some(idx);
+        let loc = self.nav_history[idx].clone();
+        if !self.jump_to_location(loc, event_tx) {
+            self.nav_cursor = before;
+        } else if let Some(pending) = &mut self.pending_credential_restore {
+            pending.cursor_before = Some(before);
+        }
     }
 
     /// `Ctrl-O`: step back one entry in the timeline (non-destructive — the
@@ -21268,11 +21514,7 @@ impl App {
     fn nav_back(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         self.park_here();
         match nav_back_target(self.nav_history.len(), self.nav_cursor) {
-            Some(idx) => {
-                self.nav_cursor = Some(idx);
-                let loc = self.nav_history[idx].clone();
-                self.jump_to_location(loc, event_tx);
-            }
+            Some(idx) => self.step_history(idx, event_tx),
             None if self.nav_history.is_empty() => {
                 self.error_message = Some("No previous location".to_string());
             }
@@ -21287,11 +21529,7 @@ impl App {
     /// (`record_into` drops the forward branch).
     pub(crate) fn nav_forward(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         match nav_forward_target(self.nav_history.len(), self.nav_cursor) {
-            Some(idx) => {
-                self.nav_cursor = Some(idx);
-                let loc = self.nav_history[idx].clone();
-                self.jump_to_location(loc, event_tx);
-            }
+            Some(idx) => self.step_history(idx, event_tx),
             None => self.error_message = Some("Nothing to go forward to".to_string()),
         }
     }
@@ -21345,9 +21583,7 @@ impl App {
         let Some(vec_idx) = vec_idx.checked_sub(self.park_here()) else {
             return;
         };
-        self.nav_cursor = Some(vec_idx);
-        let loc = self.nav_history[vec_idx].clone();
-        self.jump_to_location(loc, event_tx);
+        self.step_history(vec_idx, event_tx);
     }
 
     // ── Bookmarks (persistent, user-curated) ─────────────────────────────────
@@ -21365,7 +21601,9 @@ impl App {
             return;
         };
         if let Some(pos) = self.bookmarks.iter().position(|b| {
-            b.service == loc.service && b.selected_id.as_deref() == Some(id.as_str())
+            b.service == loc.service
+                && b.selected_id.as_deref() == Some(id.as_str())
+                && self.is_current_credentials(b.credentials.as_ref())
         }) {
             self.bookmarks.remove(pos);
             self.error_message = None;
