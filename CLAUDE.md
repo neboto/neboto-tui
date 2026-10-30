@@ -392,7 +392,13 @@ region in `R` records "here" like a service switch, and restoring a
 location from another region goes through the cross-region jump below
 (`pending_jump_region` + `RegionSwitchRequested`), whose handler filters
 and resolves on a cache hit. The footer hint, jump list and bookmark list
-name the region when it isn't the current one (`other_region`).
+name the region when it isn't the current one (`other_region`). `NavLocation.credentials` (profile + assumed org
+role; `None` for old entries) does the same across accounts: a switch via
+`P` / `s` / role exit records "here" once it succeeds, and restoring a place
+from another session stashes it in `pending_credential_restore`, replays the
+switch through the same events (profile first, then the role), and runs the
+restore only once the credentials match — a failed switch leaves the view
+and the history cursor untouched.
 
 **Cross-region jump (Resource Explorer)**: `trigger_jump` captures the selected
 resource's region *before* clearing selection; if it differs from
