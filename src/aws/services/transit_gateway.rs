@@ -267,6 +267,14 @@ pub struct TransitGateway {
     pub default_route_table_propagation: bool,
     pub association_default_route_table_id: Option<String>,
     pub propagation_default_route_table_id: Option<String>,
+    /// Any account the gateway is shared with (RAM) can attach without the
+    /// owner accepting.
+    pub auto_accept_shared_attachments: bool,
+    pub vpn_ecmp_support: bool,
+    pub multicast_support: bool,
+    pub security_group_referencing_support: bool,
+    /// The gateway's own CIDRs (Connect peers' inside addresses come from them).
+    pub cidr_blocks: Vec<String>,
     pub creation_time: Option<String>,
     pub tags: HashMap<String, String>,
 }
@@ -300,6 +308,25 @@ impl TransitGateway {
             propagation_default_route_table_id: opts
                 .and_then(|o| o.propagation_default_route_table_id())
                 .map(|s| s.to_string()),
+            auto_accept_shared_attachments: opts
+                .and_then(|o| o.auto_accept_shared_attachments())
+                .map(|v| v.as_str() == "enable")
+                .unwrap_or(false),
+            vpn_ecmp_support: opts
+                .and_then(|o| o.vpn_ecmp_support())
+                .map(|v| v.as_str() == "enable")
+                .unwrap_or(false),
+            multicast_support: opts
+                .and_then(|o| o.multicast_support())
+                .map(|v| v.as_str() == "enable")
+                .unwrap_or(false),
+            security_group_referencing_support: opts
+                .and_then(|o| o.security_group_referencing_support())
+                .map(|v| v.as_str() == "enable")
+                .unwrap_or(false),
+            cidr_blocks: opts
+                .map(|o| o.transit_gateway_cidr_blocks().to_vec())
+                .unwrap_or_default(),
             creation_time: t.creation_time().map(|dt| fmt_epoch_secs(dt.secs())),
             tags,
         }
@@ -340,6 +367,14 @@ impl Resource for TransitGateway {
     }
     fn resource_type(&self) -> &str {
         "Transit Gateway"
+    }
+    fn list_summary(&self) -> Option<String> {
+        let summary = if !self.description.is_empty() {
+            self.description.clone()
+        } else {
+            format!("ASN {}", self.amazon_side_asn?)
+        };
+        Some(crate::aws::resource::summary_with_id(self, &summary))
     }
     fn state(&self) -> ResourceState {
         state_from(&self.state)
@@ -464,6 +499,21 @@ impl Resource for TgwAttachment {
     fn resource_type(&self) -> &str {
         "TGW Attachment"
     }
+    /// What it attaches: `vpc · vpc-0abc…`.
+    fn list_summary(&self) -> Option<String> {
+        match (self.resource_kind.is_empty(), self.resource_id.is_empty()) {
+            (true, true) => None,
+            (false, true) => Some(self.resource_kind.clone()),
+            (true, false) => Some(self.resource_id.clone()),
+            (false, false) => Some(format!("{} · {}", self.resource_kind, self.resource_id)),
+        }
+    }
+    fn console_url(&self, region: &str) -> Option<String> {
+        Some(format!(
+            "https://{region}.console.aws.amazon.com/vpc/home?region={region}#TransitGatewayAttachmentDetails:transitGatewayAttachmentId={}",
+            self.id
+        ))
+    }
     fn state(&self) -> ResourceState {
         state_from(&self.state)
     }
@@ -569,6 +619,39 @@ impl Resource for TgwRouteTable {
     fn resource_type(&self) -> &str {
         "TGW Route Table"
     }
+    /// Its gateway, and whether new attachments land here by default.
+    fn list_summary(&self) -> Option<String> {
+        let default = match (self.default_association, self.default_propagation) {
+            (true, true) => " · default assoc + prop",
+            (true, false) => " · default assoc",
+            (false, true) => " · default prop",
+            (false, false) => "",
+        };
+        Some(format!("{}{default}", self.tgw_id))
+    }
+    fn cli_command(&self) -> Option<String> {
+        Some(format!(
+            "aws ec2 describe-transit-gateway-route-tables --transit-gateway-route-table-ids {}",
+            crate::aws::resource::shell_quote(self.id())
+        ))
+    }
+    fn cli_actions(&self) -> Vec<crate::aws::cli_actions::CliAction> {
+        use crate::aws::cli_actions::{CliAction, CliTier};
+        vec![CliAction::new(
+            CliTier::Inspect,
+            "search-transit-gateway-routes",
+            format!(
+                "aws ec2 search-transit-gateway-routes --transit-gateway-route-table-id {} --filters Name=state,Values=active,blackhole",
+                crate::aws::resource::shell_quote(self.id())
+            ),
+        )]
+    }
+    fn console_url(&self, region: &str) -> Option<String> {
+        Some(format!(
+            "https://{region}.console.aws.amazon.com/vpc/home?region={region}#TransitGatewayRouteTableDetails:transitGatewayRouteTableId={}",
+            self.id
+        ))
+    }
     fn state(&self) -> ResourceState {
         state_from(&self.state)
     }
@@ -613,38 +696,77 @@ impl Resource for TgwRouteTable {
 
 #[derive(Debug, Clone)]
 pub struct TgwRoute {
+    /// The destination CIDR, or the managed prefix list (`pl-…`) for a
+    /// prefix-list route — those carry no CIDR.
     pub cidr: String,
     pub state: String,       // active / blackhole
     pub route_type: String,  // static / propagated
     pub attachment_id: String,
     pub resource_id: String,
     pub resource_type: String,
+    /// Further attachments an ECMP route spreads across (VPN / Connect),
+    /// beyond the first one above.
+    pub extra_targets: usize,
 }
 
+/// A route table's routes. `more`: the table holds more than one search
+/// returns (`AdditionalRoutesAvailable`) — the API has no page token.
+#[derive(Debug, Clone, Default)]
+pub struct TgwRoutes {
+    pub routes: Vec<TgwRoute>,
+    pub more: bool,
+}
+
+/// The most routes one `SearchTransitGatewayRoutes` returns (also its
+/// default).
+pub const TGW_ROUTES_MAX: i32 = 1000;
+
 /// TGW routes can't be plain-listed — `SearchTransitGatewayRoutes` requires at
-/// least one filter, so we query active + blackhole routes for the table.
-pub async fn fetch_tgw_routes(
-    client: Ec2Client,
-    route_table_id: String,
-) -> Result<Vec<TgwRoute>> {
-    let filter = aws_sdk_ec2::types::Filter::builder()
+/// least one filter, so we query active + blackhole routes for the table. It
+/// returns at most `TGW_ROUTES_MAX` and can't page, so a fuller table comes
+/// back flagged `more`; when that page holds no default route, one exact
+/// `0.0.0.0/0` search settles whether the table has one.
+pub async fn fetch_tgw_routes(client: Ec2Client, route_table_id: String) -> Result<TgwRoutes> {
+    let state = aws_sdk_ec2::types::Filter::builder()
         .name("state")
         .values("active")
         .values("blackhole")
         .build();
+    let page = search_tgw_routes(&client, &route_table_id, state).await?;
+    let mut routes = page.routes;
+    if page.more && !routes.iter().any(|r| r.cidr == "0.0.0.0/0") {
+        let exact = aws_sdk_ec2::types::Filter::builder()
+            .name("route-search.exact-match")
+            .values("0.0.0.0/0")
+            .build();
+        routes.extend(search_tgw_routes(&client, &route_table_id, exact).await?.routes);
+    }
+    Ok(TgwRoutes { routes, more: page.more })
+}
 
+async fn search_tgw_routes(
+    client: &Ec2Client,
+    route_table_id: &str,
+    filter: aws_sdk_ec2::types::Filter,
+) -> Result<TgwRoutes> {
     let resp = client
         .search_transit_gateway_routes()
-        .transit_gateway_route_table_id(&route_table_id)
+        .transit_gateway_route_table_id(route_table_id)
         .filters(filter)
+        .max_results(TGW_ROUTES_MAX)
         .send()
         .await
         .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+    Ok(TgwRoutes {
+        routes: resp.routes().iter().map(TgwRoute::from_sdk).collect(),
+        more: resp.additional_routes_available().unwrap_or(false),
+    })
+}
 
-    let mut routes = Vec::new();
-    for r in resp.routes() {
-        let (attachment_id, resource_id, resource_type) = r
-            .transit_gateway_attachments()
+impl TgwRoute {
+    pub fn from_sdk(r: &aws_sdk_ec2::types::TransitGatewayRoute) -> Self {
+        let targets = r.transit_gateway_attachments();
+        let (attachment_id, resource_id, resource_type) = targets
             .first()
             .map(|a| {
                 (
@@ -654,16 +776,20 @@ pub async fn fetch_tgw_routes(
                 )
             })
             .unwrap_or_default();
-        routes.push(TgwRoute {
-            cidr: r.destination_cidr_block().unwrap_or_default().to_string(),
+        Self {
+            cidr: r
+                .destination_cidr_block()
+                .or(r.prefix_list_id())
+                .unwrap_or_default()
+                .to_string(),
             state: r.state().map(|s| s.as_str().to_string()).unwrap_or_default(),
             route_type: r.r#type().map(|t| t.as_str().to_string()).unwrap_or_default(),
             attachment_id,
             resource_id,
             resource_type,
-        });
+            extra_targets: targets.len().saturating_sub(1),
+        }
     }
-    Ok(routes)
 }
 
 // ── CloudWatch metrics (`m` overlay) ──────────────────────────────────────────
