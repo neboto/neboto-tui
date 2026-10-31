@@ -691,6 +691,10 @@ pub struct LazyStore {
     pub ses_event_dests: LazyMap<Vec<crate::aws::services::ses::SesEventDest>>,
     /// A TGW route table's routes, keyed by route-table id.
     pub tgw_routes: LazyMap<crate::aws::services::transit_gateway::TgwRoutes>,
+    /// Keyed by route-table id.
+    pub tgw_route_table_propagations: LazyMap<Vec<crate::aws::services::transit_gateway::TgwPropagation>>,
+    /// Keyed by attachment id.
+    pub tgw_attachment_detail: LazyMap<crate::aws::services::transit_gateway::TgwAttachmentDetail>,
 
     // ── EventBridge ──────────────────────────────────────────────────────
     /// A rule's targets, keyed by `bus/rule`.

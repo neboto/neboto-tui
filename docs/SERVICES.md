@@ -2973,6 +2973,20 @@ the service you're touching.
   ECMP routes list several attachments (`TgwRoute.extra_targets`, `+N ECMP`).
   Gateway Options come from `DescribeTransitGateways` alone; auto-accept of
   shared attachments is the one that renders as a warning.
+  **Propagations** are lazy both ways: a route table's
+  (`GetTransitGatewayRouteTablePropagations`, its own section and an Overview
+  row — the Overview hook fires both it and the routes) and an attachment's
+  (`GetTransitGatewayAttachmentPropagations`). The attachment's half rides
+  one bundle (`TgwAttachmentDetail`) with its **kind's own describe** — VPC
+  (subnets, appliance mode), peering (the far side; requester vs accepter is
+  decided by which side's gateway is ours), Connect (+ its peers) — and each
+  half is a `Result` of its own, so a denied kind describe still shows the
+  propagations. Kinds with nothing extra (VPN, DX gateway) make no describe
+  call and render no kind block. A peering's `Peer Gateway` / `Resource ID`
+  row jumps cross-region (`tgw_peer_jump_region`) once the bundle has the
+  peer's region; a peer in another account only gets a "P / s" note — the
+  jump can't reach it. Connect peers are uncapped: AWS allows four per
+  attachment.
 
 - **Cost drill-down & periods** (`@cost`, `cost.rs`; moved from CLAUDE.md) — the
   drill-down (Breakdown/Regions/Forecast) is fetched over the **active period's

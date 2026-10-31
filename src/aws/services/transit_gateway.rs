@@ -468,8 +468,8 @@ impl TgwAttachment {
 crate::sections! {
     pub enum TgwAttachmentDetailSection,
     pub static TGW_ATTACHMENT_SECTIONS = [
-        Overview "Overview",
-        Association "Association",
+        Overview "Overview" => crate::app::App::trigger_tgw_attachment_load,
+        Association "Association" => crate::app::App::trigger_tgw_attachment_load,
         Tags "Tags",
     ]
 }
@@ -596,8 +596,9 @@ impl TgwRouteTable {
 crate::sections! {
     pub enum TgwRouteTableDetailSection,
     pub static TGW_ROUTE_TABLE_SECTIONS = [
-        Overview "Overview" => crate::app::App::trigger_tgw_routes_load,
+        Overview "Overview" => crate::app::App::trigger_tgw_route_table_load,
         Routes "Routes" => crate::app::App::trigger_tgw_routes_load,
+        Propagations "Propagations" => crate::app::App::trigger_tgw_propagations_load,
         Tags "Tags",
     ]
 }
@@ -788,6 +789,307 @@ impl TgwRoute {
             resource_id,
             resource_type,
             extra_targets: targets.len().saturating_sub(1),
+        }
+    }
+}
+
+// ── Lazy propagations + per-kind attachment detail ────────────────────────────
+
+/// An attachment whose routes propagate into a route table
+/// (`GetTransitGatewayRouteTablePropagations`) — where a table's
+/// `propagated` routes come from.
+#[derive(Debug, Clone)]
+pub struct TgwPropagation {
+    pub attachment_id: String,
+    pub resource_id: String,
+    pub resource_type: String,
+    pub state: String,
+}
+
+pub async fn fetch_tgw_route_table_propagations(
+    client: Ec2Client,
+    route_table_id: String,
+) -> Result<Vec<TgwPropagation>> {
+    let mut out = Vec::new();
+    let mut next: Option<String> = None;
+    loop {
+        let mut req = client
+            .get_transit_gateway_route_table_propagations()
+            .transit_gateway_route_table_id(&route_table_id);
+        if let Some(t) = &next {
+            req = req.next_token(t);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+        out.extend(resp.transit_gateway_route_table_propagations().iter().map(|p| TgwPropagation {
+            attachment_id: p.transit_gateway_attachment_id().unwrap_or_default().to_string(),
+            resource_id: p.resource_id().unwrap_or_default().to_string(),
+            resource_type: p.resource_type().map(|t| t.as_str().to_string()).unwrap_or_default(),
+            state: p.state().map(|s| s.as_str().to_string()).unwrap_or_default(),
+        }));
+        next = crate::aws::pagination::next_page_token(resp.next_token(), &next);
+        if next.is_none() {
+            return Ok(out);
+        }
+    }
+}
+
+/// A route table an attachment propagates into.
+#[derive(Debug, Clone)]
+pub struct TgwAttachmentPropagation {
+    pub route_table_id: String,
+    pub state: String,
+}
+
+/// What an attachment's Overview and Association sections fetch on first
+/// view: where its routes propagate, plus what only its kind's own describe
+/// carries. Each half fails on its own — a denied peering describe still
+/// shows the propagations.
+#[derive(Debug, Clone)]
+pub struct TgwAttachmentDetail {
+    pub propagations: std::result::Result<Vec<TgwAttachmentPropagation>, String>,
+    pub kind: std::result::Result<TgwKindDetail, String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum TgwKindDetail {
+    /// A kind with nothing past the attachment list (VPN, DX gateway…).
+    None,
+    Vpc(TgwVpcDetail),
+    Peering(TgwPeeringDetail),
+    Connect(TgwConnectDetail),
+}
+
+#[derive(Debug, Clone)]
+pub struct TgwVpcDetail {
+    pub subnet_ids: Vec<String>,
+    /// Keeps a flow on one AZ's path through the attachment — what an
+    /// inspection (firewall) VPC needs for return traffic.
+    pub appliance_mode: bool,
+    pub dns_support: bool,
+    pub sg_referencing: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TgwPeeringSide {
+    pub tgw_id: String,
+    pub owner_id: String,
+    pub region: String,
+    pub core_network_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TgwPeeringDetail {
+    pub requester: TgwPeeringSide,
+    pub accepter: TgwPeeringSide,
+    pub accepter_attachment_id: Option<String>,
+    pub status_code: String,
+    pub status_message: String,
+    pub dynamic_routing: Option<bool>,
+}
+
+impl TgwPeeringDetail {
+    /// The far side, from the point of view of the gateway `own_tgw`.
+    pub fn peer(&self, own_tgw: &str) -> (&TgwPeeringSide, &'static str) {
+        if self.requester.tgw_id == own_tgw {
+            (&self.accepter, "requester")
+        } else {
+            (&self.requester, "accepter")
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TgwConnectDetail {
+    /// The VPC / DX attachment the GRE tunnels ride on.
+    pub transport_attachment_id: String,
+    pub protocol: String,
+    pub peers: std::result::Result<Vec<TgwConnectPeer>, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TgwConnectPeer {
+    pub id: String,
+    pub state: String,
+    pub tgw_address: String,
+    pub peer_address: String,
+    pub inside_cidrs: Vec<String>,
+    pub bgp: Vec<TgwBgpSession>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TgwBgpSession {
+    pub tgw_asn: Option<i64>,
+    pub peer_asn: Option<i64>,
+    pub tgw_address: String,
+    pub peer_address: String,
+    pub status: String,
+}
+
+/// The attachment bundle: propagations and the kind's describe, in parallel.
+pub async fn fetch_tgw_attachment_detail(
+    client: Ec2Client,
+    attachment_id: String,
+    resource_kind: String,
+) -> TgwAttachmentDetail {
+    let (propagations, kind) = tokio::join!(
+        fetch_attachment_propagations(&client, &attachment_id),
+        fetch_kind_detail(&client, &attachment_id, &resource_kind),
+    );
+    TgwAttachmentDetail { propagations, kind }
+}
+
+async fn fetch_attachment_propagations(
+    client: &Ec2Client,
+    attachment_id: &str,
+) -> std::result::Result<Vec<TgwAttachmentPropagation>, String> {
+    let mut out = Vec::new();
+    let mut next: Option<String> = None;
+    loop {
+        let mut req = client
+            .get_transit_gateway_attachment_propagations()
+            .transit_gateway_attachment_id(attachment_id);
+        if let Some(t) = &next {
+            req = req.next_token(t);
+        }
+        let resp = req.send().await.map_err(|e| crate::error::sdk_error_message(&e))?;
+        out.extend(resp.transit_gateway_attachment_propagations().iter().map(|p| TgwAttachmentPropagation {
+            route_table_id: p.transit_gateway_route_table_id().unwrap_or_default().to_string(),
+            state: p.state().map(|s| s.as_str().to_string()).unwrap_or_default(),
+        }));
+        next = crate::aws::pagination::next_page_token(resp.next_token(), &next);
+        if next.is_none() {
+            return Ok(out);
+        }
+    }
+}
+
+fn enabled<T: AsRef<str>>(v: Option<T>) -> bool {
+    v.is_some_and(|v| v.as_ref() == "enable")
+}
+
+async fn fetch_kind_detail(
+    client: &Ec2Client,
+    attachment_id: &str,
+    resource_kind: &str,
+) -> std::result::Result<TgwKindDetail, String> {
+    match resource_kind {
+        "vpc" => {
+            let resp = client
+                .describe_transit_gateway_vpc_attachments()
+                .transit_gateway_attachment_ids(attachment_id)
+                .send()
+                .await
+                .map_err(|e| crate::error::sdk_error_message(&e))?;
+            let Some(a) = resp.transit_gateway_vpc_attachments().first() else {
+                return Ok(TgwKindDetail::None);
+            };
+            let opts = a.options();
+            Ok(TgwKindDetail::Vpc(TgwVpcDetail {
+                subnet_ids: a.subnet_ids().to_vec(),
+                appliance_mode: enabled(opts.and_then(|o| o.appliance_mode_support()).map(|v| v.as_str())),
+                dns_support: enabled(opts.and_then(|o| o.dns_support()).map(|v| v.as_str())),
+                sg_referencing: enabled(opts.and_then(|o| o.security_group_referencing_support()).map(|v| v.as_str())),
+            }))
+        }
+        "peering" | "tgw-peering" => {
+            let resp = client
+                .describe_transit_gateway_peering_attachments()
+                .transit_gateway_attachment_ids(attachment_id)
+                .send()
+                .await
+                .map_err(|e| crate::error::sdk_error_message(&e))?;
+            let Some(a) = resp.transit_gateway_peering_attachments().first() else {
+                return Ok(TgwKindDetail::None);
+            };
+            let side = |i: Option<&aws_sdk_ec2::types::PeeringTgwInfo>| TgwPeeringSide {
+                tgw_id: i.and_then(|i| i.transit_gateway_id()).unwrap_or_default().to_string(),
+                owner_id: i.and_then(|i| i.owner_id()).unwrap_or_default().to_string(),
+                region: i.and_then(|i| i.region()).unwrap_or_default().to_string(),
+                core_network_id: i.and_then(|i| i.core_network_id()).map(str::to_string),
+            };
+            Ok(TgwKindDetail::Peering(TgwPeeringDetail {
+                requester: side(a.requester_tgw_info()),
+                accepter: side(a.accepter_tgw_info()),
+                accepter_attachment_id: a.accepter_transit_gateway_attachment_id().map(str::to_string),
+                status_code: a.status().and_then(|s| s.code()).unwrap_or_default().to_string(),
+                status_message: a.status().and_then(|s| s.message()).unwrap_or_default().to_string(),
+                dynamic_routing: a
+                    .options()
+                    .and_then(|o| o.dynamic_routing())
+                    .map(|v| v.as_str() == "enable"),
+            }))
+        }
+        "connect" => {
+            let resp = client
+                .describe_transit_gateway_connects()
+                .transit_gateway_attachment_ids(attachment_id)
+                .send()
+                .await
+                .map_err(|e| crate::error::sdk_error_message(&e))?;
+            let Some(c) = resp.transit_gateway_connects().first() else {
+                return Ok(TgwKindDetail::None);
+            };
+            Ok(TgwKindDetail::Connect(TgwConnectDetail {
+                transport_attachment_id: c
+                    .transport_transit_gateway_attachment_id()
+                    .unwrap_or_default()
+                    .to_string(),
+                protocol: c
+                    .options()
+                    .and_then(|o| o.protocol())
+                    .map(|p| p.as_str().to_string())
+                    .unwrap_or_default(),
+                peers: fetch_connect_peers(client, attachment_id).await,
+            }))
+        }
+        _ => Ok(TgwKindDetail::None),
+    }
+}
+
+async fn fetch_connect_peers(
+    client: &Ec2Client,
+    attachment_id: &str,
+) -> std::result::Result<Vec<TgwConnectPeer>, String> {
+    let filter = aws_sdk_ec2::types::Filter::builder()
+        .name("transit-gateway-attachment-id")
+        .values(attachment_id)
+        .build();
+    let mut out = Vec::new();
+    let mut next: Option<String> = None;
+    loop {
+        let mut req = client.describe_transit_gateway_connect_peers().filters(filter.clone());
+        if let Some(t) = &next {
+            req = req.next_token(t);
+        }
+        let resp = req.send().await.map_err(|e| crate::error::sdk_error_message(&e))?;
+        out.extend(resp.transit_gateway_connect_peers().iter().map(|p| {
+            let cfg = p.connect_peer_configuration();
+            TgwConnectPeer {
+                id: p.transit_gateway_connect_peer_id().unwrap_or_default().to_string(),
+                state: p.state().map(|s| s.as_str().to_string()).unwrap_or_default(),
+                tgw_address: cfg.and_then(|c| c.transit_gateway_address()).unwrap_or_default().to_string(),
+                peer_address: cfg.and_then(|c| c.peer_address()).unwrap_or_default().to_string(),
+                inside_cidrs: cfg.map(|c| c.inside_cidr_blocks().to_vec()).unwrap_or_default(),
+                bgp: cfg
+                    .map(|c| c.bgp_configurations())
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|b| TgwBgpSession {
+                        tgw_asn: b.transit_gateway_asn(),
+                        peer_asn: b.peer_asn(),
+                        tgw_address: b.transit_gateway_address().unwrap_or_default().to_string(),
+                        peer_address: b.peer_address().unwrap_or_default().to_string(),
+                        status: b.bgp_status().map(|s| s.as_str().to_string()).unwrap_or_default(),
+                    })
+                    .collect(),
+            }
+        }));
+        next = crate::aws::pagination::next_page_token(resp.next_token(), &next);
+        if next.is_none() {
+            return Ok(out);
         }
     }
 }
