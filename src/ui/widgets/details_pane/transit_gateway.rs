@@ -1,5 +1,5 @@
 use super::*;
-use crate::aws::services::transit_gateway::TgwRoute;
+use crate::aws::services::transit_gateway::{TgwRoute, TgwRoutes, TGW_ROUTES_MAX};
 
 // ── Transit Gateway split panes ────────────────────────────────────────────────
 
@@ -159,6 +159,25 @@ pub fn tgw_section_lines(
             if let Some(ct) = &tgw.creation_time {
                 rows.push(("Created".to_string(), ct.clone()));
             }
+
+            rows.push((String::new(), String::new()));
+            rows.push(("Options".to_string(), String::new()));
+            let on_off = |on: bool| if on { "✓ enabled" } else { "disabled" }.to_string();
+            rows.push((
+                "Auto-accept Shared".to_string(),
+                if tgw.auto_accept_shared_attachments {
+                    "⚠ enabled — accounts it's shared with attach without approval".to_string()
+                } else {
+                    "disabled — shared attachments wait for acceptance".to_string()
+                },
+            ));
+            rows.push(("VPN ECMP".to_string(), on_off(tgw.vpn_ecmp_support)));
+            rows.push(("Multicast".to_string(), on_off(tgw.multicast_support)));
+            rows.push(("SG Referencing".to_string(), on_off(tgw.security_group_referencing_support)));
+            rows.push((
+                "CIDR Blocks".to_string(),
+                if tgw.cidr_blocks.is_empty() { "—".to_string() } else { tgw.cidr_blocks.join(", ") },
+            ));
             rows
         }
         TgwDetailSection::Attachments => {
@@ -214,13 +233,33 @@ fn tgw_routes_table_header() -> (String, String) {
 /// Where a route sends traffic: the attached resource when there is one,
 /// else the attachment (a blackhole route has neither).
 fn tgw_route_target(r: &TgwRoute) -> String {
-    if !r.resource_id.is_empty() {
+    let first = if !r.resource_id.is_empty() {
         format!("{} ({})", r.resource_id, r.resource_type)
     } else if !r.attachment_id.is_empty() {
         r.attachment_id.clone()
     } else {
-        "—".to_string()
+        return "—".to_string();
+    };
+    // An ECMP route spreads across several attachments; say so rather than
+    // read as one target.
+    match r.extra_targets {
+        0 => first,
+        n => format!("{first} +{n} ECMP"),
     }
+}
+
+/// The note under a route count when the table holds more than one search
+/// returns — counts and lists below are of the first page only.
+fn tgw_routes_truncated_row() -> (String, String) {
+    (
+        format!("  ⚠ More routes than one search returns — showing the first {TGW_ROUTES_MAX}"),
+        String::new(),
+    )
+}
+
+/// `1000+` when the search was cut short.
+fn tgw_route_count(set: &TgwRoutes) -> String {
+    format!("{}{}", set.routes.len(), if set.more { "+" } else { "" })
 }
 
 /// One route as a fixed-width table line (a plain content line), shared by
@@ -234,7 +273,7 @@ fn tgw_route_line(r: &TgwRoute) -> (String, String) {
 
 fn tgw_route_table_overview_rows(
     rt: &TgwRouteTable,
-    routes: Option<&crate::lazy::Lazy<Vec<TgwRoute>>>,
+    routes: Option<&crate::lazy::Lazy<TgwRoutes>>,
     associated: &[&crate::aws::services::transit_gateway::TgwAttachment],
 ) -> Vec<(String, String)> {
     let or_dash = |s: &str| if s.is_empty() { "—".to_string() } else { s.to_string() };
@@ -283,13 +322,18 @@ fn tgw_route_table_overview_rows(
             rows.extend(error_rows(e));
             return rows;
         }
-        Some(crate::lazy::Lazy::Loaded(routes)) => routes,
+        Some(crate::lazy::Lazy::Loaded(set)) => set,
     };
+    let count = tgw_route_count(routes);
+    let routes = &routes.routes;
     let statics = routes.iter().filter(|r| r.route_type == "static").count();
     rows.push((
         "Routes".to_string(),
-        format!("{} ({statics} static · {} propagated)", routes.len(), routes.len() - statics),
+        format!("{count} ({statics} static · {} propagated)", routes.len() - statics),
     ));
+    if count.ends_with('+') {
+        rows.push(tgw_routes_truncated_row());
+    }
     rows.push((
         "Default Route".to_string(),
         match routes.iter().find(|r| r.cidr == "0.0.0.0/0") {
@@ -310,7 +354,7 @@ fn tgw_route_table_overview_rows(
     }
 
     rows.push((String::new(), String::new()));
-    rows.push((format!("Routes ({})", routes.len()), String::new()));
+    rows.push((format!("Routes ({count})"), String::new()));
     if routes.is_empty() {
         rows.push((String::new(), "No routes".to_string()));
         return rows;
@@ -327,7 +371,7 @@ fn tgw_route_table_overview_rows(
 pub fn tgw_route_table_section_lines(
     rt: &TgwRouteTable,
     section: TgwRouteTableDetailSection,
-    routes: Option<&crate::lazy::Lazy<Vec<TgwRoute>>>,
+    routes: Option<&crate::lazy::Lazy<TgwRoutes>>,
     associated: &[&crate::aws::services::transit_gateway::TgwAttachment],
 ) -> Vec<(String, String)> {
     match section {
@@ -337,8 +381,12 @@ pub fn tgw_route_table_section_lines(
                 vec![("".to_string(), "Loading routes…".to_string())]
             }
             Some(crate::lazy::Lazy::Error(e)) => error_rows(e),
-            Some(crate::lazy::Lazy::Loaded(routes)) => {
-                let mut rows = vec![(format!("Routes ({})", routes.len()), String::new())];
+            Some(crate::lazy::Lazy::Loaded(set)) => {
+                let mut rows = vec![(format!("Routes ({})", tgw_route_count(set)), String::new())];
+                if set.more {
+                    rows.push(tgw_routes_truncated_row());
+                }
+                let routes = &set.routes;
                 if routes.is_empty() {
                     rows.push((String::new(), "No routes".to_string()));
                 } else {
