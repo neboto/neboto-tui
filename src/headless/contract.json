@@ -1433,6 +1433,7 @@
     "TGW Route Table": [
       "Overview",
       "Routes",
+      "Propagations",
       "Tags"
     ],
     "Target Group": [

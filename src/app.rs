@@ -12291,6 +12291,55 @@ impl App {
         }
     }
 
+    /// A TGW route table's Overview: it summarises both routes and
+    /// propagations.
+    pub(crate) fn trigger_tgw_route_table_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        self.trigger_tgw_routes_load(event_tx);
+        self.trigger_tgw_propagations_load(event_tx);
+    }
+
+    /// Which attachments propagate into the selected TGW route table.
+    pub(crate) fn trigger_tgw_propagations_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(rt) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::transit_gateway::TgwRouteTable>()
+        }) {
+            let id = rt.id.clone();
+            let client = self.aws_clients.ec2_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.tgw_route_table_propagations,
+                id.clone(),
+                event_tx,
+                async move {
+                    crate::aws::services::transit_gateway::fetch_tgw_route_table_propagations(client, id)
+                        .await
+                        .map_err(|e| format!("Propagations unavailable: {}", e))
+                },
+            );
+        }
+    }
+
+    /// The selected TGW attachment's propagations + its kind's own describe
+    /// (VPC subnets and options, the peering's far side, Connect peers).
+    pub(crate) fn trigger_tgw_attachment_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(att) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::transit_gateway::TgwAttachment>()
+        }) {
+            let id = att.id.clone();
+            let kind = att.resource_kind.clone();
+            let client = self.aws_clients.ec2_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.tgw_attachment_detail,
+                id.clone(),
+                event_tx,
+                async move {
+                    Ok(crate::aws::services::transit_gateway::fetch_tgw_attachment_detail(client, id, kind).await)
+                },
+            );
+        }
+    }
+
     /// Trigger a lazy-load of tags for the selected CloudFront distribution.
     pub(crate) fn trigger_cf_tags_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if let Some(dist) = self.get_selected_resource().and_then(|r| {
@@ -22207,6 +22256,28 @@ impl App {
     /// The region of the resource an AppSync row jumps to, when the API
     /// names one: a user pool's `awsRegion`, a data source's table / domain
     /// region. `None` (stay put) for anything else.
+    /// A peering attachment's far gateway usually lives in another region:
+    /// its `Peer Gateway` / `Resource ID` row jumps there (once the
+    /// attachment's own describe has said which region that is).
+    fn tgw_peer_jump_region(&self, key: &str, value: &str) -> Option<crate::aws::region::Region> {
+        use crate::aws::services::transit_gateway::{TgwAttachment, TgwKindDetail};
+        if !matches!(key.trim(), "Peer Gateway" | "Resource ID") {
+            return None;
+        }
+        let att = self.get_selected_resource()?.as_any().downcast_ref::<TgwAttachment>()?;
+        let Some(crate::lazy::Lazy::Loaded(d)) = self.lazy.tgw_attachment_detail.get(&att.id) else {
+            return None;
+        };
+        let Ok(TgwKindDetail::Peering(p)) = &d.kind else {
+            return None;
+        };
+        let (peer, _) = p.peer(&att.tgw_id);
+        (peer.tgw_id == value.trim())
+            .then(|| crate::aws::region::Region::from_str(&peer.region))
+            .flatten()
+            .filter(|r| *r != self.current_region)
+    }
+
     fn appsync_row_jump_region(&self, key: &str, value: &str) -> Option<crate::aws::region::Region> {
         use crate::aws::services::appsync::{opensearch_domain_from_endpoint, AppSyncApi};
         use crate::ui::widgets::details_pane as dp;
@@ -22616,8 +22687,10 @@ impl App {
         // Cognito pool / DynamoDB table / OpenSearch domain): switch there
         // too, or the jump searches the current region and finds nothing.
         let jump_region = jump_region.or_else(|| {
-            row.as_ref()
-                .and_then(|(k, v)| self.appsync_row_jump_region(k, v))
+            row.as_ref().and_then(|(k, v)| {
+                self.appsync_row_jump_region(k, v)
+                    .or_else(|| self.tgw_peer_jump_region(k, v))
+            })
         });
         let cross = target.service != current;
         if cross && !allow_cross_service {
@@ -25969,6 +26042,9 @@ impl App {
                 return crate::ui::widgets::details_pane::tgw_attachment_section_lines(
                     att,
                     crate::aws::services::transit_gateway::TgwAttachmentDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.tgw_attachment_detail.get(&att.id),
+                    self.account_id.as_deref(),
+                    self.current_region.as_str(),
                 );
             }
             if let Some(lag) = resource
@@ -27314,6 +27390,7 @@ impl App {
                     rt,
                     crate::aws::services::transit_gateway::TgwRouteTableDetailSection::from_index(self.detail_section_idx),
                     self.lazy.tgw_routes.get(&rt.id),
+                    self.lazy.tgw_route_table_propagations.get(&rt.id),
                     &associated,
                 );
             }
