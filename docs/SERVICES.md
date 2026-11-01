@@ -2960,6 +2960,19 @@ the service you're touching.
   `tgw-`/`tgw-attach-`/`tgw-rtb-` id prefixes are Enter-jumpable
   (`JumpView::Dx`/`JumpView::Tgw`). Gateways have **no CloudWatch metrics** —
   traffic lives on the VIFs (`m` on a VIF) and the physical connection.
+- **Transit Gateway** (`@tgw`, `transit_gateway.rs`) — reuses the EC2 client;
+  gateways, attachments and route tables are one list across three sub-tabs,
+  tags inline. Route-table **routes** are lazy `SearchTransitGatewayRoutes`,
+  which can't list without a filter (we filter `state=active,blackhole`) and
+  **can't page**: one call returns at most `TGW_ROUTES_MAX` (1000) and only
+  sets `AdditionalRoutesAvailable`. A cut-short table renders `1000+` and a
+  ⚠ row on both tabs rather than reading as the whole table, and when that
+  page holds no `0.0.0.0/0` a second, `route-search.exact-match` search
+  settles the Overview's Default Route — otherwise "none" could be a lie.
+  Prefix-list routes carry `PrefixListId`, not a CIDR (the id stands in);
+  ECMP routes list several attachments (`TgwRoute.extra_targets`, `+N ECMP`).
+  Gateway Options come from `DescribeTransitGateways` alone; auto-accept of
+  shared attachments is the one that renders as a warning.
 
 - **Cost drill-down & periods** (`@cost`, `cost.rs`; moved from CLAUDE.md) — the
   drill-down (Breakdown/Regions/Forecast) is fetched over the **active period's
