@@ -975,99 +975,9 @@ fn is_leap(y: i32) -> bool {
 
 // ── CloudWatch metrics (`m` overlay) — AWS/Cognito, dims UserPool+UserPoolClient
 
-pub use crate::aws::services::ec2::MetricsTimeRange;
 
-#[derive(Debug, Clone)]
-pub struct CognitoMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub sign_in_ok: Vec<(f64, f64)>,
-    pub sign_up_ok: Vec<(f64, f64)>,
-    pub token_refresh_ok: Vec<(f64, f64)>,
-    pub sign_in_throttles: Vec<(f64, f64)>,
-    pub sign_up_throttles: Vec<(f64, f64)>,
-    pub federation_ok: Vec<(f64, f64)>,
-    pub x_max: f64,
-}
 
-#[derive(Debug, Clone)]
-pub enum CognitoMetricsState {
-    Loading,
-    Loaded(CognitoMetricsData),
-}
 
-/// Pull `AWS/Cognito` auth-flow metrics for one user pool. Cognito publishes
-/// per `(UserPool, UserPoolClient)` pair, so each series is aggregated across
-/// all app clients with the SEARCH/SUM `GetMetricData` pattern (same trick as
-/// MSK's per-broker series) — the schema form pins the dimension set so
-/// nothing else matches.
-pub async fn fetch_cognito_metrics(
-    cw: aws_sdk_cloudwatch::Client,
-    pool_id: String,
-    time_range: MetricsTimeRange,
-) -> crate::error::Result<CognitoMetricsData> {
-    use aws_sdk_cloudwatch::types::MetricDataQuery;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start = now - time_range.duration_secs();
-    let period = time_range.period_secs();
-
-    let specs = [
-        ("m0", "SignInSuccesses"),
-        ("m1", "SignUpSuccesses"),
-        ("m2", "TokenRefreshSuccesses"),
-        ("m3", "SignInThrottles"),
-        ("m4", "SignUpThrottles"),
-        ("m5", "FederationSuccesses"),
-    ];
-
-    let queries: Vec<MetricDataQuery> = specs
-        .iter()
-        .map(|(id, metric)| {
-            let expr = format!(
-                "SUM(SEARCH('{{AWS/Cognito,UserPool,UserPoolClient}} MetricName=\"{}\" UserPool=\"{}\"', 'Sum', {}))",
-                metric, pool_id, period
-            );
-            MetricDataQuery::builder().id(*id).expression(expr).build()
-        })
-        .collect();
-
-    let resp = cw
-        .get_metric_data()
-        .set_metric_data_queries(Some(queries))
-        .start_time(aws_sdk_cloudwatch::primitives::DateTime::from_secs(start))
-        .end_time(aws_sdk_cloudwatch::primitives::DateTime::from_secs(now))
-        .send()
-        .await
-        .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
-
-    let mut series: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
-    for r in resp.metric_data_results() {
-        let id = r.id().unwrap_or_default().to_string();
-        let mut pts: Vec<(f64, f64)> = r
-            .timestamps()
-            .iter()
-            .zip(r.values().iter())
-            .map(|(t, v)| (t.secs() as f64 - start as f64, *v))
-            .collect();
-        pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        series.insert(id, pts);
-    }
-
-    let take = |id: &str| series.get(id).cloned().unwrap_or_default();
-    Ok(CognitoMetricsData {
-        time_range,
-        sign_in_ok: take("m0"),
-        sign_up_ok: take("m1"),
-        token_refresh_ok: take("m2"),
-        sign_in_throttles: take("m3"),
-        sign_up_throttles: take("m4"),
-        federation_ok: take("m5"),
-        x_max: time_range.duration_secs() as f64,
-    })
-}
 
 #[cfg(test)]
 mod user_tests {

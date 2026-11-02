@@ -171,12 +171,18 @@ async fn every_spec_target_has_a_mock_that_charts() {
         select_mock(&mut app, svc, r);
         let Some(target) = app.selected_metric_target() else { continue };
         seen.insert(target.namespace.clone(), target.home);
-        assert!(target.dimensions.first().is_some_and(|(_, v)| !v.is_empty()), "{label}: no primary dimension");
+        // SES is the account-wide exception: its metrics carry no dimensions.
+        let account_wide = target.namespace == "AWS/SES";
+        assert!(
+            account_wide || target.dimensions.first().is_some_and(|(_, v)| !v.is_empty()),
+            "{label}: no primary dimension"
+        );
         press(&mut app, &tx, KeyCode::Char('m')).await;
         settle(&mut app, &tx, &mut rx).await;
         let st = app.spec_metrics.as_ref().unwrap();
         let bad: Vec<String> = st.series.iter().filter_map(|s| s.error.clone()).collect();
         assert!(bad.is_empty() && st.series.iter().all(|s| !s.points.is_empty()), "{label}: {bad:?}");
+        assert!(!st.series.is_empty() || st.target.hint.is_some(), "{label}: nothing charted and nothing said");
         press(&mut app, &tx, KeyCode::Esc).await;
     }
     // AWS/Bedrock is the one arm left out: foundation models and inference
@@ -188,7 +194,9 @@ async fn every_spec_target_has_a_mock_that_charts() {
         "AWS/WorkSpaces", "AWS/Athena", "Glue", "AWS/TransitGateway", "AWS/Logs", "AWS/Events",
         "AWS/Route53Resolver", "AWS/CodeBuild", "AWS/CloudFront", "AWS/Route53", "AWS/GlobalAccelerator",
         "AWS/ECS", "AWS/AutoScaling", "ContainerInsights", "AWS/ApiGateway", "AWS/ApplicationELB", "AWS/ES",
-        "AWS/DMS", "ECS/ContainerInsights", "AWS/WAFV2", "AWS/FSx",
+        "AWS/DMS", "ECS/ContainerInsights", "AWS/WAFV2", "AWS/FSx", "AWS/SES", "AWS/Cognito",
+        "AWS/NetworkFirewall", "AWS/Kafka", "AWS/PrivateLinkEndpoints", "AWS/Bedrock-AgentCore",
+        "AWS/AppSync", "AWS/CertificateManager", "AWS/ElasticBeanstalk", "AWS/Backup",
     ] {
         assert!(seen.contains_key(ns), "no mock reaches the {ns} spec arm: {seen:?}");
     }
@@ -560,7 +568,7 @@ async fn a_capped_lookup_says_how_far_back_it_read() {
 }
 
 
-fn fsx_mock(label: &str) -> Box<dyn crate::aws::resource::Resource> {
+fn mock(label: &str) -> Box<dyn crate::aws::resource::Resource> {
     all_mocks().into_iter().find(|(_, l, _)| *l == label).unwrap().2
 }
 
@@ -571,7 +579,7 @@ fn fsx_mock(label: &str) -> Box<dyn crate::aws::resource::Resource> {
 async fn an_fsx_file_system_charts_its_type_s_table() {
     let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    select_mock(&mut app, ServiceType::Fsx, fsx_mock("FsxFileSystem"));
+    select_mock(&mut app, ServiceType::Fsx, mock("FsxFileSystem"));
     press(&mut app, &tx, KeyCode::Char('m')).await;
     assert_eq!(app.metrics_in_pane, Some(MetricsKind::Spec));
     settle(&mut app, &tx, &mut rx).await;
@@ -591,7 +599,7 @@ async fn an_fsx_file_system_charts_its_type_s_table() {
 async fn an_ontap_volume_charts_latency_from_rows_it_hides() {
     let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    select_mock(&mut app, ServiceType::Fsx, fsx_mock("FsxVolume"));
+    select_mock(&mut app, ServiceType::Fsx, mock("FsxVolume"));
     press(&mut app, &tx, KeyCode::Char('m')).await;
     settle(&mut app, &tx, &mut rx).await;
     let st = app.spec_metrics.as_ref().unwrap();
@@ -614,9 +622,9 @@ async fn an_ontap_volume_charts_latency_from_rows_it_hides() {
 async fn enter_on_a_volume_charts_that_volume() {
     let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let mut fs = fsx_mock("FsxFileSystem").as_any().downcast_ref::<crate::aws::services::fsx::FsxFileSystem>().unwrap().clone();
+    let mut fs = mock("FsxFileSystem").as_any().downcast_ref::<crate::aws::services::fsx::FsxFileSystem>().unwrap().clone();
     fs.file_system_type = "ONTAP".into();
-    let vol = fsx_mock("FsxVolume").as_any().downcast_ref::<crate::aws::services::fsx::FsxVolume>().unwrap().clone();
+    let vol = mock("FsxVolume").as_any().downcast_ref::<crate::aws::services::fsx::FsxVolume>().unwrap().clone();
     app.lazy.fsx_volumes.apply(fs.file_system_id.clone(), Ok(vec![vol]));
     select_mock(&mut app, ServiceType::Fsx, Box::new(fs));
     press(&mut app, &tx, KeyCode::Char('m')).await;
@@ -640,3 +648,67 @@ async fn enter_on_a_volume_charts_that_volume() {
     assert!(st.curated && st.queries.iter().all(|q| !q.dimensions.iter().any(|(k, _)| k == "VolumeId")));
 }
 
+
+/// SES is account-wide: no dimensions, the same set for any identity. Its
+/// reputation rates are math over the 0–1 ratios, which are fetched and
+/// never shown, and a rate's chart draws AWS's review threshold.
+#[tokio::test]
+async fn ses_charts_the_account_s_reputation_against_its_limits() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    select_mock(&mut app, ServiceType::Ses, mock("SesIdentity"));
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    assert_eq!(app.metrics_in_pane, Some(MetricsKind::Spec));
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert!(st.target.dimensions.is_empty());
+    let labels: Vec<&str> = st.series.iter().map(|s| s.query.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        ["Sent", "Delivered", "Bounces", "Complaints", "Rejected", "Rendering failures", "Bounce rate", "Complaint rate"]
+    );
+    assert!(st.series.iter().all(|s| s.error.is_none() && !s.points.is_empty()));
+
+    let rate = labels.iter().position(|l| *l == "Bounce rate").unwrap();
+    for _ in 0..rate {
+        press(&mut app, &tx, KeyCode::Char('j')).await;
+    }
+    press(&mut app, &tx, KeyCode::Char('Z')).await;
+    let screen = screen_of(&app);
+    assert!(screen.contains("Metrics — SES · this account and region"), "{screen}");
+    assert!(screen.contains("review 5.0%"), "the threshold's legend: {screen}");
+}
+
+/// A gateway endpoint is a route-table entry: nothing is asked of
+/// CloudWatch, and the view says why instead of "Nothing to show".
+#[tokio::test]
+async fn a_gateway_endpoint_says_it_publishes_nothing() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut ep = mock("VpcEndpoint").as_any().downcast_ref::<crate::aws::services::vpc::VpcEndpoint>().unwrap().clone();
+    ep.kind = "Gateway".into();
+    select_mock(&mut app, ServiceType::VPC, Box::new(ep));
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert!(st.queries.is_empty() && !st.loading);
+    assert!(screen_of(&app).contains("Gateway endpoints (S3, DynamoDB) publish no CloudWatch metrics"));
+}
+
+/// A certificate still waiting on validation has never published
+/// `DaysToExpiry`: no call, and the view says so.
+#[tokio::test]
+async fn a_pending_certificate_says_it_has_no_expiry_yet() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut cert =
+        mock("AcmCertificate").as_any().downcast_ref::<crate::aws::services::acm::AcmCertificate>().unwrap().clone();
+    cert.status = "PENDING_VALIDATION".into();
+    select_mock(&mut app, ServiceType::Acm, Box::new(cert));
+    assert!(app.supports_metrics_overlay(), "the status bar offers m");
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert!(st.queries.is_empty() && !st.loading);
+    assert!(screen_of(&app).contains("Only an issued certificate publishes DaysToExpiry"));
+}

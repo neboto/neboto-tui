@@ -2216,7 +2216,6 @@ pub async fn fetch_code_interpreter_sessions(
 // CloudWatch metrics (`m` overlay) — namespace `AWS/Bedrock-AgentCore`
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub use crate::aws::services::ec2::MetricsTimeRange;
 
 /// Which chart set the pane draws. The five families share one namespace and
 /// the same invocation-metric names, so one `MetricsKind` covers them all and
@@ -2243,138 +2242,8 @@ impl AgentCoreMetricsFlavor {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct AgentCoreMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub flavor: AgentCoreMetricsFlavor,
-    pub invocations: Vec<(f64, f64)>,
-    pub latency: Vec<(f64, f64)>,
-    pub system_errors: Vec<(f64, f64)>,
-    pub user_errors: Vec<(f64, f64)>,
-    pub throttles: Vec<(f64, f64)>,
-    /// Runtime only.
-    pub sessions: Vec<(f64, f64)>,
-    pub cpu_hours: Vec<(f64, f64)>,
-    pub memory_gb_hours: Vec<(f64, f64)>,
-    /// Gateway only.
-    pub duration: Vec<(f64, f64)>,
-    pub target_exec_time: Vec<(f64, f64)>,
-    pub x_max: f64,
-}
 
-#[derive(Debug, Clone)]
-pub enum AgentCoreMetricsState {
-    Loading,
-    Loaded(Box<AgentCoreMetricsData>),
-}
 
-/// Pull `AWS/Bedrock-AgentCore` metrics for one resource.
-///
-/// **Why SEARCH and not `GetMetricStatistics`**: AWS documents a different
-/// dimension set per family (gateway publishes `Operation`/`Protocol`/
-/// `Method`/`Resource`/`Name`; runtime's usage metrics publish `Service`,
-/// `Service,Resource` and `Service,Resource,Name`; the runtime *invocation*
-/// metrics' dimensions aren't documented at all). A fixed-dimension query
-/// against a guess matches nothing silently. The schema-free `SEARCH` form
-/// matches the ARN as a token against dimension values whatever the schema
-/// is, and aggregating collapses the per-operation/per-method series into one
-/// line — same reasoning as Network Firewall's per-AZ aggregation.
-///
-/// The usage metrics are the exception: they publish at three nesting levels,
-/// so a token match would sum a resource's hours together with the
-/// `Service,Resource,Name` breakdown of the same hours. Those are pinned to
-/// the two-dimension schema instead.
-pub async fn fetch_agentcore_metrics(
-    cw: aws_sdk_cloudwatch::Client,
-    arn: String,
-    flavor: AgentCoreMetricsFlavor,
-    time_range: MetricsTimeRange,
-) -> crate::error::Result<AgentCoreMetricsData> {
-    use aws_sdk_cloudwatch::types::MetricDataQuery;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start = now - time_range.duration_secs();
-    let period = time_range.period_secs();
-
-    // (query id, outer aggregate, inner stat, metric name)
-    let mut specs: Vec<(&str, &str, &str, &str)> = vec![
-        ("m0", "SUM", "Sum", "Invocations"),
-        ("m1", "AVG", "Average", "Latency"),
-        ("m2", "SUM", "Sum", "SystemErrors"),
-        ("m3", "SUM", "Sum", "UserErrors"),
-        ("m4", "SUM", "Sum", "Throttles"),
-    ];
-    if flavor == AgentCoreMetricsFlavor::Runtime {
-        specs.push(("m5", "SUM", "Sum", "SessionCount"));
-    }
-    if flavor == AgentCoreMetricsFlavor::Gateway {
-        specs.push(("m8", "AVG", "Average", "Duration"));
-        specs.push(("m9", "AVG", "Average", "TargetExecutionTime"));
-    }
-
-    let mut queries: Vec<MetricDataQuery> = specs
-        .iter()
-        .map(|(id, agg, stat, metric)| {
-            let expr = format!(
-                "{}(SEARCH('Namespace=\"AWS/Bedrock-AgentCore\" MetricName=\"{}\" \"{}\"', '{}', {}))",
-                agg, metric, arn, stat, period
-            );
-            MetricDataQuery::builder().id(*id).expression(expr).build()
-        })
-        .collect();
-
-    if flavor == AgentCoreMetricsFlavor::Runtime {
-        for (id, metric) in [("m6", "CPUUsed-vCPUHours"), ("m7", "MemoryUsed-GBHours")] {
-            let expr = format!(
-                "SUM(SEARCH('{{AWS/Bedrock-AgentCore,Resource,Service}} MetricName=\"{}\" Resource=\"{}\"', 'Sum', {}))",
-                metric, arn, period
-            );
-            queries.push(MetricDataQuery::builder().id(id).expression(expr).build());
-        }
-    }
-
-    let resp = cw
-        .get_metric_data()
-        .set_metric_data_queries(Some(queries))
-        .start_time(aws_sdk_cloudwatch::primitives::DateTime::from_secs(start))
-        .end_time(aws_sdk_cloudwatch::primitives::DateTime::from_secs(now))
-        .send()
-        .await
-        .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
-
-    let mut series: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
-    for r in resp.metric_data_results() {
-        let id = r.id().unwrap_or_default().to_string();
-        let mut pts: Vec<(f64, f64)> = r
-            .timestamps()
-            .iter()
-            .zip(r.values().iter())
-            .map(|(t, v)| (t.secs() as f64 - start as f64, *v))
-            .collect();
-        pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        series.insert(id, pts);
-    }
-    let take = |id: &str| series.get(id).cloned().unwrap_or_default();
-
-    Ok(AgentCoreMetricsData {
-        time_range,
-        flavor,
-        invocations: take("m0"),
-        latency: take("m1"),
-        system_errors: take("m2"),
-        user_errors: take("m3"),
-        throttles: take("m4"),
-        sessions: take("m5"),
-        cpu_hours: take("m6"),
-        memory_gb_hours: take("m7"),
-        duration: take("m8"),
-        target_exec_time: take("m9"),
-        x_max: time_range.duration_secs() as f64,
-    })
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Memory session browser (`i`) — data-plane reads

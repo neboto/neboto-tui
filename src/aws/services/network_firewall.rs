@@ -1,11 +1,9 @@
 use crate::aws::client::AwsClients;
 use crate::aws::resource::{native_state_label, Resource, ResourceState};
 use crate::aws::service::{AwsService, ServiceType};
-use crate::aws::services::ec2::MetricsTimeRange;
 use crate::error::Result;
 use crate::event::{Event, LoadProgress};
 use async_trait::async_trait;
-use aws_sdk_cloudwatch::primitives::DateTime as CwDateTime;
 use aws_sdk_networkfirewall::Client as NfwClient;
 use std::any::Any;
 use std::collections::HashMap;
@@ -861,92 +859,8 @@ pub fn nfw_resource_status_to_state(status: &str) -> ResourceState {
 
 // ── Metrics (AWS/NetworkFirewall) ───────────────────────────────────────────
 
-#[derive(Debug, Clone)]
-pub struct NfwMetricsData {
-    pub received: Vec<(f64, f64)>,
-    pub passed: Vec<(f64, f64)>,
-    pub dropped: Vec<(f64, f64)>,
-    pub rejected: Vec<(f64, f64)>,
-    pub x_max: f64,
-}
 
-#[derive(Debug, Clone)]
-pub enum NfwMetricsState {
-    Loading,
-    Loaded(NfwMetricsData),
-}
 
-/// Fetch firewall traffic metrics from the `AWS/NetworkFirewall` namespace.
-/// Network Firewall publishes per-`AvailabilityZone` (and per-`Engine`)
-/// dimensions, so there is no firewall-wide series to read directly — we use
-/// `GetMetricData` with `SUM(SEARCH(...))` to aggregate every AZ/engine series
-/// for the firewall into one total per metric.
-pub async fn fetch_nfw_metrics(
-    cw: aws_sdk_cloudwatch::Client,
-    firewall_name: String,
-    time_range: MetricsTimeRange,
-) -> Result<NfwMetricsData> {
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start_secs = now_secs - time_range.duration_secs();
-    let period = time_range.period_secs();
-
-    let metrics = [
-        ("m0", "ReceivedPacketCount"),
-        ("m1", "PassedPackets"),
-        ("m2", "DroppedPackets"),
-        ("m3", "RejectedPackets"),
-    ];
-
-    let mut queries = Vec::new();
-    for (id, metric) in metrics {
-        // SEARCH matches every dimension schema (AZ/Engine/CustomAction) for this
-        // firewall+metric; SUM collapses them into one total time series.
-        let expr = format!(
-            "SUM(SEARCH('Namespace=\"AWS/NetworkFirewall\" MetricName=\"{}\" FirewallName=\"{}\"', 'Sum', {}))",
-            metric, firewall_name, period
-        );
-        queries.push(
-            aws_sdk_cloudwatch::types::MetricDataQuery::builder()
-                .id(id)
-                .expression(expr)
-                .build(),
-        );
-    }
-
-    let resp = cw
-        .get_metric_data()
-        .set_metric_data_queries(Some(queries))
-        .start_time(CwDateTime::from_secs(start_secs))
-        .end_time(CwDateTime::from_secs(now_secs))
-        .send()
-        .await
-        .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
-
-    let mut series: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
-    for r in resp.metric_data_results() {
-        let id = r.id().unwrap_or_default().to_string();
-        let mut pts: Vec<(f64, f64)> = r
-            .timestamps()
-            .iter()
-            .zip(r.values().iter())
-            .map(|(t, v)| (t.secs() as f64 - start_secs as f64, *v))
-            .collect();
-        pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        series.insert(id, pts);
-    }
-
-    let take = |id: &str| series.get(id).cloned().unwrap_or_default();
-    Ok(NfwMetricsData {
-        received: take("m0"),
-        passed: take("m1"),
-        dropped: take("m2"),
-        rejected: take("m3"),
-        x_max: time_range.duration_secs() as f64,
-    })
-}
 
 // ── Logging configuration (FLOW / ALERT / TLS destinations) ──────────────────
 

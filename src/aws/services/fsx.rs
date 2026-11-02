@@ -1030,9 +1030,7 @@ fn curate(
     capacity_bytes: i64,
     queries: &[crate::aws::metrics::MetricQuery],
 ) -> Vec<crate::aws::metrics::MetricQuery> {
-    use crate::aws::metrics::{MetricQuery, Unit};
-    let filters: String =
-        target.iter().map(|(k, v)| format!("{k}=\"{v}\"")).collect::<Vec<_>>().join(" ");
+    use crate::aws::metrics::{Agg, MetricQuery, Search, Unit};
     let mut kept: Vec<MetricQuery> = Vec::new();
     for q in queries.iter().filter(|q| q.expression.is_none()) {
         let mut q = q.clone();
@@ -1041,13 +1039,8 @@ fn curate(
             Some(Published::Exact) => {}
             Some(Published::At(dims)) => q.dimensions = dims,
             Some(Published::Each(schema)) => {
-                let (agg, note) = if q.unit == Unit::Percent { ("MAX", " (max)") } else { ("SUM", "") };
-                q.expression = Some(format!(
-                    "{agg}(SEARCH('{{AWS/FSx,{}}} MetricName=\"{}\" {filters}', '{}', $PERIOD))",
-                    schema.join(","),
-                    q.metric,
-                    q.stat.api()
-                ));
+                let (agg, note) = if q.unit == Unit::Percent { (Agg::Max, " (max)") } else { (Agg::Sum, "") };
+                q.search = Some(Search { agg, schema: Some(schema.join(",")), token: false });
                 q.label.push_str(note);
             }
         }
@@ -1077,6 +1070,7 @@ fn curate(
         && capacity_bytes > 0
     {
         let free = set.iter().find(|q| q.metric == "FreeStorageCapacity").cloned().unwrap();
+        let free = MetricQuery { search: None, ..free };
         set.insert(
             0,
             MetricQuery {
@@ -1442,12 +1436,12 @@ mod metrics_tests {
         assert_eq!(labels(&set), ["Storage used (max)", "Free storage", "Read", "Network (max)"]);
         let free = set.iter().find(|q| q.metric == "FreeDataStorageCapacity").unwrap();
         assert_eq!(
-            free.expression.as_deref(),
-            Some("SUM(SEARCH('{AWS/FSx,FileSystemId,StorageTargetId} MetricName=\"FreeDataStorageCapacity\" FileSystemId=\"fs-1\"', 'Average', $PERIOD))")
+            free.search_expression(300).as_deref(),
+            Some("SUM(SEARCH('{AWS/FSx,FileSystemId,StorageTargetId} MetricName=\"FreeDataStorageCapacity\" FileSystemId=\"fs-1\"', 'Average', 300))")
         );
         let net = set.iter().find(|q| q.metric == "NetworkThroughputUtilization").unwrap();
-        assert!(net.expression.as_deref().unwrap().starts_with("MAX(SEARCH('{AWS/FSx,FileServer,FileSystemId}"), "{net:?}");
-        assert!(set.iter().find(|q| q.metric == "DataReadBytes").unwrap().expression.is_none());
+        assert!(net.search_expression(60).unwrap().starts_with("MAX(SEARCH('{AWS/FSx,FileServer,FileSystemId}"), "{net:?}");
+        assert!(set.iter().find(|q| q.metric == "DataReadBytes").unwrap().search.is_none());
     }
 
     /// ONTAP's utilisation is per tier: the SSD tier's, not a sum with the

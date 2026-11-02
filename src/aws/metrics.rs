@@ -84,6 +84,49 @@ pub enum Tone {
     Warn,
 }
 
+/// How a row folds the series it's published as into one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Agg {
+    Sum,
+    Max,
+    Avg,
+}
+
+impl Agg {
+    fn api(self) -> &'static str {
+        match self {
+            Agg::Sum => "SUM",
+            Agg::Max => "MAX",
+            Agg::Avg => "AVG",
+        }
+    }
+}
+
+/// A metric published once per AZ, broker or app client and never for the
+/// resource as a whole: the row is `agg(SEARCH(…))` over all of them, built
+/// from the query's dimensions when it's fetched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Across {
+    pub agg: Agg,
+    /// The dimension names the SEARCH pins (`UserPool,UserPoolClient`), so
+    /// a breakdown of the same series isn't counted twice; `None` matches
+    /// any (Network Firewall's per-AZ and per-engine sets alike).
+    pub schema: Option<&'static str>,
+    /// Match the dimension values as bare tokens rather than `Name="value"`:
+    /// AgentCore's invocation metrics publish the ARN under undocumented
+    /// dimension names.
+    pub token: bool,
+}
+
+/// [`Across`] on a query, where the schema can be one found at runtime
+/// (an FSx file system's per-target metrics).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Search {
+    pub agg: Agg,
+    pub schema: Option<String>,
+    pub token: bool,
+}
+
 /// One curated metric of a kind.
 #[derive(Debug, Clone, Copy)]
 pub struct MetricSpec {
@@ -110,6 +153,10 @@ pub struct MetricSpec {
     /// latency's operation time). Hidden rows go last in a set: a row's
     /// place in the view is its place in the queries.
     pub hidden: bool,
+    pub across: Option<Across>,
+    /// Lines drawn across the chart, `(value, what it means)`: SES's
+    /// reputation thresholds. The first is kept in the y range.
+    pub limits: &'static [(f64, &'static str)],
 }
 
 const fn m(metric: &'static str, label: &'static str, stat: Stat, unit: Unit) -> MetricSpec {
@@ -125,6 +172,8 @@ const fn m(metric: &'static str, label: &'static str, stat: Stat, unit: Unit) ->
         tone: None,
         expr: None,
         hidden: false,
+        across: None,
+        limits: &[],
     }
 }
 
@@ -156,6 +205,26 @@ impl MetricSpec {
 
     const fn hidden(self) -> Self {
         MetricSpec { hidden: true, ..self }
+    }
+
+    const fn limits(self, limits: &'static [(f64, &'static str)]) -> Self {
+        MetricSpec { limits, ..self }
+    }
+
+    /// Published per `schema`'s extra dimensions: one series over them all.
+    const fn across(self, agg: Agg, schema: &'static str) -> Self {
+        MetricSpec { across: Some(Across { agg, schema: Some(schema), token: false }), ..self }
+    }
+
+    /// Published under any set carrying the resource's dimensions.
+    const fn across_any(self, agg: Agg) -> Self {
+        MetricSpec { across: Some(Across { agg, schema: None, token: false }), ..self }
+    }
+
+    /// Published with the resource's dimension values under names nobody
+    /// documents: match the values as tokens.
+    const fn across_token(self, agg: Agg) -> Self {
+        MetricSpec { across: Some(Across { agg, schema: None, token: true }), ..self }
     }
 }
 
@@ -738,6 +807,207 @@ pub const FSX_OPENZFS_VOLUME: &[MetricSpec] = &[
     m("StorageCapacity", "Capacity", Avg, Unit::Bytes).hidden(),
 ];
 
+/// SES publishes **account-wide**, with no dimensions: the same set for
+/// any SES row. The reputation rates are 0–1 ratios, a running reading
+/// (`Max` per period, never a sum), drawn against SES's thresholds: above
+/// the first AWS reviews the account, above the second it can stop it
+/// sending.
+pub const SES_ACCOUNT: &[MetricSpec] = &[
+    m("Send", "Sent", Sum, Unit::Count).group("mail"),
+    m("Delivery", "Delivered", Sum, Unit::Count).group("mail").tone(Tone::Good),
+    m("Bounce", "Bounces", Sum, Unit::Count).group("problems").tone(Tone::Bad),
+    m("Complaint", "Complaints", Sum, Unit::Count).group("problems").tone(Tone::Warn),
+    m("Reject", "Rejected", Sum, Unit::Count).group("problems"),
+    m("Rendering Failures", "Rendering failures", Sum, Unit::Count),
+    e("Bounce rate", "100*{Reputation.BounceRate}", Unit::Percent)
+        .tone(Tone::Bad)
+        .limits(&[(5.0, "review"), (10.0, "pause")]),
+    e("Complaint rate", "100*{Reputation.ComplaintRate}", Unit::Percent)
+        .tone(Tone::Warn)
+        .limits(&[(0.1, "review"), (0.5, "pause")]),
+    m("Reputation.BounceRate", "Bounce ratio", Max, Unit::Raw).hidden(),
+    m("Reputation.ComplaintRate", "Complaint ratio", Max, Unit::Raw).hidden(),
+];
+
+/// Cognito publishes per `(UserPool, UserPoolClient)`: each row sums the
+/// pool's app clients. Federation adds `IdentityProvider`, and a schema
+/// matches only series with exactly its dimensions, so that row names it.
+pub const COGNITO_USER_POOL: &[MetricSpec] = &[
+    m("SignInSuccesses", "Sign-ins", Sum, Unit::Count).across(Agg::Sum, "UserPool,UserPoolClient").group("auth"),
+    m("SignUpSuccesses", "Sign-ups", Sum, Unit::Count).across(Agg::Sum, "UserPool,UserPoolClient").group("auth"),
+    m("TokenRefreshSuccesses", "Token refreshes", Sum, Unit::Count).across(Agg::Sum, "UserPool,UserPoolClient"),
+    m("FederationSuccesses", "Federated sign-ins", Sum, Unit::Count)
+        .across(Agg::Sum, "UserPool,UserPoolClient,IdentityProvider"),
+    m("SignInThrottles", "Sign-in throttles", Sum, Unit::Count)
+        .across(Agg::Sum, "UserPool,UserPoolClient")
+        .group("throttles")
+        .tone(Tone::Bad),
+    m("SignUpThrottles", "Sign-up throttles", Sum, Unit::Count)
+        .across(Agg::Sum, "UserPool,UserPoolClient")
+        .group("throttles")
+        .tone(Tone::Warn),
+];
+
+/// Network Firewall publishes per AZ, engine and custom action, never for
+/// the firewall as a whole: each row sums every set it's in.
+pub const NFW_FIREWALL: &[MetricSpec] = &[
+    m("ReceivedPackets", "Received", Sum, Unit::Count).across_any(Agg::Sum).group("packets"),
+    m("PassedPackets", "Passed", Sum, Unit::Count).across_any(Agg::Sum).group("packets").tone(Tone::Good),
+    m("DroppedPackets", "Dropped", Sum, Unit::Count).across_any(Agg::Sum).group("packets").tone(Tone::Bad),
+    m("RejectedPackets", "Rejected", Sum, Unit::Count).across_any(Agg::Sum).group("packets").tone(Tone::Warn),
+];
+
+/// Topic and partition counts are the cluster's own; throughput and disk
+/// are per broker — the cluster's total, and the fullest broker.
+pub const MSK_CLUSTER: &[MetricSpec] = &[
+    m("BytesInPerSec", "Bytes in", Avg, Unit::BytesPerSec).across(Agg::Sum, "Cluster Name,Broker ID").group("bytes"),
+    m("BytesOutPerSec", "Bytes out", Avg, Unit::BytesPerSec).across(Agg::Sum, "Cluster Name,Broker ID").group("bytes"),
+    m("KafkaDataLogsDiskUsed", "Disk used (max)", Avg, Unit::Percent).across(Agg::Max, "Cluster Name,Broker ID"),
+    m("GlobalTopicCount", "Topics", Max, Unit::Count),
+    m("GlobalPartitionCount", "Partitions", Max, Unit::Count),
+];
+
+/// `AWS/PrivateLinkEndpoints` publishes under its full four-dimension set,
+/// so a query on the endpoint id alone matches nothing: each row is pinned
+/// to that schema.
+pub const VPC_ENDPOINT: &[MetricSpec] = &[
+    m("BytesProcessed", "Bytes processed", Sum, Unit::BytesPerSec)
+        .rate()
+        .across(Agg::Sum, "Endpoint Type,Service Name,VPC Endpoint Id,VPC Id"),
+    m("ActiveConnections", "Active connections", Max, Unit::Count)
+        .across(Agg::Max, "Endpoint Type,Service Name,VPC Endpoint Id,VPC Id"),
+    m("NewConnections", "New connections", Sum, Unit::Count)
+        .across(Agg::Sum, "Endpoint Type,Service Name,VPC Endpoint Id,VPC Id"),
+    m("PacketsDropped", "Packets dropped", Sum, Unit::Count)
+        .across(Agg::Sum, "Endpoint Type,Service Name,VPC Endpoint Id,VPC Id")
+        .group("drops")
+        .tone(Tone::Bad),
+    m("RstPacketsReceived", "RST received", Sum, Unit::Count)
+        .across(Agg::Sum, "Endpoint Type,Service Name,VPC Endpoint Id,VPC Id")
+        .group("drops")
+        .tone(Tone::Warn),
+];
+
+// AgentCore: AWS documents a different dimension set per family and none
+// for a runtime's invocation metrics, so those match the ARN as a token
+// and fold the per-operation series together. A runtime's usage publishes
+// at three nesting levels; a token match would add the breakdown to the
+// total, so those rows pin `Resource,Service`.
+
+pub const AGENTCORE_RESOURCE: &[MetricSpec] = &[
+    m("Invocations", "Invocations", Sum, Unit::Count).across_token(Agg::Sum),
+    m("Latency", "Latency", Avg, Unit::Millis).across_token(Agg::Avg),
+    m("SystemErrors", "System errors", Sum, Unit::Count).across_token(Agg::Sum).group("errors").tone(Tone::Bad),
+    m("UserErrors", "User errors", Sum, Unit::Count).across_token(Agg::Sum).group("errors").tone(Tone::Warn),
+    m("Throttles", "Throttles", Sum, Unit::Count).across_token(Agg::Sum).group("errors"),
+];
+
+pub const AGENTCORE_RUNTIME: &[MetricSpec] = &[
+    m("Invocations", "Invocations", Sum, Unit::Count).across_token(Agg::Sum),
+    m("SessionCount", "Sessions", Sum, Unit::Count).across_token(Agg::Sum),
+    m("Latency", "Latency", Avg, Unit::Millis).across_token(Agg::Avg),
+    m("SystemErrors", "System errors", Sum, Unit::Count).across_token(Agg::Sum).group("errors").tone(Tone::Bad),
+    m("UserErrors", "User errors", Sum, Unit::Count).across_token(Agg::Sum).group("errors").tone(Tone::Warn),
+    m("Throttles", "Throttles", Sum, Unit::Count).across_token(Agg::Sum).group("errors"),
+    m("CPUUsed-vCPUHours", "vCPU-hours", Sum, Unit::Raw).across(Agg::Sum, "Resource,Service").group("usage"),
+    m("MemoryUsed-GBHours", "GB-hours", Sum, Unit::Raw).across(Agg::Sum, "Resource,Service").group("usage"),
+];
+
+pub const AGENTCORE_GATEWAY: &[MetricSpec] = &[
+    m("Invocations", "Invocations", Sum, Unit::Count).across_token(Agg::Sum),
+    m("Latency", "Latency", Avg, Unit::Millis).across_token(Agg::Avg).group("time"),
+    m("Duration", "Duration", Avg, Unit::Millis).across_token(Agg::Avg).group("time"),
+    m("TargetExecutionTime", "Target time", Avg, Unit::Millis).across_token(Agg::Avg).group("time"),
+    m("SystemErrors", "System errors", Sum, Unit::Count).across_token(Agg::Sum).group("errors").tone(Tone::Bad),
+    m("UserErrors", "User errors", Sum, Unit::Count).across_token(Agg::Sum).group("errors").tone(Tone::Warn),
+    m("Throttles", "Throttles", Sum, Unit::Count).across_token(Agg::Sum).group("errors"),
+];
+
+/// `GraphQLAPIId`. `Requests` and `TokensConsumed` are account-wide (per
+/// region), so they aren't here; the real-time rows exist only for an API
+/// with subscriptions.
+pub const APPSYNC_API: &[MetricSpec] = &[
+    m("Latency", "Latency", Avg, Unit::Millis),
+    m("4XXError", "4xx", Sum, Unit::Count).group("errors").tone(Tone::Warn),
+    m("5XXError", "5xx", Sum, Unit::Count).group("errors").tone(Tone::Bad),
+    m("ActiveConnections", "Connections", Sum, Unit::Count).group("realtime"),
+    m("ActiveSubscriptions", "Subscriptions", Sum, Unit::Count).group("realtime"),
+    m("PublishDataMessageSuccess", "Published", Sum, Unit::Count).group("messages").tone(Tone::Good),
+    m("PublishDataMessageServerError", "Publish errors", Sum, Unit::Count).group("messages").tone(Tone::Bad),
+];
+
+/// Published twice a day per issued certificate, until it expires. ACM's
+/// expiry events start 45 days out.
+pub const ACM_CERTIFICATE: &[MetricSpec] =
+    &[m("DaysToExpiry", "Days to expiry", Min, Unit::Raw).limits(&[(45.0, "expiry events"), (0.0, "expired")])];
+
+/// `ClusterName`. The `AWS/ECS` rows count EC2 container instances only;
+/// the Container Insights ones cover Fargate too.
+pub const ECS_CLUSTER: &[MetricSpec] = &[
+    m("CPUReservation", "CPU reserved", Avg, Unit::Percent).group("cpu"),
+    m("CPUUtilization", "CPU used", Avg, Unit::Percent).group("cpu"),
+    m("MemoryReservation", "Memory reserved", Avg, Unit::Percent).group("memory"),
+    m("MemoryUtilization", "Memory used", Avg, Unit::Percent).group("memory"),
+    e("Task CPU used", "100*{CpuUtilized}/{CpuReserved}", Unit::Percent).group("insights"),
+    e("Task memory used", "100*{MemoryUtilized}/{MemoryReserved}", Unit::Percent).group("insights"),
+    m("TaskCount", "Tasks", Avg, Unit::Count).group("counts").ns("ECS/ContainerInsights"),
+    m("ServiceCount", "Services", Avg, Unit::Count).group("counts").ns("ECS/ContainerInsights"),
+    m("CpuUtilized", "CPU units used", Sum, Unit::Raw).ns("ECS/ContainerInsights").hidden(),
+    m("CpuReserved", "CPU units reserved", Sum, Unit::Raw).ns("ECS/ContainerInsights").hidden(),
+    m("MemoryUtilized", "Memory used (MB)", Sum, Unit::Raw).ns("ECS/ContainerInsights").hidden(),
+    m("MemoryReserved", "Memory reserved (MB)", Sum, Unit::Raw).ns("ECS/ContainerInsights").hidden(),
+];
+
+/// `ProxyName`. Each EC2 instance behind the proxy publishes its own
+/// numbers, so a gauge's Sum over a period is that many minutes' worth:
+/// the rows divide it back to one minute. Latencies are microseconds.
+pub const RDS_PROXY: &[MetricSpec] = &[
+    e("Client connections", "{ClientConnections}*60/$PERIOD", Unit::Count).group("connections"),
+    e("Database connections", "{DatabaseConnections}*60/$PERIOD", Unit::Count).group("connections"),
+    e("Connections allowed", "{MaxDatabaseConnectionsAllowed}*60/$PERIOD", Unit::Count).group("connections"),
+    e("Pinned", "{DatabaseConnectionsCurrentlySessionPinned}*60/$PERIOD", Unit::Count).tone(Tone::Warn),
+    m("QueryRequests", "Queries", Sum, Unit::Count),
+    e("Borrow latency", "{DatabaseConnectionsBorrowLatency}/1000", Unit::Millis).group("latency"),
+    e("Query latency", "{QueryDatabaseResponseLatency}/1000", Unit::Millis).group("latency"),
+    m("ClientConnectionsSetupFailedAuth", "Client auth failures", Sum, Unit::Count).group("failures").tone(Tone::Warn),
+    m("DatabaseConnectionsSetupFailed", "Database setup failures", Sum, Unit::Count).group("failures").tone(Tone::Bad),
+    m("ClientConnections", "Client connections (sum)", Sum, Unit::Count).hidden(),
+    m("DatabaseConnections", "Database connections (sum)", Sum, Unit::Count).hidden(),
+    m("MaxDatabaseConnectionsAllowed", "Connections allowed (sum)", Sum, Unit::Count).hidden(),
+    m("DatabaseConnectionsCurrentlySessionPinned", "Pinned (sum)", Sum, Unit::Count).hidden(),
+    m("DatabaseConnectionsBorrowLatency", "Borrow latency (µs)", Avg, Unit::Raw).hidden(),
+    m("QueryDatabaseResponseLatency", "Query latency (µs)", Avg, Unit::Raw).hidden(),
+];
+
+/// `EnvironmentName`. Enhanced health publishes `EnvironmentHealth` free
+/// (0 OK, 1 info, 5 unknown, 10 no data, 15 warning, 20 degraded, 25
+/// severe); the rest exist only once the environment is configured to
+/// publish them. Latency is seconds.
+pub const EB_ENVIRONMENT: &[MetricSpec] = &[
+    m("EnvironmentHealth", "Health (0 = OK)", Max, Unit::Raw).limits(&[(15.0, "warning"), (25.0, "severe")]),
+    m("ApplicationRequestsTotal", "Requests", Sum, Unit::Count),
+    m("ApplicationRequests4xx", "4xx", Sum, Unit::Count).group("errors").tone(Tone::Warn),
+    m("ApplicationRequests5xx", "5xx", Sum, Unit::Count).group("errors").tone(Tone::Bad),
+    m("ApplicationLatencyP50", "p50", Avg, Unit::Seconds).group("latency"),
+    m("ApplicationLatencyP99", "p99", Avg, Unit::Seconds).group("latency"),
+    m("InstancesOk", "OK", Avg, Unit::Count).group("instances").tone(Tone::Good),
+    m("InstancesDegraded", "Degraded", Avg, Unit::Count).group("instances").tone(Tone::Warn),
+    m("InstancesSevere", "Severe", Avg, Unit::Count).group("instances").tone(Tone::Bad),
+];
+
+/// `BackupVaultName`. A copy job counts in its destination vault. Each
+/// metric is published only for a period with a non-zero value.
+pub const BACKUP_VAULT: &[MetricSpec] = &[
+    m("NumberOfBackupJobsCompleted", "Completed", Sum, Unit::Count).group("backups").sparse().tone(Tone::Good),
+    m("NumberOfBackupJobsFailed", "Failed", Sum, Unit::Count).group("backups").sparse().tone(Tone::Bad),
+    m("NumberOfBackupJobsExpired", "Expired", Sum, Unit::Count).group("backups").sparse().tone(Tone::Warn),
+    m("NumberOfCopyJobsCompleted", "Completed", Sum, Unit::Count).group("copies").sparse().tone(Tone::Good),
+    m("NumberOfCopyJobsFailed", "Failed", Sum, Unit::Count).group("copies").sparse().tone(Tone::Bad),
+    m("NumberOfRestoreJobsCompleted", "Completed", Sum, Unit::Count).group("restores").sparse().tone(Tone::Good),
+    m("NumberOfRestoreJobsFailed", "Failed", Sum, Unit::Count).group("restores").sparse().tone(Tone::Bad),
+    m("NumberOfRecoveryPointsExpired", "Expired, not deleted", Sum, Unit::Count).sparse().tone(Tone::Warn),
+];
+
 /// What `m` charts for one resource: where its metrics live and its curated set.
 #[derive(Debug, Clone)]
 pub struct MetricTarget {
@@ -1186,15 +1456,61 @@ pub struct MetricQuery {
     pub expression: Option<String>,
     /// See [`MetricSpec::hidden`].
     pub hidden: bool,
+    /// See [`MetricSpec::across`].
+    pub search: Option<Search>,
+    /// See [`MetricSpec::limits`].
+    pub limits: &'static [(f64, &'static str)],
 }
 
 impl MetricQuery {
     /// `sum BlockedRequests`, or `expression`: what a row is, after its label.
     pub fn describe(&self) -> String {
-        match &self.expression {
-            Some(_) => "expression".to_string(),
-            None => format!("{} {}", self.stat.short(), self.metric),
+        match (&self.expression, &self.search) {
+            (Some(_), _) => "expression".to_string(),
+            (None, Some(s)) => format!("{} {} across", s.agg.api().to_lowercase(), self.metric),
+            (None, None) => format!("{} {}", self.stat.short(), self.metric),
         }
+    }
+
+    /// How a row reads, for its stat column: `avg`, `math`, or `sum·avg`
+    /// for a sum across brokers of each broker's average.
+    pub fn how(&self) -> String {
+        match (&self.expression, &self.search) {
+            (Some(_), _) => "math".to_string(),
+            (None, Some(s)) => format!("{}·{}", s.agg.api().to_lowercase(), self.stat.short()),
+            (None, None) => self.stat.short().to_string(),
+        }
+    }
+
+    /// The `agg(SEARCH(…))` a [`Search`] row is fetched as.
+    pub fn search_expression(&self, period: i32) -> Option<String> {
+        let s = self.search.as_ref()?;
+        let quote = |n: &str| {
+            if n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-') {
+                n.to_string()
+            } else {
+                format!("\"{n}\"")
+            }
+        };
+        let scope = match &s.schema {
+            Some(schema) => {
+                let names: Vec<String> = schema.split(',').map(|n| quote(n.trim())).collect();
+                format!("{{{},{}}}", self.namespace, names.join(","))
+            }
+            None => format!("Namespace=\"{}\"", self.namespace),
+        };
+        let filters: Vec<String> = self
+            .dimensions
+            .iter()
+            .map(|(n, v)| if s.token { format!("\"{v}\"") } else { format!("{}=\"{v}\"", quote(n)) })
+            .collect();
+        Some(format!(
+            "{}(SEARCH('{scope} MetricName=\"{}\" {}', '{}', {period}))",
+            s.agg.api(),
+            self.metric,
+            filters.join(" "),
+            self.stat.api()
+        ))
     }
 
     /// One spec resolved against a set of dimensions.
@@ -1212,6 +1528,8 @@ impl MetricQuery {
             tone: s.tone,
             expression: s.expr.map(str::to_string),
             hidden: s.hidden,
+            search: s.across.map(|a| Search { agg: a.agg, schema: a.schema.map(str::to_string), token: a.token }),
+            limits: s.limits,
         }
     }
 }
@@ -1294,6 +1612,11 @@ pub async fn fetch_series(
     let mut errors: Vec<Option<String>> = vec![Some("not in the response".to_string()); queries.len()];
     let mut data_queries: Vec<MetricDataQuery> = Vec::new();
     for (i, q) in queries.iter().enumerate() {
+        if let (None, Some(expr)) = (&q.expression, q.search_expression(period)) {
+            data_queries
+                .push(MetricDataQuery::builder().id(format!("q{i}")).expression(expr).return_data(!q.hidden).build());
+            continue;
+        }
         match &q.expression {
             None => {
                 let metric = Metric::builder()
@@ -1378,12 +1701,13 @@ pub async fn fetch_series(
 }
 
 /// `{MetricName}` placeholders as the ids of the set's metrics of that
-/// name (`q0`, `q1`, …), or the name of one the set doesn't have. Braces
-/// around anything but a name are left alone (a SEARCH's
-/// `{AWS/FSx,FileSystemId,StorageTargetId}` schema), and `$PERIOD` is the
-/// request's period, which a SEARCH has to name.
+/// name (`q0`, `q1`, …), or the name of one the set doesn't have. A name
+/// can hold dots and spaces (SES's `Reputation.BounceRate`, `Rendering
+/// Failures`); braces around a SEARCH schema (`{AWS/FSx,FileSystemId}`,
+/// commas and slashes) are left alone, and `$PERIOD` is the request's
+/// period, which a SEARCH has to name.
 fn resolve_expression(expr: &str, queries: &[MetricQuery], period: i32) -> Result<String, String> {
-    let is_name = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let is_name = |s: &str| !s.trim().is_empty() && !s.contains([',', '/', '\'', '"', '=']);
     let mut out = String::with_capacity(expr.len());
     let mut rest = expr;
     while let Some(open) = rest.find('{') {
@@ -1462,6 +1786,8 @@ impl MetricDefinition {
             tone: None,
             expression: None,
             hidden: false,
+            search: None,
+            limits: &[],
         }
     }
 }
@@ -1470,9 +1796,11 @@ impl MetricDefinition {
 pub const MAX_DEFINITIONS: usize = 2_500;
 
 /// Every metric carrying the resource's dimensions, in any namespace, sorted
-/// namespace → fewest extra dimensions → name.
+/// namespace → fewest extra dimensions → name. A target with no dimensions
+/// (SES, account-wide) lists its own namespace instead of the account.
 pub async fn list_definitions(
     cw: &aws_sdk_cloudwatch::Client,
+    namespace: &str,
     dimensions: &[(String, String)],
 ) -> Result<Vec<MetricDefinition>, String> {
     let filters: Vec<DimensionFilter> =
@@ -1482,6 +1810,7 @@ pub async fn list_definitions(
     for _ in 0..5 {
         let resp = cw
             .list_metrics()
+            .set_namespace(dimensions.is_empty().then(|| namespace.to_string()))
             .set_dimensions(Some(filters.clone()))
             .set_next_token(token.clone())
             .send()
@@ -1652,6 +1981,92 @@ mod tests {
         assert_eq!(resolve_expression("100*(1-{FreeDataStorageCapacity}/10)", &[folded], 60).unwrap(), "100*(1-q0/10)");
     }
 
+    /// Each kind folds its series the way its old hand-built fetch did:
+    /// the SEARCH it sends is that one, only built from the spec row. Two
+    /// rows differ on purpose, where the old fetch had AWS's names wrong:
+    /// Network Firewall's metric is `ReceivedPackets`, and Cognito's
+    /// federation metrics carry `IdentityProvider` too.
+    #[test]
+    fn a_folded_row_sends_the_search_its_old_view_did() {
+        let first = |specs: &'static [MetricSpec], ns: &str, dims: &[(&str, &str)]| {
+            let dims = dims.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect();
+            MetricQuery::from_spec(&specs[0], ns, dims).search_expression(300).unwrap()
+        };
+        assert_eq!(
+            first(COGNITO_USER_POOL, "AWS/Cognito", &[("UserPool", "us-east-1_abc")]),
+            "SUM(SEARCH('{AWS/Cognito,UserPool,UserPoolClient} MetricName=\"SignInSuccesses\" UserPool=\"us-east-1_abc\"', 'Sum', 300))"
+        );
+        let federation = COGNITO_USER_POOL.iter().find(|s| s.metric == "FederationSuccesses").unwrap();
+        let dims = vec![("UserPool".to_string(), "us-east-1_abc".to_string())];
+        assert_eq!(
+            MetricQuery::from_spec(federation, "AWS/Cognito", dims).search_expression(300).unwrap(),
+            "SUM(SEARCH('{AWS/Cognito,UserPool,UserPoolClient,IdentityProvider} MetricName=\"FederationSuccesses\" UserPool=\"us-east-1_abc\"', 'Sum', 300))"
+        );
+        assert_eq!(
+            first(NFW_FIREWALL, "AWS/NetworkFirewall", &[("FirewallName", "edge")]),
+            "SUM(SEARCH('Namespace=\"AWS/NetworkFirewall\" MetricName=\"ReceivedPackets\" FirewallName=\"edge\"', 'Sum', 300))"
+        );
+        assert_eq!(
+            first(MSK_CLUSTER, "AWS/Kafka", &[("Cluster Name", "orders")]),
+            "SUM(SEARCH('{AWS/Kafka,\"Cluster Name\",\"Broker ID\"} MetricName=\"BytesInPerSec\" \"Cluster Name\"=\"orders\"', 'Average', 300))"
+        );
+        assert_eq!(
+            first(VPC_ENDPOINT, "AWS/PrivateLinkEndpoints", &[("VPC Endpoint Id", "vpce-1")]),
+            "SUM(SEARCH('{AWS/PrivateLinkEndpoints,\"Endpoint Type\",\"Service Name\",\"VPC Endpoint Id\",\"VPC Id\"} MetricName=\"BytesProcessed\" \"VPC Endpoint Id\"=\"vpce-1\"', 'Sum', 300))"
+        );
+        let arn = "arn:aws:bedrock-agentcore:us-east-1:1:runtime/r";
+        assert_eq!(
+            first(AGENTCORE_RUNTIME, "AWS/Bedrock-AgentCore", &[("Resource", arn)]),
+            format!("SUM(SEARCH('Namespace=\"AWS/Bedrock-AgentCore\" MetricName=\"Invocations\" \"{arn}\"', 'Sum', 300))")
+        );
+        // Usage pins its two-dimension schema: a token match would add the
+        // per-name breakdown to the total.
+        let usage = AGENTCORE_RUNTIME.iter().find(|s| s.metric == "CPUUsed-vCPUHours").unwrap();
+        let q = MetricQuery::from_spec(usage, "AWS/Bedrock-AgentCore", vec![("Resource".into(), arn.into())]);
+        assert!(q.search_expression(60).unwrap().starts_with("SUM(SEARCH('{AWS/Bedrock-AgentCore,Resource,Service} MetricName=\"CPUUsed-vCPUHours\" Resource="));
+        // MSK's cluster-level counts are plain metrics, so `s` cycles them.
+        assert!(MSK_CLUSTER.iter().filter(|s| s.metric.starts_with("Global")).all(|s| s.across.is_none()));
+    }
+
+    /// A folded row keeps its statistic: `s` changes what's read per broker.
+    #[test]
+    fn s_on_a_folded_row_changes_its_inner_statistic() {
+        let mut q = MetricQuery::from_spec(&MSK_CLUSTER[0], "AWS/Kafka", vec![("Cluster Name".into(), "c".into())]);
+        q.stat = q.stat.next();
+        assert!(q.search_expression(60).unwrap().ends_with("'Maximum', 60))"), "{:?}", q.search_expression(60));
+        assert_eq!(q.describe(), "sum BytesInPerSec across");
+        assert_eq!(q.how(), "sum·max");
+    }
+
+    /// SES's metric names hold dots and spaces, and still read as names.
+    #[test]
+    fn a_name_with_dots_or_spaces_is_still_a_placeholder() {
+        let q = |metric: &str| MetricQuery { metric: metric.into(), ..MetricDefinition::default_query() };
+        let set = [q("Reputation.BounceRate"), q("Rendering Failures")];
+        assert_eq!(resolve_expression("100*{Reputation.BounceRate}+{Rendering Failures}", &set, 60).unwrap(), "100*q0+q1");
+    }
+
+    /// An RDS proxy's gauges are published once per instance per minute,
+    /// so their Sum over a 5-minute period is five minutes' worth.
+    #[test]
+    fn a_proxy_gauge_is_brought_back_to_one_minute() {
+        let t = MetricTarget {
+            title: String::new(),
+            namespace: "AWS/RDS".into(),
+            dimensions: vec![("ProxyName".into(), "p".into())],
+            specs: RDS_PROXY,
+            home: None,
+            hint: None,
+            extra: Vec::new(),
+            breakdown: None,
+            resolve: None,
+        };
+        let qs = t.curated_queries();
+        let row = qs.iter().find(|q| q.label == "Client connections").unwrap();
+        let i = qs.iter().position(|q| q.metric == "ClientConnections").unwrap();
+        assert_eq!(resolve_expression(row.expression.as_deref().unwrap(), &qs, 300).unwrap(), format!("q{i}*60/300"));
+    }
+
     #[test]
     fn hidden_rows_go_last() {
         let t = MetricTarget {
@@ -1668,7 +2083,7 @@ mod tests {
         let q = t.curated_queries();
         let first_hidden = q.iter().position(|q| q.hidden).unwrap();
         assert!(q[first_hidden..].iter().all(|q| q.hidden), "{:?}", q.iter().map(|q| &q.label).collect::<Vec<_>>());
-        for set in [FSX_WINDOWS, FSX_LUSTRE, FSX_ONTAP, FSX_OPENZFS, FSX_ONTAP_VOLUME, FSX_OPENZFS_VOLUME] {
+        for set in [FSX_WINDOWS, FSX_LUSTRE, FSX_ONTAP, FSX_OPENZFS, FSX_ONTAP_VOLUME, FSX_OPENZFS_VOLUME, ECS_CLUSTER, RDS_PROXY] {
             let seen = set.iter().skip_while(|s| !s.hidden).all(|s| s.hidden);
             assert!(seen, "a table lists its hidden rows last");
         }
