@@ -22,8 +22,12 @@ pub const EXIT_ASSUMED_ROLE_ENTRY: &str = "↩ exit assumed role (back to base a
 /// accounts, delegated setups).
 pub const ASSUME_BY_ID_ENTRY: &str = "⇄ assume role by account id…";
 
+/// Synthetic entry back to the credentials neboto started with, when they
+/// have no profile name (keys in the environment, an instance role).
+pub const STARTUP_CREDENTIALS_ENTRY: &str = "↺ startup credentials (no profile name)";
+
 fn is_action_row(row: &str) -> bool {
-    row == EXIT_ASSUMED_ROLE_ENTRY || row == ASSUME_BY_ID_ENTRY
+    row == EXIT_ASSUMED_ROLE_ENTRY || row == ASSUME_BY_ID_ENTRY || row == STARTUP_CREDENTIALS_ENTRY
 }
 
 pub struct ProfileSelectorState {
@@ -57,9 +61,12 @@ impl ProfileSelectorState {
     /// active profile (or `default`) if present. The assume-by-account-id
     /// action always leads the list; while a member-account role is assumed,
     /// the "exit assumed role" entry comes first.
-    pub fn show(&mut self, current_profile: Option<&str>, role_assumed: bool) {
+    pub fn show(&mut self, current_profile: Option<&str>, role_assumed: bool, offer_startup: bool) {
         self.profiles = list_profiles();
         self.profiles.insert(0, ASSUME_BY_ID_ENTRY.to_string());
+        if offer_startup {
+            self.profiles.insert(0, STARTUP_CREDENTIALS_ENTRY.to_string());
+        }
         if role_assumed {
             self.profiles.insert(0, EXIT_ASSUMED_ROLE_ENTRY.to_string());
         }

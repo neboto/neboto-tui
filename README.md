@@ -379,6 +379,20 @@ deliberately not duplicated here; that is how a README rots.
 - While assumed, the tab bar shows a `⇄ name (id)` badge, and exiting lands you
   back on the Organizations account list — so assume → inspect → exit → next
   account is a tight loop.
+- **History and bookmarks remember the account.** `⌫` / `Ctrl-F` and a
+  bookmark from another account switch profile (and assume the role) to get
+  back, then open the place only once the new credentials reach the account
+  it was saved in. The account is what matters, not the profile: a place
+  saved under one profile opens directly in any session for the same
+  account.
+- **Credentials with no profile name** (keys exported in the shell,
+  `aws-vault exec`, an instance role) can be returned to within a run — `P`
+  offers *startup credentials* once you've switched away — but not from a
+  later run: neboto never stores credentials, so a bookmark saved under
+  another run's environment keys opens only when you start neboto with
+  credentials for that account. It says so rather than opening the
+  same-named resource in whichever account you're in now.
+  `AWS_PROFILE=prod neboto` counts as profile `prod`.
 
 ---
 

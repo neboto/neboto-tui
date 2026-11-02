@@ -67,6 +67,11 @@ pub struct AwsClients {
     /// prompt in the terminal (#151); `prime_prompting_credentials` resolves
     /// those before the TUI starts.
     prompting_credentials: bool,
+    /// `AWS_PROFILE`, when the default chain (no `profile`) resolves through
+    /// it — no static keys in the environment ahead of it. Display and
+    /// navigation only: it names the session a saved place belongs to, so
+    /// `AWS_PROFILE=prod neboto` and `-p prod` are the same session.
+    env_profile: Option<String>,
 }
 
 impl AwsClients {
@@ -159,6 +164,11 @@ impl AwsClients {
                 .build();
         }
 
+        let env_profile = match (&profile, &endpoint, demo) {
+            (None, None, false) => env_chain_profile(),
+            _ => None,
+        };
+
         let region = region
             .or_else(|| config.region().and_then(Region::from_sdk_region))
             .unwrap_or(Region::UsEast1);
@@ -170,6 +180,7 @@ impl AwsClients {
             endpoint_url: endpoint,
             assumed_role,
             prompting_credentials,
+            env_profile,
         })
     }
 
@@ -223,6 +234,7 @@ impl AwsClients {
             endpoint_url: None,
             assumed_role: None,
             prompting_credentials: false,
+            env_profile: None,
         }
     }
 
@@ -243,6 +255,14 @@ impl AwsClients {
         self.profile.as_deref()
     }
 
+    /// The profile the credentials come from: the chosen one, else the
+    /// `AWS_PROFILE` the default chain resolves through. `None` for
+    /// credentials with no profile name — static or session keys in the
+    /// environment, an instance or container role.
+    pub fn nav_profile(&self) -> Option<&str> {
+        self.profile.as_deref().or(self.env_profile.as_deref())
+    }
+
     /// The active custom endpoint, if pointing at a mock emulator.
     pub fn current_endpoint(&self) -> Option<&str> {
         self.endpoint_url.as_deref()
@@ -257,6 +277,11 @@ impl AwsClients {
     #[cfg(test)]
     pub(crate) fn set_assumed_role_for_test(&mut self, role: AssumedOrgRole) {
         self.assumed_role = Some(role);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_profile_for_test(&mut self, profile: &str) {
+        self.profile = Some(profile.to_string());
     }
 
     /// Switch to a different region, keeping the active profile + endpoint
@@ -285,6 +310,7 @@ impl AwsClients {
             endpoint_url: self.endpoint_url.clone(),
             assumed_role: self.assumed_role.clone(),
             prompting_credentials: self.prompting_credentials,
+            env_profile: self.env_profile.clone(),
         }
     }
 
@@ -402,6 +428,15 @@ impl AwsClients {
 
     /// Drop the assumed role and return to the base profile credentials,
     /// keeping the current region + endpoint.
+    /// Back to the credentials neboto started with — the default chain, no
+    /// named profile (env keys, `AWS_PROFILE`, an instance role). The
+    /// environment is the process's own, so it still says what it said at
+    /// startup; short-term keys may have expired since, which the first call
+    /// reports.
+    pub async fn switch_to_startup_credentials(&self) -> Result<Self> {
+        Self::build(None, Some(self.region), self.endpoint_url.clone(), None).await
+    }
+
     pub async fn drop_assumed_role(&self) -> Result<Self> {
         Self::build(self.profile.clone(), Some(self.region), self.endpoint_url.clone(), None).await
     }
@@ -1052,6 +1087,15 @@ impl aws_credential_types::provider::ProvideCredentials for TerminalCredentialPr
             result
         })
     }
+}
+
+/// `AWS_PROFILE`, when the default chain will resolve through it: set,
+/// non-empty, and no `AWS_ACCESS_KEY_ID` ahead of it in the chain.
+fn env_chain_profile() -> Option<String> {
+    if std::env::var("AWS_ACCESS_KEY_ID").is_ok_and(|v| !v.is_empty()) {
+        return None;
+    }
+    std::env::var("AWS_PROFILE").ok().filter(|p| !p.is_empty())
 }
 
 /// The profile whose credentials come from a `credential_process` — `profile`

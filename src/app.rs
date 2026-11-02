@@ -1251,15 +1251,30 @@ pub struct NavLocation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials: Option<NavCredentials>}
 
-/// Whose credentials a `NavLocation` was captured under: the base profile
-/// (`None` = the startup credential chain, no named profile) and the org
+/// Whose credentials a `NavLocation` was captured under: the account they
+/// resolved to, the base profile (`None` = the startup credential chain with
+/// no profile name — keys in the environment, an instance role) and the org
 /// member role assumed on top of it, if any.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+///
+/// The account is the identity: two sessions in the same account are the
+/// same place whichever profile reached it. The profile and role are only
+/// the way back. Never holds key material — a session with no profile name
+/// can't be re-entered from a later run, and is refused rather than
+/// remembered.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct NavCredentials {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assumed: Option<NavAssumedRole>,
+    /// The caller account (`GetCallerIdentity`) at capture; `None` when it
+    /// hadn't resolved yet, and for places saved before this existed —
+    /// those match on profile + role alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// The account alias, display-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1277,12 +1292,34 @@ pub struct CredentialRestore {
     /// `nav_cursor` before the history step, put back if the switch fails;
     /// `None` when the restore wasn't a history step (a bookmark).
     cursor_before: Option<Option<usize>>,
+    /// The switch is done and the place records its account: waiting on
+    /// `AccountInfoLoaded` to say whether the new credentials reach it.
+    awaiting_identity: bool,
+}
+
+#[cfg(test)]
+impl CredentialRestore {
+    pub(crate) fn awaiting_identity_for_test(&self) -> bool {
+        self.awaiting_identity
+    }
 }
 
 impl NavCredentials {
-    /// Same session: same profile, same assumed account + role. The account
-    /// name is display-only (it can be renamed).
+    /// Same session: the same account when both sides know it, else the
+    /// same profile and assumed account + role. The account name and alias
+    /// are display-only (they can be renamed).
     pub fn same_as(&self, other: &NavCredentials) -> bool {
+        match (&self.account, &other.account) {
+            (Some(a), Some(b)) => a == b,
+            _ => self.same_route(other),
+        }
+    }
+
+    /// Reached the same way: same profile, same assumed account + role.
+    /// Where `same_as` is false but this holds, the route now leads to
+    /// another account (an expired env session replaced, a profile
+    /// re-pointed) and no switch can get back.
+    pub fn same_route(&self, other: &NavCredentials) -> bool {
         self.profile == other.profile
             && match (&self.assumed, &other.assumed) {
                 (None, None) => true,
@@ -1291,14 +1328,29 @@ impl NavCredentials {
             }
     }
 
+    /// The account, as the top bar names it: `alias (id)`, else the id.
+    pub(crate) fn account_label(&self) -> Option<String> {
+        let id = self.account.as_ref()?;
+        Some(match &self.alias {
+            Some(alias) => format!("{alias} ({id})"),
+            None => id.clone(),
+        })
+    }
+
     /// What the jump list names beside a place from another session: the
-    /// member account, else the profile.
+    /// member account, else the profile, else the account.
     pub fn label(&self) -> String {
         match (&self.assumed, &self.profile) {
             (Some(a), _) if a.account_name.is_empty() => a.account_id.clone(),
             (Some(a), _) => format!("{} ({})", a.account_name, a.account_id),
-            (None, Some(p)) => format!("profile {p}"),
-            (None, None) => "startup credentials".to_string(),
+            (None, Some(p)) => match self.account_label() {
+                Some(account) => format!("profile {p} · {account}"),
+                None => format!("profile {p}"),
+            },
+            (None, None) => match self.account_label() {
+                Some(account) => format!("{account} · startup credentials"),
+                None => "startup credentials".to_string(),
+            },
         }
     }
 }
@@ -1316,6 +1368,21 @@ impl NavLocation {
             .as_deref()
             .and_then(Region::from_str)
             .filter(|r| *r != current)
+    }
+}
+
+/// Why `loc` (saved under `want`) can't be reached from `reach`, the
+/// credentials its route leads to now: they are another account's.
+fn unreachable_account_message(loc: &NavLocation, want: &NavCredentials, reach: &NavCredentials) -> String {
+    let saved = want.account_label().unwrap_or_else(|| "another account".to_string());
+    let now = reach.account_label().unwrap_or_else(|| "another account".to_string());
+    let service = loc.service.short_name();
+    match &want.profile {
+        Some(p) => format!("{service} was saved in {saved} — profile {p} reaches {now} now"),
+        None => format!(
+            "{service} was saved in {saved} under startup credentials with no profile name — \
+             this run's reach {now}; start neboto with that account's credentials to open it"
+        ),
     }
 }
 
@@ -2308,6 +2375,11 @@ pub struct App {
     /// touched until the switch succeeds, so a failed one (role gone,
     /// `AssumeRole` denied) leaves you exactly where you were.
     pub pending_credential_restore: Option<CredentialRestore>,
+    /// The account the startup credentials reach when they have no profile
+    /// name (env keys, an instance role) — recorded whenever they're the
+    /// session's. Refuses a place saved under another run's startup
+    /// credentials before switching to them, and offers them back in `P`.
+    pub startup_account: Option<String>,
     /// Focus the detail pane once `pending_jump` resolves to an **exact** id
     /// (or name) match (the `Enter` "follow link" jump, the S3 cross-region
     /// drill, and nav/bookmark restores captured at detail depth). Query-style
@@ -3250,6 +3322,7 @@ impl App {
             load_warnings: Vec::new(),
             pending_jump_region: None,
             pending_credential_restore: None,
+            startup_account: None,
             pending_jump_focus_details: false,
             pending_jump_section: None,
             nav_history: Vec::new(),
@@ -3936,8 +4009,22 @@ impl App {
                 generation} => {
                 // Late arrival from credentials we've since switched away from.
                 if generation == self.account_info_generation {
-                    self.account_id = Some(account_id);
+                    self.account_id = account_id;
                     self.account_alias = alias;
+                    // The account the unnamed default chain reaches — what a
+                    // place saved under the startup credentials is checked
+                    // against before switching back to them.
+                    if self.aws_clients.nav_profile().is_none()
+                        && self.aws_clients.current_assumed_role().is_none()
+                        && self.account_id.is_some()
+                    {
+                        self.startup_account = self.account_id.clone();
+                    }
+                    if self.pending_credential_restore.as_ref().is_some_and(|r| r.awaiting_identity) {
+                        if let Some(restore) = self.pending_credential_restore.take() {
+                            self.continue_credential_restore(restore, event_tx);
+                        }
+                    }
                 }
             }
             Event::UpdateAvailable(latest) => {
@@ -4490,13 +4577,18 @@ impl App {
                         {
                             let _ = event_tx.send(Event::OrgRoleExitRequested);
                         } else if profile
+                            == crate::ui::widgets::profile_selector::STARTUP_CREDENTIALS_ENTRY
+                        {
+                            let _ = event_tx.send(Event::ProfileSwitchRequested { profile: None });
+                        } else if profile
                             == crate::ui::widgets::profile_selector::ASSUME_BY_ID_ENTRY
                         {
                             let roles = self.org_access_roles.clone();
                             let last = self.org_access_role.clone();
                             self.org_role_selector.show_manual(&roles, &last);
                         } else {
-                            let _ = event_tx.send(Event::ProfileSwitchRequested { profile });
+                            let _ = event_tx
+                                .send(Event::ProfileSwitchRequested { profile: Some(profile) });
                         }
                     }
                 }
@@ -5571,12 +5663,7 @@ impl App {
                     self.region_selector.show(self.current_region);
                     self.start_region_fanout(event_tx);
                 }
-                KeyCode::Char('P') => {
-                    self.profile_selector.show(
-                            self.aws_clients.current_profile(),
-                            self.aws_clients.current_assumed_role().is_some(),
-                        );
-                }
+                KeyCode::Char('P') => self.open_profile_selector(),
                 // Help overlay works from the detail pane too (the global `?`
                 // arm is unreachable here — this block returns first).
                 KeyCode::Char('?') => self.toggle_help(),
@@ -8375,12 +8462,7 @@ impl App {
                 self.region_selector.show(self.current_region);
                 self.start_region_fanout(event_tx);
             }
-            (KeyCode::Char('P'), KeyModifiers::SHIFT) => {
-                self.profile_selector.show(
-                        self.aws_clients.current_profile(),
-                        self.aws_clients.current_assumed_role().is_some(),
-                    );
-            }
+            (KeyCode::Char('P'), KeyModifiers::SHIFT) => self.open_profile_selector(),
 
             _ => {}
         }
@@ -9999,9 +10081,10 @@ impl App {
     /// Switch the active AWS profile (keeping the current region): rebuild
     /// clients + services, drop all caches/region-scoped state, refetch account
     /// identity, and reload the current service.
+    /// `None` goes back to the startup credentials (the default chain).
     pub async fn switch_profile(
         &mut self,
-        profile: String,
+        profile: Option<String>,
         event_tx: &mpsc::UnboundedSender<Event>,
     ) -> Result<()> {
         // "Here", for `Ctrl-O` to come back to — recorded once the switch
@@ -10017,9 +10100,16 @@ impl App {
         // Yield so the UI can paint the loading state before we block on client init.
         tokio::task::yield_now().await;
 
-        match self.aws_clients.switch_profile(profile.clone()).await {
+        let switched = match &profile {
+            Some(p) => self.aws_clients.switch_profile(p.clone()).await,
+            None => self.aws_clients.switch_to_startup_credentials().await,
+        };
+        match switched {
             Ok(new_clients) => {
-                let landing = NavCredentials { profile: Some(profile.clone()), assumed: None };
+                let landing = NavCredentials {
+                    profile: new_clients.nav_profile().map(str::to_string),
+                    ..Default::default()
+                };
                 if let Some(land) = self.credential_restore_landing(&landing) {
                     self.prepare_service_view(land);
                 }
@@ -10027,7 +10117,10 @@ impl App {
                     self.record_captured(loc);
                 }
                 self.install_new_clients(new_clients, event_tx);
-                self.success_message = Some(format!("Switched to profile {}", profile));
+                self.success_message = Some(match &profile {
+                    Some(p) => format!("Switched to profile {}", p),
+                    None => "Switched to the startup credentials".to_string(),
+                });
                 self.success_message_time = Some(Instant::now());
                 self.error_message = None;
                 self.resume_credential_restore(true, event_tx);
@@ -10079,12 +10172,13 @@ impl App {
                 // jump always happens. A history restore lands where it's
                 // going instead.
                 let landing = NavCredentials {
-                    profile: self.aws_clients.current_profile().map(str::to_string),
+                    profile: self.aws_clients.nav_profile().map(str::to_string),
                     assumed: Some(NavAssumedRole {
                         account_id: account_id.clone(),
                         account_name: account_name.clone(),
                         role_name: role_name.clone(),
                     }),
+                    ..Default::default()
                 };
                 let land = self
                     .credential_restore_landing(&landing)
@@ -10143,8 +10237,8 @@ impl App {
                 // exit → assume the next account. A history restore lands
                 // where it's going instead.
                 let landing = NavCredentials {
-                    profile: self.aws_clients.current_profile().map(str::to_string),
-                    assumed: None,
+                    profile: self.aws_clients.nav_profile().map(str::to_string),
+                    ..Default::default()
                 };
                 let land = self
                     .credential_restore_landing(&landing)
@@ -10238,9 +10332,15 @@ impl App {
         let tx = event_tx.clone();
         let generation = self.account_info_generation;
         tokio::spawn(async move {
+            // A failure still reports (as `None`): a credential restore may be
+            // waiting on the account to decide where it lands.
             let account_id = match sts.get_caller_identity().send().await {
-                Ok(resp) => resp.account().unwrap_or("").to_string(),
-                Err(_) => return};
+                Ok(resp) => resp.account().filter(|a| !a.is_empty()).map(str::to_string),
+                Err(_) => {
+                    let _ = tx.send(Event::AccountInfoLoaded { account_id: None, alias: None, generation });
+                    return;
+                }
+            };
             let alias = iam
                 .list_account_aliases()
                 .send()
@@ -21220,15 +21320,29 @@ impl App {
             credentials: Some(self.current_credentials())})
     }
 
+    /// `P`. Offers the startup credentials back when they had no profile
+    /// name (env keys, an instance role) and a profile has replaced them —
+    /// otherwise nothing in the list leads there.
+    fn open_profile_selector(&mut self) {
+        let offer_startup = self.startup_account.is_some() && self.aws_clients.nav_profile().is_some();
+        self.profile_selector.show(
+            self.aws_clients.current_profile(),
+            self.aws_clients.current_assumed_role().is_some(),
+            offer_startup,
+        );
+    }
+
     /// The session locations are captured under (`NavLocation.credentials`).
     pub(crate) fn current_credentials(&self) -> NavCredentials {
         NavCredentials {
-            profile: self.aws_clients.current_profile().map(str::to_string),
+            profile: self.aws_clients.nav_profile().map(str::to_string),
             assumed: self.aws_clients.current_assumed_role().map(|r| NavAssumedRole {
                 account_id: r.account_id.clone(),
                 account_name: r.account_name.clone(),
                 role_name: r.role_name.clone(),
             }),
+            account: self.account_id.clone(),
+            alias: self.account_alias.clone(),
         }
     }
 
@@ -21436,21 +21550,33 @@ impl App {
         event_tx: &mpsc::UnboundedSender<Event>,
     ) -> bool {
         let current = self.current_credentials();
+        // Reached the way it was saved, yet another account: the profile was
+        // re-pointed, or the startup credentials are another run's. No
+        // switch gets back there.
+        if want.same_route(&current) {
+            self.error_message = Some(unreachable_account_message(&loc, &want, &current));
+            return false;
+        }
         let event = if want.profile != current.profile {
-            match &want.profile {
-                // Switching profile drops any assumed role; the role is the
-                // next step.
-                Some(profile) => Event::ProfileSwitchRequested { profile: profile.clone() },
-                // Captured before a `P` switch, under the credentials neboto
-                // started with: no profile name to switch back to.
-                None => {
-                    self.error_message = Some(format!(
-                        "{} is under the startup credentials — no profile to switch back to",
-                        loc.service.short_name()
-                    ));
-                    return false;
+            // Switching profile drops any assumed role; the role is the
+            // next step.
+            if want.profile.is_none() {
+                // The startup credentials are this run's environment, not the
+                // one the place was saved under: when they're known to reach
+                // another account, say so instead of switching to them.
+                if let (Some(saved), Some(startup)) = (&want.account, &self.startup_account) {
+                    if saved != startup {
+                        let startup_creds = NavCredentials {
+                            account: Some(startup.clone()),
+                            ..Default::default()
+                        };
+                        self.error_message =
+                            Some(unreachable_account_message(&loc, &want, &startup_creds));
+                        return false;
+                    }
                 }
             }
+            Event::ProfileSwitchRequested { profile: want.profile.clone() }
         } else {
             match &want.assumed {
                 Some(role) => Event::OrgRoleSwitchRequested {
@@ -21461,7 +21587,8 @@ impl App {
                 None => Event::OrgRoleExitRequested,
             }
         };
-        self.pending_credential_restore = Some(CredentialRestore { loc, cursor_before });
+        self.pending_credential_restore =
+            Some(CredentialRestore { loc, cursor_before, awaiting_identity: false });
         let _ = event_tx.send(event);
         true
     }
@@ -21470,17 +21597,53 @@ impl App {
     /// credential restore. `ok == false` (the switch failed and said why)
     /// drops it and puts the history cursor back.
     fn resume_credential_restore(&mut self, ok: bool, event_tx: &mpsc::UnboundedSender<Event>) {
-        let Some(CredentialRestore { loc, cursor_before }) = self.pending_credential_restore.take() else {
+        let Some(mut restore) = self.pending_credential_restore.take() else {
             return;
         };
+        if !ok {
+            if let Some(cursor) = restore.cursor_before {
+                self.nav_cursor = cursor;
+            }
+            return;
+        }
+        // A place that records its account waits for the new credentials'
+        // account (`AccountInfoLoaded`) — the profile alone doesn't say
+        // where they lead.
+        let saved_account = restore.loc.credentials.as_ref().is_some_and(|c| c.account.is_some());
+        if saved_account && self.account_id.is_none() {
+            restore.awaiting_identity = true;
+            self.pending_credential_restore = Some(restore);
+            return;
+        }
+        self.continue_credential_restore(restore, event_tx);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn resume_credential_restore_for_test(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        self.resume_credential_restore(true, event_tx);
+    }
+
+    /// A switch for `restore` worked (and its account is known, or can't
+    /// be): land, ask for the next switch, or say why it can't get there.
+    fn continue_credential_restore(
+        &mut self,
+        CredentialRestore { loc, cursor_before, .. }: CredentialRestore,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
         let current = self.current_credentials();
         let want = loc.credentials.clone().unwrap_or_else(|| current.clone());
-        if ok && want.same_as(&current) {
+        if want.same_as(&current) {
             self.jump_to_location(loc, event_tx);
-        } else if ok && want.profile == current.profile {
-            self.start_credential_restore(loc, want, cursor_before, event_tx);
-        } else if let Some(cursor) = cursor_before {
-            self.nav_cursor = cursor;
+            return;
+        }
+        // The profile matches now; the role (or a refusal) is what's left.
+        // A profile that still differs would ask for the same switch again.
+        let asked = want.profile == current.profile
+            && self.start_credential_restore(loc, want, cursor_before, event_tx);
+        if !asked {
+            if let Some(cursor) = cursor_before {
+                self.nav_cursor = cursor;
+            }
         }
     }
 
@@ -22128,7 +22291,7 @@ impl App {
             },
             MacroStep::SwitchProfile(profile) => {
                 let _ = event_tx.send(Event::ProfileSwitchRequested {
-                    profile: profile.clone(),
+                    profile: Some(profile.clone()),
                 });
             }
             MacroStep::SwitchService(service) => {
