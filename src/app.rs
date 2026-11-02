@@ -633,7 +633,6 @@ pub enum MetricsKind {
     /// Charted from a spec table (`aws::metrics`, `App.spec_metrics`):
     /// EC2 instances, Lambda functions, RDS instances and clusters.
     Spec,
-    CwAlarm,
     Cost,
     S3,
     CwDashboard}
@@ -2033,9 +2032,6 @@ impl CwView {
     }
 }
 
-/// Load state for the alarm metric-chart overlay.
-pub use crate::aws::services::cloudwatch::CwAlarmMetricsState;
-
 /// Sub-tab view for IAM resources
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum IamView {
@@ -2704,10 +2700,6 @@ pub struct App {
     // CW log group split pane
     /// Guards against re-issuing the metric-explorer ListMetrics while in flight.
     pub cw_metrics_loading: bool,
-    // CW alarm metric-chart overlay
-    pub cw_alarm_metrics_time_range: MetricsTimeRange,
-    // Alarm metric series keyed by alarm ARN
-    pub cw_alarm_metrics: HashMap<String, CwAlarmMetricsState>,
 
     // Metric charts shown in the detail pane (in-pane, not a modal; `Z` expands).
     pub metrics_in_pane: Option<MetricsKind>,
@@ -3430,8 +3422,6 @@ impl App {
             sc_view: ScView::Portfolios,
             cw_view: CwView::Alarms,
             cw_metrics_loading: false,
-            cw_alarm_metrics_time_range: MetricsTimeRange::OneHour,
-            cw_alarm_metrics: HashMap::new(),
             metrics_in_pane: None,
             ec2_metrics_time_range: MetricsTimeRange::OneHour,
             spec_metrics: None,
@@ -3840,10 +3830,6 @@ impl App {
             Event::WafSampledRequestsLoaded { content } => {
                 self.pending_editor_content = Some((content, ".txt".to_string()));
                 self.editor_requested = true;
-            }
-            Event::CwAlarmMetricsLoaded { alarm_arn, data } => {
-                self.cw_alarm_metrics
-                    .insert(alarm_arn, CwAlarmMetricsState::Loaded(data));
             }
             Event::CwMetricsLoaded { metrics, capped } => {
                 self.cw_metrics_loading = false;
@@ -4804,18 +4790,6 @@ impl App {
                         _ => {}
                     }
                 }
-                MetricsKind::CwAlarm => match key.code {
-                    KeyCode::Char('r') => self.trigger_cw_alarm_metrics_load(event_tx),
-                    KeyCode::Char('[') => {
-                        self.cw_alarm_metrics_time_range = self.cw_alarm_metrics_time_range.prev();
-                        self.trigger_cw_alarm_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.cw_alarm_metrics_time_range = self.cw_alarm_metrics_time_range.next();
-                        self.trigger_cw_alarm_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
                 // S3 storage is a fixed 30-day daily window; only refresh.
                 MetricsKind::S3 => {
                     if let KeyCode::Char('r') = key.code {
@@ -23854,51 +23828,6 @@ impl App {
         }
     }
 
-    /// Fetch the selected alarm's own metric series for the metric-chart
-    /// overlay. Always refetches (cheap, time-windowed) so `[`/`]`/`r` reflect
-    /// the current range. No-op when the selection isn't a CwAlarm.
-    fn trigger_cw_alarm_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(alarm) = self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::cloudwatch::CwAlarm>())
-        {
-            let alarm_arn = alarm.alarm_arn.clone();
-            let namespace = alarm.namespace.clone();
-            let metric_name = alarm.metric_name.clone();
-            let dimensions = alarm.dimensions.clone();
-            let statistic = alarm.statistic.clone();
-            let period = alarm.period;
-            let threshold = alarm.threshold;
-            let time_range = self.cw_alarm_metrics_time_range;
-            self.cw_alarm_metrics
-                .insert(alarm_arn.clone(), CwAlarmMetricsState::Loading);
-            let client = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                match crate::aws::services::cloudwatch::fetch_alarm_metrics(
-                    client,
-                    namespace,
-                    metric_name,
-                    dimensions,
-                    statistic,
-                    period,
-                    threshold,
-                    time_range,
-                )
-                .await
-                {
-                    Ok(data) => {
-                        let _ = tx.send(crate::event::Event::CwAlarmMetricsLoaded { alarm_arn, data });
-                    }
-                    Err(e) => {
-                        let _ = tx.send(crate::event::Event::ResourceLoadError {
-                            service: crate::aws::service::ServiceType::CloudWatch,
-                            error: format!("Failed to load alarm metric: {}", e)});
-                    }
-                }
-            });
-        }
-    }
 
     /// Lazy-load the selected log group's subscription + metric filters on
     /// first visit to the Filters section, keyed by log group name.
@@ -32561,7 +32490,8 @@ impl App {
                             expression: None,
                             hidden: false,
                             search: None,
-                            limits: &[],
+                            limits: Vec::new(),
+                            min_period: None,
                         })
                 })
                 .collect();
@@ -32636,12 +32566,15 @@ impl App {
                 expression: None,
                 hidden: false,
                 search: None,
-                limits: &[],
+                limits: Vec::new(),
+                min_period: None,
             };
             MetricTarget {
                 extra: vec![query],
                 ..target("CloudWatch metric", &metric.namespace, metric.dimensions.clone(), &[])
             }
+        } else if let Some(a) = is!(s::cloudwatch::CwAlarm) {
+            s::cloudwatch::alarm_metric_target(a)
         } else if let Some(p) = is!(s::cognito::CognitoUserPool) {
             target("Cognito user pool", "AWS/Cognito", dim("UserPool", &p.id), m::COGNITO_USER_POOL)
         } else if let Some(f) = is!(s::network_firewall::NfwFirewall) {
@@ -32714,10 +32647,10 @@ impl App {
     fn open_spec_metrics(
         &mut self,
         target: crate::aws::metrics::MetricTarget,
+        range: MetricsTimeRange,
         event_tx: &mpsc::UnboundedSender<Event>,
     ) {
-        self.spec_metrics =
-            Some(crate::ui::widgets::spec_metrics::SpecMetricsState::open(target, self.spec_metrics_range));
+        self.spec_metrics = Some(crate::ui::widgets::spec_metrics::SpecMetricsState::open(target, range));
         self.fetch_spec_metrics(event_tx);
     }
 
@@ -32733,7 +32666,6 @@ impl App {
         // The change markers place themselves against the same `now`.
         self.metrics_window_end = end;
         let Some(st) = self.spec_metrics.as_mut() else { return };
-        self.spec_metrics_range = st.range;
         // Nothing to ask for (a gateway endpoint): the view shows its hint.
         if st.queries.is_empty() && st.target.breakdown.is_none() {
             st.set_series(end, Vec::new());
@@ -32880,11 +32812,13 @@ impl App {
             }
             KeyCode::Char(']') => {
                 st.range = crate::aws::metrics::step_range(st.range, 1);
+                self.spec_metrics_range = st.range;
                 self.fetch_spec_metrics(event_tx);
                 self.widen_chart_markers(event_tx);
             }
             KeyCode::Char('[') => {
                 st.range = crate::aws::metrics::step_range(st.range, -1);
+                self.spec_metrics_range = st.range;
                 self.fetch_spec_metrics(event_tx);
                 // From 1h this wraps to 30d.
                 self.widen_chart_markers(event_tx);
@@ -32892,6 +32826,7 @@ impl App {
             KeyCode::Char(c @ '1'..='5') => {
                 if let Some(r) = crate::aws::metrics::range_from_digit(c) {
                     st.range = r;
+                    self.spec_metrics_range = r;
                     self.fetch_spec_metrics(event_tx);
                     self.widen_chart_markers(event_tx);
                 }
@@ -32936,12 +32871,14 @@ impl App {
     fn open_metrics_in_pane(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         self.metrics_window_end = epoch_now();
         let kind = if let Some(target) = self.selected_metric_target() {
-            self.open_spec_metrics(target, event_tx);
+            // An alarm with a long period opens on a range that holds one,
+            // without changing the range the other kinds open on.
+            let range = match self.is_selected_cw_alarm().then(|| self.default_alarm_metrics_range()) {
+                Some(r) if r.duration_secs() > self.spec_metrics_range.duration_secs() => r,
+                _ => self.spec_metrics_range,
+            };
+            self.open_spec_metrics(target, range, event_tx);
             Some(MetricsKind::Spec)
-        } else if self.is_selected_cw_alarm() {
-            self.cw_alarm_metrics_time_range = self.default_alarm_metrics_range();
-            self.trigger_cw_alarm_metrics_load(event_tx);
-            Some(MetricsKind::CwAlarm)
         } else if self.is_selected_cw_dashboard() {
             self.cw_dashboard_scroll = 0;
             self.cw_dashboard_cursor = None;

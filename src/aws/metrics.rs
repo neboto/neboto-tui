@@ -25,6 +25,8 @@ pub enum Stat {
     Maximum,
     Minimum,
     P99,
+    /// An alarm's own statistic; not one `s` cycles to.
+    SampleCount,
 }
 
 impl Stat {
@@ -38,6 +40,7 @@ impl Stat {
             Stat::Maximum => "Maximum",
             Stat::Minimum => "Minimum",
             Stat::P99 => "p99",
+            Stat::SampleCount => "SampleCount",
         }
     }
 
@@ -48,6 +51,7 @@ impl Stat {
             Stat::Maximum => "max",
             Stat::Minimum => "min",
             Stat::P99 => "p99",
+            Stat::SampleCount => "count",
         }
     }
 
@@ -1458,8 +1462,11 @@ pub struct MetricQuery {
     pub hidden: bool,
     /// See [`MetricSpec::across`].
     pub search: Option<Search>,
-    /// See [`MetricSpec::limits`].
-    pub limits: &'static [(f64, &'static str)],
+    /// See [`MetricSpec::limits`]; an alarm's threshold is one too.
+    pub limits: Vec<(f64, String)>,
+    /// The shortest period this row means anything at: an alarm's own. The
+    /// whole request is fetched at the longest of these and the range's.
+    pub min_period: Option<i32>,
 }
 
 impl MetricQuery {
@@ -1529,7 +1536,8 @@ impl MetricQuery {
             expression: s.expr.map(str::to_string),
             hidden: s.hidden,
             search: s.across.map(|a| Search { agg: a.agg, schema: a.schema.map(str::to_string), token: a.token }),
-            limits: s.limits,
+            limits: s.limits.iter().map(|(v, what)| (*v, what.to_string())).collect(),
+            min_period: None,
         }
     }
 }
@@ -1607,7 +1615,7 @@ pub async fn fetch_series(
     range: MetricsTimeRange,
     end: i64,
 ) -> Vec<MetricSeries> {
-    let period = range.period_secs();
+    let period = queries.iter().filter_map(|q| q.min_period).fold(range.period_secs(), i32::max);
     let start = end - range.duration_secs();
     let mut errors: Vec<Option<String>> = vec![Some("not in the response".to_string()); queries.len()];
     let mut data_queries: Vec<MetricDataQuery> = Vec::new();
@@ -1787,7 +1795,8 @@ impl MetricDefinition {
             expression: None,
             hidden: false,
             search: None,
-            limits: &[],
+            limits: Vec::new(),
+            min_period: None,
         }
     }
 }

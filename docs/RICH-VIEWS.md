@@ -130,14 +130,24 @@ in `any_pane_overlay_active` (which gates the mouse).
   reads its operation time that way; hidden rows go **last**, since a
   row's place in the view is its place in the queries. A `Resolve` whose
   `TargetFix::curated` is set replaces the curated set outright: FSx keeps
-  only what `ListMetrics` says the file system publishes. A
+  only what `ListMetrics` says the file system publishes. A target
+  built at runtime puts its rows in `extra`, and those can carry what a
+  static spec can't: a CloudWatch alarm (`cloudwatch::alarm_metric_target`)
+  charts its own metric and statistic, its threshold as an owned limit,
+  and a `min_period` — the whole request is fetched at the longest of the
+  rows' `min_period` and the range's period, so a 1h alarm is never read
+  per minute. A Sum or SampleCount alarm is then scaled back to its own
+  period (`{X}*<period>/$PERIOD`) so line and threshold stay comparable.
+  An alarm with a long period opens on a range that holds one
+  (`default_alarm_metrics_range`) without changing the range other kinds
+  open on: the shared range is saved only when you pick one. A
   hand-built kind (an enum
   variant + an open arm + a render arm) is for what a spec can't say yet —
-  only four are left: the CW alarm (its own period and threshold line),
-  S3's daily series, dashboards,
-  Cost. Either way it needs **an arm in `supports_metrics_overlay()`** —
-  that gates the status-bar `m` hint (not the key itself), and it lagging
-  is exactly how DX VIFs shipped with a working `m` but no hint.
+  only three are left: S3's daily series, dashboards, Cost. The
+  status-bar `m` hint (`supports_metrics_overlay()`, not the key itself)
+  accepts any selection with a spec target; a hand-built kind still needs
+  its own arm there, and it lagging is exactly how DX VIFs shipped with a
+  working `m` but no hint.
   Notable dimension gotchas: RDS instances vs clusters use different dims;
   S3 storage metrics are **daily** (fixed 30d window, no time-range knob; only
   offered for current-region buckets, not other-region stubs);
