@@ -830,12 +830,14 @@ pub const SES_ACCOUNT: &[MetricSpec] = &[
 ];
 
 /// Cognito publishes per `(UserPool, UserPoolClient)`: each row sums the
-/// pool's app clients.
+/// pool's app clients. Federation adds `IdentityProvider`, and a schema
+/// matches only series with exactly its dimensions, so that row names it.
 pub const COGNITO_USER_POOL: &[MetricSpec] = &[
     m("SignInSuccesses", "Sign-ins", Sum, Unit::Count).across(Agg::Sum, "UserPool,UserPoolClient").group("auth"),
     m("SignUpSuccesses", "Sign-ups", Sum, Unit::Count).across(Agg::Sum, "UserPool,UserPoolClient").group("auth"),
     m("TokenRefreshSuccesses", "Token refreshes", Sum, Unit::Count).across(Agg::Sum, "UserPool,UserPoolClient"),
-    m("FederationSuccesses", "Federated sign-ins", Sum, Unit::Count).across(Agg::Sum, "UserPool,UserPoolClient"),
+    m("FederationSuccesses", "Federated sign-ins", Sum, Unit::Count)
+        .across(Agg::Sum, "UserPool,UserPoolClient,IdentityProvider"),
     m("SignInThrottles", "Sign-in throttles", Sum, Unit::Count)
         .across(Agg::Sum, "UserPool,UserPoolClient")
         .group("throttles")
@@ -849,7 +851,7 @@ pub const COGNITO_USER_POOL: &[MetricSpec] = &[
 /// Network Firewall publishes per AZ, engine and custom action, never for
 /// the firewall as a whole: each row sums every set it's in.
 pub const NFW_FIREWALL: &[MetricSpec] = &[
-    m("ReceivedPacketCount", "Received", Sum, Unit::Count).across_any(Agg::Sum).group("packets"),
+    m("ReceivedPackets", "Received", Sum, Unit::Count).across_any(Agg::Sum).group("packets"),
     m("PassedPackets", "Passed", Sum, Unit::Count).across_any(Agg::Sum).group("packets").tone(Tone::Good),
     m("DroppedPackets", "Dropped", Sum, Unit::Count).across_any(Agg::Sum).group("packets").tone(Tone::Bad),
     m("RejectedPackets", "Rejected", Sum, Unit::Count).across_any(Agg::Sum).group("packets").tone(Tone::Warn),
@@ -1895,7 +1897,10 @@ mod tests {
     }
 
     /// Each kind folds its series the way its old hand-built fetch did:
-    /// the SEARCH it sends is that one, only built from the spec row.
+    /// the SEARCH it sends is that one, only built from the spec row. Two
+    /// rows differ on purpose, where the old fetch had AWS's names wrong:
+    /// Network Firewall's metric is `ReceivedPackets`, and Cognito's
+    /// federation metrics carry `IdentityProvider` too.
     #[test]
     fn a_folded_row_sends_the_search_its_old_view_did() {
         let first = |specs: &'static [MetricSpec], ns: &str, dims: &[(&str, &str)]| {
@@ -1906,9 +1911,15 @@ mod tests {
             first(COGNITO_USER_POOL, "AWS/Cognito", &[("UserPool", "us-east-1_abc")]),
             "SUM(SEARCH('{AWS/Cognito,UserPool,UserPoolClient} MetricName=\"SignInSuccesses\" UserPool=\"us-east-1_abc\"', 'Sum', 300))"
         );
+        let federation = COGNITO_USER_POOL.iter().find(|s| s.metric == "FederationSuccesses").unwrap();
+        let dims = vec![("UserPool".to_string(), "us-east-1_abc".to_string())];
+        assert_eq!(
+            MetricQuery::from_spec(federation, "AWS/Cognito", dims).search_expression(300).unwrap(),
+            "SUM(SEARCH('{AWS/Cognito,UserPool,UserPoolClient,IdentityProvider} MetricName=\"FederationSuccesses\" UserPool=\"us-east-1_abc\"', 'Sum', 300))"
+        );
         assert_eq!(
             first(NFW_FIREWALL, "AWS/NetworkFirewall", &[("FirewallName", "edge")]),
-            "SUM(SEARCH('Namespace=\"AWS/NetworkFirewall\" MetricName=\"ReceivedPacketCount\" FirewallName=\"edge\"', 'Sum', 300))"
+            "SUM(SEARCH('Namespace=\"AWS/NetworkFirewall\" MetricName=\"ReceivedPackets\" FirewallName=\"edge\"', 'Sum', 300))"
         );
         assert_eq!(
             first(MSK_CLUSTER, "AWS/Kafka", &[("Cluster Name", "orders")]),
