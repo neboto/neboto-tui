@@ -636,8 +636,6 @@ pub enum MetricsKind {
     CwAlarm,
     Cost,
     Nfw,
-    Fsx,
-    FsxVolume,
     S3,
     Ses,
     Msk,
@@ -2699,12 +2697,6 @@ pub struct App {
     pub s3tables_view: S3TablesView,
     pub bedrock_view: BedrockView,
     pub agentcore_view: AgentCoreView,
-    pub fsx_metrics: HashMap<String, crate::aws::services::fsx::FsxMetricsState>,
-    /// Per-volume metrics graph, keyed by volume id.
-    pub fsx_volume_metrics: HashMap<String, crate::aws::services::fsx::FsxMetricsState>,
-    /// The volume the `m` graph is open for: (volume_id, name, capacity_bytes).
-    pub fsx_metrics_volume: Option<(String, String, i64)>,
-    pub fsx_metrics_time_range: MetricsTimeRange,
     pub cloudtrail_view: CloudTrailView,
     /// Account id → name map for assignment rows (Organizations, best-effort;
     /// fetched once per profile on first view of an assignments/access section).
@@ -3456,10 +3448,6 @@ impl App {
             s3tables_view: S3TablesView::Buckets,
             bedrock_view: BedrockView::FoundationModels,
             agentcore_view: AgentCoreView::Runtimes,
-            fsx_metrics: HashMap::new(),
-            fsx_volume_metrics: HashMap::new(),
-            fsx_metrics_volume: None,
-            fsx_metrics_time_range: MetricsTimeRange::OneHour,
             cloudtrail_view: CloudTrailView::Events,
             ic_account_names: HashMap::new(),
             ic_account_names_requested: false,
@@ -3688,18 +3676,6 @@ impl App {
             }
             Event::MskMetricsLoaded { arn, data } => {
                 self.msk_metrics.insert(arn, MskMetricsState::Loaded(data));
-            }
-            Event::FsxMetricsLoaded { file_system_id, data } => {
-                self.fsx_metrics.insert(
-                    file_system_id,
-                    crate::aws::services::fsx::FsxMetricsState::Loaded(data),
-                );
-            }
-            Event::FsxVolumeMetricsLoaded { volume_id, data } => {
-                self.fsx_volume_metrics.insert(
-                    volume_id,
-                    crate::aws::services::fsx::FsxMetricsState::Loaded(data),
-                );
             }
             Event::LogTailResolved {
                 generation,
@@ -4908,47 +4884,6 @@ impl App {
                     KeyCode::Char(']') => {
                         self.cw_alarm_metrics_time_range = self.cw_alarm_metrics_time_range.next();
                         self.trigger_cw_alarm_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::Fsx => match key.code {
-                    KeyCode::Char('r') => self.trigger_fsx_metrics_load(event_tx),
-                    // `f` toggles to the volume graph (pick a volume to chart).
-                    KeyCode::Char('f') => {
-                        if let Some(vol) = self
-                            .selected_fsx_volume()
-                            .or_else(|| self.first_fsx_volume())
-                        {
-                            self.fsx_metrics_volume =
-                                Some((vol.volume_id, vol.name, vol.size_bytes));
-                            self.trigger_fsx_volume_metrics_load(event_tx);
-                            self.metrics_in_pane = Some(MetricsKind::FsxVolume);
-                        }
-                    }
-                    KeyCode::Char('[') => {
-                        self.fsx_metrics_time_range = self.fsx_metrics_time_range.prev();
-                        self.trigger_fsx_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.fsx_metrics_time_range = self.fsx_metrics_time_range.next();
-                        self.trigger_fsx_metrics_load(event_tx);
-                    }
-                    _ => {}
-                },
-                MetricsKind::FsxVolume => match key.code {
-                    KeyCode::Char('r') => self.trigger_fsx_volume_metrics_load(event_tx),
-                    // `f` toggles to the file-system-wide graph.
-                    KeyCode::Char('f') => {
-                        self.trigger_fsx_metrics_load(event_tx);
-                        self.metrics_in_pane = Some(MetricsKind::Fsx);
-                    }
-                    KeyCode::Char('[') => {
-                        self.fsx_metrics_time_range = self.fsx_metrics_time_range.prev();
-                        self.trigger_fsx_volume_metrics_load(event_tx);
-                    }
-                    KeyCode::Char(']') => {
-                        self.fsx_metrics_time_range = self.fsx_metrics_time_range.next();
-                        self.trigger_fsx_volume_metrics_load(event_tx);
                     }
                     _ => {}
                 },
@@ -14185,38 +14120,6 @@ impl App {
         );
     }
 
-    fn trigger_fsx_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        use crate::aws::services::fsx::{FsxFileSystem, FsxMetricsState};
-        let (id, total_bytes) = match self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<FsxFileSystem>())
-        {
-            Some(fs) => (
-                fs.file_system_id.clone(),
-                fs.storage_capacity_gib as i64 * 1024 * 1024 * 1024,
-            ),
-            None => return};
-        let time_range = self.fsx_metrics_time_range;
-        self.fsx_metrics.insert(id.clone(), FsxMetricsState::Loading);
-        let cw = self.aws_clients.cloudwatch_client();
-        let tx = event_tx.clone();
-        tokio::spawn(async move {
-            if let Ok(data) = crate::aws::services::fsx::fetch_fsx_metrics(
-                cw,
-                id.clone(),
-                None,
-                total_bytes,
-                time_range,
-            )
-            .await
-            {
-                let _ = tx.send(crate::event::Event::FsxMetricsLoaded {
-                    file_system_id: id,
-                    data});
-            }
-        });
-    }
-
     /// The volume under the detail cursor when the FSx Volumes section is shown
     /// (matches the cursor's nearest volume-header row back to a loaded volume).
     fn selected_fsx_volume(&self) -> Option<crate::aws::services::fsx::FsxVolume> {
@@ -14261,19 +14164,22 @@ impl App {
         matched.or_else(|| vols.first()).cloned()
     }
 
-    /// First loaded volume of the selected FSx file system (for `f` from the
-    /// file-system graph when no specific volume is under the cursor).
-    fn first_fsx_volume(&self) -> Option<crate::aws::services::fsx::FsxVolume> {
-        use crate::aws::services::fsx::FsxFileSystem;
-        let fs_id = self
-            .get_selected_resource()?
-            .as_any()
-            .downcast_ref::<FsxFileSystem>()?
-            .file_system_id
-            .clone();
-        match self.lazy.fsx_volumes.get(&fs_id)? {
-            crate::lazy::Lazy::Loaded(v) => v.first().cloned(),
-            _ => None}
+    /// A file system's volumes as (id, name), for its metrics' Volumes
+    /// table: the Volumes section's when it has loaded, else the Volumes
+    /// sub-tab's rows.
+    fn fsx_volume_names(&self, file_system_id: &str) -> Vec<(String, String)> {
+        use crate::aws::services::fsx::FsxVolume;
+        let pair = |v: &FsxVolume| (v.volume_id.clone(), v.name.clone());
+        match self.lazy.fsx_volumes.get(file_system_id) {
+            Some(crate::lazy::Lazy::Loaded(vols)) => vols.iter().map(pair).collect(),
+            _ => self
+                .resources
+                .iter()
+                .filter_map(|r| r.as_any().downcast_ref::<FsxVolume>())
+                .filter(|v| v.file_system_id == file_system_id)
+                .map(pair)
+                .collect(),
+        }
     }
 
     /// Lazily fetch the live snapshot (used/util/latency) for the selected
@@ -14294,36 +14200,6 @@ impl App {
             // The snapshot fetch is best-effort per metric and infallible.
             async move { Ok(crate::aws::services::fsx::fetch_fsx_volume_detail(cw, id, cap).await) },
         );
-    }
-
-    fn trigger_fsx_volume_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        use crate::aws::services::fsx::FsxMetricsState;
-        let (volume_id, _name, cap) = match &self.fsx_metrics_volume {
-            Some(v) => v.clone(),
-            None => return};
-        // fs_id is unused for volume-scoped metrics (VolumeId dimension); a
-        // selected volume *resource* has no file system selected.
-        let fs_id = self.selected_fsx_id().unwrap_or_default();
-        let time_range = self.fsx_metrics_time_range;
-        self.fsx_volume_metrics
-            .insert(volume_id.clone(), FsxMetricsState::Loading);
-        let cw = self.aws_clients.cloudwatch_client();
-        let tx = event_tx.clone();
-        tokio::spawn(async move {
-            if let Ok(data) = crate::aws::services::fsx::fetch_fsx_metrics(
-                cw,
-                fs_id,
-                Some(volume_id.clone()),
-                cap,
-                time_range,
-            )
-            .await
-            {
-                let _ = tx.send(crate::event::Event::FsxVolumeMetricsLoaded {
-                    volume_id,
-                    data});
-            }
-        });
     }
 
     fn is_selected_eb_rule(&self) -> bool {
@@ -32734,6 +32610,14 @@ impl App {
             target("DynamoDB table", "AWS/DynamoDB", dim("TableName", &t.name), m::DDB_TABLE)
         } else if let Some(f) = is!(s::efs::EfsFileSystem) {
             target("EFS file system", "AWS/EFS", dim("FileSystemId", &f.file_system_id), m::EFS_FILE_SYSTEM)
+        } else if let Some(v) = is!(s::fsx::FsxVolume) {
+            s::fsx::volume_metric_target(v)
+        } else if let Some(fs) = is!(s::fsx::FsxFileSystem) {
+            // The cursor on a volume in the Volumes section charts that volume.
+            match self.selected_fsx_volume() {
+                Some(v) => s::fsx::volume_metric_target(&v),
+                None => s::fsx::file_system_metric_target(fs, &self.fsx_volume_names(&fs.file_system_id)),
+            }
         } else if let Some(c) = is!(s::elasticache::ElastiCacheCluster) {
             // A replication group's metrics are per node: chart its primary.
             let node = c.metric_cache_cluster_id.as_deref().unwrap_or(&c.id);
@@ -32921,6 +32805,7 @@ impl App {
                             sparse: false,
                             tone: None,
                             expression: None,
+                            hidden: false,
                         })
                 })
                 .collect();
@@ -32993,6 +32878,7 @@ impl App {
                 sparse: false,
                 tone: None,
                 expression: None,
+                hidden: false,
             };
             MetricTarget {
                 extra: vec![query],
@@ -33151,7 +33037,7 @@ impl App {
             }
             // A web ACL's sampled requests for the rule in view, over the
             // chart's window (AWS keeps three hours), into the editor.
-            KeyCode::Char('x') if st.target.breakdown.is_some() => {
+            KeyCode::Char('x') if st.target.breakdown.as_ref().is_some_and(|b| b.has_samples()) => {
                 // Before the first answer there is no window yet: all three hours.
                 let window = (st.end > 0).then(|| (st.end - st.range.duration_secs(), st.end));
                 match st.sample_rule() {
@@ -33248,20 +33134,6 @@ impl App {
         } else if self.is_selected_nfw_firewall() {
             self.trigger_nfw_metrics_load(event_tx);
             Some(MetricsKind::Nfw)
-        } else if let Some(vol) = self
-            .get_selected_resource()
-            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::fsx::FsxVolume>())
-            .cloned()
-            .or_else(|| self.selected_fsx_volume())
-        {
-            // A selected volume resource (Volumes sub-tab) or the volume row in
-            // a file system's Volumes section → that volume's graph.
-            self.fsx_metrics_volume = Some((vol.volume_id, vol.name, vol.size_bytes));
-            self.trigger_fsx_volume_metrics_load(event_tx);
-            Some(MetricsKind::FsxVolume)
-        } else if self.is_selected_fsx() {
-            self.trigger_fsx_metrics_load(event_tx);
-            Some(MetricsKind::Fsx)
         } else if self.selected_s3_metric_bucket().is_some() {
             self.trigger_s3_metrics_load(event_tx);
             Some(MetricsKind::S3)

@@ -439,6 +439,7 @@ impl WafTraffic {
                 title: title.to_string(),
                 columns: &WAF_ACTIONS,
                 rows: rows.iter().map(|r| (r.name.clone(), r.values().to_vec())).collect(),
+                unit: crate::aws::metrics::Unit::Count,
                 drill: drill_dims.filter(|_| !base.is_empty()).map(|dimensions| Drill {
                     namespace: "AWS/WAFV2",
                     specs: WAF_RULE,
