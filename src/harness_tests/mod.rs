@@ -71,6 +71,7 @@ mod timeline_test;
 mod list_ux_test;
 mod search_follow_test;
 mod region_fanout_test;
+mod nav_credentials_test;
 mod access_lens_test;
 mod changes_test;
 mod chart_markers_test;
@@ -720,7 +721,7 @@ async fn stale_account_identity_is_dropped_after_a_credential_switch() {
 
     app.handle_event(
         Event::AccountInfoLoaded {
-            account_id: "111111111111".to_string(),
+            account_id: Some("111111111111".to_string()),
             alias: Some("base".to_string()),
             generation: first,
         },
@@ -739,7 +740,7 @@ async fn stale_account_identity_is_dropped_after_a_credential_switch() {
     // The old profile's fetch finally resolves — it must be ignored.
     app.handle_event(
         Event::AccountInfoLoaded {
-            account_id: "111111111111".to_string(),
+            account_id: Some("111111111111".to_string()),
             alias: Some("base".to_string()),
             generation: first,
         },
@@ -753,7 +754,7 @@ async fn stale_account_identity_is_dropped_after_a_credential_switch() {
     // The new credentials' fetch is accepted.
     app.handle_event(
         Event::AccountInfoLoaded {
-            account_id: "222222222222".to_string(),
+            account_id: Some("222222222222".to_string()),
             alias: None,
             generation: second,
         },

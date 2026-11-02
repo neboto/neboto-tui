@@ -113,8 +113,9 @@ pub enum Event {
         region: Region,
     },
 
+    /// `None`: back to the startup credentials (the default chain).
     ProfileSwitchRequested {
-        profile: String,
+        profile: Option<String>,
     },
 
     /// Assume `role_name` in a member account (the `s` action on an
@@ -146,8 +147,10 @@ pub enum Event {
 
 
 
+    /// `None` when `GetCallerIdentity` failed — still sent, since a
+    /// credential restore may be waiting on it.
     AccountInfoLoaded {
-        account_id: String,
+        account_id: Option<String>,
         alias: Option<String>,
         /// `App.account_info_generation` at spawn time — an event stamped with
         /// anything older belongs to superseded credentials and is dropped.

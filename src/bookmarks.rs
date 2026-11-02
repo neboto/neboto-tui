@@ -39,7 +39,29 @@ pub fn save(bookmarks: &[NavLocation]) {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(json) = serde_json::to_string_pretty(bookmarks) {
-        let _ = std::fs::write(&path, json);
+        let _ = write_private(&path, json.as_bytes());
+    }
+}
+
+/// Write `data` readable by the owner only. Bookmarks name accounts, ARNs,
+/// profiles and roles — not secret, but a map of your estate that other
+/// users on a shared host have no business reading. Tightens a file an
+/// older version left at the umask default, too.
+fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        opts.mode(0o600);
+        let mut file = opts.open(path)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(data)
+    }
+    #[cfg(not(unix))]
+    {
+        opts.open(path)?.write_all(data)
     }
 }
 
@@ -60,6 +82,16 @@ mod tests {
             details_focused: true,
             detail_section: Some("Networking".to_string()),
             region: Some("ap-southeast-2".to_string()),
+            credentials: Some(crate::app::NavCredentials {
+                profile: Some("mgmt".to_string()),
+                assumed: Some(crate::app::NavAssumedRole {
+                    account_id: "111122223333".to_string(),
+                    account_name: "prod".to_string(),
+                    role_name: "OrganizationAccountAccessRole".to_string(),
+                }),
+                account: Some("111122223333".to_string()),
+                alias: Some("prod".to_string()),
+            }),
         };
         let json = serde_json::to_string(std::slice::from_ref(&loc)).unwrap();
         let back: Vec<NavLocation> = serde_json::from_str(&json).unwrap();
@@ -71,6 +103,9 @@ mod tests {
         assert!(back[0].details_focused);
         assert_eq!(back[0].detail_section.as_deref(), Some("Networking"));
         assert_eq!(back[0].region.as_deref(), Some("ap-southeast-2"));
+        let creds = back[0].credentials.as_ref().expect("credentials survive");
+        assert_eq!(creds.profile.as_deref(), Some("mgmt"));
+        assert_eq!(creds.assumed.as_ref().map(|a| a.account_id.as_str()), Some("111122223333"));
     }
 
     #[test]
@@ -86,16 +121,34 @@ mod tests {
             details_focused: true,
             detail_section: Some("Tags".to_string()),
             region: Some("us-east-1".to_string()),
+            credentials: Some(crate::app::NavCredentials { profile: Some("dev".to_string()), ..Default::default() }),
         };
         let mut value = serde_json::to_value(&loc).unwrap();
         let obj = value.as_object_mut().unwrap();
         obj.remove("details_focused");
         obj.remove("detail_section");
         obj.remove("region");
+        obj.remove("credentials");
         let back: NavLocation = serde_json::from_value(value).unwrap();
         assert!(!back.details_focused);
         assert!(back.detail_section.is_none());
         assert!(back.region.is_none(), "an old bookmark restores in the current region");
+        assert!(back.credentials.is_none(), "…and under the current credentials");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saved_file_is_owner_only_even_over_an_old_world_readable_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("neboto-bm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bookmarks.json");
+        std::fs::write(&path, "[]").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        super::write_private(&path, b"[]").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(mode, 0o600);
     }
 
     #[test]
