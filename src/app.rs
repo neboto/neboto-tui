@@ -23089,6 +23089,7 @@ impl App {
             || self.selected_r53_public_zone().is_some()
             || self.is_selected_resolver_endpoint()
             || self.is_selected_code_build_project()
+            || self.selected_metric_target().is_some()
     }
 
     /// Whether the selected resource can be live-tailed (`t`). Mirrors the `t`
@@ -32263,6 +32264,35 @@ impl App {
                 F::Memory | F::Browser | F::CodeInterpreter => m::AGENTCORE_RESOURCE,
             };
             target(&format!("AgentCore {}", flavor.label().to_lowercase()), "AWS/Bedrock-AgentCore", dim("Resource", &arn), specs)
+        } else if let Some(api) = is!(s::appsync::AppSyncApi) {
+            target("AppSync API", "AWS/AppSync", dim("GraphQLAPIId", &api.api_id), m::APPSYNC_API)
+        } else if let Some(c) = is!(s::acm::AcmCertificate) {
+            let t = target("Certificate", "AWS/CertificateManager", dim("CertificateArn", &c.certificate_arn), m::ACM_CERTIFICATE);
+            if matches!(c.status.as_str(), "PENDING_VALIDATION" | "FAILED" | "VALIDATION_TIMED_OUT") {
+                MetricTarget { specs: &[], hint: Some("Only an issued certificate publishes DaysToExpiry"), ..t }
+            } else {
+                MetricTarget { hint: Some("Published twice a day: try a 7d or 30d range (digits)"), ..t }
+            }
+        } else if let Some(c) = is!(s::ecs::EcsCluster) {
+            MetricTarget {
+                hint: Some("Nothing published: a cluster reports only while tasks run, and Fargate-only clusters need Container Insights"),
+                ..target("ECS cluster", "AWS/ECS", dim("ClusterName", &c.cluster_name), m::ECS_CLUSTER)
+            }
+        } else if let Some(p) = is!(s::rds::RdsProxy) {
+            MetricTarget {
+                hint: Some("A proxy publishes once a client has connected through it"),
+                ..target("RDS proxy", "AWS/RDS", dim("ProxyName", &p.name), m::RDS_PROXY)
+            }
+        } else if let Some(env) = is!(s::beanstalk::EbEnvironment) {
+            MetricTarget {
+                hint: Some("Needs enhanced health reporting; metrics past EnvironmentHealth are opt-in (Configuration → Monitoring)"),
+                ..target("Beanstalk environment", "AWS/ElasticBeanstalk", dim("EnvironmentName", &env.name), m::EB_ENVIRONMENT)
+            }
+        } else if let Some(v) = is!(s::backup::BackupVault) {
+            MetricTarget {
+                hint: Some("No jobs in the window: a vault publishes only for periods with a job"),
+                ..target("Backup vault", "AWS/Backup", dim("BackupVaultName", &v.name), m::BACKUP_VAULT)
+            }
         } else if self.is_selected_ses_resource() {
             // Account-wide: the same set whichever identity is selected.
             MetricTarget {

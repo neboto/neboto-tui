@@ -917,7 +917,13 @@ the service you're touching.
   of its own; its instances do, so it reads `—`). `Debug Logging` on is a ⚠:
   AWS logs SQL statement text, sensitive values included. Targets are lazy,
   so `U` on an instance can't name the proxy in front of it — that would
-  need the targets fetched per proxy at list time.
+  need the targets fetched per proxy at list time. Metrics (`m`,
+  `RDS_PROXY`): every EC2 instance serving the proxy publishes its own
+  per-minute gauge, and AWS says to aggregate with Sum — so a 5-minute
+  Sum is five minutes of readings. The connection rows are math
+  (`{X}*60/$PERIOD`) over hidden Sum rows; Average would undercount a
+  proxy served by several instances. Both latencies are **microseconds**
+  (`/1000` to ms).
 - **RDS blue/green** (#106) — not a sub-tab: one `DescribeBlueGreenDeployments`
   runs **before** the instance pages (so each streamed batch already carries
   it), keyed by both the source and the target ARN, and lands as a
