@@ -320,16 +320,6 @@ pub enum Event {
 
 
 
-    /// FSx metrics, keyed by file-system id.
-    FsxMetricsLoaded {
-        file_system_id: String,
-        data: crate::aws::services::fsx::FsxMetricsData,
-    },
-    FsxVolumeMetricsLoaded {
-        volume_id: String,
-        data: crate::aws::services::fsx::FsxMetricsData,
-    },
-
     /// The live tail resolved its log group + streams (for async-resolved
     /// sources: ECS task / Network Firewall / CodeBuild). Stored on the pane so
     /// `[`/`]` window re-seed and `s`-to-search work on those sources too.

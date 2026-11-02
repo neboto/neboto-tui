@@ -105,11 +105,21 @@ in `any_pane_overlay_active` (which gates the mouse).
   `{MetricName}` placeholders resolved to the request's ids by
   `fetch_series`; an expression naming a metric that isn't charted is a
   row error, not a failed call) and can carry a `Tone` so its colour
-  means something (blocked is red whatever the palette order). SEARCH is
-  still not a spec row: it returns many series, math returns one. A
+  means something (blocked is red whatever the palette order). A bare
+  SEARCH is still not a spec row (it returns many series, math returns
+  one), but math **aggregating** one is:
+  `SUM(SEARCH('{AWS/FSx,FileSystemId,StorageTargetId} …', 'Average',
+  $PERIOD))` — braces around anything but a metric name are left alone,
+  `$PERIOD` becomes the request's period, and keeping `metric` set on the
+  row lets other math name it. A spec row marked `.hidden()` is fetched
+  (`ReturnData=false`) for math to read and never shown — FSx's latency
+  reads its operation time that way; hidden rows go **last**, since a
+  row's place in the view is its place in the queries. A `Resolve` whose
+  `TargetFix::curated` is set replaces the curated set outright: FSx keeps
+  only what `ListMetrics` says the file system publishes. A
   hand-built kind (an enum
   variant + an open arm + a render arm) is for what a spec can't say yet:
-  SEARCH expressions, a fixed home region, S3's daily series, dashboards,
+  per-row SEARCH breakdowns, a fixed home region, S3's daily series, dashboards,
   Cost. Either way it needs **an arm in `supports_metrics_overlay()`** —
   that gates the status-bar `m` hint (not the key itself), and it lagging
   is exactly how DX VIFs shipped with a working `m` but no hint.

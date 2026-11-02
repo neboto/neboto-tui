@@ -31,7 +31,7 @@ impl Stat {
     /// The order `s` cycles through.
     pub const ALL: [Stat; 5] = [Stat::Average, Stat::Maximum, Stat::Sum, Stat::Minimum, Stat::P99];
 
-    fn api(self) -> &'static str {
+    pub(crate) fn api(self) -> &'static str {
         match self {
             Stat::Average => "Average",
             Stat::Sum => "Sum",
@@ -106,10 +106,26 @@ pub struct MetricSpec {
     /// Metric math over the set's other metrics in place of a metric of
     /// its own: `{MetricName}` stands for that metric's series.
     pub expr: Option<&'static str>,
+    /// Fetched for an expression to read, never a row of its own (an FSx
+    /// latency's operation time). Hidden rows go last in a set: a row's
+    /// place in the view is its place in the queries.
+    pub hidden: bool,
 }
 
 const fn m(metric: &'static str, label: &'static str, stat: Stat, unit: Unit) -> MetricSpec {
-    MetricSpec { metric, label, stat, unit, rate: false, group: None, namespace: None, sparse: false, tone: None, expr: None }
+    MetricSpec {
+        metric,
+        label,
+        stat,
+        unit,
+        rate: false,
+        group: None,
+        namespace: None,
+        sparse: false,
+        tone: None,
+        expr: None,
+        hidden: false,
+    }
 }
 
 /// A row computed from the set's other rows (see [`MetricSpec::expr`]).
@@ -136,6 +152,10 @@ impl MetricSpec {
 
     const fn tone(self, tone: Tone) -> Self {
         MetricSpec { tone: Some(tone), ..self }
+    }
+
+    const fn hidden(self) -> Self {
+        MetricSpec { hidden: true, ..self }
     }
 }
 
@@ -588,6 +608,136 @@ pub const DMS_TASK: &[MetricSpec] = &[
     m("FullLoadThroughputRowsTarget", "Full-load rows", Avg, Unit::PerSec),
 ];
 
+// FSx: one table per file-system type, each from its own user guide — the
+// four publish different metric names under different dimensions. A table
+// is what the type *can* publish; `fsx::resolve_metrics` keeps what this
+// file system does (Windows under 32 MBps has no file-server metrics) and
+// folds Lustre's per-target series into one before the first fetch.
+// Latency is `*OperationTime` (seconds spent) ÷ the operation count, from
+// the hidden rows at the end of a table.
+
+pub const FSX_WINDOWS: &[MetricSpec] = &[
+    m("StorageCapacityUtilization", "Storage used", Avg, Unit::Percent),
+    m("FreeStorageCapacity", "Free storage", Min, Unit::Bytes),
+    m("DeduplicationSavedStorage", "Dedup savings", Avg, Unit::Bytes),
+    m("DataReadBytes", "Read", Sum, Unit::BytesPerSec).rate().group("throughput"),
+    m("DataWriteBytes", "Write", Sum, Unit::BytesPerSec).rate().group("throughput"),
+    m("DataReadOperations", "Read IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("DataWriteOperations", "Write IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("MetadataOperations", "Metadata IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("ClientConnections", "Connections", Max, Unit::Count),
+    m("CPUUtilization", "CPU", Avg, Unit::Percent).group("server"),
+    m("MemoryUtilization", "Memory", Avg, Unit::Percent).group("server"),
+    m("NetworkThroughputUtilization", "Network", Avg, Unit::Percent).group("server"),
+    m("FileServerDiskThroughputUtilization", "Disk throughput", Avg, Unit::Percent).group("server"),
+    m("FileServerDiskIopsUtilization", "Disk IOPS", Avg, Unit::Percent).group("server"),
+    m("FileServerDiskThroughputBalance", "Throughput credits", Min, Unit::Percent).group("burst"),
+    m("FileServerDiskIopsBalance", "IOPS credits", Min, Unit::Percent).group("burst"),
+    // One or the other: HDD storage publishes throughput, SSD IOPS.
+    m("DiskThroughputUtilization", "Volume throughput", Avg, Unit::Percent),
+    m("DiskIopsUtilization", "Volume IOPS", Avg, Unit::Percent),
+];
+
+/// Lustre publishes capacity per storage target and utilisation per
+/// server; resolving sums the one and takes the busiest of the other.
+pub const FSX_LUSTRE: &[MetricSpec] = &[
+    m("StorageCapacityUtilization", "Storage used", Avg, Unit::Percent),
+    m("FreeDataStorageCapacity", "Free storage", Avg, Unit::Bytes),
+    m("PhysicalDiskUsage", "Used storage", Sum, Unit::Bytes),
+    m("LogicalDiskUsage", "Logical data", Sum, Unit::Bytes),
+    m("DataReadBytes", "Read", Sum, Unit::BytesPerSec).rate().group("throughput"),
+    m("DataWriteBytes", "Write", Sum, Unit::BytesPerSec).rate().group("throughput"),
+    m("DataReadOperations", "Read IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("DataWriteOperations", "Write IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("MetadataOperations", "Metadata IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("ClientConnections", "Connections", Max, Unit::Count),
+    m("NetworkThroughputUtilization", "Network", Avg, Unit::Percent).group("server"),
+    m("FileServerDiskThroughputUtilization", "Disk throughput", Avg, Unit::Percent).group("server"),
+    m("DiskIopsUtilization", "Disk IOPS", Avg, Unit::Percent).group("server"),
+    m("CPUUtilization", "Metadata CPU", Avg, Unit::Percent).group("server"),
+    m("AgeOfOldestQueuedMessage", "Oldest S3 sync", Max, Unit::Seconds),
+];
+
+pub const FSX_ONTAP: &[MetricSpec] = &[
+    m("StorageCapacityUtilization", "SSD used", Avg, Unit::Percent),
+    m("StorageUsed", "Used storage", Avg, Unit::Bytes),
+    m("LogicalDataStored", "Logical data", Avg, Unit::Bytes),
+    m("StorageEfficiencySavings", "Efficiency savings", Avg, Unit::Bytes),
+    m("DataReadBytes", "Read", Sum, Unit::BytesPerSec).rate().group("throughput"),
+    m("DataWriteBytes", "Write", Sum, Unit::BytesPerSec).rate().group("throughput"),
+    m("DataReadOperations", "Read IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("DataWriteOperations", "Write IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("MetadataOperations", "Metadata IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    e("Read latency", "1000*{DataReadOperationTime}/{DataReadOperations}", Unit::Millis).group("latency"),
+    e("Write latency", "1000*{DataWriteOperationTime}/{DataWriteOperations}", Unit::Millis).group("latency"),
+    m("CPUUtilization", "CPU", Avg, Unit::Percent).group("server"),
+    m("NetworkThroughputUtilization", "Network", Avg, Unit::Percent).group("server"),
+    m("FileServerDiskThroughputUtilization", "Disk throughput", Avg, Unit::Percent).group("server"),
+    m("FileServerDiskIopsUtilization", "Disk IOPS", Avg, Unit::Percent).group("server"),
+    m("DiskIopsUtilization", "SSD IOPS", Avg, Unit::Percent).group("server"),
+    m("FileServerCacheHitRatio", "Cache hit", Avg, Unit::Percent),
+    m("FileServerDiskThroughputBalance", "Throughput credits", Min, Unit::Percent).group("burst"),
+    m("FileServerDiskIopsBalance", "IOPS credits", Min, Unit::Percent).group("burst"),
+    m("CapacityPoolReadBytes", "Pool read", Sum, Unit::BytesPerSec).rate().group("pool"),
+    m("CapacityPoolWriteBytes", "Pool write", Sum, Unit::BytesPerSec).rate().group("pool"),
+    m("DataReadOperationTime", "Read time", Sum, Unit::Seconds).hidden(),
+    m("DataWriteOperationTime", "Write time", Sum, Unit::Seconds).hidden(),
+];
+
+pub const FSX_OPENZFS: &[MetricSpec] = &[
+    e("Storage used", "100*{UsedStorageCapacity}/{StorageCapacity}", Unit::Percent),
+    m("UsedStorageCapacity", "Used storage", Avg, Unit::Bytes),
+    m("CompressionRatio", "Compression", Avg, Unit::Raw),
+    m("DataReadBytes", "Read", Sum, Unit::BytesPerSec).rate().group("throughput"),
+    m("DataWriteBytes", "Write", Sum, Unit::BytesPerSec).rate().group("throughput"),
+    m("DataReadOperations", "Read IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("DataWriteOperations", "Write IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("MetadataOperations", "Metadata IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("ClientConnections", "Connections", Max, Unit::Count),
+    m("NfsBadCalls", "NFS bad calls", Sum, Unit::Count).tone(Tone::Bad),
+    m("CPUUtilization", "CPU", Avg, Unit::Percent).group("server"),
+    m("MemoryUtilization", "Memory", Avg, Unit::Percent).group("server"),
+    m("NetworkThroughputUtilization", "Network", Avg, Unit::Percent).group("server"),
+    m("FileServerDiskThroughputUtilization", "Disk throughput", Avg, Unit::Percent).group("server"),
+    m("FileServerDiskIopsUtilization", "Disk IOPS", Avg, Unit::Percent).group("server"),
+    m("DiskIopsUtilization", "SSD IOPS", Avg, Unit::Percent).group("server"),
+    m("FileServerCacheHitRatio", "Cache hit", Avg, Unit::Percent),
+    m("FileServerDiskThroughputBalance", "Throughput credits", Min, Unit::Percent).group("burst"),
+    m("FileServerDiskIopsBalance", "IOPS credits", Min, Unit::Percent).group("burst"),
+    m("StorageCapacity", "Capacity", Avg, Unit::Bytes).hidden(),
+];
+
+/// A volume publishes under `FileSystemId` + `VolumeId`: its own storage
+/// and its clients' traffic, never the file server's.
+pub const FSX_ONTAP_VOLUME: &[MetricSpec] = &[
+    m("StorageCapacityUtilization", "Storage used", Avg, Unit::Percent),
+    m("StorageUsed", "Used storage", Avg, Unit::Bytes),
+    m("FilesUsed", "Files", Avg, Unit::Count),
+    m("DataReadBytes", "Read", Sum, Unit::BytesPerSec).rate().group("throughput"),
+    m("DataWriteBytes", "Write", Sum, Unit::BytesPerSec).rate().group("throughput"),
+    m("DataReadOperations", "Read IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("DataWriteOperations", "Write IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("MetadataOperations", "Metadata IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    e("Read latency", "1000*{DataReadOperationTime}/{DataReadOperations}", Unit::Millis).group("latency"),
+    e("Write latency", "1000*{DataWriteOperationTime}/{DataWriteOperations}", Unit::Millis).group("latency"),
+    e("Metadata latency", "1000*{MetadataOperationTime}/{MetadataOperations}", Unit::Millis).group("latency"),
+    m("DataReadOperationTime", "Read time", Sum, Unit::Seconds).hidden(),
+    m("DataWriteOperationTime", "Write time", Sum, Unit::Seconds).hidden(),
+    m("MetadataOperationTime", "Metadata time", Sum, Unit::Seconds).hidden(),
+];
+
+pub const FSX_OPENZFS_VOLUME: &[MetricSpec] = &[
+    e("Storage used", "100*{UsedStorageCapacity}/{StorageCapacity}", Unit::Percent),
+    m("UsedStorageCapacity", "Used storage", Avg, Unit::Bytes),
+    m("CompressionRatio", "Compression", Avg, Unit::Raw),
+    m("DataReadBytes", "Read", Sum, Unit::BytesPerSec).rate().group("throughput"),
+    m("DataWriteBytes", "Write", Sum, Unit::BytesPerSec).rate().group("throughput"),
+    m("DataReadOperations", "Read IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("DataWriteOperations", "Write IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("MetadataOperations", "Metadata IOPS", Sum, Unit::PerSec).rate().group("iops"),
+    m("StorageCapacity", "Capacity", Avg, Unit::Bytes).hidden(),
+];
+
 /// What `m` charts for one resource: where its metrics live and its curated set.
 #[derive(Debug, Clone)]
 pub struct MetricTarget {
@@ -613,14 +763,16 @@ pub struct MetricTarget {
     pub resolve: Option<Resolve>,
 }
 
-/// A kind's per-dimension totals, fetched with the series. Only WAF has one
-/// so far: per-rule and per-label SEARCH totals.
+/// A kind's per-dimension tables, fetched with the series: WAF's per-rule
+/// and per-label SEARCH totals, an FSx file system's volumes and storage
+/// tiers.
 #[derive(Debug, Clone)]
 pub enum Breakdown {
     Waf {
         /// `None` for CLOUDFRONT-scope ACLs, which publish without one.
         region: Option<String>,
     },
+    Fsx(crate::aws::services::fsx::FsxBreakdown),
 }
 
 /// A lookup a target needs before its series are right. Run once; the
@@ -646,6 +798,15 @@ pub enum Resolve {
         /// id, when the distribution has a WAFv2 ACL.
         waf: Option<(String, aws_sdk_wafv2::Client, String, String)>,
     },
+    /// An FSx file system or volume: which of its type's metrics it
+    /// publishes, under which dimensions (`fsx::resolve_metrics`).
+    Fsx {
+        /// The target's own dimensions: `FileSystemId`, plus `VolumeId`
+        /// for a volume.
+        dimensions: Vec<(String, String)>,
+        /// The configured size, for a utilisation the type doesn't publish.
+        capacity_bytes: i64,
+    },
 }
 
 /// What a [`Resolve`] changes. Applied to the fetch's own queries, then to
@@ -663,6 +824,9 @@ pub struct TargetFix {
     pub notes: Vec<(String, &'static str)>,
     /// Said in place of the rows when nothing can publish (metrics off).
     pub hint: Option<&'static str>,
+    /// The curated set in full, replacing the spec's rows: what a resource
+    /// really publishes once it's been looked up (FSx).
+    pub curated: Option<Vec<MetricQuery>>,
 }
 
 impl TargetFix {
@@ -677,6 +841,10 @@ impl TargetFix {
     /// The fix on a list of queries; `extra` rows only on the curated set
     /// (a picked metric or a drilled row has no use for them).
     pub fn apply_queries(&self, queries: &mut Vec<MetricQuery>, curated: bool) {
+        if let (Some(set), true) = (&self.curated, curated) {
+            *queries = set.clone();
+            return;
+        }
         for q in queries.iter_mut() {
             self.set_dims(&mut q.dimensions);
             if let Some((_, dims, label)) = self.series.iter().find(|(l, _, _)| *l == q.label) {
@@ -691,6 +859,10 @@ impl TargetFix {
 
     /// The fix on the target, so a later `d` rebuilds the fixed set.
     pub fn apply_target(&self, target: &mut MetricTarget) {
+        if let Some(set) = &self.curated {
+            target.specs = &[];
+            target.extra = set.clone();
+        }
         self.set_dims(&mut target.dimensions);
         let mut extra = std::mem::take(&mut target.extra);
         self.apply_queries(&mut extra, true);
@@ -750,6 +922,9 @@ impl Resolve {
                 }
                 fix
             }
+            Resolve::Fsx { dimensions, capacity_bytes } => {
+                crate::aws::services::fsx::resolve_metrics(cw, dimensions, *capacity_bytes, queries).await
+            }
         };
         fix.apply_queries(queries, curated);
         fix
@@ -782,7 +957,29 @@ impl Breakdown {
                     dimensions.iter().filter(|(n, _)| n == "WebACL" || n == "Region").cloned().collect();
                 Ok(BreakdownData { summary: traffic.summary(), tables: traffic.tables(&base) })
             }
+            Breakdown::Fsx(b) => b.fetch(cw, range, end).await,
         }
+    }
+
+    /// The panel's title.
+    pub fn title(&self, range: MetricsTimeRange) -> String {
+        match self {
+            Breakdown::Waf { .. } => format!("Totals · last {}", range.label()),
+            Breakdown::Fsx(_) => format!("Breakdown · last {}", range.label()),
+        }
+    }
+
+    /// What `Tab` moves into, for the footer.
+    pub fn rows_noun(&self) -> &'static str {
+        match self {
+            Breakdown::Waf { .. } => "rules",
+            Breakdown::Fsx(_) => "volumes",
+        }
+    }
+
+    /// `x` samples a web ACL's requests; nothing else has samples.
+    pub fn has_samples(&self) -> bool {
+        matches!(self, Breakdown::Waf { .. })
     }
 }
 
@@ -801,6 +998,8 @@ pub struct BreakdownTable {
     pub title: String,
     pub columns: &'static [&'static str],
     pub rows: Vec<(String, Vec<f64>)>,
+    /// How a cell reads: WAF's request counts, FSx's bytes.
+    pub unit: Unit,
     /// How `⏎` charts a row over time, when it can.
     pub drill: Option<Drill>,
 }
@@ -823,9 +1022,16 @@ impl Drill {
 
 impl BreakdownTable {
     /// The columns with any traffic, as indexes: an ACL with no CAPTCHA
-    /// rules shows no CAPTCHA column.
+    /// rules shows no CAPTCHA column. A table with none at all keeps every
+    /// column, so a quiet one still says what it counts.
     fn live_columns(&self) -> Vec<usize> {
-        (0..self.columns.len()).filter(|&c| self.rows.iter().any(|(_, v)| v.get(c).is_some_and(|x| *x > 0.0))).collect()
+        let live: Vec<usize> =
+            (0..self.columns.len()).filter(|&c| self.rows.iter().any(|(_, v)| v.get(c).is_some_and(|x| *x > 0.0))).collect();
+        if live.is_empty() {
+            (0..self.columns.len()).collect()
+        } else {
+            live
+        }
     }
 
     /// The header and up to `max_rows` rows as text in `width` columns:
@@ -847,9 +1053,21 @@ impl BreakdownTable {
         self.text_capped(usize::MAX, 0, usize::MAX, usize::MAX)
     }
 
+    /// A cell: `1.5K` requests, `2.1 GB`.
+    fn cell(&self, v: f64) -> String {
+        match self.unit {
+            Unit::Count | Unit::Raw => fmt_count(v),
+            unit => fmt_value(v, unit),
+        }
+    }
+
     fn text_capped(&self, width: usize, skip: usize, max_rows: usize, name_cap: usize) -> (String, Vec<String>) {
         const NUM_W: usize = 8;
         const NAME_MIN: usize = 16;
+        // One column is its own total: headed by its name, said once.
+        if self.columns.len() == 1 {
+            return self.text_single(width, skip, max_rows, name_cap);
+        }
         let mut cols = self.live_columns();
         // One leading space, the name, then a space and a number per column
         // (Total included).
@@ -881,13 +1099,41 @@ impl BreakdownTable {
             .take(max_rows)
             .map(|(name, vals)| {
                 let total: f64 = vals.iter().sum();
-                let mut line = format!(" {:<nw$} {:>NUM_W$}", fit(name), fmt_count(total));
+                let mut line = format!(" {:<nw$} {:>NUM_W$}", fit(name), self.cell(total));
                 for &c in &cols {
                     let v = vals.get(c).copied().unwrap_or(0.0);
-                    let cell = if v > 0.0 { fmt_count(v) } else { "—".to_string() };
+                    let cell = if v > 0.0 { self.cell(v) } else { "—".to_string() };
                     line.push_str(&format!(" {cell:>NUM_W$}"));
                 }
                 line
+            })
+            .collect();
+        (header, rows)
+    }
+}
+
+impl BreakdownTable {
+    fn text_single(&self, width: usize, skip: usize, max_rows: usize, name_cap: usize) -> (String, Vec<String>) {
+        const NUM_W: usize = 9;
+        let longest = self.rows.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0).max(4);
+        let nw = width.saturating_sub(2 + NUM_W).min(longest).min(name_cap).max(4);
+        let fit = |s: &str| -> String {
+            let n = s.chars().count();
+            if n > nw {
+                format!("…{}", s.chars().skip(n + 1 - nw).collect::<String>())
+            } else {
+                s.to_string()
+            }
+        };
+        let header = format!(" {:<nw$} {:>NUM_W$}", "", self.columns[0]);
+        let rows = self
+            .rows
+            .iter()
+            .skip(skip)
+            .take(max_rows)
+            .map(|(name, vals)| {
+                let v = vals.first().copied().unwrap_or(0.0);
+                format!(" {:<nw$} {:>NUM_W$}", fit(name), self.cell(v))
             })
             .collect();
         (header, rows)
@@ -907,11 +1153,15 @@ pub fn fmt_count(v: f64) -> String {
 
 impl MetricTarget {
     pub fn curated_queries(&self) -> Vec<MetricQuery> {
-        self.specs
+        let mut queries: Vec<MetricQuery> = self
+            .specs
             .iter()
             .map(|s| MetricQuery::from_spec(s, &self.namespace, self.dimensions.clone()))
             .chain(self.extra.iter().cloned())
-            .collect()
+            .collect();
+        // Hidden rows last, so the shown rows' places are the queries'.
+        queries.sort_by_key(|q| q.hidden);
+        queries
     }
 }
 
@@ -931,8 +1181,11 @@ pub struct MetricQuery {
     pub sparse: bool,
     pub tone: Option<Tone>,
     /// See [`MetricSpec::expr`]: metric math, `{MetricName}` placeholders
-    /// and all; `metric` is then empty.
+    /// and all. `metric` is empty, except on an aggregate over a SEARCH,
+    /// which still answers to its metric's name.
     pub expression: Option<String>,
+    /// See [`MetricSpec::hidden`].
+    pub hidden: bool,
 }
 
 impl MetricQuery {
@@ -958,6 +1211,7 @@ impl MetricQuery {
             sparse: s.sparse,
             tone: s.tone,
             expression: s.expr.map(str::to_string),
+            hidden: s.hidden,
         }
     }
 }
@@ -1048,14 +1302,16 @@ pub async fn fetch_series(
                     .set_dimensions(Some(dims(&q.dimensions)))
                     .build();
                 let stat = MetricStat::builder().metric(metric).period(period).stat(q.stat.api()).build();
-                data_queries.push(MetricDataQuery::builder().id(format!("q{i}")).metric_stat(stat).build());
+                data_queries.push(
+                    MetricDataQuery::builder().id(format!("q{i}")).metric_stat(stat).return_data(!q.hidden).build(),
+                );
             }
             // An expression naming a metric that isn't in the request would
             // fail the whole call, so it's left out and says why.
-            Some(expr) => match resolve_expression(expr, queries) {
-                Ok(resolved) => {
-                    data_queries.push(MetricDataQuery::builder().id(format!("q{i}")).expression(resolved).build())
-                }
+            Some(expr) => match resolve_expression(expr, queries, period) {
+                Ok(resolved) => data_queries.push(
+                    MetricDataQuery::builder().id(format!("q{i}")).expression(resolved).return_data(!q.hidden).build(),
+                ),
                 Err(e) => errors[i] = Some(e),
             },
         }
@@ -1109,6 +1365,8 @@ pub async fn fetch_series(
     queries
         .iter()
         .zip(points.into_iter().zip(errors))
+        // A hidden row is asked for, never answered: it's only read by math.
+        .filter(|(q, _)| !q.hidden)
         .map(|(q, (mut pts, error))| {
             pts.sort_by_key(|(t, _)| *t);
             if q.sparse {
@@ -1120,8 +1378,12 @@ pub async fn fetch_series(
 }
 
 /// `{MetricName}` placeholders as the ids of the set's metrics of that
-/// name (`q0`, `q1`, …), or the name of one the set doesn't have.
-fn resolve_expression(expr: &str, queries: &[MetricQuery]) -> Result<String, String> {
+/// name (`q0`, `q1`, …), or the name of one the set doesn't have. Braces
+/// around anything but a name are left alone (a SEARCH's
+/// `{AWS/FSx,FileSystemId,StorageTargetId}` schema), and `$PERIOD` is the
+/// request's period, which a SEARCH has to name.
+fn resolve_expression(expr: &str, queries: &[MetricQuery], period: i32) -> Result<String, String> {
+    let is_name = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     let mut out = String::with_capacity(expr.len());
     let mut rest = expr;
     while let Some(open) = rest.find('{') {
@@ -1129,15 +1391,21 @@ fn resolve_expression(expr: &str, queries: &[MetricQuery]) -> Result<String, Str
         let after = &rest[open + 1..];
         let close = after.find('}').ok_or_else(|| "unclosed { in the expression".to_string())?;
         let name = &after[..close];
-        let i = queries
-            .iter()
-            .position(|q| q.expression.is_none() && q.metric == name)
-            .ok_or_else(|| format!("needs {name}, which isn't charted"))?;
-        out.push_str(&format!("q{i}"));
+        if is_name(name) {
+            let i = queries
+                .iter()
+                .position(|q| !q.metric.is_empty() && q.metric == name)
+                .ok_or_else(|| format!("needs {name}, which isn't charted"))?;
+            out.push_str(&format!("q{i}"));
+        } else {
+            out.push('{');
+            out.push_str(name);
+            out.push('}');
+        }
         rest = &after[close + 1..];
     }
     out.push_str(rest);
-    Ok(out)
+    Ok(out.replace("$PERIOD", &period.to_string()))
 }
 
 /// How long CloudWatch can take to publish a period: a missing point this
@@ -1193,6 +1461,7 @@ impl MetricDefinition {
             sparse: false,
             tone: None,
             expression: None,
+            hidden: false,
         }
     }
 }
@@ -1336,6 +1605,7 @@ mod tests {
                 ("AWS-AWSManagedRulesCommonRuleSet".to_string(), vec![0.0, 1_500.0, 0.0]),
                 ("Default_Action".to_string(), vec![900.0, 0.0, 0.0]),
             ],
+            unit: Unit::Count,
             drill: None,
         }
     }
@@ -1355,14 +1625,68 @@ mod tests {
         };
         let qs = target.curated_queries();
         let rate = qs.iter().find(|q| q.label == "Block rate").unwrap();
-        let resolved = resolve_expression(rate.expression.as_deref().unwrap(), &qs).unwrap();
+        let resolved = resolve_expression(rate.expression.as_deref().unwrap(), &qs, 60).unwrap();
         assert!(resolved.contains("FILL(q1,0)") && resolved.contains("FILL(q0,0)"), "{resolved}");
         assert!(!resolved.contains('{') && !resolved.contains("FILL(q2"), "Count isn't in the rate: {resolved}");
         let only_blocked: Vec<MetricQuery> = qs.iter().filter(|q| q.metric != "AllowedRequests").cloned().collect();
-        let err = resolve_expression(rate.expression.as_deref().unwrap(), &only_blocked).unwrap_err();
+        let err = resolve_expression(rate.expression.as_deref().unwrap(), &only_blocked, 60).unwrap_err();
         assert_eq!(err, "needs AllowedRequests, which isn't charted");
         assert_eq!(WAF_RULE.len(), 5);
         assert!(WAF_RULE.iter().all(|s| s.expr.is_none()));
+    }
+
+    /// A SEARCH's schema braces aren't placeholders, and `$PERIOD` is the
+    /// request's: a fold over storage targets, and math reading it by name.
+    #[test]
+    fn a_search_keeps_its_braces_and_takes_the_period() {
+        let search = "SUM(SEARCH('{AWS/FSx,FileSystemId,StorageTargetId} MetricName=\"X\"', 'Average', $PERIOD))";
+        let folded = MetricQuery {
+            metric: "FreeDataStorageCapacity".into(),
+            expression: Some(search.into()),
+            ..MetricDefinition::default_query()
+        };
+        assert_eq!(
+            resolve_expression(search, &[], 300).unwrap(),
+            "SUM(SEARCH('{AWS/FSx,FileSystemId,StorageTargetId} MetricName=\"X\"', 'Average', 300))"
+        );
+        assert_eq!(resolve_expression("100*(1-{FreeDataStorageCapacity}/10)", &[folded], 60).unwrap(), "100*(1-q0/10)");
+    }
+
+    #[test]
+    fn hidden_rows_go_last() {
+        let t = MetricTarget {
+            title: String::new(),
+            namespace: "AWS/FSx".into(),
+            dimensions: vec![("FileSystemId".into(), "fs-1".into())],
+            specs: FSX_OPENZFS,
+            home: None,
+            hint: None,
+            extra: Vec::new(),
+            breakdown: None,
+            resolve: None,
+        };
+        let q = t.curated_queries();
+        let first_hidden = q.iter().position(|q| q.hidden).unwrap();
+        assert!(q[first_hidden..].iter().all(|q| q.hidden), "{:?}", q.iter().map(|q| &q.label).collect::<Vec<_>>());
+        for set in [FSX_WINDOWS, FSX_LUSTRE, FSX_ONTAP, FSX_OPENZFS, FSX_ONTAP_VOLUME, FSX_OPENZFS_VOLUME] {
+            let seen = set.iter().skip_while(|s| !s.hidden).all(|s| s.hidden);
+            assert!(seen, "a table lists its hidden rows last");
+        }
+    }
+
+    /// One column is its own total: headed by its name, in its unit.
+    #[test]
+    fn a_one_column_table_says_its_value_once() {
+        let t = BreakdownTable {
+            title: "Used by tier · now".into(),
+            columns: &["Used"],
+            rows: vec![("SSD".into(), vec![2.5e9])],
+            unit: Unit::Bytes,
+            drill: None,
+        };
+        let (header, rows) = t.text(40, 5);
+        assert!(header.contains("Used") && !header.contains("Total"), "{header}");
+        assert_eq!(rows[0].matches("GB").count(), 1, "{}", rows[0]);
     }
 
     #[test]

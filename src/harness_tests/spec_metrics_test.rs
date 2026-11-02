@@ -188,7 +188,7 @@ async fn every_spec_target_has_a_mock_that_charts() {
         "AWS/WorkSpaces", "AWS/Athena", "Glue", "AWS/TransitGateway", "AWS/Logs", "AWS/Events",
         "AWS/Route53Resolver", "AWS/CodeBuild", "AWS/CloudFront", "AWS/Route53", "AWS/GlobalAccelerator",
         "AWS/ECS", "AWS/AutoScaling", "ContainerInsights", "AWS/ApiGateway", "AWS/ApplicationELB", "AWS/ES",
-        "AWS/DMS", "ECS/ContainerInsights", "AWS/WAFV2",
+        "AWS/DMS", "ECS/ContainerInsights", "AWS/WAFV2", "AWS/FSx",
     ] {
         assert!(seen.contains_key(ns), "no mock reaches the {ns} spec arm: {seen:?}");
     }
@@ -557,5 +557,86 @@ async fn a_capped_lookup_says_how_far_back_it_read() {
     let at = crate::aws::services::cloudwatch::fmt_epoch_secs(cut);
     assert!(screen.contains(&format!("CloudTrail stopped at its cap: nothing before {} read", &at[5..])), "{screen}");
     assert!(screen.contains("1+"), "{screen}");
+}
+
+
+fn fsx_mock(label: &str) -> Box<dyn crate::aws::resource::Resource> {
+    all_mocks().into_iter().find(|(_, l, _)| *l == label).unwrap().2
+}
+
+/// `m` on an FSx file system charts its type's table on the spec view —
+/// range, `s`, `a`, change markers — where it had a view of its own. The
+/// demo's `ListMetrics` finds nothing, so the whole table is asked for.
+#[tokio::test]
+async fn an_fsx_file_system_charts_its_type_s_table() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    select_mock(&mut app, ServiceType::Fsx, fsx_mock("FsxFileSystem"));
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    assert_eq!(app.metrics_in_pane, Some(MetricsKind::Spec));
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    let labels: Vec<&str> = st.series.iter().map(|s| s.query.label.as_str()).collect();
+    assert_eq!(labels[..3], ["Storage used", "Free storage", "Dedup savings"]);
+    assert!(labels.contains(&"CPU") && labels.contains(&"Disk throughput"), "the file server's load: {labels:?}");
+    assert!(st.target.breakdown.is_none(), "Windows has no volumes");
+    let screen = screen_of(&app);
+    assert!(screen.contains("Metrics — FSx Windows · mock-fsx"), "{screen}");
+    assert!(!screen.contains("x samples"), "a web ACL's key: {screen}");
+}
+
+/// An ONTAP volume's latency is math over its operation time, which is
+/// fetched and never shown; its breakdown is storage by tier.
+#[tokio::test]
+async fn an_ontap_volume_charts_latency_from_rows_it_hides() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    select_mock(&mut app, ServiceType::Fsx, fsx_mock("FsxVolume"));
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert_eq!(
+        st.target.dimensions,
+        [("FileSystemId".to_string(), "fs-0123456789abcdef0".to_string()), ("VolumeId".into(), "fsvol-0123456789abcdef0".into())]
+    );
+    let labels: Vec<&str> = st.series.iter().map(|s| s.query.label.as_str()).collect();
+    assert!(labels.contains(&"Read latency") && !labels.iter().any(|l| l.ends_with(" time")), "{labels:?}");
+    assert_eq!(st.series.len(), st.queries.iter().filter(|q| !q.hidden).count());
+    let latency = st.series.iter().find(|s| s.query.label == "Read latency").unwrap();
+    assert!(latency.error.is_none() && !latency.points.is_empty(), "{latency:?}");
+    press(&mut app, &tx, KeyCode::Char('Z')).await;
+    assert!(screen_of(&app).contains("Breakdown · last 1h"));
+}
+
+/// An ONTAP file system lists its volumes beside the chart; `Tab`, `⏎`
+/// charts one volume's own set, and `d` goes back.
+#[tokio::test]
+async fn enter_on_a_volume_charts_that_volume() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut fs = fsx_mock("FsxFileSystem").as_any().downcast_ref::<crate::aws::services::fsx::FsxFileSystem>().unwrap().clone();
+    fs.file_system_type = "ONTAP".into();
+    let vol = fsx_mock("FsxVolume").as_any().downcast_ref::<crate::aws::services::fsx::FsxVolume>().unwrap().clone();
+    app.lazy.fsx_volumes.apply(fs.file_system_id.clone(), Ok(vec![vol]));
+    select_mock(&mut app, ServiceType::Fsx, Box::new(fs));
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert_eq!(st.target.title, "FSx ONTAP · mock-fsx");
+    assert_eq!(st.table_rows(), 1, "the volume, quiet but listed");
+
+    press(&mut app, &tx, KeyCode::Tab).await;
+    press(&mut app, &tx, KeyCode::Enter).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert_eq!(st.drilled.as_deref(), Some("mock-volume"));
+    assert!(st.queries.iter().all(|q| q.dimensions.iter().any(|(k, v)| k == "VolumeId" && v == "fsvol-0123456789abcdef0")));
+    assert!(st.series.iter().all(|s| s.error.is_none()), "{:?}", st.series.iter().filter_map(|s| s.error.clone()).collect::<Vec<_>>());
+
+    press(&mut app, &tx, KeyCode::Tab).await;
+    press(&mut app, &tx, KeyCode::Char('d')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert!(st.curated && st.queries.iter().all(|q| !q.dimensions.iter().any(|(k, _)| k == "VolumeId")));
 }
 

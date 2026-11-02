@@ -326,19 +326,23 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
         vec![("j/k", "select"), ("⏎", "chart it"), ("Esc", "back")]
     } else if st.table_cursor.is_some() {
         let back: &[(&str, &str)] = if st.curated { &[] } else { &[("d", "default set")] };
-        [&[("j/k", "select"), ("⏎", "chart it"), ("x", "samples"), ("y", "copy name")][..], back, &[("Tab", "metrics"), ("Esc", "back")]]
+        let samples: &[(&str, &str)] =
+            if st.target.breakdown.as_ref().is_some_and(|b| b.has_samples()) { &[("x", "samples")] } else { &[] };
+        [&[("j/k", "select"), ("⏎", "chart it")][..], samples, &[("y", "copy name")], back, &[("Tab", "metrics"), ("Esc", "back")]]
             .concat()
     } else {
         // `d` only means something once a picked metric replaced the set.
         let back: &[(&str, &str)] = if st.curated { &[] } else { &[("d", "default set")] };
         let changes: &[(&str, &str)] =
             if app.metrics_supports_markers() { &[("c", "changes"), ("W", "timeline")] } else { &[] };
-        let tables: &[(&str, &str)] = match (st.table_rows() > 0, st.target.breakdown.is_some()) {
-            (true, _) => &[("Tab", "rules"), ("x", "samples")],
-            (false, true) => &[("x", "samples")],
-            _ => &[],
+        let (tab, samples) = match &st.target.breakdown {
+            Some(b) => (st.table_rows() > 0, b.has_samples()),
+            None => (false, false),
         };
-        [&[("[/]", "range"), ("s", "stat"), ("a", "all")][..], tables, back, changes, &[("y", "copy"), ("e", "edit"), ("Esc", "close")]]
+        let noun = st.target.breakdown.as_ref().map_or("rules", |b| b.rows_noun());
+        let tables: Vec<(&str, &str)> =
+            [tab.then_some(("Tab", noun)), samples.then_some(("x", "samples"))].into_iter().flatten().collect();
+        [&[("[/]", "range"), ("s", "stat"), ("a", "all")][..], &tables, back, changes, &[("y", "copy"), ("e", "edit"), ("Esc", "close")]]
             .concat()
     };
     // A narrow pane drops hints from the end, but `Esc` stays the last.
@@ -514,14 +518,16 @@ fn render_series(app: &App, st: &SpecMetricsState, area: Rect, frame: &mut Frame
     }
 }
 
-/// The target's breakdown tables (WAF's requests by rule and by label) for
-/// the view's range. What doesn't fit is left to `e`, which lists them all.
+/// The target's breakdown tables (WAF's requests by rule and by label, an
+/// FSx file system's volumes and tiers) for the view's range. What doesn't
+/// fit is left to `e`, which lists them all.
 fn render_breakdown(st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
     let dim = Style::default().fg(theme::text_dim());
     let focused = st.table_cursor.is_some();
     let border = if focused { theme::border_focused() } else { theme::border_dim() };
+    let title = st.target.breakdown.as_ref().map_or_else(String::new, |b| b.title(st.range));
     let block = Block::default()
-        .title(Span::styled(format!(" Totals · last {} ", st.range.label()), dim))
+        .title(Span::styled(format!(" {title} "), dim))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border));
     let inner = block.inner(area);
@@ -531,6 +537,9 @@ fn render_breakdown(st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
     match &st.breakdown {
         None => lines.push(Line::styled(if st.loading { " Reading…" } else { " Nothing to show" }, dim)),
         Some(Err(e)) => lines.push(Line::styled(format!(" ⚠ {e}"), Style::default().fg(theme::warning()))),
+        Some(Ok(data)) if data.tables.is_empty() && data.summary.is_none() => {
+            lines.push(Line::styled(" Nothing published in the range", dim))
+        }
         Some(Ok(data)) => {
             if let Some(summary) = &data.summary {
                 lines.push(Line::styled(

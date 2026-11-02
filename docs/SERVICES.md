@@ -647,10 +647,27 @@ the service you're touching.
     use `DRAFT`). `trigger_agent_section_load` dispatches per section.
 - **FSx** (`@fsx`) — sub-tabs File Systems/Volumes; volumes are first-class
   (fuzzy-searchable, own detail pane, own `m`). Storage metric **names +
-  dimensions differ per FS type**, so they're **discovered** via
-  `ListMetrics(AWS/FSx)` rather than hard-coded. `m` charts storage/throughput/
-  latency + a storage-composition breakdown; `f` toggles volume↔file-system
-  graph.
+  dimensions differ per FS type**. `m` is the spec view with **one table
+  per type** (`aws::metrics::FSX_*`, written from each user guide's metric
+  page) plus ONTAP / OpenZFS volume tables; `Resolve::Fsx`
+  (`fsx::resolve_metrics`) runs `ListMetrics` once and keeps only what this
+  file system publishes (Windows under 32 MBps has no file-server metrics),
+  re-keyed to its real dimensions: ONTAP's utilisation is the
+  `StorageTier=SSD, DataType=All` cell, never a sum with the capacity pool.
+  Lustre publishes capacity **per storage target** and utilisation **per
+  server**, so those rows become `SUM`/`MAX(SEARCH(…))` over them — the old
+  view's "fewest dimensions" pick charted one arbitrary OST. If
+  `ListMetrics` fails or finds nothing the whole table is asked for, so the
+  fetch says what's wrong per row. Latency is metric math over **hidden**
+  `*OperationTime` rows: that metric is **seconds** spent (ONTAP guide), so
+  ms = 1000 × time ÷ ops — the old view and the volume pane divided by 1000
+  as if it were microseconds. Windows' utilisation, when unpublished, is
+  worked out from `FreeStorageCapacity` and the configured size. ONTAP /
+  OpenZFS file systems get a Volumes breakdown (read/write per volume over
+  the range; `⏎` charts one, its set unresolved — `m` on the volume itself
+  resolves it) and ONTAP adds used storage by tier and by data type (the
+  `StorageTier=All` / `DataType=All` roll-ups, so nothing counts twice). `m`
+  with the cursor on a volume in the Volumes section charts that volume.
 - **ECR** (`@ecr`, `ecr.rs`) — sub-tabs Repositories (1) / **Images** (2).
   Images are first-class rows: phase 2 of the list load walks
   `DescribeImages` for every repo (`buffer_unordered(6)`); a repo that fails
