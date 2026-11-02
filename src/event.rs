@@ -1,7 +1,6 @@
 use crate::aws::region::Region;
 use crate::aws::resource::Resource;
 use crate::aws::service::ServiceType;
-use crate::aws::services::cloudwatch::CwAlarmMetricsData;
 use crate::aws::services::ec2::SsmInstanceStatus;
 use std::collections::HashMap;
 use crossterm::event::{KeyEvent, MouseEvent};
@@ -191,13 +190,6 @@ pub enum Event {
     /// opens in `$EDITOR` with a JSON/YAML suffix sniffed from the body.
     ScTemplateLoaded {
         result: Result<String, String>,
-    },
-
-    /// Fired when a CloudWatch alarm's own metric time series has been fetched
-    /// for the metric-chart overlay (`m` on a CwAlarm).
-    CwAlarmMetricsLoaded {
-        alarm_arn: String,
-        data: CwAlarmMetricsData,
     },
 
     /// Fired when the metric explorer's metric list has been fetched (lazily, on

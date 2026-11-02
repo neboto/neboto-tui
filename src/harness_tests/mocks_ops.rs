@@ -13,6 +13,15 @@ pub(super) fn mocks() -> Vec<Mock> {
             Box::new(svc::cloudwatch::CwAlarm::from_sdk(
                 &aws_sdk_cloudwatch::types::MetricAlarm::builder()
                     .alarm_name("mock-alarm")
+                    .namespace("AWS/EC2")
+                    .metric_name("CPUUtilization")
+                    .dimensions(
+                        aws_sdk_cloudwatch::types::Dimension::builder().name("InstanceId").value("i-0mock").build(),
+                    )
+                    .statistic(aws_sdk_cloudwatch::types::Statistic::Average)
+                    .period(300)
+                    .threshold(80.0)
+                    .comparison_operator(aws_sdk_cloudwatch::types::ComparisonOperator::GreaterThanThreshold)
                     .build(),
             )),
         ),

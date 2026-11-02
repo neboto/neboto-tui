@@ -712,3 +712,53 @@ async fn a_pending_certificate_says_it_has_no_expiry_yet() {
     assert!(st.queries.is_empty() && !st.loading);
     assert!(screen_of(&app).contains("Only an issued certificate publishes DaysToExpiry"));
 }
+
+fn alarm() -> crate::aws::services::cloudwatch::CwAlarm {
+    mock("CwAlarm").as_any().downcast_ref::<crate::aws::services::cloudwatch::CwAlarm>().unwrap().clone()
+}
+
+/// `m` on an alarm charts its own metric at its own statistic, never at a
+/// shorter period than it evaluates, with the threshold drawn across.
+#[tokio::test]
+async fn an_alarm_charts_its_metric_against_its_threshold() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut a = alarm();
+    a.period = 7200;
+    select_mock(&mut app, ServiceType::CloudWatch, Box::new(a));
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    assert_eq!(app.metrics_in_pane, Some(MetricsKind::Spec));
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert_eq!(st.range, crate::aws::services::ec2::MetricsTimeRange::SixHours, "a 2h period opens on a range that holds it");
+    let s = &st.series[0];
+    assert!(s.error.is_none() && !s.points.is_empty());
+    assert!(s.points.windows(2).all(|w| w[1].0 - w[0].0 >= 7200), "read at the alarm's period: {:?}", s.points);
+    assert_eq!(s.query.limits, vec![(80.0, "alarm >".to_string())]);
+    assert!(screen_of(&app).contains("alarm > 80"));
+    assert_eq!(app.spec_metrics_range, crate::aws::services::ec2::MetricsTimeRange::OneHour, "the shared range is untouched");
+}
+
+/// A Sum grows with its period, so a Sum alarm read over a longer one is
+/// scaled back to the alarm's; a math alarm has no single metric and says so.
+#[test]
+fn a_sum_alarm_is_scaled_and_a_math_alarm_explains() {
+    use crate::aws::services::cloudwatch::alarm_metric_target;
+    let mut a = alarm();
+    a.statistic = "Sum".into();
+    a.period = 60;
+    let t = alarm_metric_target(&a);
+    assert_eq!(t.extra.len(), 2);
+    assert_eq!(t.extra[0].expression.as_deref(), Some("{CPUUtilization}*60/$PERIOD"));
+    assert!(t.extra[1].hidden && t.extra[1].metric == "CPUUtilization" && t.extra[1].min_period == Some(60));
+
+    a.statistic = "p90".into();
+    let t = alarm_metric_target(&a);
+    assert_eq!(t.extra.len(), 1);
+    assert!(t.extra[0].label.contains("alarm reads p90"));
+
+    a.metric_name.clear();
+    a.namespace.clear();
+    let t = alarm_metric_target(&a);
+    assert!(t.extra.is_empty() && t.hint.unwrap().contains("no single metric"));
+}

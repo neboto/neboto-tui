@@ -610,7 +610,7 @@ fn render_chart(st: &SpecMetricsState, drawn: &[(usize, &MetricSeries)], area: R
     let lo = all.clone().map(|(_, y)| *y).fold(0.0_f64, f64::min);
     let sel = drawn.iter().find(|(i, _)| *i == st.selected).map(|(_, s)| *s).unwrap_or(drawn[0].1);
     // The first limit stays in view, so a rate reads against it.
-    let limits = sel.query.limits;
+    let limits = &sel.query.limits;
     let peak = all.map(|(_, y)| *y).chain(limits.first().map(|(v, _)| *v)).fold(f64::MIN, f64::max);
     let hi = if peak > lo { peak + (peak - lo) * 0.1 } else { lo + 1.0 };
     let limit_lines: Vec<Vec<(f64, f64)>> = limits.iter().map(|(v, _)| vec![(0.0, *v), (x_max, *v)]).collect();

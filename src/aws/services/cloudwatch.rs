@@ -10,6 +10,8 @@ use std::any::Any;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
+use crate::aws::services::ec2::MetricsTimeRange;
+
 pub struct CloudWatchService {
     cw_client: CwClient,
     logs_client: LogsClient,
@@ -421,9 +423,11 @@ impl CwAlarm {
             namespace: a.namespace().unwrap_or("").to_string(),
             metric_name: a.metric_name().unwrap_or("").to_string(),
             period: a.period().unwrap_or(60),
+            // A percentile alarm leaves `statistic` empty and says `p95` here.
             statistic: a
                 .statistic()
                 .map(|s| s.as_str().to_string())
+                .or_else(|| a.extended_statistic().map(str::to_string))
                 .unwrap_or_default(),
             threshold: a.threshold().unwrap_or(0.0),
             comparison_operator: a
@@ -464,6 +468,73 @@ impl CwAlarm {
             other => other.to_string(),
         }
     }
+}
+
+/// `m` on an alarm: its own metric, at its own statistic and never a
+/// shorter period than it evaluates, with the threshold drawn across. A Sum
+/// grows with the period it's read over, so when the range's period is
+/// longer it's scaled back to the alarm's (`×period/$PERIOD`): the line and
+/// the threshold stay comparable at any range.
+pub fn alarm_metric_target(a: &CwAlarm) -> crate::aws::metrics::MetricTarget {
+    use crate::aws::metrics::{MetricQuery, MetricTarget, Stat, Unit};
+    let t = MetricTarget {
+        title: format!("Alarm · {}", a.alarm_name),
+        namespace: a.namespace.clone(),
+        dimensions: a.dimensions.clone(),
+        specs: &[],
+        home: None,
+        hint: Some("No datapoints in this range: the metric may not be reporting (a stopped resource, a sparse event metric)"),
+        extra: Vec::new(),
+        breakdown: None,
+        resolve: None,
+    };
+    if a.namespace.is_empty() || a.metric_name.is_empty() {
+        return MetricTarget {
+            hint: Some("This alarm has no single metric to chart (metric math or anomaly detection)"),
+            ..t
+        };
+    }
+    // `Stat` has one percentile; any other charts as an average and says so.
+    let (stat, label) = match a.statistic.as_str() {
+        "Sum" => (Stat::Sum, a.metric_name.clone()),
+        "Maximum" => (Stat::Maximum, a.metric_name.clone()),
+        "Minimum" => (Stat::Minimum, a.metric_name.clone()),
+        "SampleCount" => (Stat::SampleCount, a.metric_name.clone()),
+        "p99" => (Stat::P99, a.metric_name.clone()),
+        "Average" | "" => (Stat::Average, a.metric_name.clone()),
+        other => (Stat::Average, format!("{} (avg; alarm reads {other})", a.metric_name)),
+    };
+    let raw = MetricQuery {
+        namespace: a.namespace.clone(),
+        metric: a.metric_name.clone(),
+        dimensions: a.dimensions.clone(),
+        label,
+        stat,
+        unit: Unit::Raw,
+        rate: false,
+        group: None,
+        sparse: false,
+        tone: None,
+        expression: None,
+        hidden: false,
+        search: None,
+        limits: vec![(a.threshold, format!("alarm {}", a.comparison_display()))],
+        min_period: Some(a.period),
+    };
+    // A name the placeholder can't hold charts unscaled rather than not at all.
+    let placeable = !a.metric_name.contains([',', '/', '\'', '"', '=', '{', '}']);
+    let extra = if matches!(stat, Stat::Sum | Stat::SampleCount) && placeable {
+        let shown = MetricQuery {
+            metric: String::new(),
+            label: format!("{} per {}s", raw.label, a.period),
+            expression: Some(format!("{{{}}}*{}/$PERIOD", a.metric_name, a.period)),
+            ..raw.clone()
+        };
+        vec![shown, MetricQuery { hidden: true, limits: Vec::new(), ..raw }]
+    } else {
+        vec![raw]
+    };
+    MetricTarget { extra, ..t }
 }
 
 crate::sections! {
@@ -2166,103 +2237,6 @@ pub async fn fetch_alarm_history(
         .collect();
 
     Ok(items)
-}
-
-// ── Alarm metric overlay (`m` action on a CwAlarm) ─────────────────────────
-
-use crate::aws::services::ec2::MetricsTimeRange;
-
-#[derive(Debug, Clone)]
-pub struct CwAlarmMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub points: Vec<(f64, f64)>,
-    pub threshold: f64,
-    pub x_max: f64,
-}
-
-#[derive(Debug, Clone)]
-pub enum CwAlarmMetricsState {
-    Loading,
-    Loaded(CwAlarmMetricsData),
-}
-
-/// Fetch the time series for an alarm's own metric so it can be charted with
-/// the threshold drawn as a reference line. Uses the alarm's namespace /
-/// metric / dimensions / statistic; the period is widened to the view's
-/// period on long ranges to stay under the 1440-datapoint cap. Metric-math /
-/// anomaly-detection alarms (no single metric/statistic) come back empty.
-#[allow(clippy::too_many_arguments)]
-pub async fn fetch_alarm_metrics(
-    client: CwClient,
-    namespace: String,
-    metric_name: String,
-    dimensions: Vec<(String, String)>,
-    statistic: String,
-    period: i32,
-    threshold: f64,
-    time_range: MetricsTimeRange,
-) -> Result<CwAlarmMetricsData> {
-    use aws_sdk_cloudwatch::types::{Dimension, Statistic};
-
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start_secs = now_secs - time_range.duration_secs();
-    let period = period.max(time_range.period_secs());
-
-    let start_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(start_secs);
-    let end_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(now_secs);
-
-    let stat = match statistic.as_str() {
-        "Sum" => Statistic::Sum,
-        "Minimum" => Statistic::Minimum,
-        "Maximum" => Statistic::Maximum,
-        "SampleCount" => Statistic::SampleCount,
-        _ => Statistic::Average,
-    };
-
-    let dims: Vec<Dimension> = dimensions
-        .iter()
-        .map(|(n, v)| Dimension::builder().name(n).value(v).build())
-        .collect();
-
-    let resp = client
-        .get_metric_statistics()
-        .namespace(&namespace)
-        .metric_name(&metric_name)
-        .set_dimensions(if dims.is_empty() { None } else { Some(dims) })
-        .start_time(start_dt)
-        .end_time(end_dt)
-        .period(period)
-        .set_statistics(Some(vec![stat]))
-        .send()
-        .await
-        .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
-
-    let mut points: Vec<(f64, f64)> = resp
-        .datapoints()
-        .iter()
-        .filter_map(|dp| {
-            let t = (dp.timestamp()?.secs() - start_secs) as f64;
-            let v = match statistic.as_str() {
-                "Sum" => dp.sum(),
-                "Minimum" => dp.minimum(),
-                "Maximum" => dp.maximum(),
-                "SampleCount" => dp.sample_count(),
-                _ => dp.average(),
-            }?;
-            Some((t, v))
-        })
-        .collect();
-    points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    Ok(CwAlarmMetricsData {
-        time_range,
-        points,
-        threshold,
-        x_max: time_range.duration_secs() as f64,
-    })
 }
 
 // ── Log group filters (lazy Filters section of the CwLogGroup split pane) ──
