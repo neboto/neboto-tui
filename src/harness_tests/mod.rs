@@ -71,6 +71,7 @@ mod timeline_test;
 mod list_ux_test;
 mod search_follow_test;
 mod region_fanout_test;
+mod nav_credentials_test;
 mod access_lens_test;
 mod changes_test;
 mod chart_markers_test;

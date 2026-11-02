@@ -60,6 +60,14 @@ mod tests {
             details_focused: true,
             detail_section: Some("Networking".to_string()),
             region: Some("ap-southeast-2".to_string()),
+            credentials: Some(crate::app::NavCredentials {
+                profile: Some("mgmt".to_string()),
+                assumed: Some(crate::app::NavAssumedRole {
+                    account_id: "111122223333".to_string(),
+                    account_name: "prod".to_string(),
+                    role_name: "OrganizationAccountAccessRole".to_string(),
+                }),
+            }),
         };
         let json = serde_json::to_string(std::slice::from_ref(&loc)).unwrap();
         let back: Vec<NavLocation> = serde_json::from_str(&json).unwrap();
@@ -71,6 +79,9 @@ mod tests {
         assert!(back[0].details_focused);
         assert_eq!(back[0].detail_section.as_deref(), Some("Networking"));
         assert_eq!(back[0].region.as_deref(), Some("ap-southeast-2"));
+        let creds = back[0].credentials.as_ref().expect("credentials survive");
+        assert_eq!(creds.profile.as_deref(), Some("mgmt"));
+        assert_eq!(creds.assumed.as_ref().map(|a| a.account_id.as_str()), Some("111122223333"));
     }
 
     #[test]
@@ -86,16 +97,19 @@ mod tests {
             details_focused: true,
             detail_section: Some("Tags".to_string()),
             region: Some("us-east-1".to_string()),
+            credentials: Some(crate::app::NavCredentials { profile: Some("dev".to_string()), assumed: None }),
         };
         let mut value = serde_json::to_value(&loc).unwrap();
         let obj = value.as_object_mut().unwrap();
         obj.remove("details_focused");
         obj.remove("detail_section");
         obj.remove("region");
+        obj.remove("credentials");
         let back: NavLocation = serde_json::from_value(value).unwrap();
         assert!(!back.details_focused);
         assert!(back.detail_section.is_none());
         assert!(back.region.is_none(), "an old bookmark restores in the current region");
+        assert!(back.credentials.is_none(), "…and under the current credentials");
     }
 
     #[test]
