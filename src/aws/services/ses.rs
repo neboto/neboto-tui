@@ -9,7 +9,6 @@ use std::any::Any;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-pub use crate::aws::services::ec2::MetricsTimeRange;
 
 /// Amazon SES (v2) — three sub-tabs (Identities / Configuration Sets /
 /// Suppression List), one `ServiceType`, browse-only. Each type streams as its
@@ -34,10 +33,6 @@ pub use crate::aws::services::ec2::MetricsTimeRange;
 pub struct SesService {
     client: SesClient,
 }
-
-/// Fixed cache key for the account-wide `m` metrics — SES `AWS/SES` metrics
-/// carry no dimensions, so one series serves every SES row.
-pub const SES_METRICS_KEY: &str = "__ses_account__";
 
 impl SesService {
     pub fn new(aws_clients: &AwsClients) -> Self {
@@ -716,133 +711,9 @@ impl Resource for SesSuppressedDest {
 
 // ── Metrics (account-wide `AWS/SES`, no dimensions) ──────────────────────────
 
-#[derive(Debug, Clone)]
-pub struct SesMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub send: Vec<(f64, f64)>,
-    pub delivery: Vec<(f64, f64)>,
-    pub bounce: Vec<(f64, f64)>,
-    pub complaint: Vec<(f64, f64)>,
-    pub reject: Vec<(f64, f64)>,
-    pub rendering_failures: Vec<(f64, f64)>,
-    /// `Reputation.BounceRate` / `Reputation.ComplaintRate` as **percent**
-    /// (AWS publishes a 0–1 ratio) — the numbers SES pauses an account on.
-    pub bounce_rate: Vec<(f64, f64)>,
-    pub complaint_rate: Vec<(f64, f64)>,
-    pub x_max: f64,
-}
 
-/// SES's published reputation thresholds, in percent: (review, pause).
-/// Above "review" AWS puts the account under review; above "pause" it can
-/// stop the account sending.
-pub const SES_BOUNCE_RATE_LIMITS: (f64, f64) = (5.0, 10.0);
-pub const SES_COMPLAINT_RATE_LIMITS: (f64, f64) = (0.1, 0.5);
 
-#[derive(Debug, Clone)]
-pub enum SesMetricsState {
-    Loading,
-    Loaded(Box<SesMetricsData>),
-}
 
-/// Pull account-wide `AWS/SES` volume metrics. These carry no dimensions — the
-/// numbers are for the whole account/region, so the same chart is shown for any
-/// selected SES row. Send/Delivery are the throughput headline; Bounce/Complaint
-/// are the reputation-risk signals; Reject/Rendering Failures catch pre-send
-/// problems.
-pub async fn fetch_ses_metrics(
-    cw: aws_sdk_cloudwatch::Client,
-    time_range: MetricsTimeRange,
-) -> Result<SesMetricsData> {
-    use aws_sdk_cloudwatch::types::Statistic;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start = now - time_range.duration_secs();
-    let period = time_range.period_secs();
-    let start_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(start);
-    let end_dt = aws_sdk_cloudwatch::primitives::DateTime::from_secs(now);
-
-    let metric = |name: &'static str| {
-        cw.get_metric_statistics()
-            .namespace("AWS/SES")
-            .metric_name(name)
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Sum]))
-            .send()
-    };
-
-    // The reputation rates are a running ratio, not a count: Maximum per
-    // period is the honest reading (a Sum of ratios means nothing).
-    let rate = |name: &'static str| {
-        cw.get_metric_statistics()
-            .namespace("AWS/SES")
-            .metric_name(name)
-            .start_time(start_dt)
-            .end_time(end_dt)
-            .period(period)
-            .set_statistics(Some(vec![Statistic::Maximum]))
-            .send()
-    };
-
-    let (send, delivery, bounce, complaint, reject, rendering, bounce_rate, complaint_rate) = tokio::join!(
-        metric("Send"),
-        metric("Delivery"),
-        metric("Bounce"),
-        metric("Complaint"),
-        metric("Reject"),
-        metric("Rendering Failures"),
-        rate("Reputation.BounceRate"),
-        rate("Reputation.ComplaintRate"),
-    );
-
-    let parse = |resp: std::result::Result<
-        aws_sdk_cloudwatch::operation::get_metric_statistics::GetMetricStatisticsOutput,
-        _,
-    >| -> Vec<(f64, f64)> {
-        let mut pts: Vec<(f64, f64)> = match resp {
-            Ok(r) => r
-                .datapoints()
-                .iter()
-                .filter_map(|dp| Some((dp.timestamp()?.secs() as f64 - start as f64, dp.sum()?)))
-                .collect(),
-            Err(_) => vec![],
-        };
-        pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        pts
-    };
-    let parse_pct = |resp: std::result::Result<
-        aws_sdk_cloudwatch::operation::get_metric_statistics::GetMetricStatisticsOutput,
-        _,
-    >| -> Vec<(f64, f64)> {
-        let mut pts: Vec<(f64, f64)> = match resp {
-            Ok(r) => r
-                .datapoints()
-                .iter()
-                .filter_map(|dp| Some((dp.timestamp()?.secs() as f64 - start as f64, dp.maximum()? * 100.0)))
-                .collect(),
-            Err(_) => vec![],
-        };
-        pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        pts
-    };
-
-    Ok(SesMetricsData {
-        time_range,
-        send: parse(send),
-        delivery: parse(delivery),
-        bounce: parse(bounce),
-        complaint: parse(complaint),
-        reject: parse(reject),
-        rendering_failures: parse(rendering),
-        bounce_rate: parse_pct(bounce_rate),
-        complaint_rate: parse_pct(complaint_rate),
-        x_max: time_range.duration_secs() as f64,
-    })
-}
 
 #[cfg(test)]
 mod tests {

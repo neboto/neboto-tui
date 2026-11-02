@@ -41,9 +41,9 @@ in `any_pane_overlay_active` (which gates the mouse).
   inference profile, `AWS/Bedrock` dim `ModelId`)/S3 (bucket size + object
   count)/Transfer (`AWS/Transfer` dim `ServerId`)/Route53 health checks
   (`AWS/Route53` dim `HealthCheckId`, global → us-east-1)/SES (`AWS/SES`,
-  **account-wide, no dimensions** — one series for any SES row, keyed
-  `SES_METRICS_KEY`)/MSK (`AWS/Kafka` dim `Cluster Name`; per-broker
-  bytes/disk series aggregated with the SEARCH/SUM+MAX pattern)/NAT gateways
+  **account-wide, no dimensions** — the same set for any SES row)/MSK
+  (`AWS/Kafka` dim `Cluster Name`; per-broker bytes/disk folded across
+  brokers, SUM and MAX)/NAT gateways
   (`AWS/NATGateway` dim `NatGatewayId`)/VPN connections (`AWS/VPN` dim `VpnId`,
   both tunnels aggregated)/DX connections (`AWS/DX` dim `ConnectionId` —
   state, bps+pps both ways, errors, light levels)/DX virtual interfaces
@@ -56,14 +56,14 @@ in `any_pane_overlay_active` (which gates the mouse).
   us-west-2 → `cloudwatch_us_west_2_client()`)/WorkSpaces (`AWS/WorkSpaces` dim
   `WorkspaceId`)/Cognito user pools (`AWS/Cognito` publishes per
   `(UserPool, UserPoolClient)` pair — aggregated across app clients with the
-  MSK-style SEARCH/SUM `GetMetricData` pattern)/Athena workgroups
+  MSK-style fold across a SEARCH)/Athena workgroups
   (`AWS/Athena` dim `WorkGroup` — data scanned + per-phase timing)/Glue jobs
   (`Glue` namespace, **no `AWS/` prefix**, dims `JobName`/`JobRunId=ALL`/
   `Type=count`, Maximum stat; needs job metrics enabled)/Redshift clusters
   (`AWS/Redshift` dim `ClusterIdentifier`)/Redshift Serverless workgroups
   (`AWS/Redshift-Serverless` dim `Workgroup`)/VPC endpoints
   (`AWS/PrivateLinkEndpoints` — publishes under the full 4-dim schema, so it
-  needs the SEARCH/SUM `GetMetricData` pattern keyed `VPC Endpoint Id`;
+  needs its rows folded across that schema, keyed `VPC Endpoint Id`;
   **gateway** endpoints (S3/DDB) publish nothing → the pane explains instead
   of fetching)/Transit Gateways + attachments (`AWS/TransitGateway` dim
   `TransitGateway`, attachments add `TransitGatewayAttachment`; one
@@ -107,19 +107,34 @@ in `any_pane_overlay_active` (which gates the mouse).
   row error, not a failed call) and can carry a `Tone` so its colour
   means something (blocked is red whatever the palette order). A bare
   SEARCH is still not a spec row (it returns many series, math returns
-  one), but math **aggregating** one is:
-  `SUM(SEARCH('{AWS/FSx,FileSystemId,StorageTargetId} …', 'Average',
-  $PERIOD))` — braces around anything but a metric name are left alone,
-  `$PERIOD` becomes the request's period, and keeping `metric` set on the
-  row lets other math name it. A spec row marked `.hidden()` is fetched
+  one), but a metric **folded across** one is: `.across(Agg::Sum,
+  "UserPool,UserPoolClient")` pins a schema, `.across_any` matches any set
+  carrying the resource's dimensions (Network Firewall's per-AZ and
+  per-engine sets), `.across_token` matches the dimension values as bare
+  tokens (AgentCore's undocumented dimension names). The row is built into
+  `AGG(SEARCH('… MetricName="X" <its dimensions>', '<stat>', <period>))`
+  when it's fetched (`MetricQuery::search_expression`), so `s` still
+  cycles the statistic read per series, a drill re-keys it, and math can
+  name it by its metric. This is how Cognito, Network Firewall, MSK, VPC
+  endpoints, AgentCore and Lustre's per-target FSx rows chart; the demo
+  generates a folded SEARCH like a plain metric (a bare one still needs a
+  fixture). A math row's `{Name}` placeholder can hold dots and spaces
+  (SES's `Reputation.BounceRate`); braces around a SEARCH schema (commas,
+  slashes, quotes) are left alone and `$PERIOD` becomes the request's
+  period. `.limits(&[(5.0, "review"), …])` draws lines across a row's
+  chart, the first kept in the y range (SES's reputation thresholds). A
+  target with no queries (a gateway endpoint) makes no call and shows its
+  `hint`; one with no dimensions (SES, account-wide) lists only its own
+  namespace under `a`. A spec row marked `.hidden()` is fetched
   (`ReturnData=false`) for math to read and never shown — FSx's latency
   reads its operation time that way; hidden rows go **last**, since a
   row's place in the view is its place in the queries. A `Resolve` whose
   `TargetFix::curated` is set replaces the curated set outright: FSx keeps
   only what `ListMetrics` says the file system publishes. A
   hand-built kind (an enum
-  variant + an open arm + a render arm) is for what a spec can't say yet:
-  per-row SEARCH breakdowns, a fixed home region, S3's daily series, dashboards,
+  variant + an open arm + a render arm) is for what a spec can't say yet —
+  only four are left: the CW alarm (its own period and threshold line),
+  S3's daily series, dashboards,
   Cost. Either way it needs **an arm in `supports_metrics_overlay()`** —
   that gates the status-bar `m` hint (not the key itself), and it lagging
   is exactly how DX VIFs shipped with a working `m` but no hint.

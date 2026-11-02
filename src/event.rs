@@ -227,12 +227,6 @@ pub enum Event {
         statuses: HashMap<String, SsmInstanceStatus>,
     },
 
-    /// Fired when a Network Firewall's traffic metrics have been fetched.
-    /// Keyed by firewall name.
-    NfwMetricsLoaded {
-        firewall_name: String,
-        data: crate::aws::services::network_firewall::NfwMetricsData,
-    },
 
 
     /// Fired when the Organizations account-name map for Identity Center
@@ -273,11 +267,6 @@ pub enum Event {
 
 
 
-    /// VPC endpoint (PrivateLink) CloudWatch metrics (`m` overlay), keyed by endpoint id.
-    VpceMetricsLoaded {
-        endpoint_id: String,
-        data: crate::aws::services::vpc::VpceMetricsData,
-    },
 
 
 
@@ -300,21 +289,10 @@ pub enum Event {
 
 
 
-    /// Bedrock AgentCore CloudWatch metrics (`m` overlay), keyed by the
-    /// resource id (one map covers all five families).
-    AgentCoreMetricsLoaded {
-        key: String,
-        data: Box<crate::aws::services::agentcore::AgentCoreMetricsData>,
-    },
 
 
 
 
-    /// Cognito user-pool CloudWatch metrics (`m` overlay), keyed by pool id.
-    CognitoMetricsLoaded {
-        pool_id: String,
-        data: crate::aws::services::cognito::CognitoMetricsData,
-    },
 
 
 
@@ -471,11 +449,6 @@ pub enum Event {
         info: crate::aws::services::ses::SesAccountInfo,
     },
 
-    /// SES account-wide `AWS/SES` metrics (`m` overlay); a single series, so it
-    /// is stored under a fixed key rather than a per-resource one.
-    SesMetricsLoaded {
-        data: crate::aws::services::ses::SesMetricsData,
-    },
 
     /// Firewall Manager admin posture (`GetAdminAccount`), fetched once per
     /// load and folded into each policy's Overview + the non-admin empty state.
@@ -489,12 +462,6 @@ pub enum Event {
     /// per-fetch `*Loaded` variants for lazy sections.
     Lazy(crate::lazy::LazyApply),
 
-    /// Fired when an MSK cluster's `AWS/Kafka` metrics have been fetched. Keyed
-    /// by cluster ARN.
-    MskMetricsLoaded {
-        arn: String,
-        data: crate::aws::services::msk::MskMetricsData,
-    },
 
     // Application events
     Tick,
