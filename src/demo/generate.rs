@@ -124,9 +124,20 @@ fn get_metric_data(body: &str, now: i64) -> Option<String> {
             None => {
                 let expr = q.get("Expression")?.as_str()?;
                 if expr.contains("SEARCH") {
-                    return None;
+                    // One series folded from a SEARCH (`SUM(SEARCH(…))`, a
+                    // spec row published per AZ or broker) is generated like
+                    // its metric; a bare SEARCH answers many series, and
+                    // those come from fixtures.
+                    let folded = ["SUM(SEARCH(", "MAX(SEARCH(", "AVG(SEARCH(", "MIN(SEARCH("].iter().any(|p| expr.starts_with(p));
+                    if !folded {
+                        return None;
+                    }
+                    let name = expr.split("MetricName=\"").nth(1).and_then(|r| r.split('"').next())?;
+                    let period = expr.rsplit(',').next()?.trim_end_matches(')').trim().parse::<i64>().ok()?.max(1);
+                    (name, expr.to_string(), period)
+                } else {
+                    ("Expression", expr.to_string(), stat_period)
                 }
-                ("Expression", expr.to_string(), stat_period)
             }
         };
         let seed = resource.bytes().chain(name.bytes()).fold(0i64, |h, b| h.wrapping_mul(31).wrapping_add(b as i64));
@@ -366,11 +377,18 @@ mod tests {
         let errors: Vec<f64> = r[0]["Values"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
         assert!(errors[50..].iter().sum::<f64>() > errors[..10].iter().sum::<f64>(), "orders-api errors climb");
         assert_eq!(get_metric_data(&body, now), get_metric_data(&body, now), "repeatable");
-        let search = serde_json::json!({
-            "StartTime": {"$timestamp": now - 3_600}, "EndTime": {"$timestamp": now},
-            "MetricDataQueries": [{"Id": "m0", "Expression": "SUM(SEARCH('{AWS/Kafka} x', 'Sum', 60))"}]
-        })
-        .to_string();
-        assert!(get_metric_data(&search, now).is_none(), "a SEARCH falls through");
+        let request = |expr: &str| {
+            serde_json::json!({
+                "StartTime": {"$timestamp": now - 3_600}, "EndTime": {"$timestamp": now},
+                "MetricDataQueries": [{"Id": "q0", "Expression": expr}]
+            })
+            .to_string()
+        };
+        let bare = request("SEARCH('{AWS/WAFV2,Rule,WebACL} MetricName=\"BlockedRequests\"', 'Sum', 60)");
+        assert!(get_metric_data(&bare, now).is_none(), "many series: a bare SEARCH falls through");
+        let folded = request("SUM(SEARCH('{AWS/Kafka,\"Cluster Name\",\"Broker ID\"} MetricName=\"BytesInPerSec\" \"Cluster Name\"=\"c\"', 'Average', 300))");
+        let out: serde_json::Value = serde_json::from_str(&get_metric_data(&folded, now).unwrap()).unwrap();
+        let r = out["MetricDataResults"].as_array().unwrap();
+        assert_eq!((r[0]["Label"].as_str(), r[0]["Values"].as_array().unwrap().len()), (Some("BytesInPerSec"), 12), "one series at its period");
     }
 }

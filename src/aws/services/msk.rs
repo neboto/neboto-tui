@@ -1,11 +1,9 @@
 use crate::aws::client::AwsClients;
 use crate::aws::resource::{native_state_label, Resource, ResourceState};
 use crate::aws::service::{AwsService, ServiceType};
-use crate::aws::services::ec2::MetricsTimeRange;
 use crate::error::Result;
 use crate::event::{Event, LoadProgress};
 use async_trait::async_trait;
-use aws_sdk_cloudwatch::primitives::DateTime as CwDateTime;
 use aws_sdk_kafka::Client as KafkaClient;
 use std::any::Any;
 use std::collections::HashMap;
@@ -515,98 +513,8 @@ pub async fn fetch_msk_config(
 
 // ── CloudWatch metrics (`m` overlay — AWS/Kafka) ──────────────────────────────
 
-#[derive(Debug, Clone)]
-pub struct MskMetricsData {
-    pub time_range: MetricsTimeRange,
-    pub topics: Vec<(f64, f64)>,
-    pub partitions: Vec<(f64, f64)>,
-    pub bytes_in: Vec<(f64, f64)>,
-    pub bytes_out: Vec<(f64, f64)>,
-    pub disk_used: Vec<(f64, f64)>,
-    pub x_max: f64,
-}
 
-#[derive(Debug, Clone)]
-pub enum MskMetricsState {
-    Loading,
-    Loaded(MskMetricsData),
-}
 
-/// Pull `AWS/Kafka` metrics for one cluster. `GlobalTopicCount` /
-/// `GlobalPartitionCount` are cluster-level (dim `Cluster Name` only), but
-/// `BytesInPerSec` / `BytesOutPerSec` / `KafkaDataLogsDiskUsed` are published
-/// **per broker** (dim `Broker ID`), so — like Network Firewall's per-AZ series —
-/// we aggregate every broker's series with `GetMetricData` SEARCH: SUM for the
-/// throughput totals, MAX for the worst-broker disk usage. The schema form
-/// (`{AWS/Kafka,"Cluster Name","Broker ID"}`) restricts the SEARCH to broker-level
-/// series so per-topic series don't double-count.
-pub async fn fetch_msk_metrics(
-    cw: aws_sdk_cloudwatch::Client,
-    cluster_name: String,
-    time_range: MetricsTimeRange,
-) -> Result<MskMetricsData> {
-    use aws_sdk_cloudwatch::types::MetricDataQuery;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let start = now - time_range.duration_secs();
-    let period = time_range.period_secs();
-
-    // (id, aggregate, schema, metric)
-    let specs = [
-        ("m0", "MAX", "\"Cluster Name\"", "GlobalTopicCount"),
-        ("m1", "MAX", "\"Cluster Name\"", "GlobalPartitionCount"),
-        ("m2", "SUM", "\"Cluster Name\",\"Broker ID\"", "BytesInPerSec"),
-        ("m3", "SUM", "\"Cluster Name\",\"Broker ID\"", "BytesOutPerSec"),
-        ("m4", "MAX", "\"Cluster Name\",\"Broker ID\"", "KafkaDataLogsDiskUsed"),
-    ];
-
-    let queries: Vec<MetricDataQuery> = specs
-        .iter()
-        .map(|(id, agg, schema, metric)| {
-            let expr = format!(
-                "{}(SEARCH('{{AWS/Kafka,{}}} MetricName=\"{}\" \"Cluster Name\"=\"{}\"', 'Average', {}))",
-                agg, schema, metric, cluster_name, period
-            );
-            MetricDataQuery::builder().id(*id).expression(expr).build()
-        })
-        .collect();
-
-    let resp = cw
-        .get_metric_data()
-        .set_metric_data_queries(Some(queries))
-        .start_time(CwDateTime::from_secs(start))
-        .end_time(CwDateTime::from_secs(now))
-        .send()
-        .await
-        .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
-
-    let mut series: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
-    for r in resp.metric_data_results() {
-        let id = r.id().unwrap_or_default().to_string();
-        let mut pts: Vec<(f64, f64)> = r
-            .timestamps()
-            .iter()
-            .zip(r.values().iter())
-            .map(|(t, v)| (t.secs() as f64 - start as f64, *v))
-            .collect();
-        pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        series.insert(id, pts);
-    }
-
-    let take = |id: &str| series.get(id).cloned().unwrap_or_default();
-    Ok(MskMetricsData {
-        time_range,
-        topics: take("m0"),
-        partitions: take("m1"),
-        bytes_in: take("m2"),
-        bytes_out: take("m3"),
-        disk_used: take("m4"),
-        x_max: time_range.duration_secs() as f64,
-    })
-}
 
 #[cfg(test)]
 mod tests {

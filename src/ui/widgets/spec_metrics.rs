@@ -388,7 +388,8 @@ fn render_picker(app: &App, p: &MetricPicker, area: Rect, frame: &mut Frame) {
 
 fn render_series(app: &App, st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
     if st.series.is_empty() {
-        let msg = if st.loading { "  Reading…" } else { "  Nothing to show" };
+        let hint = st.target.hint.map(|h| format!("  ℹ {h}"));
+        let msg = if st.loading { "  Reading…".to_string() } else { hint.unwrap_or_else(|| "  Nothing to show".to_string()) };
         frame.render_widget(Paragraph::new(Line::styled(msg, Style::default().fg(theme::text_dim()))), area);
         return;
     }
@@ -460,7 +461,7 @@ fn render_series(app: &App, st: &SpecMetricsState, area: Rect, frame: &mut Frame
                         bold(Style::default().fg(theme::text_muted())),
                     ));
                 }
-                let how = if s.query.expression.is_some() { "math" } else { s.query.stat.short() };
+                let how = s.query.how();
                 spans.push(Span::styled(format!("({how})"), Style::default().fg(theme::text_dim())));
             }
         }
@@ -607,13 +608,31 @@ fn render_chart(st: &SpecMetricsState, drawn: &[(usize, &MetricSeries)], area: R
         .collect();
     let all = data.iter().flatten();
     let lo = all.clone().map(|(_, y)| *y).fold(0.0_f64, f64::min);
-    let peak = all.map(|(_, y)| *y).fold(f64::MIN, f64::max);
+    let sel = drawn.iter().find(|(i, _)| *i == st.selected).map(|(_, s)| *s).unwrap_or(drawn[0].1);
+    // The first limit stays in view, so a rate reads against it.
+    let limits = sel.query.limits;
+    let peak = all.map(|(_, y)| *y).chain(limits.first().map(|(v, _)| *v)).fold(f64::MIN, f64::max);
     let hi = if peak > lo { peak + (peak - lo) * 0.1 } else { lo + 1.0 };
+    let limit_lines: Vec<Vec<(f64, f64)>> = limits.iter().map(|(v, _)| vec![(0.0, *v), (x_max, *v)]).collect();
     let unit = drawn[0].1.query.unit;
     let label = |v: f64| Span::styled(fmt_value(v, unit), Style::default().fg(theme::text_dim()));
 
     let marks = super::metrics_overlay::marker_lines(x_max, lo, hi);
     let mut datasets = super::metrics_overlay::marker_datasets(&marks);
+    for (k, ((v, what), pts)) in limits.iter().zip(&limit_lines).enumerate() {
+        if *v > hi {
+            continue;
+        }
+        let colour = if k == 0 { theme::warning() } else { theme::error() };
+        datasets.push(
+            Dataset::default()
+                .data(pts)
+                .marker(symbols::Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(colour))
+                .name(format!("{what} {}", fmt_value(*v, unit))),
+        );
+    }
     for ((i, s), pts) in drawn.iter().zip(&data) {
         let mut ds = Dataset::default()
             .data(pts)
@@ -626,10 +645,9 @@ fn render_chart(st: &SpecMetricsState, drawn: &[(usize, &MetricSeries)], area: R
         }
         datasets.push(ds);
     }
-    let sel = drawn.iter().find(|(i, _)| *i == st.selected).map(|(_, s)| *s).unwrap_or(drawn[0].1);
     let title = match &sel.query.expression {
         Some(_) => format!(" {} · expression ", sel.query.label),
-        None => format!(" {} · {} ({}) ", sel.query.label, sel.query.metric, sel.query.stat.short()),
+        None => format!(" {} · {} ({}) ", sel.query.label, sel.query.metric, sel.query.how()),
     };
     let mut block = Block::default()
         .title(Span::styled(title, Style::default().fg(row_color(st, st.selected)).add_modifier(Modifier::BOLD)))

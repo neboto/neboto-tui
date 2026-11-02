@@ -359,10 +359,11 @@ the service you're touching.
       rule bites — an account with runtimes but no credential providers is
       entirely ordinary, and `a` would blank the tab for it. If AWS ever adds
       a provenance field, that's the hook to revisit.
-  - **Metrics** (`m`) — namespace `AWS/Bedrock-AgentCore`, one
-    `MetricsKind::AgentCore` with an `AgentCoreMetricsFlavor` (Runtime /
-    Gateway / Memory / Browser / CodeInterpreter), mirroring
-    API Gateway's per-protocol spec tables. **Why `SEARCH` and not `GetMetricStatistics`**: AWS
+  - **Metrics** (`m`) — namespace `AWS/Bedrock-AgentCore`, the spec view
+    with one table per `AgentCoreMetricsFlavor` (`AGENTCORE_RUNTIME` /
+    `_GATEWAY`, and `_RESOURCE` for memory / browser / code interpreter),
+    target dimension `Resource` = the ARN, mirroring API Gateway's
+    per-protocol spec tables. **Why `SEARCH` and not `GetMetricStatistics`**: AWS
     documents a different dimension set per family (gateway:
     `Operation`/`Protocol`/`Method`/`Resource`/`Name`; runtime usage:
     `Service`, `Service,Resource`, `Service,Resource,Name`) and the runtime
@@ -1279,8 +1280,9 @@ the service you're touching.
   `App.ses_account` and folded into every identity's Overview (the single lazy-ish
   bit; **a zero-identity account won't surface it** — documented limitation). `m`
   charts **account-wide** `AWS/SES` metrics (Send/Delivery/Bounce/Complaint/
-  Reject/Rendering Failures) — **no dimensions**, so one series serves any SES row
-  (`MetricsKind::Ses`, cached under the fixed `SES_METRICS_KEY`, not per-resource).
+  Reject/Rendering Failures, and the bounce / complaint rates against SES's
+  review and pause thresholds) — **no dimensions**, so the same set serves any
+  SES row (`metrics::SES_ACCOUNT`; its `a` lists only `AWS/SES`).
 - **MSK** (`@msk`, `msk.rs`, **aws-sdk-kafka**) — browse-only, single-list of
   Kafka clusters (provisioned **and** serverless) with an Overview / Networking /
   Monitoring / Config / Tags split pane. The load is a **single** paginated
