@@ -923,6 +923,91 @@ pub const AGENTCORE_GATEWAY: &[MetricSpec] = &[
     m("Throttles", "Throttles", Sum, Unit::Count).across_token(Agg::Sum).group("errors"),
 ];
 
+/// `GraphQLAPIId`. `Requests` and `TokensConsumed` are account-wide (per
+/// region), so they aren't here; the real-time rows exist only for an API
+/// with subscriptions.
+pub const APPSYNC_API: &[MetricSpec] = &[
+    m("Latency", "Latency", Avg, Unit::Millis),
+    m("4XXError", "4xx", Sum, Unit::Count).group("errors").tone(Tone::Warn),
+    m("5XXError", "5xx", Sum, Unit::Count).group("errors").tone(Tone::Bad),
+    m("ActiveConnections", "Connections", Sum, Unit::Count).group("realtime"),
+    m("ActiveSubscriptions", "Subscriptions", Sum, Unit::Count).group("realtime"),
+    m("PublishDataMessageSuccess", "Published", Sum, Unit::Count).group("messages").tone(Tone::Good),
+    m("PublishDataMessageServerError", "Publish errors", Sum, Unit::Count).group("messages").tone(Tone::Bad),
+];
+
+/// Published twice a day per issued certificate, until it expires. ACM's
+/// expiry events start 45 days out.
+pub const ACM_CERTIFICATE: &[MetricSpec] =
+    &[m("DaysToExpiry", "Days to expiry", Min, Unit::Raw).limits(&[(45.0, "expiry events"), (0.0, "expired")])];
+
+/// `ClusterName`. The `AWS/ECS` rows count EC2 container instances only;
+/// the Container Insights ones cover Fargate too.
+pub const ECS_CLUSTER: &[MetricSpec] = &[
+    m("CPUReservation", "CPU reserved", Avg, Unit::Percent).group("cpu"),
+    m("CPUUtilization", "CPU used", Avg, Unit::Percent).group("cpu"),
+    m("MemoryReservation", "Memory reserved", Avg, Unit::Percent).group("memory"),
+    m("MemoryUtilization", "Memory used", Avg, Unit::Percent).group("memory"),
+    e("Task CPU used", "100*{CpuUtilized}/{CpuReserved}", Unit::Percent).group("insights"),
+    e("Task memory used", "100*{MemoryUtilized}/{MemoryReserved}", Unit::Percent).group("insights"),
+    m("TaskCount", "Tasks", Avg, Unit::Count).group("counts").ns("ECS/ContainerInsights"),
+    m("ServiceCount", "Services", Avg, Unit::Count).group("counts").ns("ECS/ContainerInsights"),
+    m("CpuUtilized", "CPU units used", Sum, Unit::Raw).ns("ECS/ContainerInsights").hidden(),
+    m("CpuReserved", "CPU units reserved", Sum, Unit::Raw).ns("ECS/ContainerInsights").hidden(),
+    m("MemoryUtilized", "Memory used (MB)", Sum, Unit::Raw).ns("ECS/ContainerInsights").hidden(),
+    m("MemoryReserved", "Memory reserved (MB)", Sum, Unit::Raw).ns("ECS/ContainerInsights").hidden(),
+];
+
+/// `ProxyName`. Each EC2 instance behind the proxy publishes its own
+/// numbers, so a gauge's Sum over a period is that many minutes' worth:
+/// the rows divide it back to one minute. Latencies are microseconds.
+pub const RDS_PROXY: &[MetricSpec] = &[
+    e("Client connections", "{ClientConnections}*60/$PERIOD", Unit::Count).group("connections"),
+    e("Database connections", "{DatabaseConnections}*60/$PERIOD", Unit::Count).group("connections"),
+    e("Connections allowed", "{MaxDatabaseConnectionsAllowed}*60/$PERIOD", Unit::Count).group("connections"),
+    e("Pinned", "{DatabaseConnectionsCurrentlySessionPinned}*60/$PERIOD", Unit::Count).tone(Tone::Warn),
+    m("QueryRequests", "Queries", Sum, Unit::Count),
+    e("Borrow latency", "{DatabaseConnectionsBorrowLatency}/1000", Unit::Millis).group("latency"),
+    e("Query latency", "{QueryDatabaseResponseLatency}/1000", Unit::Millis).group("latency"),
+    m("ClientConnectionsSetupFailedAuth", "Client auth failures", Sum, Unit::Count).group("failures").tone(Tone::Warn),
+    m("DatabaseConnectionsSetupFailed", "Database setup failures", Sum, Unit::Count).group("failures").tone(Tone::Bad),
+    m("ClientConnections", "Client connections (sum)", Sum, Unit::Count).hidden(),
+    m("DatabaseConnections", "Database connections (sum)", Sum, Unit::Count).hidden(),
+    m("MaxDatabaseConnectionsAllowed", "Connections allowed (sum)", Sum, Unit::Count).hidden(),
+    m("DatabaseConnectionsCurrentlySessionPinned", "Pinned (sum)", Sum, Unit::Count).hidden(),
+    m("DatabaseConnectionsBorrowLatency", "Borrow latency (µs)", Avg, Unit::Raw).hidden(),
+    m("QueryDatabaseResponseLatency", "Query latency (µs)", Avg, Unit::Raw).hidden(),
+];
+
+/// `EnvironmentName`. Enhanced health publishes `EnvironmentHealth` free
+/// (0 OK, 1 info, 5 unknown, 10 no data, 15 warning, 20 degraded, 25
+/// severe); the rest exist only once the environment is configured to
+/// publish them. Latency is seconds.
+pub const EB_ENVIRONMENT: &[MetricSpec] = &[
+    m("EnvironmentHealth", "Health (0 = OK)", Max, Unit::Raw).limits(&[(15.0, "warning"), (25.0, "severe")]),
+    m("ApplicationRequestsTotal", "Requests", Sum, Unit::Count),
+    m("ApplicationRequests4xx", "4xx", Sum, Unit::Count).group("errors").tone(Tone::Warn),
+    m("ApplicationRequests5xx", "5xx", Sum, Unit::Count).group("errors").tone(Tone::Bad),
+    m("ApplicationLatencyP50", "p50", Avg, Unit::Seconds).group("latency"),
+    m("ApplicationLatencyP99", "p99", Avg, Unit::Seconds).group("latency"),
+    m("InstancesOk", "OK", Avg, Unit::Count).group("instances").tone(Tone::Good),
+    m("InstancesDegraded", "Degraded", Avg, Unit::Count).group("instances").tone(Tone::Warn),
+    m("InstancesSevere", "Severe", Avg, Unit::Count).group("instances").tone(Tone::Bad),
+];
+
+/// `BackupVaultName`. A copy job counts in its destination vault. Each
+/// metric is published only for a period with a non-zero value.
+pub const BACKUP_VAULT: &[MetricSpec] = &[
+    m("NumberOfBackupJobsCompleted", "Completed", Sum, Unit::Count).group("backups").sparse().tone(Tone::Good),
+    m("NumberOfBackupJobsFailed", "Failed", Sum, Unit::Count).group("backups").sparse().tone(Tone::Bad),
+    m("NumberOfBackupJobsExpired", "Expired", Sum, Unit::Count).group("backups").sparse().tone(Tone::Warn),
+    m("NumberOfCopyJobsCompleted", "Completed", Sum, Unit::Count).group("copies").sparse().tone(Tone::Good),
+    m("NumberOfCopyJobsFailed", "Failed", Sum, Unit::Count).group("copies").sparse().tone(Tone::Bad),
+    m("NumberOfRestoreJobsCompleted", "Completed", Sum, Unit::Count).group("restores").sparse().tone(Tone::Good),
+    m("NumberOfRestoreJobsFailed", "Failed", Sum, Unit::Count).group("restores").sparse().tone(Tone::Bad),
+    m("NumberOfRecoveryPointsExpired", "Expired, not deleted", Sum, Unit::Count).sparse().tone(Tone::Warn),
+];
+
 /// What `m` charts for one resource: where its metrics live and its curated set.
 #[derive(Debug, Clone)]
 pub struct MetricTarget {
@@ -1961,6 +2046,27 @@ mod tests {
         assert_eq!(resolve_expression("100*{Reputation.BounceRate}+{Rendering Failures}", &set, 60).unwrap(), "100*q0+q1");
     }
 
+    /// An RDS proxy's gauges are published once per instance per minute,
+    /// so their Sum over a 5-minute period is five minutes' worth.
+    #[test]
+    fn a_proxy_gauge_is_brought_back_to_one_minute() {
+        let t = MetricTarget {
+            title: String::new(),
+            namespace: "AWS/RDS".into(),
+            dimensions: vec![("ProxyName".into(), "p".into())],
+            specs: RDS_PROXY,
+            home: None,
+            hint: None,
+            extra: Vec::new(),
+            breakdown: None,
+            resolve: None,
+        };
+        let qs = t.curated_queries();
+        let row = qs.iter().find(|q| q.label == "Client connections").unwrap();
+        let i = qs.iter().position(|q| q.metric == "ClientConnections").unwrap();
+        assert_eq!(resolve_expression(row.expression.as_deref().unwrap(), &qs, 300).unwrap(), format!("q{i}*60/300"));
+    }
+
     #[test]
     fn hidden_rows_go_last() {
         let t = MetricTarget {
@@ -1977,7 +2083,7 @@ mod tests {
         let q = t.curated_queries();
         let first_hidden = q.iter().position(|q| q.hidden).unwrap();
         assert!(q[first_hidden..].iter().all(|q| q.hidden), "{:?}", q.iter().map(|q| &q.label).collect::<Vec<_>>());
-        for set in [FSX_WINDOWS, FSX_LUSTRE, FSX_ONTAP, FSX_OPENZFS, FSX_ONTAP_VOLUME, FSX_OPENZFS_VOLUME] {
+        for set in [FSX_WINDOWS, FSX_LUSTRE, FSX_ONTAP, FSX_OPENZFS, FSX_ONTAP_VOLUME, FSX_OPENZFS_VOLUME, ECS_CLUSTER, RDS_PROXY] {
             let seen = set.iter().skip_while(|s| !s.hidden).all(|s| s.hidden);
             assert!(seen, "a table lists its hidden rows last");
         }

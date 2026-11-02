@@ -196,6 +196,7 @@ async fn every_spec_target_has_a_mock_that_charts() {
         "AWS/ECS", "AWS/AutoScaling", "ContainerInsights", "AWS/ApiGateway", "AWS/ApplicationELB", "AWS/ES",
         "AWS/DMS", "ECS/ContainerInsights", "AWS/WAFV2", "AWS/FSx", "AWS/SES", "AWS/Cognito",
         "AWS/NetworkFirewall", "AWS/Kafka", "AWS/PrivateLinkEndpoints", "AWS/Bedrock-AgentCore",
+        "AWS/AppSync", "AWS/CertificateManager", "AWS/ElasticBeanstalk", "AWS/Backup",
     ] {
         assert!(seen.contains_key(ns), "no mock reaches the {ns} spec arm: {seen:?}");
     }
@@ -692,4 +693,22 @@ async fn a_gateway_endpoint_says_it_publishes_nothing() {
     let st = app.spec_metrics.as_ref().unwrap();
     assert!(st.queries.is_empty() && !st.loading);
     assert!(screen_of(&app).contains("Gateway endpoints (S3, DynamoDB) publish no CloudWatch metrics"));
+}
+
+/// A certificate still waiting on validation has never published
+/// `DaysToExpiry`: no call, and the view says so.
+#[tokio::test]
+async fn a_pending_certificate_says_it_has_no_expiry_yet() {
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut cert =
+        mock("AcmCertificate").as_any().downcast_ref::<crate::aws::services::acm::AcmCertificate>().unwrap().clone();
+    cert.status = "PENDING_VALIDATION".into();
+    select_mock(&mut app, ServiceType::Acm, Box::new(cert));
+    assert!(app.supports_metrics_overlay(), "the status bar offers m");
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert!(st.queries.is_empty() && !st.loading);
+    assert!(screen_of(&app).contains("Only an issued certificate publishes DaysToExpiry"));
 }
