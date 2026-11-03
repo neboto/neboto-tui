@@ -668,6 +668,17 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
         .map(|b| b.chars().count() + 1)
         .max()
         .unwrap_or(0);
+    // A fixed slot left of the state for `⇄ shared`, when any row needs it,
+    // so the marks line up instead of following each state's length.
+    let mark_slot = if app
+        .filtered_resources
+        .iter()
+        .any(|&i| !shared_mark(app.resources[i].as_ref(), app.account_id.as_deref()).is_empty())
+    {
+        SHARED_MARK.chars().count() + 2
+    } else {
+        0
+    };
     let (name_col, id_col, state_col) = if wide {
         let mut name_w = 0usize;
         let mut id_w = 0usize;
@@ -676,16 +687,14 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
             let r = &app.resources[idx];
             name_w = name_w.max(r.name().chars().count());
             id_w = id_w.max(id_cell(r.as_ref()).chars().count());
-            let mark = shared_mark(r.as_ref(), app.account_id.as_deref());
-            let mark_w = if mark.is_empty() { 0 } else { mark.chars().count() + 2 };
-            state_w = state_w.max(r.state_label().chars().count().min(STATE_CAP) + mark_w);
+            state_w = state_w.max(r.state_label().chars().count().min(STATE_CAP));
         }
         column_widths(
             inner_width,
             badge_w + pol_badge_w,
             name_w,
             id_w,
-            state_w,
+            state_w + mark_slot,
         )
     } else {
         (0, 0, 0)
@@ -814,12 +823,19 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                 let used =
                     2 + badge_w + pol_badge_w + name_col + 2 + if id_col > 0 { id_col + 2 } else { 0 };
                 let right = inner_width.saturating_sub(used).max(state_col);
-                let mark = shared_mark(resource.as_ref(), app.account_id.as_deref());
-                let mark = if mark.is_empty() { String::new() } else { format!("{mark}  ") };
-                let gap = right.saturating_sub(mark.chars().count() + state_text.chars().count());
-                spans.push(Span::raw(" ".repeat(gap)));
-                spans.push(Span::styled(mark, Style::default().fg(theme::heading())));
-                spans.push(Span::styled(state_text, Style::default().fg(indicator_color)));
+                if mark_slot > 0 {
+                    let mark = shared_mark(resource.as_ref(), app.account_id.as_deref());
+                    spans.push(Span::raw(" ".repeat(right.saturating_sub(state_col))));
+                    spans.push(Span::styled(
+                        format!("{mark:<mark_slot$}"),
+                        Style::default().fg(theme::heading()),
+                    ));
+                }
+                let right = if mark_slot > 0 { state_col.saturating_sub(mark_slot) } else { right };
+                spans.push(Span::styled(
+                    format!("{:>right$}", state_text, right = right),
+                    Style::default().fg(indicator_color),
+                ));
                 let line = Line::from(spans);
                 return if in_visual {
                     visual_item(line)

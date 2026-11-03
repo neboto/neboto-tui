@@ -104,30 +104,6 @@ async fn an_own_gateway_reads_as_before() {
     assert!(tables.iter().any(|(k, _)| k == "  No route tables"), "{tables:#?}");
 }
 
-/// Prints the list and detail pane for a shared gateway — run with
-/// `--ignored --nocapture` to eyeball the layout.
-#[tokio::test]
-#[ignore]
-async fn print_shared_gateway_screens() {
-    let (mut app, tx, _rx) = app_on(OWNER).await;
-    let own = named(HERE, "tgw-0fedcba9876543210", "edge");
-    app.resources.push(Box::new(own));
-    app.filtered_resources = vec![0, 1];
-    for (focus, width) in [(false, 260), (true, 160)] {
-        app.details_focused = focus;
-        if focus {
-            app.reset_detail_section_to_default(&tx);
-        }
-        let mut terminal = Terminal::new(TestBackend::new(width, 14)).unwrap();
-        terminal.draw(|f| crate::render_app(&app, f)).unwrap();
-        let buf = terminal.backend().buffer();
-        for y in 0..buf.area.height {
-            let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
-            println!("{}", row.trim_end());
-        }
-        println!();
-    }
-}
 
 /// The pane header carries the fact, from the one central header builder.
 #[tokio::test]
@@ -246,4 +222,24 @@ fn the_owner_hook_covers_the_other_shareable_types() {
         &aws_sdk_redshift::types::Snapshot::builder().snapshot_identifier("snap-1").owner_account(OWNER).build(),
     );
     assert_eq!(shared_owner(&snap, Some(HERE)), Some(OWNER));
+}
+
+/// On a wide list the marks sit in one column, whatever each row's state.
+#[tokio::test]
+async fn shared_marks_line_up_on_a_wide_list() {
+    let (mut app, _tx, _rx) = app_on(OWNER).await;
+    let mut pending = named(OWNER, "tgw-0aaaaaaaaaaaaaaa2", "inspection");
+    pending.state = "pending".to_string();
+    app.resources.push(Box::new(pending));
+    app.filtered_resources = vec![0, 1];
+    let mut terminal = Terminal::new(TestBackend::new(240, 13)).unwrap();
+    terminal.draw(|f| crate::render_app(&app, f)).unwrap();
+    let buf = terminal.backend().buffer();
+    let cols: Vec<usize> = (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<Vec<_>>())
+        .filter_map(|row| row.iter().position(|c| *c == "⇄"))
+        .take(2)
+        .collect();
+    assert_eq!(cols.len(), 2);
+    assert_eq!(cols[0], cols[1], "the marks should share a column");
 }
