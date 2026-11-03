@@ -565,6 +565,9 @@ impl Resource for Vpc {
     fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
         Some(&VPC_SECTIONS)
     }
+    fn owner_account(&self) -> Option<&str> {
+        self.owner_id.as_deref()
+    }
     fn cli_command(&self) -> Option<String> {
         Some(format!(
             "aws ec2 describe-vpcs --vpc-ids {}",
@@ -796,6 +799,9 @@ impl Resource for Subnet {
 
     fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
         Some(&SUBNET_SECTIONS)
+    }
+    fn owner_account(&self) -> Option<&str> {
+        self.owner_id.as_deref()
     }
     fn cli_command(&self) -> Option<String> {
         Some(format!(

@@ -34,7 +34,8 @@ pub(super) fn render_tgw_split(app: &App, tgw: &TransitGateway, area: Rect, fram
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let header = build_tgw_header_lines(tgw);
+    let shared_from = crate::aws::resource::shared_owner(tgw, app.account_id.as_deref());
+    let header = build_tgw_header_lines(tgw, shared_from);
     let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
@@ -54,7 +55,7 @@ pub(super) fn render_tgw_split(app: &App, tgw: &TransitGateway, area: Rect, fram
     render_split_section_body(app, chunks[4], frame);
 }
 
-pub(super) fn build_tgw_header_lines(tgw: &TransitGateway) -> Vec<Line<'static>> {
+pub(super) fn build_tgw_header_lines(tgw: &TransitGateway, shared_from: Option<&str>) -> Vec<Line<'static>> {
     let name = tgw
         .tags
         .get("Name")
@@ -81,6 +82,10 @@ pub(super) fn build_tgw_header_lines(tgw: &TransitGateway) -> Vec<Line<'static>>
             Span::styled(tgw.id.clone(), Style::default().fg(theme::text_dim())),
             Span::styled("  ·  ", Style::default().fg(theme::text_dim())),
             Span::styled(tgw.state.clone(), Style::default().fg(state_color)),
+            Span::styled(
+                shared_from.map(|o| format!("  ·  ⇄ shared from {o}")).unwrap_or_default(),
+                Style::default().fg(theme::heading()),
+            ),
         ]),
         Line::raw(""),
     ]
@@ -138,11 +143,15 @@ pub(super) fn render_tgw_route_table_split(
 
 /// Body lines for a Transit Gateway. Attachments/Route Tables are filtered from
 /// the already-loaded list (passed in by `get_detail_lines`), so no extra fetch.
+/// `shared_from` is the owning account when the gateway is shared in through
+/// RAM: AWS then lists only this account's attachments and none of the
+/// owner's route tables, so the sections say so rather than read as complete.
 pub fn tgw_section_lines(
     tgw: &TransitGateway,
     section: TgwDetailSection,
     attachments: &[(String, String, String, String)], // id, kind, resource_id, state
     route_tables: &[(String, String)],                 // id, state
+    shared_from: Option<&str>,
 ) -> Vec<(String, String)> {
     match section {
         TgwDetailSection::Overview => {
@@ -150,8 +159,9 @@ pub fn tgw_section_lines(
                 ("ID".to_string(), tgw.id.clone()),
                 ("ARN".to_string(), tgw.arn.clone()),
                 ("State".to_string(), tgw.state.clone()),
-                ("Owner".to_string(), tgw.owner_id.clone()),
             ];
+            // Just the id, so `y` copies it; the header says it's shared.
+            rows.push(("Owner".to_string(), tgw.owner_id.clone()));
             if let Some(asn) = tgw.amazon_side_asn {
                 rows.push(("Amazon Side ASN".to_string(), asn.to_string()));
             }
@@ -185,11 +195,13 @@ pub fn tgw_section_lines(
             let on_off = |on: bool| if on { "✓ enabled" } else { "disabled" }.to_string();
             rows.push((
                 "Auto-accept Shared".to_string(),
-                if tgw.auto_accept_shared_attachments {
-                    "⚠ enabled — accounts it's shared with attach without approval".to_string()
-                } else {
-                    "disabled — shared attachments wait for acceptance".to_string()
-                },
+                match (shared_from.is_some(), tgw.auto_accept_shared_attachments) {
+                    (false, true) => "⚠ enabled — accounts it's shared with attach without approval",
+                    (false, false) => "disabled — shared attachments wait for acceptance",
+                    (true, true) => "enabled · the owner's setting",
+                    (true, false) => "disabled · the owner's setting",
+                }
+                .to_string(),
             ));
             rows.push(("VPN ECMP".to_string(), on_off(tgw.vpn_ecmp_support)));
             rows.push(("Multicast".to_string(), on_off(tgw.multicast_support)));
@@ -201,13 +213,15 @@ pub fn tgw_section_lines(
             rows
         }
         TgwDetailSection::Attachments => {
+            // A shared gateway lists only this account's attachments.
+            let whose = if shared_from.is_some() { " from this account" } else { "" };
             let mut rows = vec![(
-                format!("Attachments ({})", attachments.len()),
+                format!("Attachments{whose} ({})", attachments.len()),
                 String::new(),
             )];
             rows.push((String::new(), String::new()));
             if attachments.is_empty() {
-                rows.push(("  No attachments".to_string(), String::new()));
+                rows.push((format!("  No attachments{whose}"), String::new()));
             } else {
                 rows.push((
                     format!("  {:<24}  {:<14}  {:<22}  {}", "ID", "Type", "Resource", "State"),
@@ -223,12 +237,16 @@ pub fn tgw_section_lines(
             rows
         }
         TgwDetailSection::RouteTables => {
-            let mut rows = vec![(
-                format!("Route Tables ({})", route_tables.len()),
-                String::new(),
-            )];
+            let title = match shared_from {
+                Some(_) => "Route Tables".to_string(),
+                None => format!("Route Tables ({})", route_tables.len()),
+            };
+            let mut rows = vec![(title, String::new())];
             rows.push((String::new(), String::new()));
-            if route_tables.is_empty() {
+            if let Some(owner) = shared_from {
+                // AWS lists a gateway's route tables only to its owner.
+                rows.push((String::new(), format!("· only the owner, {owner}, can list these")));
+            } else if route_tables.is_empty() {
                 rows.push(("  No route tables".to_string(), String::new()));
             } else {
                 for (id, state) in route_tables {

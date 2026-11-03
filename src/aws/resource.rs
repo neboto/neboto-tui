@@ -117,6 +117,14 @@ pub trait Resource: Send + Sync + Debug {
         None
     }
 
+    /// The account that owns this resource, for the types AWS RAM can share
+    /// into another account (a transit gateway, a VPC, a subnet). Compared
+    /// with the caller's account by `shared_owner` to mark rows that live
+    /// elsewhere. `None` (the default) for every type that can't be shared.
+    fn owner_account(&self) -> Option<&str> {
+        None
+    }
+
     /// The split pane's section table, when this type has one — the single
     /// source of truth its section wiring derives from (`src/sections.rs`).
     /// `None` (the default) renders the flat `details()` view.
@@ -280,6 +288,14 @@ pub fn summary_with_id(r: &dyn Resource, summary: &str) -> String {
     } else {
         format!("{summary} · {}", r.id())
     }
+}
+
+/// The owning account when `r` is shared into the browsed account from
+/// another one: its `owner_account` is known and isn't `account`. `None`
+/// while the caller's account is unknown, rather than guessing.
+pub fn shared_owner<'a>(r: &'a dyn Resource, account: Option<&str>) -> Option<&'a str> {
+    let owner = r.owner_account().filter(|o| !o.is_empty())?;
+    (owner != account?).then_some(owner)
 }
 
 pub fn shell_quote(s: &str) -> String {
