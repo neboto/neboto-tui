@@ -3016,17 +3016,11 @@ the service you're touching.
   in the account it's shared with, but AWS gives that account only its
   **own** attachments and **none** of the owner's route tables (route-table
   APIs are owner-only). Without saying so, the pane read as a gateway made
-  here with no route tables. When `owner_id` isn't the caller's account
-  (`shared_owner`, via `Resource::owner_account`), the header says
-  `⇄ shared from <owner>` (the Owner row stays the bare id so `y` copies
-  just that), the Attachments / Route Tables tabs each say
-  in one line what's missing (no note on the Overview — the tabs carry it),
-  and auto-accept reads as the owner's setting, not a ⚠.
-  The list's
-  `⇄ shared` marker (beside the state on a wide list, after the name on a
-  narrow one) is generic: VPCs and subnets implement `owner_account` too. Nothing is marked while the caller's account is
-  unknown. Naming the RAM share would cost a `ram:ListResources` call and
-  isn't done.
+  here with no route tables. Besides the generic shared-in marker (CLAUDE.md,
+  **Shared-in resources**), the Attachments / Route Tables tabs each say in
+  one line what's missing (no note on the Overview — the tabs carry it), and
+  auto-accept reads as the owner's setting, not a ⚠. Naming the RAM share
+  would cost a `ram:ListResources` call and isn't done.
 
 - **Cost drill-down & periods** (`@cost`, `cost.rs`; moved from CLAUDE.md) — the
   drill-down (Breakdown/Regions/Forecast) is fetched over the **active period's

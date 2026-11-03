@@ -34,8 +34,7 @@ pub(super) fn render_tgw_split(app: &App, tgw: &TransitGateway, area: Rect, fram
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let shared_from = crate::aws::resource::shared_owner(tgw, app.account_id.as_deref());
-    let header = build_tgw_header_lines(tgw, shared_from);
+    let header = build_tgw_header_lines(tgw);
     let header = one_row_header(app, header, area.width.saturating_sub(2) as usize);
     let header_h = header.len() as u16;
     let chunks = Layout::default()
@@ -55,7 +54,7 @@ pub(super) fn render_tgw_split(app: &App, tgw: &TransitGateway, area: Rect, fram
     render_split_section_body(app, chunks[4], frame);
 }
 
-pub(super) fn build_tgw_header_lines(tgw: &TransitGateway, shared_from: Option<&str>) -> Vec<Line<'static>> {
+pub(super) fn build_tgw_header_lines(tgw: &TransitGateway) -> Vec<Line<'static>> {
     let name = tgw
         .tags
         .get("Name")
@@ -82,10 +81,6 @@ pub(super) fn build_tgw_header_lines(tgw: &TransitGateway, shared_from: Option<&
             Span::styled(tgw.id.clone(), Style::default().fg(theme::text_dim())),
             Span::styled("  ·  ", Style::default().fg(theme::text_dim())),
             Span::styled(tgw.state.clone(), Style::default().fg(state_color)),
-            Span::styled(
-                shared_from.map(|o| format!("  ·  ⇄ shared from {o}")).unwrap_or_default(),
-                Style::default().fg(theme::heading()),
-            ),
         ]),
         Line::raw(""),
     ]

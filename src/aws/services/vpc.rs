@@ -1558,6 +1558,9 @@ impl VpcSecurityGroup {
 }
 
 impl Resource for VpcSecurityGroup {
+    fn owner_account(&self) -> Option<&str> {
+        self.owner_id.as_deref()
+    }
     fn security_group_ids(&self) -> Vec<String> {
         vec![self.group_id.clone()]
     }
@@ -2345,6 +2348,9 @@ crate::sections! {
 }
 
 impl Resource for DhcpOptionsSet {
+    fn owner_account(&self) -> Option<&str> {
+        self.owner_id.as_deref()
+    }
     fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
         Some(&DHCP_OPTIONS_SECTIONS)
     }
@@ -2662,6 +2668,10 @@ crate::sections! {
 }
 
 impl Resource for PrefixList {
+    /// An AWS-managed list is AWS's, not another account's.
+    fn owner_account(&self) -> Option<&str> {
+        self.owner_id.as_deref().filter(|_| !self.is_aws_managed())
+    }
     fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
         Some(&PREFIX_LIST_SECTIONS)
     }
