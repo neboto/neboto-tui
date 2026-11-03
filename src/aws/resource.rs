@@ -117,6 +117,24 @@ pub trait Resource: Send + Sync + Debug {
         None
     }
 
+    /// The account that owns this resource, for the types that can be shared
+    /// into another account (a transit gateway, a VPC, a security group, a
+    /// Redshift snapshot…). Compared with the caller's account by
+    /// `shared_owner` to mark rows that live elsewhere. `None` (the default)
+    /// for every type that can't be shared in — and for the AWS-owned ones
+    /// (an AWS-managed prefix list), which aren't another account's.
+    fn owner_account(&self) -> Option<&str> {
+        None
+    }
+
+    /// AWS's own word on whether this was shared with the caller, for the
+    /// types whose API says so (a `share_status` of `SHARED_WITH_ME`). It
+    /// beats comparing `owner_account`, which needs the caller's account.
+    /// `None` (the default) means the type has no such field.
+    fn shared_in(&self) -> Option<bool> {
+        None
+    }
+
     /// The split pane's section table, when this type has one — the single
     /// source of truth its section wiring derives from (`src/sections.rs`).
     /// `None` (the default) renders the flat `details()` view.
@@ -279,6 +297,23 @@ pub fn summary_with_id(r: &dyn Resource, summary: &str) -> String {
         summary.to_string()
     } else {
         format!("{summary} · {}", r.id())
+    }
+}
+
+/// The owning account when `r` is shared into the browsed account from
+/// another one — the one rule behind the list's `⇄ shared` and the pane
+/// header's `⇄ shared from <owner>`. AWS's `shared_in` answer wins (the
+/// owner may then be `""`, unknown); otherwise its `owner_account` is known
+/// and isn't `account`. `None` while the caller's account is unknown,
+/// rather than guessing.
+pub fn shared_owner<'a>(r: &'a dyn Resource, account: Option<&str>) -> Option<&'a str> {
+    match r.shared_in() {
+        Some(true) => Some(r.owner_account().unwrap_or("")),
+        Some(false) => None,
+        None => {
+            let owner = r.owner_account().filter(|o| !o.is_empty())?;
+            (owner != account?).then_some(owner)
+        }
     }
 }
 

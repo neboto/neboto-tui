@@ -1671,6 +1671,9 @@ crate::sections! {
 }
 
 impl Resource for SecurityGroup {
+    fn owner_account(&self) -> Option<&str> {
+        self.owner_id.as_deref()
+    }
     fn security_group_ids(&self) -> Vec<String> {
         vec![self.group_id.clone()]
     }

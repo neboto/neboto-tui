@@ -138,6 +138,11 @@ crate::sections! {
 }
 
 impl Resource for Route53Profile {
+    /// The owner rides the lazy detail, so a shared profile's header says
+    /// `⇄ shared` without the account.
+    fn shared_in(&self) -> Option<bool> {
+        (!self.share_status.is_empty()).then(|| self.share_status == "SHARED_WITH_ME")
+    }
     fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
         Some(&ROUTE53_PROFILE_SECTIONS)
     }

@@ -668,6 +668,17 @@ and the approaches you rejected are the part nobody can recover from your code.
   service is still current (else it stamped the *other* service's on-screen
   rows into this service's cache slot). Keep both layers: don't restore an
   unconditional `loading = false` on the mismatch paths.
+- **Shared-in resources** (from another account — RAM, a shared VPC, a
+  shared snapshot): one rule, `aws::resource::shared_owner` — `⇄ shared` in
+  the list (beside the state; after the name when narrow) and `⇄ shared from
+  <owner>` in the pane header, drawn centrally by `header_line_colored`;
+  nothing for your own resources. A type opts in with
+  `Resource::owner_account` (compared with the caller's account; nothing
+  marked while that's unknown) or, where the API says so,
+  `Resource::shared_in` (`share_status == SHARED_WITH_ME`, which wins).
+  Don't put the owner in a header by hand, and keep Overview `Owner` rows
+  the bare id so `y` copies just that. AWS-owned (an AWS-managed prefix
+  list) is not "another account".
 - **Clipboard**: `App.clipboard` is kept alive for the process — dropping the
   handle clears the selection on Linux. Reuse it via `copy_to_clipboard`.
 - **CLI command copy** (`C`, either pane; `src/aws/cli_actions.rs`, picker

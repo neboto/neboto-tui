@@ -5074,6 +5074,19 @@ fn header_line_colored(app: &App, name: &str, facts: &[(&str, Option<Color>)], w
     if !label.is_empty() {
         spans.push(Span::styled(format!("  {label}"), Style::default().fg(color)));
     }
+    // Shared in from another account: said here, once for every pane, right
+    // after the state so a narrow pane drops other facts first.
+    let shared = resource.and_then(|r| crate::aws::resource::shared_owner(r, app.account_id.as_deref()));
+    if let Some(owner) = shared {
+        let fact = match owner {
+            "" => "⇄ shared".to_string(),
+            o => format!("⇄ shared from {o}"),
+        };
+        let sep = if label.is_empty() { "  " } else { "  ·  " };
+        spans.push(Span::styled(sep, Style::default().fg(theme::text_dim())));
+        spans.push(Span::styled(fact, Style::default().fg(theme::heading())));
+    }
+    let lead = label.is_empty() && shared.is_none();
     let dim = Style::default().fg(theme::text_dim());
     let mut used: usize = spans.iter().map(|s| s.content.width()).sum();
     let mut first = true;
@@ -5087,7 +5100,7 @@ fn header_line_colored(app: &App, name: &str, facts: &[(&str, Option<Color>)], w
             continue;
         }
         shown.push(fact);
-        let sep = if first && label.is_empty() { "  " } else { "  ·  " };
+        let sep = if first && lead { "  " } else { "  ·  " };
         let room = width.saturating_sub(used + sep.width() + 1);
         let style = fact_color.map_or(dim, |c| Style::default().fg(c));
         if fact.width() <= room {

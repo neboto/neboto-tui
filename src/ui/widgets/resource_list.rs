@@ -23,6 +23,18 @@ fn id_cell(resource: &dyn crate::aws::resource::Resource) -> String {
     }
 }
 
+/// Drawn beside the state of a row shared in from another account
+/// (`shared_owner`), so a transit gateway someone else owns doesn't read as
+/// one made here.
+const SHARED_MARK: &str = "⇄ shared";
+
+fn shared_mark(resource: &dyn crate::aws::resource::Resource, account: Option<&str>) -> &'static str {
+    match crate::aws::resource::shared_owner(resource, account) {
+        Some(_) => SHARED_MARK,
+        None => "",
+    }
+}
+
 /// A leading `[Type]` badge for Organizations policy rows (SCP / Tag / Backup /
 /// …) — the policies otherwise differ only by name, so the type is the
 /// at-a-glance discriminator. `None` for every other resource type.
@@ -656,6 +668,17 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
         .map(|b| b.chars().count() + 1)
         .max()
         .unwrap_or(0);
+    // A fixed slot left of the state for `⇄ shared`, when any row needs it,
+    // so the marks line up instead of following each state's length.
+    let mark_slot = if app
+        .filtered_resources
+        .iter()
+        .any(|&i| !shared_mark(app.resources[i].as_ref(), app.account_id.as_deref()).is_empty())
+    {
+        SHARED_MARK.chars().count() + 2
+    } else {
+        0
+    };
     let (name_col, id_col, state_col) = if wide {
         let mut name_w = 0usize;
         let mut id_w = 0usize;
@@ -664,14 +687,14 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
             let r = &app.resources[idx];
             name_w = name_w.max(r.name().chars().count());
             id_w = id_w.max(id_cell(r.as_ref()).chars().count());
-            state_w = state_w.max(r.state_label().chars().count());
+            state_w = state_w.max(r.state_label().chars().count().min(STATE_CAP));
         }
         column_widths(
             inner_width,
             badge_w + pol_badge_w,
             name_w,
             id_w,
-            state_w.min(STATE_CAP),
+            state_w + mark_slot,
         )
     } else {
         (0, 0, 0)
@@ -800,6 +823,15 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                 let used =
                     2 + badge_w + pol_badge_w + name_col + 2 + if id_col > 0 { id_col + 2 } else { 0 };
                 let right = inner_width.saturating_sub(used).max(state_col);
+                if mark_slot > 0 {
+                    let mark = shared_mark(resource.as_ref(), app.account_id.as_deref());
+                    spans.push(Span::raw(" ".repeat(right.saturating_sub(state_col))));
+                    spans.push(Span::styled(
+                        format!("{mark:<mark_slot$}"),
+                        Style::default().fg(theme::heading()),
+                    ));
+                }
+                let right = if mark_slot > 0 { state_col.saturating_sub(mark_slot) } else { right };
                 spans.push(Span::styled(
                     format!("{:>right$}", state_text, right = right),
                     Style::default().fg(indicator_color),
@@ -840,6 +872,12 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                 // information and there is room for at least part of it
                 let cell = id_cell(resource.as_ref());
                 let used = 2 + name.chars().count();
+                // A shared row's mark comes first: the cell is the part a
+                // narrow pane can lose.
+                let mark = shared_mark(resource.as_ref(), app.account_id.as_deref());
+                if !mark.is_empty() {
+                    spans.push(Span::styled(format!("  {mark}"), Style::default().fg(theme::heading())));
+                }
                 if !cell.is_empty() && inner_width > used + 4 {
                     spans.push(Span::styled(
                         format!("  {}", cell),

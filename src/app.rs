@@ -27329,6 +27329,7 @@ impl App {
                     crate::aws::services::transit_gateway::TgwDetailSection::from_index(self.detail_section_idx),
                     &attachments,
                     &route_tables,
+                    crate::aws::resource::shared_owner(tgw, self.account_id.as_deref()),
                 );
             }
             if let Some(rt) = resource
