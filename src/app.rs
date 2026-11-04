@@ -1238,7 +1238,24 @@ pub struct NavLocation {
     /// whichever credentials are current, as they always did. Restoring one
     /// from another account switches profile / assumes the role first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credentials: Option<NavCredentials>}
+    pub credentials: Option<NavCredentials>,
+    /// A lens open over the detail pane at capture — `⏎` from a lens row
+    /// records the place before following it, so going back reopens the
+    /// lens on that row instead of leaving you in the plain pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lens: Option<NavLens>}
+
+/// Which lens a `NavLocation` reopens, and where its cursor was.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum NavLens {
+    /// `N`: its direction and the row's `line_key`.
+    Access {
+        direction: crate::ui::widgets::access_lens::AccessDirection,
+        row: Option<String>,
+    },
+    /// `U`: the selected referencing resource's id.
+    Refs { row: Option<String> },
+}
 
 /// Whose credentials a `NavLocation` was captured under: the account they
 /// resolved to, the base profile (`None` = the startup credential chain with
@@ -2376,6 +2393,8 @@ pub struct App {
     /// focused — set only by nav/bookmark restores; follow-link jumps open the
     /// default section. Cleared with `pending_jump_focus_details`.
     pub pending_jump_section: Option<String>,
+    /// …and the lens to reopen over it (`NavLocation::lens`).
+    pub pending_jump_lens: Option<NavLens>,
     /// Resource id selected when a full refresh (`r`) started — restored as the
     /// reload streams in so refreshing doesn't lose your place in the list.
     pub pending_reselect_id: Option<String>,
@@ -3282,6 +3301,7 @@ impl App {
             startup_account: None,
             pending_jump_focus_details: false,
             pending_jump_section: None,
+            pending_jump_lens: None,
             nav_history: Vec::new(),
             nav_cursor: None,
             jump_list_visible: false,
@@ -3684,6 +3704,8 @@ impl App {
                             Ok(nacls) => st.add_nacls(nacls),
                             Err(e) => st.nacl_error = Some(e),
                         }
+                        // The ACL layer's heading reads `loading` and the error.
+                        st.rebuild();
                     }
                 }
             }
@@ -3987,6 +4009,7 @@ impl App {
         // moved on. (The jump/restore triggers below re-arm it after this.)
         self.pending_jump_focus_details = false;
         self.pending_jump_section = None;
+        self.pending_jump_lens = None;
         self.iam_pending_policy_doc = None;
 
         // Stash the key for the recorder before anything can consume it — the
@@ -9208,6 +9231,7 @@ impl App {
         self.pending_jump = Some(id);
         self.pending_jump_focus_details = true;
         self.pending_jump_section = section;
+        self.pending_jump_lens = None;
         if !self.loading {
             self.update_search();
             self.resolve_pending_jump(event_tx);
@@ -18302,8 +18326,9 @@ impl App {
                     .and_then(|st| st.selected_row())
                     .map(|row| (row.service, row.id.clone(), row.resource_type.clone()));
                 if let Some((svc, id, rtype)) = target {
-                    self.close_refs_lens();
+                    // Record with the lens still open, so going back reopens it.
                     self.record_location();
+                    self.close_refs_lens();
                     self.jump_to_cached_resource(svc, id, &rtype, false, event_tx);
                 }
             }
@@ -18648,14 +18673,12 @@ impl App {
                     st.selected_row()
                         .and_then(|row| row.jump_group())
                         .map(|id| (ServiceType::EC2, id, "Security Group"))
-                        .or_else(|| {
-                            st.selected_nacl()
-                                .map(|row| (ServiceType::VPC, row.acl_id.clone(), "NetworkAcl"))
-                        })
+                        .or_else(|| st.selected_acl().map(|id| (ServiceType::VPC, id, "NetworkAcl")))
                 });
                 if let Some((svc, id, rtype)) = target {
-                    self.close_access_lens();
+                    // Record with the lens still open, so going back reopens it.
                     self.record_location();
+                    self.close_access_lens();
                     self.jump_to_cached_resource(svc, id, rtype, false, event_tx);
                 }
             }
@@ -19301,7 +19324,8 @@ impl App {
                 details_focused: false,
                 detail_section: None,
                 region: Some(self.current_region.as_str().to_string()),
-                credentials: Some(self.current_credentials())};
+                credentials: Some(self.current_credentials()),
+                lens: None};
             self.bookmarks.push(loc);
             self.s3_object_browser.message = Some("Bookmarked".to_string());
         }
@@ -20330,10 +20354,14 @@ impl App {
                     // jump asked for it (follow-link semantics / nav restore),
                     // then re-enter the captured section for nav restores.
                     let section = self.pending_jump_section.take();
+                    let lens = self.pending_jump_lens.take();
                     if std::mem::take(&mut self.pending_jump_focus_details) {
                         self.focus_details_panel(event_tx);
                         if let Some(name) = section {
                             self.restore_detail_section_by_name(&name, event_tx);
+                        }
+                        if let Some(lens) = lens {
+                            self.reopen_nav_lens(lens, event_tx);
                         }
                     }
                 }
@@ -20348,6 +20376,7 @@ impl App {
                             self.search_query = repo.clone();
                             self.pending_jump = Some(repo);
                             self.pending_jump_section = None;
+                            self.pending_jump_lens = None;
                             self.update_search();
                             self.success_message = Some(
                                 "Image not among the loaded rows — showing its repository".to_string(),
@@ -20368,6 +20397,7 @@ impl App {
                         // Never auto-focus the fallback row — it isn't the target.
                         self.pending_jump_focus_details = false;
                         self.pending_jump_section = None;
+                        self.pending_jump_lens = None;
                         self.selected_index = Some(0);
                         self.resource_list_state.borrow_mut().select(Some(0));
                     }
@@ -20969,7 +20999,41 @@ impl App {
             details_focused,
             detail_section,
             region: self.location_region(service),
-            credentials: Some(self.current_credentials())})
+            credentials: Some(self.current_credentials()),
+            lens: self.current_nav_lens()})
+    }
+
+    /// The lens open over the detail pane, for `current_location`.
+    fn current_nav_lens(&self) -> Option<NavLens> {
+        if let Some(st) = &self.access_in_pane {
+            return Some(NavLens::Access { direction: st.direction, row: st.selected_key() });
+        }
+        self.refs_in_pane
+            .as_ref()
+            .map(|st| NavLens::Refs { row: st.selected_row().map(|r| r.id.clone()) })
+    }
+
+    /// Reopen a lens a restored location was captured under, once its
+    /// resource is selected and the detail pane focused.
+    fn reopen_nav_lens(&mut self, lens: NavLens, event_tx: &mpsc::UnboundedSender<Event>) {
+        match lens {
+            NavLens::Access { direction, row } => {
+                self.open_access_lens(event_tx);
+                if let Some(st) = self.access_in_pane.as_mut() {
+                    st.direction = direction;
+                    st.want_row = row;
+                    st.rebuild();
+                }
+            }
+            NavLens::Refs { row } => {
+                self.open_refs_lens();
+                if let (Some(st), Some(id)) = (self.refs_in_pane.as_mut(), row) {
+                    if let Some(i) = st.rows.iter().position(|r| r.id == id) {
+                        st.selected = i;
+                    }
+                }
+            }
+        }
     }
 
     /// `P`. Offers the startup credentials back when they had no profile
@@ -21095,6 +21159,14 @@ impl App {
             return;
         }
         let is_dup_top = self.is_history_top(&loc);
+        // The same row with a lens open is a different place to come back
+        // to: it replaces the plain entry rather than being dropped.
+        if is_dup_top && loc.lens.is_some() && self.nav_cursor.is_none() {
+            if let Some(top) = self.nav_history.last_mut() {
+                *top = loc;
+            }
+            return;
+        }
         record_into(
             &mut self.nav_history,
             &mut self.nav_cursor,
@@ -21167,6 +21239,7 @@ impl App {
         } else {
             None
         };
+        self.pending_jump_lens = if self.pending_jump_focus_details { loc.lens.clone() } else { None };
         if !self.loading {
             self.update_search();
             self.resolve_pending_jump(event_tx);
@@ -24871,6 +24944,7 @@ impl App {
         // focusing its detail pane once the target region's load resolves it.
         self.pending_jump_focus_details = true;
         self.pending_jump_section = None;
+        self.pending_jump_lens = None;
         let _ = event_tx.send(Event::RegionSwitchRequested {
             region: target_region});
         true
@@ -33373,7 +33447,7 @@ impl App {
             }
             PaneView::Access => {
                 if let Some(l) = self.access_in_pane.as_mut() {
-                    l.selected = idx;
+                    l.select_line(idx);
                 }
             }
             PaneView::Metrics => {
