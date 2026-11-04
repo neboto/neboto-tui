@@ -336,13 +336,26 @@ in `any_pane_overlay_active` (which gates the mouse).
   (`cached_security_groups`, converting `VpcSecurityGroup`) and the rest
   from one `DescribeSecurityGroups` (`Event::AccessLensLoaded`,
   `access_generation`-guarded; off the LazyStore like the other lenses, `r`
-  refetches all). Below the SG rows come the **subnet NACLs** (#246): the
-  subnets are the `Subnet` rows of `references()` (so a type that lists its
-  subnets there gets NACLs for free), the ACLs come from the warm VPC cache
-  (`cached_network_acls`) or `DescribeNetworkAcls` by `association.subnet-id`
-  in the same task. NACL rows keep **rule order** (first match wins — never
-  the SG port sort), the `32767` catch-all reads `*`, and an ACL whose first
-  rule each way allows everything is labelled `allow-all`. `merge_rules` collapses identical `(direction, protocol,
+  refetches all). The **subnet NACLs** (#246) come from the `Subnet` rows
+  of `references()` (so a type that lists its subnets there gets NACLs for
+  free), the ACLs from the warm VPC cache (`cached_network_acls`) or
+  `DescribeNetworkAcls` by `association.subnet-id` in the same task. The
+  body is **layered in the order AWS checks** (`build_lines`, nebaz's
+  network-lens model): inbound is ① NACL then ② security groups, outbound
+  the reverse, both must allow. NACL entries keep **rule order** (first
+  match wins — never the SG port sort), the `32767` catch-all reads `*`,
+  an entry an earlier one fully covers is marked `⊘ shadowed by #N`, and
+  an ACL whose first rule each way allows everything is **one line**
+  (`allow-all: this layer allows everything`). Each merged SG rule is run
+  through the ACLs (`nacl_verdict`): `⊘ NACL #90 denies` when all of it is
+  stopped, `◐ NACL #* blocks some` for part; NACLs are stateless, so its
+  **replies** (ephemeral 1024-65535 back to the peer) are checked the
+  other way (`◐ replies: …`). A rule that gets through says nothing. An
+  `sg-`/`pl-` peer has no address here, so only a `/0` entry decides it.
+  Route tables and Network Firewall aren't evaluated. The cursor is an
+  index into `lines`, always on a selectable one (rules, entries, ACL
+  headings), and follows its row across rebuilds.
+  `merge_rules` collapses identical `(direction, protocol,
   ports, source)` rules and lists the contributing groups; sorted inbound
   first then by port. `t` cycles inbound → outbound → both (sticky across
   opens), open-to-world sources render in the warning colour, a source that
@@ -350,6 +363,11 @@ in `any_pane_overlay_active` (which gates the mouse).
   `cached_lb_security_groups`; a cold cache says so in the header), `⏎` jumps to
   the row's group (a referenced `sg-` source wins over the contributor),
   `e` opens the whole table, `y` copies a row.
+  **`⏎` from a lens records the place with the lens still open**
+  (`NavLocation::lens` — `N`'s direction and row key, `U`'s row id), so
+  `Ctrl-O` reopens the lens on that row (`reopen_nav_lens`, after the
+  pending jump resolves) instead of leaving you in the pane under it; the
+  lens entry replaces a plain entry for the same row on the history top.
   Both lenses share the `W` plumbing: a `handle_*_key` early in
   `handle_key`, an arm in `any_pane_overlay_active`, the `details_pane`
   dispatch + ribbon guard, and a `supports_*` gate for the status-bar hint.

@@ -92,6 +92,7 @@ mod tests {
                 account: Some("111122223333".to_string()),
                 alias: Some("prod".to_string()),
             }),
+            lens: None,
         };
         let json = serde_json::to_string(std::slice::from_ref(&loc)).unwrap();
         let back: Vec<NavLocation> = serde_json::from_str(&json).unwrap();
@@ -122,6 +123,7 @@ mod tests {
             detail_section: Some("Tags".to_string()),
             region: Some("us-east-1".to_string()),
             credentials: Some(crate::app::NavCredentials { profile: Some("dev".to_string()), ..Default::default() }),
+            lens: None,
         };
         let mut value = serde_json::to_value(&loc).unwrap();
         let obj = value.as_object_mut().unwrap();
