@@ -725,7 +725,9 @@ pub(super) fn render_security_group_split(
     area: Rect,
     frame: &mut Frame,
 ) {
-    let (name, group_id, vpc_id, owner_id, description) = (sg.name, sg.group_id, sg.vpc_id, sg.owner_id, sg.description);
+    // The owner is the Overview's; a group shared in from another account
+    // gets the header's `⇄ shared from` (`header_line_colored`).
+    let (name, group_id, vpc_id, description) = (sg.name, sg.group_id, sg.vpc_id, sg.description);
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 5, "");
     let mut block = theme::pane_block("Security Group", focused);
@@ -736,13 +738,10 @@ pub(super) fn render_security_group_split(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let mut subtitle = match vpc_id {
+    let subtitle = match vpc_id {
         Some(v) if !v.is_empty() => format!("{}  ·  {}", group_id, v),
         _ => group_id.to_string(),
     };
-    if let Some(owner) = owner_id.filter(|o| !o.is_empty()) {
-        subtitle.push_str(&format!("  ·  owner {owner}"));
-    }
     let mut header = vec![
         Line::raw(""),
         Line::from(vec![

@@ -376,6 +376,9 @@ impl Resource for TransitGateway {
         };
         Some(crate::aws::resource::summary_with_id(self, &summary))
     }
+    fn owner_account(&self) -> Option<&str> {
+        Some(&self.owner_id)
+    }
     fn state(&self) -> ResourceState {
         state_from(&self.state)
     }

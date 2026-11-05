@@ -13,7 +13,9 @@ pub(super) fn render_route53_profile_split(
         "Route53 Profile",
         p.name(),
         &p.id,
-        &p.share_status,
+        // The raw share status isn't a state; `SHARED_WITH_ME` shows as the
+        // header's `⇄ shared` (`Resource::shared_in`), the rest in the Overview.
+        "",
         &descriptor_tabs(app, &crate::aws::services::route53profiles::ROUTE53_PROFILE_SECTIONS),
         area,
         frame,

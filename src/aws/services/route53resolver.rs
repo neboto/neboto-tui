@@ -502,6 +502,12 @@ crate::sections! {
 }
 
 impl Resource for ResolverRule {
+    fn owner_account(&self) -> Option<&str> {
+        Some(&self.owner_id)
+    }
+    fn shared_in(&self) -> Option<bool> {
+        (!self.share_status.is_empty()).then(|| self.share_status == "SHARED_WITH_ME")
+    }
     fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
         Some(&RESOLVER_RULE_SECTIONS)
     }

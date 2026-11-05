@@ -386,8 +386,9 @@ rides `detail_sections_snapshot_with_active()` (the descriptor walk also
 reports the active index) and `restore_detail_section_by_name` (the label
 position in the descriptor IS the section index — a direct jump, only the
 target's on-enter hook fires); unknown names fall back to the default
-section. `NavLocation.region` (the capture region; `None` for global
-services and old bookmark files) makes history cross-region: picking a
+section. `NavLocation.region` (the capture region, global services
+included, so back from a jump that switched region switches back; `None`
+for a global service's bookmark and old bookmark files) makes history cross-region: picking a
 region in `R` records "here" like a service switch, and restoring a
 location from another region goes through the cross-region jump below
 (`pending_jump_region` + `RegionSwitchRequested`), whose handler filters
@@ -668,6 +669,17 @@ and the approaches you rejected are the part nobody can recover from your code.
   service is still current (else it stamped the *other* service's on-screen
   rows into this service's cache slot). Keep both layers: don't restore an
   unconditional `loading = false` on the mismatch paths.
+- **Shared-in resources** (from another account — RAM, a shared VPC, a
+  shared snapshot): one rule, `aws::resource::shared_owner` — `⇄ shared` in
+  the list (beside the state; after the name when narrow) and `⇄ shared from
+  <owner>` in the pane header, drawn centrally by `header_line_colored`;
+  nothing for your own resources. A type opts in with
+  `Resource::owner_account` (compared with the caller's account; nothing
+  marked while that's unknown) or, where the API says so,
+  `Resource::shared_in` (`share_status == SHARED_WITH_ME`, which wins).
+  Don't put the owner in a header by hand, and keep Overview `Owner` rows
+  the bare id so `y` copies just that. AWS-owned (an AWS-managed prefix
+  list) is not "another account".
 - **Clipboard**: `App.clipboard` is kept alive for the process — dropping the
   handle clears the selection on Linux. Reuse it via `copy_to_clipboard`.
 - **CLI command copy** (`C`, either pane; `src/aws/cli_actions.rs`, picker

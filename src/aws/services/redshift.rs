@@ -785,6 +785,9 @@ impl RedshiftSnapshot {
 }
 
 impl Resource for RedshiftSnapshot {
+    fn owner_account(&self) -> Option<&str> {
+        self.owner_account.as_deref()
+    }
     fn cli_command(&self) -> Option<String> {
         Some(if self.is_serverless {
             format!(
