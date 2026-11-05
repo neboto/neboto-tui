@@ -39,6 +39,17 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl Error {
+    /// The message for a reader: an SDK error is the AWS message alone, without
+    /// the `AWS SDK error:` prefix that only pushes it right in a pane.
+    pub fn message(self) -> String {
+        match self {
+            Error::AwsSdk(m) => m,
+            e => e.to_string(),
+        }
+    }
+}
+
 use aws_smithy_runtime_api::client::result::SdkError;
 use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 
@@ -82,5 +93,18 @@ where
 {
     fn from(err: SdkError<E, R>) -> Self {
         Error::AwsSdk(sdk_error_message(&err))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_sdk_error_reads_as_the_aws_message_alone() {
+        let e = Error::AwsSdk("AccessDeniedException: not authorized".into());
+        assert_eq!(e.message(), "AccessDeniedException: not authorized");
+        // Other kinds keep their prefix: there it says what failed.
+        assert_eq!(Error::EditorNotFound("vim".into()).message(), Error::EditorNotFound("vim".into()).to_string());
     }
 }

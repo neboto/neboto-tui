@@ -1552,7 +1552,7 @@ pub async fn fetch_principal_policy_documents(
         async move {
             let document = fetch_managed_policy_document(client, arn.clone())
                 .await
-                .map_err(|e| e.to_string());
+                .map_err(crate::error::Error::message);
             IamPolicyDoc { name: policy, arn: Some(arn), document }
         }
         .boxed()
@@ -1566,7 +1566,7 @@ pub async fn fetch_principal_policy_documents(
                 IamPrincipalKind::User => fetch_user_inline_policy_document(client, principal, policy.clone()).await,
                 IamPrincipalKind::Group => fetch_group_inline_policy_document(client, principal, policy.clone()).await,
             }
-            .map_err(|e| e.to_string());
+            .map_err(crate::error::Error::message);
             IamPolicyDoc { name: policy, arn: None, document }
         }
         .boxed()
