@@ -3412,6 +3412,24 @@ fn s3_origin_domain_bucket(s: &str) -> Option<&str> {
 /// Covers the common EventBridge-target services that neboto can browse; returns
 /// `None` for services with no list (Step Functions, Kinesis, …) so no marker
 /// shows. IAM role/policy ARNs are handled earlier in `resource_jump_target`.
+/// The region an ARN row names, when following it should switch there: an
+/// ARN in another region would otherwise be searched for in this one. `None`
+/// for a global target service and for ARNs without a region (IAM, S3,
+/// Route 53), and for WAF's `global/` scope, which is CloudFront's and lives
+/// under us-east-1 without being regional.
+pub fn arn_jump_region(value: &str, target: crate::aws::service::ServiceType) -> Option<crate::aws::region::Region> {
+    if target.is_global() {
+        return None;
+    }
+    // A policy document's line quotes the ARN: `"arn:…",`.
+    let arn = value.trim().trim_matches(['"', ',']);
+    let parts: Vec<&str> = arn.splitn(6, ':').collect();
+    if parts.len() < 6 || parts[0] != "arn" || parts[5].starts_with("global/") {
+        return None;
+    }
+    crate::aws::region::Region::from_str(parts[3])
+}
+
 fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
     use crate::app::{CloudFrontView, CwView, Ec2View, ElbView, EventBridgeView, JumpView, MsgView, NfwView, RdsView, WafScope, WafView};
     use crate::aws::service::ServiceType;
@@ -5315,6 +5333,29 @@ mod ecr_jump_tests {
             assert!(matches!(t.view, JumpView::Iam(crate::app::IamView::Policies)));
             assert_eq!(t.id, want);
         }
+    }
+
+    #[test]
+    fn an_arn_row_names_its_region_unless_the_target_is_global() {
+        use crate::aws::region::Region;
+        let lambda = "arn:aws:lambda:eu-west-1:123456789012:function:resolve-order";
+        assert_eq!(arn_jump_region(lambda, ServiceType::Lambda), Some(Region::EuWest1));
+        assert_eq!(arn_jump_region(&format!("  \"{lambda}\","), ServiceType::Lambda), Some(Region::EuWest1));
+        // No region in the ARN, or a global target: stay put.
+        assert_eq!(arn_jump_region("arn:aws:iam::123456789012:role/app", ServiceType::IAM), None);
+        assert_eq!(arn_jump_region("arn:aws:s3:::my-bucket", ServiceType::S3), None);
+        assert_eq!(
+            arn_jump_region("arn:aws:cloudfront::123456789012:distribution/E1", ServiceType::CloudFront),
+            None,
+        );
+        // WAF's CloudFront scope sits under us-east-1 without being regional.
+        assert_eq!(
+            arn_jump_region("arn:aws:wafv2:us-east-1:123456789012:global/webacl/edge/abc", ServiceType::Waf),
+            None,
+        );
+        // Not an ARN, or an unknown region.
+        assert_eq!(arn_jump_region("i-0123456789abcdef0", ServiceType::EC2), None);
+        assert_eq!(arn_jump_region("arn:aws:lambda:mars-1:1:function:f", ServiceType::Lambda), None);
     }
 
     #[test]

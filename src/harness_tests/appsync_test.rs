@@ -233,8 +233,14 @@ async fn cross_region_rows_switch_region_with_the_jump() {
     assert_eq!(app.pending_jump_region, Some(Region::EuWest1));
     assert_eq!(switched_to(&mut rx), Some(Region::EuWest1));
 
-    // DynamoDB table in ap-southeast-2, OpenSearch domain in the current region.
-    for (label, want) in [("  DynamoDB Table", Some(Region::ApSoutheast2)), ("  OpenSearch Domain", None)] {
+    // DynamoDB table in ap-southeast-2, a Lambda whose ARN says eu-west-1
+    // (any ARN row, not an AppSync special case), OpenSearch domain in the
+    // current region.
+    for (label, want) in [
+        ("  DynamoDB Table", Some(Region::ApSoutheast2)),
+        ("  Function", Some(Region::EuWest1)),
+        ("  OpenSearch Domain", None),
+    ] {
         select_mock(&mut app, ServiceType::AppSync, Box::new(api.clone()));
         app.pending_jump = None;
         app.pending_jump_region = None;
@@ -248,6 +254,12 @@ async fn cross_region_rows_switch_region_with_the_jump() {
                     ds_type: "AMAZON_DYNAMODB".into(),
                     dynamodb_table: Some("catalog".into()),
                     region: Some("ap-southeast-2".into()),
+                    ..Default::default()
+                },
+                AppSyncDataSource {
+                    name: "Resolve".into(),
+                    ds_type: "AWS_LAMBDA".into(),
+                    lambda_function_arn: Some("arn:aws:lambda:eu-west-1:123456789012:function:resolve-order".into()),
                     ..Default::default()
                 },
                 AppSyncDataSource {

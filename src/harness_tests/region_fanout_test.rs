@@ -233,14 +233,15 @@ async fn back_and_forward_cross_region_switches() {
     assert_eq!(selected(&app).as_deref(), Some("i-0away"));
 }
 
-/// A global service's location carries no region, so going back to it never
-/// switches region; neither does a bookmark saved before regions were.
+/// A global service's history entry carries the region you were in, so
+/// going back across a jump that switched region switches back; a location
+/// saved before regions were stays in the current region.
 #[tokio::test]
-async fn global_and_regionless_locations_stay_in_the_current_region() {
+async fn global_history_keeps_its_region_but_old_entries_dont() {
     let (mut app, tx, mut rx) = test_app().await;
     let here = app.current_region;
     app.current_service = Some(ServiceType::IAM);
-    assert_eq!(app.current_location().unwrap().region, None);
+    assert_eq!(app.current_location().unwrap().region.as_deref(), Some(here.as_str()));
     app.current_service = Some(ServiceType::EC2);
     assert_eq!(app.current_location().unwrap().region.as_deref(), Some(here.as_str()));
 
@@ -250,4 +251,36 @@ async fn global_and_regionless_locations_stay_in_the_current_region() {
     drain(&mut app, &tx, &mut rx).await;
     assert_eq!(app.current_region, here);
     assert_eq!(app.pending_jump_region, None);
+}
+
+fn distribution(cert_arn: &str) -> Box<dyn Resource> {
+    use crate::aws::services::cloudfront::CfDistribution;
+    let mocks = super::mocks_edge::mocks();
+    let (_, _, mock) = mocks.iter().find(|(_, label, _)| *label == "CfDistribution").unwrap();
+    let mut dist = mock.as_any().downcast_ref::<CfDistribution>().unwrap().clone();
+    dist.viewer_cert = cert_arn.to_string();
+    Box::new(dist)
+}
+
+/// The issue's case: in ap-southeast-2, a distribution's certificate row
+/// jumps to ACM in us-east-1; `⌫` comes back to the distribution in
+/// ap-southeast-2, not in us-east-1 where the jump left you.
+#[tokio::test]
+async fn back_from_a_cross_region_jump_out_of_a_global_service_switches_back() {
+    let (mut app, tx, mut rx) = test_app().await;
+    let home = Region::ApSoutheast2;
+    app.current_region = home;
+    let cert = "arn:aws:acm:us-east-1:123456789012:certificate/0aaaaaaa-1111-2222-3333-444444444444";
+    select_mock(&mut app, ServiceType::CloudFront, distribution(cert));
+    app.details_focused = true;
+    app.details_selected_index = app.get_detail_lines_filtered().iter().position(|(_, v)| v == cert);
+    assert!(app.details_selected_index.is_some(), "no certificate row");
+
+    press(&mut app, &tx, key(KeyCode::Enter)).await;
+    drain(&mut app, &tx, &mut rx).await;
+    assert_eq!((app.current_service, app.current_region), (Some(ServiceType::Acm), Region::UsEast1));
+
+    press(&mut app, &tx, key(KeyCode::Backspace)).await;
+    drain(&mut app, &tx, &mut rx).await;
+    assert_eq!((app.current_service, app.current_region), (Some(ServiceType::CloudFront), home));
 }
