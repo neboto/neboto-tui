@@ -245,6 +245,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(Actions, "M", "message history").runs(Key('M')),
     cmd(Actions, ",", "macros (⏎ run · n record)").runs(Key(',')),
     cmd(Actions, "b", "toggle banner").runs(Key('b')),
+    cmd(Actions, "Ctrl-L", "repaint the screen").runs(Ctrl('l')),
     cmd(Actions, ":", "command picker (run a key by name)"),
     cmd(Actions, "? / q", "help (type to filter) / quit"),
     cmd(Search, "/", "fuzzy search").runs(Key('/')),

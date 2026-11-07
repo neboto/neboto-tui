@@ -679,8 +679,12 @@ and the approaches you rejected are the part nobody can recover from your code.
   Don't put the owner in a header by hand, and keep Overview `Owner` rows
   the bare id so `y` copies just that. AWS-owned (an AWS-managed prefix
   list) is not "another account".
-- **Clipboard**: `App.clipboard` is kept alive for the process — dropping the
-  handle clears the selection on Linux. Reuse it via `copy_to_clipboard`.
+- **Clipboard** (`src/clipboard.rs`): every copy goes out as OSC 52 (tmux
+  passthrough inside tmux), which is how it reaches the user's clipboard over
+  SSH / SSM, and to the system clipboard through one handle kept for the
+  process — dropping it clears the selection on Linux. Reuse it via
+  `copy_to_clipboard`; under `cfg(test)` neither sink is touched
+  (`App::clipboard_last` reads the copy back).
 - **CLI command copy** (`C`, either pane; `src/aws/cli_actions.rs`, picker
   `cli_picker.rs`): `Resource::cli_command()` returns the per-type **read**
   command (`aws ec2 describe-instances --instance-ids …`) — always the first

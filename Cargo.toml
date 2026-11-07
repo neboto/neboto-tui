@@ -72,6 +72,7 @@ toml = "1.1"
 
 # Clipboard
 arboard = "3.3"
+base64 = "0.22"
 
 # Temporary files
 tempfile = "3.8"

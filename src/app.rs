@@ -2805,8 +2805,9 @@ pub struct App {
     cache_base_ttl: Duration,
     cache_ttl_overrides: HashMap<ServiceType, Duration>,
 
-    // Clipboard — kept alive so Linux X11/Wayland doesn't drop contents immediately
-    clipboard: Option<arboard::Clipboard>}
+    // Clipboard: OSC 52 to the terminal plus one long-lived system handle
+    // (`src/clipboard.rs`).
+    clipboard: crate::clipboard::Clipboard}
 
 /// Return the resolved path to `bin` if it is found on `$PATH`, else `None`.
 /// Used to detect optional CLI dependencies (`aws`, `tmux`, terminal emulators).
@@ -3071,7 +3072,6 @@ impl App {
             }
         }
         let mut app = Self::from_parts(config, aws_clients)?;
-        app.clipboard = arboard::Clipboard::new().ok();
         // Applied after construction, not through `apply_to` — resolving the
         // name needs the saved macros, which `from_parts` loads.
         if let Some(name) = &cli.macro_name {
@@ -3473,9 +3473,9 @@ impl App {
             cache: ResourceCache::new(cache_base_ttl, cache_ttl_overrides.clone()),
             cache_base_ttl,
             cache_ttl_overrides,
-            // Created by `new` (and on first copy): a headless `neboto get`
-            // has no use for one, and on Linux it dials the display server.
-            clipboard: None})
+            // The system handle opens on the first copy: a headless `neboto
+            // get` has no use for one, and on Linux it dials the display server.
+            clipboard: crate::clipboard::Clipboard::new()})
     }
 
     /// Fresh cache with the configured TTL windows — used wherever a region or
@@ -4169,6 +4169,13 @@ impl App {
             && !self.any_pane_overlay_active()
         {
             self.toggle_macro_picker();
+            return Ok(());
+        }
+
+        // `Ctrl-L` repaints, whatever has focus: the plain `l` arms (pane
+        // movement, follow a jump) match on the key code alone.
+        if key.code == KeyCode::Char('l') && key.modifiers == KeyModifiers::CONTROL {
+            crate::tui::request_clear();
             return Ok(());
         }
 
@@ -28476,33 +28483,20 @@ impl App {
                     value.clone()
                 };
 
-                // Lazily initialize clipboard if not already available
-                if self.clipboard.is_none() {
-                    self.clipboard = arboard::Clipboard::new().ok();
-                }
-                match self.clipboard.as_mut() {
-                    Some(clipboard) => match clipboard.set_text(&text_to_copy) {
-                        Ok(_) => {
-                            self.success_message = Some(format!(
-                                "Copied: {}",
-                                // By chars: a byte cut panics inside a
-                                // multi-byte char (the flat view's `━━` rule).
-                                if text_to_copy.chars().count() > 50 {
-                                    format!("{}...", text_to_copy.chars().take(50).collect::<String>())
-                                } else {
-                                    text_to_copy
-                                }
-                            ));
-                            self.success_message_time = Some(Instant::now());
-                            self.error_message = None;
-                        }
-                        Err(e) => {
-                            self.error_message = Some(format!("Failed to copy: {}", e));
-                        }
-                    },
-                    None => {
-                        self.error_message = Some("Clipboard unavailable".to_string());
+                match self.clipboard.copy(&text_to_copy) {
+                    Ok(sink) => {
+                        // By chars: a byte cut panics inside a multi-byte
+                        // char (the flat view's `━━` rule).
+                        let shown = if text_to_copy.chars().count() > 50 {
+                            format!("{}...", text_to_copy.chars().take(50).collect::<String>())
+                        } else {
+                            text_to_copy
+                        };
+                        self.success_message = Some(format!("Copied: {shown}{}", sink.note()));
+                        self.success_message_time = Some(Instant::now());
+                        self.error_message = None;
                     }
+                    Err(e) => self.error_message = Some(format!("Failed to copy: {e}")),
                 }
             }
         }
@@ -31800,26 +31794,21 @@ impl App {
         self.copy_to_clipboard(&id, &id);
     }
 
-    /// Write text to the clipboard (lazily re-initialising the handle), setting
+    #[cfg(test)]
+    pub(crate) fn clipboard_last(&self) -> Option<&str> {
+        self.clipboard.last()
+    }
+
+    /// Write text to the clipboard (OSC 52 and the system one), setting
     /// a success/error message. `label` describes *what* was copied — the value
     /// itself is never echoed.
     fn copy_to_clipboard(&mut self, text: &str, label: &str) {
-        if self.clipboard.is_none() {
-            self.clipboard = arboard::Clipboard::new().ok();
-        }
-        match self.clipboard.as_mut() {
-            Some(cb) => match cb.set_text(text) {
-                Ok(_) => {
-                    self.success_message = Some(format!("Copied {} to clipboard", label));
-                    self.success_message_time = Some(std::time::Instant::now());
-                }
-                Err(e) => {
-                    self.error_message = Some(format!("Failed to copy: {}", e));
-                }
-            },
-            None => {
-                self.error_message = Some("Clipboard unavailable".to_string());
+        match self.clipboard.copy(text) {
+            Ok(sink) => {
+                self.success_message = Some(format!("Copied {} to clipboard{}", label, sink.note()));
+                self.success_message_time = Some(std::time::Instant::now());
             }
+            Err(e) => self.error_message = Some(format!("Failed to copy: {e}")),
         }
     }
 

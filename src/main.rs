@@ -3,6 +3,7 @@ mod audit;
 mod aws;
 mod bookmarks;
 mod cli;
+mod clipboard;
 mod commands;
 mod config;
 mod ddb_history;

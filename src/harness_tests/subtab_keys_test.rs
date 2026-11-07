@@ -90,3 +90,29 @@ async fn keycast_names_the_sub_tab_not_the_reset_section() {
     assert_eq!(last.key, "L");
     assert_eq!(last.action, app.active_type_filter().map(str::to_string));
 }
+
+/// `Ctrl-L` repaints from either pane and is never taken for `l`: from the
+/// list, a plain `l` would open the detail pane.
+#[tokio::test]
+async fn ctrl_l_repaints_and_is_not_l() {
+    let (mut app, tx, _rx) = ec2_app().await;
+    let ctrl_l = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL);
+    for focused in [false, true] {
+        app.details_focused = focused;
+        crate::tui::take_clear_request();
+        app.handle_key(ctrl_l, &tx).await.unwrap();
+        assert!(crate::tui::take_clear_request(), "focused={focused}");
+        assert_eq!(app.details_focused, focused);
+    }
+}
+
+/// A copy lands on the clipboard (a test build's only sink, so `cargo test`
+/// never touches the real one) and says it was copied.
+#[tokio::test]
+async fn y_copies_the_id() {
+    let (mut app, tx, _rx) = ec2_app().await;
+    let id = app.get_selected_resource().unwrap().id().to_string();
+    app.handle_key(key(KeyCode::Char('y')), &tx).await.unwrap();
+    assert_eq!(app.clipboard_last(), Some(id.as_str()));
+    assert!(app.success_message.as_deref().is_some_and(|m| m.starts_with("Copied")), "{:?}", app.success_message);
+}

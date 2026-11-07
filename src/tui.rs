@@ -90,6 +90,18 @@ static HANDED_OFF: AtomicBool = AtomicBool::new(false);
 static READER_PARKED: AtomicBool = AtomicBool::new(false);
 /// The screen under ratatui's buffer is stale: clear before the next draw.
 static NEEDS_CLEAR: AtomicBool = AtomicBool::new(false);
+
+/// `Ctrl-L`: repaint the whole screen on the next draw, for one garbled by
+/// stray output or a terminal that lost the frame.
+pub fn request_clear() {
+    NEEDS_CLEAR.store(true, Ordering::SeqCst);
+}
+
+/// Whether a clear is pending, taking it (the harness has no `Tui` to draw).
+#[cfg(test)]
+pub fn take_clear_request() -> bool {
+    NEEDS_CLEAR.swap(false, Ordering::SeqCst)
+}
 /// Held across a draw and across each mode switch, so the handoff never
 /// switches modes halfway through a frame.
 static TERM_LOCK: Mutex<()> = Mutex::new(());
