@@ -4822,6 +4822,7 @@ dependencies = [
  "aws-sdk-xray",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "crossterm",

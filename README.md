@@ -187,6 +187,7 @@ selection. The essentials:
 | `M` | Message history (past errors and toasts, `y`-copyable) |
 | `\` | Toggle flat detail view (all sections in one scroll) |
 | `:` | Command picker: run a key by name (only what works here) |
+| `Ctrl-L` | Repaint the screen |
 | `b` / `?` / `q` | Banner / help / quit |
 
 ### List pane
@@ -223,7 +224,7 @@ selection. The essentials:
 | `Ctrl-F` | Forward again, after going back (`→` on the service strip) |
 | `/` | Filter the body text; `n` / `N` step through the matches |
 | `Ctrl-W` | Wrap long values onto continuation rows (toggle) |
-| `y` / `c` | Copy the row, or the visual selection |
+| `y` / `c` | Copy the row, or the visual selection. Every copy also goes out as OSC 52, so it reaches your own clipboard over SSH or SSM (tmux needs `set -g set-clipboard on`) |
 | `e` | Open in `$EDITOR` |
 | `d` | Download (Lambda deployment package, invoice PDF) |
 | `Z` | Full-width pane |
