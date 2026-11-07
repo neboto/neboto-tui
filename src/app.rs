@@ -1228,9 +1228,10 @@ pub struct NavLocation {
     #[serde(default)]
     pub detail_section: Option<String>,
     /// The region the location was captured in (a region code); `None` for
-    /// a global service, and for history and bookmarks written before this
-    /// existed — those restore in whichever region is current, as they
-    /// always did. Restoring one from another region switches there first.
+    /// a global service's bookmark, and for history and bookmarks written
+    /// before this existed — those restore in whichever region is current,
+    /// as they always did. Restoring one from another region switches there
+    /// first, a global service's history entry included.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
     /// The credentials the location was captured under; `None` for history
@@ -11248,7 +11249,7 @@ impl App {
                 async move {
                     crate::aws::services::route53::fetch_health_check_status(client, id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -12388,7 +12389,7 @@ impl App {
                 async move {
                     crate::aws::services::cloudfront::fetch_function_code(client, name, published)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -12409,7 +12410,7 @@ impl App {
                 async move {
                     crate::aws::services::cloudfront::fetch_invalidations(client, id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -12447,7 +12448,7 @@ impl App {
                 async move {
                     crate::aws::services::kms::fetch_kms_policy(client, key_id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -12463,7 +12464,7 @@ impl App {
                 async move {
                     crate::aws::services::kms::fetch_kms_grants(client, key_id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -12479,7 +12480,7 @@ impl App {
                 async move {
                     crate::aws::services::kms::fetch_kms_tags(client, key_id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -12502,7 +12503,7 @@ impl App {
                     crate::aws::services::bedrock::fetch_guardrail_detail(client, id, version)
                         .await
                         .map(Box::new)
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -12529,7 +12530,7 @@ impl App {
                     crate::aws::services::bedrock::fetch_kb_detail(client, kb_id)
                         .await
                         .map(Box::new)
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -12546,7 +12547,7 @@ impl App {
                 async move {
                     crate::aws::services::bedrock::fetch_kb_data_sources(client, kb_id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -12564,7 +12565,7 @@ impl App {
                 async move {
                     crate::aws::services::bedrock::fetch_kb_ingestion(client, kb_id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -12590,7 +12591,7 @@ impl App {
                     crate::aws::services::bedrock::fetch_agent_detail(client, agent_id)
                         .await
                         .map(Box::new)
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -12606,7 +12607,7 @@ impl App {
                 async move {
                     crate::aws::services::bedrock::fetch_agent_action_groups(client, agent_id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -12622,7 +12623,7 @@ impl App {
                 async move {
                     crate::aws::services::bedrock::fetch_agent_aliases(client, agent_id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -12638,7 +12639,7 @@ impl App {
                 async move {
                     crate::aws::services::bedrock::fetch_agent_knowledge_bases(client, agent_id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -13146,7 +13147,7 @@ impl App {
             async move {
                 crate::aws::services::fms::fetch_fms_policy_tags(client, arn)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -13183,7 +13184,7 @@ impl App {
                         client, policy_id, account,
                     )
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -13207,7 +13208,7 @@ impl App {
             async move {
                 crate::aws::services::fms::fetch_fms_resource_set_detail(client, id)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -13718,7 +13719,7 @@ impl App {
                         client, gateway_id,
                     )
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -13741,7 +13742,7 @@ impl App {
                         client, gateway_id,
                     )
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -13934,7 +13935,7 @@ impl App {
             async move {
                 crate::aws::services::fsx::fetch_fsx_volumes(client, cw, id)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -13951,7 +13952,7 @@ impl App {
             async move {
                 crate::aws::services::fsx::fetch_fsx_backups(client, id)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -14887,7 +14888,7 @@ impl App {
                         client, bucket, key,
                     )
                     .await
-                    .map_err(|e| e.to_string());
+                    .map_err(crate::error::Error::message);
                     let _ = tx.send(Event::ScTemplateLoaded { result });
                 });
             }
@@ -14895,7 +14896,7 @@ impl App {
                 tokio::spawn(async move {
                     let result = crate::aws::services::servicecatalog::fetch_sc_template_body(url)
                         .await
-                        .map_err(|e| e.to_string());
+                        .map_err(crate::error::Error::message);
                     let _ = tx.send(Event::ScTemplateLoaded { result });
                 });
             }
@@ -15943,7 +15944,7 @@ impl App {
                 async move {
                     crate::aws::services::global_accelerator::fetch_ga_listeners(client, arn)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -15959,7 +15960,7 @@ impl App {
                 async move {
                     crate::aws::services::global_accelerator::fetch_ga_endpoint_groups(client, arn)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -15975,7 +15976,7 @@ impl App {
                 async move {
                     crate::aws::services::global_accelerator::fetch_ga_tags(client, arn)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -16001,7 +16002,7 @@ impl App {
                 async move {
                     crate::aws::services::trusted_advisor::fetch_ta_rec_detail(client, arn)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -16017,7 +16018,7 @@ impl App {
                 async move {
                     crate::aws::services::trusted_advisor::fetch_ta_rec_accounts(client, arn)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -16036,7 +16037,7 @@ impl App {
                 async move {
                     crate::aws::services::trusted_advisor::fetch_ta_rec_resources(client, arn)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -16056,7 +16057,7 @@ impl App {
                 async move {
                     crate::aws::services::trusted_advisor::fetch_ta_check_result(client, check_id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -16154,7 +16155,7 @@ impl App {
                 async move {
                     crate::aws::services::api_gateway::fetch_usage_plan_keys(client, plan_id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -18009,7 +18010,7 @@ impl App {
                     .map(|acts| {
                         crate::timeline::scaling_rows(&acts, cutoff, instance.as_deref())
                     })
-                    .map_err(|e| e.to_string());
+                    .map_err(crate::error::Error::message);
                 let _ = tx.send(Event::TrailLensAux {
                     generation,
                     source: TimelineSource::Scaling,
@@ -18030,7 +18031,7 @@ impl App {
                             .map(TimelineRow::from_rds)
                             .collect()
                     })
-                    .map_err(|e| e.to_string());
+                    .map_err(crate::error::Error::message);
                 let _ = tx.send(Event::TrailLensAux {
                     generation,
                     source: TimelineSource::Rds,
@@ -19118,7 +19119,7 @@ impl App {
                 crate::aws::services::s3::fetch_s3_object_meta(client, bucket, key, version)
                     .await
                     .map(Box::new)
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -19158,7 +19159,7 @@ impl App {
                 )
                 .await
             }
-            .map_err(|e| e.to_string());
+            .map_err(crate::error::Error::message);
             let _ = tx.send(Event::S3ObjectsLoaded {
                 bucket,
                 prefix,
@@ -19191,7 +19192,7 @@ impl App {
             .await
             {
                 Ok(bytes) => write_download(&key, &bytes).map_err(|e| e.to_string()),
-                Err(e) => Err(e.to_string())};
+                Err(e) => Err(e.message())};
             let _ = tx.send(Event::S3ObjectDownloaded { key, result });
         });
     }
@@ -19220,7 +19221,7 @@ impl App {
                 3600,
             )
             .await
-            .map_err(|e| e.to_string());
+            .map_err(crate::error::Error::message);
             let _ = tx.send(Event::S3PresignedUrl { key, result });
         });
     }
@@ -19299,7 +19300,7 @@ impl App {
                     )),
                     Some(text) => Ok(text),
                     None => Err("binary content — press d to download instead".to_string())},
-                Err(e) => Err(e.to_string())};
+                Err(e) => Err(e.message())};
             let _ = tx.send(Event::S3ObjectContentLoaded { key, result });
         });
     }
@@ -19362,7 +19363,7 @@ impl App {
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(text) => crate::terraform::parse_tfstate(&text).map_err(|e| e.to_string()),
                     Err(_) => Err("State file is not valid UTF-8".to_string())},
-                Err(e) => Err(e.to_string())};
+                Err(e) => Err(e.message())};
             let _ = tx.send(Event::TfStateLoaded { result });
         });
     }
@@ -21005,7 +21006,7 @@ impl App {
             s3_object_path: None,
             details_focused,
             detail_section,
-            region: self.location_region(service),
+            region: self.location_region(),
             credentials: Some(self.current_credentials()),
             lens: self.current_nav_lens()})
     }
@@ -21075,11 +21076,13 @@ impl App {
         c.is_none_or(|c| c.same_as(&self.current_credentials()))
     }
 
-    /// The region a location in `service` is captured in: the current one,
-    /// or `None` for a global service (the same list in every region, so
-    /// restoring it must never switch region).
-    fn location_region(&self, service: ServiceType) -> Option<String> {
-        (!service.is_global()).then(|| self.current_region.as_str().to_string())
+    /// The region a location is captured in: the current one, even for a
+    /// global service. Its list is the same everywhere, but the region is
+    /// still where you were: back from a jump that switched region (a
+    /// CloudFront distribution's us-east-1 certificate) must switch back.
+    /// Bookmarks drop it for global services (`toggle_bookmark`).
+    fn location_region(&self) -> Option<String> {
+        Some(self.current_region.as_str().to_string())
     }
 
     /// Whether `loc` is the history's newest entry already (same service,
@@ -21108,7 +21111,7 @@ impl App {
             top.service == service
                 && top.query == self.location_query(service)
                 && top.selected_id == id
-                && top.region == self.location_region(service)
+                && top.region == self.location_region()
                 && self.is_current_credentials(top.credentials.as_ref())
         })
     }
@@ -21510,6 +21513,11 @@ impl App {
                 .map(|r| r.name().to_string())
                 .filter(|n| !n.is_empty() && *n != id);
             loc.query = String::new();
+            // A global resource is the same in every region: opening its
+            // bookmark mustn't move you out of the one you're in.
+            if loc.service.is_global() {
+                loc.region = None;
+            }
             loc.label = match &name {
                 Some(n) => format!("{} · {} ({})", loc.service.short_name(), n, id),
                 None => format!("{} · {}", loc.service.short_name(), id)};
@@ -22767,12 +22775,13 @@ impl App {
         let target = match target {
             Some(t) => t,
             None => return false};
-        // A row can name a resource in another region (an AppSync API's
-        // Cognito pool / DynamoDB table / OpenSearch domain): switch there
-        // too, or the jump searches the current region and finds nothing.
+        // A row can name a resource in another region (an ARN, an AppSync
+        // API's Cognito pool / DynamoDB table / OpenSearch domain): switch
+        // there too, or the jump searches the current region and finds nothing.
         let jump_region = jump_region.or_else(|| {
             row.as_ref().and_then(|(k, v)| {
-                self.appsync_row_jump_region(k, v)
+                crate::ui::widgets::details_pane::arn_jump_region(v, target.service)
+                    .or_else(|| self.appsync_row_jump_region(k, v))
                     .or_else(|| self.tgw_peer_jump_region(k, v))
             })
         });
@@ -22893,10 +22902,7 @@ impl App {
             async move {
                 crate::aws::services::ec2::fetch_instance_credit_spec(client, instance_id)
                     .await
-                    .map_err(|e| match e {
-                        crate::error::Error::AwsSdk(m) => m,
-                        e => e.to_string(),
-                    })
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -23517,7 +23523,7 @@ impl App {
                 crate::aws::services::s3::fetch_s3_storage_metrics(cw, bucket)
                     .await
                     .map(Box::new)
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -29318,7 +29324,7 @@ impl App {
             async move {
                 crate::aws::services::lambda::fetch_lambda_concurrency(client, name)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -29340,7 +29346,7 @@ impl App {
                 crate::aws::services::lambda::fetch_lambda_code(client, name)
                     .await
                     .map(Box::new)
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -29390,7 +29396,7 @@ impl App {
             async move {
                 crate::aws::services::lambda::fetch_lambda_esms(client, name)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -29414,7 +29420,7 @@ impl App {
             async move {
                 crate::aws::services::lambda::fetch_lambda_eventbridge_rules(client, arn)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -29447,7 +29453,7 @@ impl App {
                 crate::aws::services::lambda::download_and_extract_lambda_code(client, name.clone(), dest)
                     .await
                     .map(|(p, n)| (p.to_string_lossy().to_string(), n))
-                    .map_err(|e| e.to_string());
+                    .map_err(crate::error::Error::message);
             let _ = tx.send(crate::event::Event::LambdaCodeDownloaded {
                 function_name: name,
                 result});
@@ -29490,7 +29496,7 @@ impl App {
             let result = crate::aws::services::invoicing::download_invoice_pdf(client, invoice_id.clone(), dest)
                 .await
                 .map(|(p, n)| (p.to_string_lossy().to_string(), n))
-                .map_err(|e| e.to_string());
+                .map_err(crate::error::Error::message);
             let _ = tx.send(crate::event::Event::InvoicePdfDownloaded { invoice_id, result });
         });
     }
@@ -29537,7 +29543,7 @@ impl App {
             async move {
                 crate::aws::services::rds::fetch_rds_pi(pi, resource_id)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -29594,7 +29600,7 @@ impl App {
             async move {
                 crate::aws::services::rds::fetch_rds_pending_maintenance(client, fetch_arn)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -29621,7 +29627,7 @@ impl App {
             async move {
                 crate::aws::services::rds::fetch_rds_log_files(client, fetch_id)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -29644,7 +29650,7 @@ impl App {
             async move {
                 crate::aws::services::rds::fetch_rds_proxy_targets(client, name)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -29670,7 +29676,7 @@ impl App {
             async move {
                 crate::aws::services::rds::fetch_rds_parameters(client, name, is_cluster)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -29759,7 +29765,7 @@ impl App {
             async move {
                 crate::aws::services::rds::fetch_rds_events(client, fetch_id, is_cluster)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(crate::error::Error::message)
             },
         );
     }
@@ -31313,7 +31319,7 @@ impl App {
                     crate::aws::services::waf::fetch_waf_insights(client, arn, name, id, scope)
                         .await
                         .map(Box::new)
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -31407,7 +31413,7 @@ impl App {
                 async move {
                     crate::aws::services::ssm::fetch_command_invocations(ssm, id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -31466,7 +31472,7 @@ impl App {
                     crate::aws::services::ssm::fetch_ops_item_detail(ssm, id)
                         .await
                         .map(Box::new)
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -31488,7 +31494,7 @@ impl App {
                 async move {
                     crate::aws::services::ssm::fetch_maint_window_detail(ssm, id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -31511,7 +31517,7 @@ impl App {
                     crate::aws::services::ssm::fetch_patch_baseline_detail(ssm, id)
                         .await
                         .map(Box::new)
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -31533,7 +31539,7 @@ impl App {
                 async move {
                     crate::aws::services::ssm::fetch_automation_steps(ssm, id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -31555,7 +31561,7 @@ impl App {
                 async move {
                     crate::aws::services::ssm::fetch_ssm_assoc_detail(ssm, id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -31587,7 +31593,7 @@ impl App {
                 async move {
                     crate::aws::services::ssm::fetch_instance_associations(ssm, id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -31610,7 +31616,7 @@ impl App {
                     crate::aws::services::ssm::fetch_instance_inventory(ssm, id)
                         .await
                         .map(Box::new)
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -31632,7 +31638,7 @@ impl App {
                 async move {
                     crate::aws::services::ssm::fetch_instance_patches(ssm, id)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -31654,7 +31660,7 @@ impl App {
                 async move {
                     crate::aws::services::ssm::fetch_document_content(ssm, name)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
@@ -31677,7 +31683,7 @@ impl App {
                 async move {
                     crate::aws::services::ssm::fetch_ssm_param_detail(ssm, name, is_secure)
                         .await
-                        .map_err(|e| e.to_string())
+                        .map_err(crate::error::Error::message)
                 },
             );
         }
