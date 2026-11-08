@@ -557,6 +557,8 @@ pub fn render_cw_dashboard_metrics_overlay(app: &App, area: Rect, frame: &mut Fr
             dim("  scroll    ".into()),
             key("r"),
             dim("  refresh    ".into()),
+            key("w"),
+            dim("  watch    ".into()),
             key("Z"),
             dim("  full-width".into()),
         ])

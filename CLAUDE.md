@@ -493,6 +493,12 @@ See [`docs/MACROS.md`](docs/MACROS.md#keycast---show-keys-srckeycastrs). A new i
   `⟳ watch Ns` chip — `show_loading_indicator()` stays quiet for watch
   refreshes. `load_service_resources()` drops any in-flight staging (a manual
   load supersedes the watch pass).
+  **Over the charts** (`m`) it refreshes them instead of holding off
+  (`watch_tick_charts`): never faster than once a minute
+  (`chart_watch_interval` — CloudWatch's resolution; the chip shows that
+  cadence), timed off `metrics_window_end` so `r` / a range key resets it,
+  and a dashboard pass is `quiet` — the grid stays drawn, and stays if the
+  pass fails. Cost / S3 charts are daily and aren't refreshed.
 - **Global services** key the cache on `Region::UsEast1` (data doesn't vary by
   region). Client region and cache region are independent.
 - **A region switch keeps the cache** (it's region-keyed; only a profile/role

@@ -180,7 +180,7 @@ selection. The essentials:
 | `@` | Search bar seeded with `@`, for a fast service switch |
 | `/` | Fuzzy search the current service |
 | `r` / `F5` | Refresh — whole service from the list, just this resource from the detail pane |
-| `w` | Watch mode (auto-refresh); `+` / `-` tune the interval |
+| `w` | Watch mode (auto-refresh); `+` / `-` tune the interval. With the charts (`m`) open it refreshes them, at most once a minute |
 | `,` | Macros — `⏎` run, `n` record, `,` again to stop recording |
 | `` ` `` | Jump list (navigation history) |
 | `B` / `'` | Bookmark this location / open bookmarks |

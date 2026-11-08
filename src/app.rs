@@ -2599,6 +2599,9 @@ pub struct App {
     pub cw_dashboard_metrics:
         HashMap<String, crate::aws::services::cloudwatch::CwDashboardMetricsState>,
     pub cw_dashboard_metrics_time_range: MetricsTimeRange,
+    /// A watch pass is refreshing this dashboard behind the drawn grid
+    /// (`load_cw_dashboard_metrics(quiet)`).
+    pub cw_dashboard_watch_pending: Option<String>,
     /// Scroll offset into the dashboard grid, in terminal rows — a real
     /// dashboard is taller than any pane.
     pub cw_dashboard_scroll: u16,
@@ -3396,6 +3399,7 @@ impl App {
 
             cw_dashboard_metrics: HashMap::new(),
             cw_dashboard_metrics_time_range: MetricsTimeRange::SixHours,
+            cw_dashboard_watch_pending: None,
             cw_dashboard_scroll: 0,
             cw_dashboard_cursor: None,
             cw_dashboard_regions: RefCell::new(Vec::new()),
@@ -3616,6 +3620,9 @@ impl App {
                 self.co_enrollment = Some(enrollment);
             }
             Event::CwDashboardMetricsLoaded { name, data } => {
+                if self.cw_dashboard_watch_pending.as_ref() == Some(&name) {
+                    self.cw_dashboard_watch_pending = None;
+                }
                 // The fetch may have adopted the dashboard body's own window, so
                 // the range the `[`/`]` chip steps from is whatever came back —
                 // not what we asked for.
@@ -3626,10 +3633,16 @@ impl App {
                 );
             }
             Event::CwDashboardMetricsFailed { name, error } => {
-                self.cw_dashboard_metrics.insert(
-                    name,
-                    crate::aws::services::cloudwatch::CwDashboardMetricsState::Error(error),
-                );
+                // A failed watch pass keeps the grid it was refreshing.
+                if self.cw_dashboard_watch_pending.as_ref() == Some(&name) {
+                    self.cw_dashboard_watch_pending = None;
+                    self.error_message = Some(format!("Watch: couldn't refresh the dashboard — {error}"));
+                } else {
+                    self.cw_dashboard_metrics.insert(
+                        name,
+                        crate::aws::services::cloudwatch::CwDashboardMetricsState::Error(error),
+                    );
+                }
             }
             Event::Lazy(a) => {
                 // A stale epoch means the fetch was spawned before an
@@ -4789,6 +4802,19 @@ impl App {
                     self.layout_mode = match self.layout_mode {
                         LayoutMode::DetailsOnly => LayoutMode::Split,
                         _ => LayoutMode::DetailsOnly};
+                    return Ok(());
+                }
+                // Watch works over the charts too (`watch_tick_charts`).
+                KeyCode::Char('w') if key.modifiers.is_empty() => {
+                    self.toggle_watch_mode();
+                    return Ok(());
+                }
+                KeyCode::Char('+') | KeyCode::Char('=') if self.watch.enabled => {
+                    self.adjust_watch_interval(true);
+                    return Ok(());
+                }
+                KeyCode::Char('-') if self.watch.enabled => {
+                    self.adjust_watch_interval(false);
                     return Ok(());
                 }
                 _ => {}
@@ -10847,6 +10873,12 @@ impl App {
     /// due and nothing blocks it — a load already in flight, active search,
     /// any modal/overlay, or a region switch all hold the tick over.
     fn watch_tick(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        // The charts are what's on screen: refresh them, not the list
+        // behind them.
+        if self.metrics_in_pane.is_some() {
+            self.watch_tick_charts(event_tx);
+            return;
+        }
         let blocked = self.current_service.is_none_or(|s| s.is_virtual()) // no stream to watch
             || self.loading
             || self.search_active
@@ -10866,6 +10898,79 @@ impl App {
         } else {
             self.start_watch_refresh();
         }
+    }
+
+    /// How often watch mode refreshes the open charts: the watch interval,
+    /// but never under a minute — CloudWatch's standard resolution, so a
+    /// faster refetch spends `GetMetricData` on the same points. `None` for
+    /// charts with nothing newer to fetch (Cost's daily series, loaded with
+    /// the row; S3's daily storage metrics).
+    pub(crate) fn chart_watch_interval(&self) -> Option<Duration> {
+        const FLOOR: Duration = Duration::from_secs(60);
+        match self.metrics_in_pane? {
+            MetricsKind::Spec | MetricsKind::CwDashboard => Some(self.watch.interval.max(FLOOR)),
+            MetricsKind::Cost | MetricsKind::S3 => None,
+        }
+    }
+
+    /// A chart fetch is in flight (manual or watch).
+    fn chart_fetch_in_flight(&self) -> bool {
+        match self.metrics_in_pane {
+            Some(MetricsKind::Spec) => self.spec_metrics.as_ref().is_some_and(|m| m.loading),
+            Some(MetricsKind::CwDashboard) => {
+                self.cw_dashboard_watch_pending.is_some()
+                    || self.selected_cw_dashboard_name().is_some_and(|n| {
+                        matches!(
+                            self.cw_dashboard_metrics.get(&n),
+                            Some(crate::aws::services::cloudwatch::CwDashboardMetricsState::Loading)
+                        )
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// Watch mode over the charts: refetch them from now once the last fetch
+    /// (open, `r`, a range key, or the last watch pass — each moves
+    /// `metrics_window_end`) is an interval old. Never under a modal, while
+    /// a fetch is in flight, or in the spec view's metric picker.
+    fn watch_tick_charts(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(every) = self.chart_watch_interval() else { return };
+        let picking = self.spec_metrics.as_ref().is_some_and(|m| m.picker.is_some());
+        if !self.watch.enabled || picking || self.overlay_over_pane_view() || self.chart_fetch_in_flight() {
+            return;
+        }
+        if epoch_now() - self.metrics_window_end < every.as_secs() as i64 {
+            return;
+        }
+        self.watch.mark_refreshed();
+        match self.metrics_in_pane {
+            Some(MetricsKind::Spec) => self.fetch_spec_metrics(event_tx),
+            Some(MetricsKind::CwDashboard) => {
+                self.metrics_window_end = epoch_now();
+                self.load_cw_dashboard_metrics(true, event_tx);
+            }
+            _ => {}
+        }
+    }
+
+    /// The selected resource's dashboard name, if it's a CW dashboard.
+    fn selected_cw_dashboard_name(&self) -> Option<String> {
+        self.get_selected_resource()?
+            .as_any()
+            .downcast_ref::<crate::aws::services::cloudwatch::CwDashboard>()
+            .map(|d| d.name.clone())
+    }
+
+    /// The status-bar watch chip's spinner: a list refresh streaming into
+    /// staging, or a chart refresh in flight under watch.
+    pub fn watch_spinning(&self) -> bool {
+        self.watch_refresh_active() || (self.chart_watch_interval().is_some() && self.chart_fetch_in_flight())
+    }
+
+    /// The cadence the chip shows: the charts' when they're open.
+    pub fn watch_cadence(&self) -> Duration {
+        self.chart_watch_interval().unwrap_or(self.watch.interval)
     }
 
     /// Whether the selected resource has a targeted single-resource fetch
@@ -10908,10 +11013,19 @@ impl App {
         if self.watch.enabled {
             // First refresh fires on the next tick — `w` feels immediate.
             self.watch.last_refresh = None;
-            self.success_message = Some(format!(
-                "Watch on — refreshing every {}s (+/- interval, w off)",
-                self.watch.interval.as_secs()
-            ));
+            self.success_message = Some(match self.chart_watch_interval() {
+                Some(every) => format!(
+                    "Watch on — refreshing the charts every {}s (w off)",
+                    every.as_secs()
+                ),
+                None if self.metrics_in_pane.is_some() => {
+                    "Watch on — these charts are daily, so they aren't refreshed".to_string()
+                }
+                None => format!(
+                    "Watch on — refreshing every {}s (+/- interval, w off)",
+                    self.watch.interval.as_secs()
+                ),
+            });
         } else {
             self.success_message = Some("Watch off".to_string());
         }
@@ -24752,6 +24866,12 @@ impl App {
     }
 
     pub(crate) fn any_pane_overlay_active(&self) -> bool {
+        self.metrics_in_pane.is_some() || self.overlay_over_pane_view()
+    }
+
+    /// Every overlay `any_pane_overlay_active` counts except the charts —
+    /// what watch mode holds off for while they're open.
+    fn overlay_over_pane_view(&self) -> bool {
         self.help_visible
             || self.command_picker.visible
             || self.service_selector.visible
@@ -24769,7 +24889,6 @@ impl App {
             || self.trail_in_pane.is_some()
             || self.refs_in_pane.is_some()
             || self.access_in_pane.is_some()
-            || self.metrics_in_pane.is_some()
             || self.jump_list_visible
             || self.bookmarks_visible
             || self.macro_picker_visible
@@ -33361,6 +33480,14 @@ impl App {
     /// Unlike the other `m` triggers this reports its failure (the state has an
     /// `Error` arm) — a denied `GetDashboard` would otherwise spin forever.
     fn trigger_cw_dashboard_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        self.load_cw_dashboard_metrics(false, event_tx);
+    }
+
+    /// `quiet` (a watch pass): the grid already drawn stays up until the new
+    /// data lands — and stays if the refresh fails, which says so in the
+    /// status bar — instead of blanking to `Loading` once a minute.
+    fn load_cw_dashboard_metrics(&mut self, quiet: bool, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::cloudwatch::CwDashboardMetricsState;
         if let Some(d) = self.get_selected_resource().and_then(|r| {
             r.as_any()
                 .downcast_ref::<crate::aws::services::cloudwatch::CwDashboard>()
@@ -33369,10 +33496,13 @@ impl App {
             let time_range = self.cw_dashboard_metrics_time_range;
             let honor_body_range = self.cw_dashboard_range_from_body;
             let region = self.current_region.as_str().to_string();
-            self.cw_dashboard_metrics.insert(
-                name.clone(),
-                crate::aws::services::cloudwatch::CwDashboardMetricsState::Loading,
-            );
+            let drawn = matches!(self.cw_dashboard_metrics.get(&name), Some(CwDashboardMetricsState::Loaded(_)));
+            if quiet && drawn {
+                self.cw_dashboard_watch_pending = Some(name.clone());
+            } else {
+                self.cw_dashboard_watch_pending = None;
+                self.cw_dashboard_metrics.insert(name.clone(), CwDashboardMetricsState::Loading);
+            }
             // The whole config, not one client: a widget can pin its own region
             // and we only learn which after the body comes back.
             let config = self.aws_clients.sdk_config().clone();
