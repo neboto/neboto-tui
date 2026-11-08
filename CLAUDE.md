@@ -687,11 +687,16 @@ and the approaches you rejected are the part nobody can recover from your code.
   `copy_to_clipboard`; under `cfg(test)` neither sink is touched
   (`App::clipboard_last` reads the copy back).
 - **Split out** (`|`, `src/split.rs`): a second neboto process in a new
-  pane of the host multiplexer / terminal, started at `current_location()`
+  pane of the host multiplexer / terminal (else a tab or window where it
+  has no split; each `Launch` says which, and whether to wait for it), started at `current_location()`
   via a hidden `--at` (base64url `NavLocation`) plus the session flags, and
   restored by `restore_startup_location` through the bookmark path. No
   in-process panes: `App` owns the whole screen. Credentials follow the
-  `session_launch` rules — never in the command.
+  `session_launch` rules — never in the command. `|` is checked ahead of
+  the in-pane views' handlers unless one is taking text
+  (`in_pane_view_typing` — a new text input needs a line there); charts
+  come back through `NavLens::Metrics`, the object browser through
+  `s3_object_path`, other views as the pane behind them.
 - **CLI command copy** (`C`, either pane; `src/aws/cli_actions.rs`, picker
   `cli_picker.rs`): `Resource::cli_command()` returns the per-type **read**
   command (`aws ec2 describe-instances --instance-ids …`) — always the first

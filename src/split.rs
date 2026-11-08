@@ -12,7 +12,7 @@
 use crate::app::NavLocation;
 use base64::Engine;
 
-/// Somewhere that can open a pane next to this one.
+/// The terminal or multiplexer neboto is running in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Host {
     Tmux,
@@ -20,6 +20,12 @@ pub enum Host {
     WezTerm,
     Kitty,
     ITerm,
+    Ghostty,
+    Alacritty,
+    TerminalApp,
+    GnomeTerminal,
+    Konsole,
+    Foot,
 }
 
 impl Host {
@@ -30,15 +36,22 @@ impl Host {
             Host::WezTerm => "WezTerm",
             Host::Kitty => "kitty",
             Host::ITerm => "iTerm",
+            Host::Ghostty => "Ghostty",
+            Host::Alacritty => "Alacritty",
+            Host::TerminalApp => "Terminal",
+            Host::GnomeTerminal => "GNOME Terminal",
+            Host::Konsole => "Konsole",
+            Host::Foot => "foot",
         }
     }
 }
 
 /// The host neboto runs in, innermost first: a multiplexer inside a terminal
-/// splits the multiplexer's pane (WezTerm's variables are inherited into
-/// the tmux it runs, so the order matters).
+/// splits the multiplexer's pane (the terminal's variables are inherited
+/// into the tmux it runs, so the order matters).
 pub fn detect(env: impl Fn(&str) -> Option<String>) -> Option<Host> {
     let set = |k: &str| env(k).is_some_and(|v| !v.is_empty());
+    let term_program = env("TERM_PROGRAM").unwrap_or_default();
     if set("TMUX") {
         Some(Host::Tmux)
     } else if set("ZELLIJ") {
@@ -47,10 +60,69 @@ pub fn detect(env: impl Fn(&str) -> Option<String>) -> Option<Host> {
         Some(Host::WezTerm)
     } else if set("KITTY_WINDOW_ID") {
         Some(Host::Kitty)
-    } else if env("TERM_PROGRAM").as_deref() == Some("iTerm.app") {
+    } else if term_program == "iTerm.app" {
         Some(Host::ITerm)
+    } else if term_program == "ghostty" || set("GHOSTTY_RESOURCES_DIR") {
+        Some(Host::Ghostty)
+    } else if set("ALACRITTY_SOCKET") || set("ALACRITTY_WINDOW_ID") {
+        Some(Host::Alacritty)
+    } else if term_program == "Apple_Terminal" {
+        Some(Host::TerminalApp)
+    } else if set("KONSOLE_VERSION") {
+        Some(Host::Konsole)
+    } else if set("GNOME_TERMINAL_SCREEN") || set("GNOME_TERMINAL_SERVICE") {
+        Some(Host::GnomeTerminal)
+    } else if env("TERM").is_some_and(|t| t == "foot" || t.starts_with("foot-")) {
+        Some(Host::Foot)
     } else {
         None
+    }
+}
+
+/// What a launch opens, for the status line: a window opening where a pane
+/// was hoped for shouldn't look like a bug.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opens {
+    Pane,
+    Tab,
+    Window,
+    /// Config `split_command`: whatever it does.
+    Custom,
+}
+
+/// One way to open the new neboto.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launch {
+    pub prog: String,
+    pub args: Vec<String>,
+    pub opens: Opens,
+    /// The program *is* the new window (`alacritty -e`, `foot`): spawn it and
+    /// don't wait, or neboto would hang until that window closed. The others
+    /// are a CLI that returns once the pane exists, so its error is
+    /// reportable.
+    pub detach: bool,
+}
+
+impl Launch {
+    fn wait(prog: &str, args: Vec<String>, opens: Opens) -> Self {
+        Launch { prog: prog.to_string(), args, opens, detach: false }
+    }
+
+    fn detach(prog: &str, args: Vec<String>, opens: Opens) -> Self {
+        Launch { prog: prog.to_string(), args, opens, detach: true }
+    }
+
+    pub fn describe(&self, host: Option<Host>) -> String {
+        let what = match self.opens {
+            Opens::Pane => "pane",
+            Opens::Tab => "tab",
+            Opens::Window => "window",
+            Opens::Custom => return "Split out with split_command".to_string(),
+        };
+        match host {
+            Some(h) => format!("Split out into a new {} {what}", h.name()),
+            None => format!("Split out into a new {what}"),
+        }
     }
 }
 
@@ -59,6 +131,13 @@ thread_local! {
     static TEST_HOST: std::cell::Cell<Option<Host>> = const { std::cell::Cell::new(None) };
     static LAUNCHED: std::cell::RefCell<Vec<(String, Vec<String>)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    static FAILING: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Make launches of `progs` fail on this thread (the kitty → window fallback).
+#[cfg(test)]
+pub fn set_test_failing(progs: &[&str]) {
+    FAILING.with(|f| *f.borrow_mut() = progs.iter().map(|p| p.to_string()).collect());
 }
 
 /// The host to split, from the process environment. Under `cfg(test)` it is
@@ -137,16 +216,22 @@ pub fn neboto_command(exe: &str, session: &Session, place: Option<&str>) -> Stri
     parts.join(" ")
 }
 
-/// The program + args that open a pane to the right of this one running
-/// `shell_cmd` through `sh -c`. `env` is read for the pane / window ids, so
-/// the split lands beside neboto rather than beside whichever pane is
-/// active.
-pub fn split_invocation(
+/// The ways to open a pane (else a tab, else a window) beside this one
+/// running `shell_cmd` through `sh -c`, best first: the caller tries each
+/// until one works. `env` is read for the pane / window ids, so the split
+/// lands beside neboto rather than beside whichever pane is active.
+pub fn launches(
     host: Host,
     shell_cmd: &str,
     env: impl Fn(&str) -> Option<String>,
-) -> (String, Vec<String>) {
+    macos: bool,
+) -> Vec<Launch> {
     let s = |v: &str| v.to_string();
+    let sh = || vec![s("sh"), s("-c"), shell_cmd.to_string()];
+    let with = |mut head: Vec<String>, tail: Vec<String>| {
+        head.extend(tail);
+        head
+    };
     match host {
         Host::Tmux => {
             let mut args = vec![s("split-window"), s("-h")];
@@ -154,75 +239,130 @@ pub fn split_invocation(
                 args.extend([s("-t"), pane]);
             }
             args.push(shell_cmd.to_string());
-            (s("tmux"), args)
+            vec![Launch::wait("tmux", args, Opens::Pane)]
         }
-        Host::Zellij => (
-            s("zellij"),
-            vec![
-                s("run"),
-                s("--direction"),
-                s("right"),
-                s("--close-on-exit"),
-                s("--"),
-                s("sh"),
-                s("-c"),
-                shell_cmd.to_string(),
-            ],
-        ),
+        Host::Zellij => vec![Launch::wait(
+            "zellij",
+            with(vec![s("run"), s("--direction"), s("right"), s("--close-on-exit"), s("--")], sh()),
+            Opens::Pane,
+        )],
         Host::WezTerm => {
             let mut args = vec![s("cli"), s("split-pane"), s("--right")];
             if let Some(pane) = env("WEZTERM_PANE") {
                 args.extend([s("--pane-id"), pane]);
             }
-            args.extend([s("--"), s("sh"), s("-c"), shell_cmd.to_string()]);
-            (s("wezterm"), args)
+            args.push(s("--"));
+            vec![Launch::wait("wezterm", with(args, sh()), Opens::Pane)]
         }
-        // Needs `allow_remote_control` in kitty.conf; a vertical split
-        // needs the `splits` layout, other layouts just add a window.
-        Host::Kitty => (
-            s("kitten"),
-            vec![
-                s("@"),
-                s("launch"),
-                s("--location=vsplit"),
-                s("--cwd=current"),
-                s("sh"),
-                s("-c"),
-                shell_cmd.to_string(),
-            ],
-        ),
-        Host::ITerm => {
-            let inner = format!("sh -c {}", crate::aws::resource::shell_quote(shell_cmd));
-            let escaped = inner.replace('\\', "\\\\").replace('"', "\\\"");
-            (
-                s("osascript"),
-                vec![
-                    s("-e"),
-                    format!(
-                        "tell application \"iTerm\" to tell current session of current window \
-                         to split vertically with default profile command \"{escaped}\""
-                    ),
-                ],
-            )
+        // A split needs `allow_remote_control` in kitty.conf (and the
+        // `splits` layout for it to be vertical); without it, a new window.
+        Host::Kitty => vec![
+            Launch::wait(
+                "kitten",
+                with(vec![s("@"), s("launch"), s("--location=vsplit"), s("--cwd=current")], sh()),
+                Opens::Pane,
+            ),
+            Launch::detach("kitty", sh(), Opens::Window),
+        ],
+        Host::ITerm => vec![osascript(&format!(
+            "tell application \"iTerm\" to tell current session of current window \
+             to split vertically with default profile command \"{}\"",
+            applescript_text(&sh_c(shell_cmd))
+        ))],
+        // Ghostty 1.3+ scripts splits on macOS. No `shell:` prefix: a
+        // surface configuration's command takes it literally (the config
+        // file's prefixes don't apply), and with arguments it already runs
+        // through a shell. Linux has no split IPC, so a window there.
+        Host::Ghostty if macos => vec![osascript(&format!(
+            "tell application \"Ghostty\"\n\
+             set cfg to new surface configuration\n\
+             set command of cfg to \"{}\"\n\
+             split (focused terminal of selected tab of front window) direction right with configuration cfg\n\
+             end tell",
+            applescript_text(&sh_c(shell_cmd))
+        ))],
+        Host::Ghostty => vec![Launch::detach("ghostty", with(vec![s("-e")], sh()), Opens::Window)],
+        // No splits, by design: a window in the running instance, else a
+        // new one.
+        Host::Alacritty => vec![
+            Launch::wait("alacritty", with(vec![s("msg"), s("create-window"), s("-e")], sh()), Opens::Window),
+            Launch::detach("alacritty", with(vec![s("-e")], sh()), Opens::Window),
+        ],
+        Host::TerminalApp => vec![osascript_opens(
+            &format!(
+                "tell application \"Terminal\"\n\
+                 do script \"{}\"\n\
+                 activate\n\
+                 end tell",
+                applescript_text(&sh_c(shell_cmd))
+            ),
+            Opens::Window,
+        )],
+        Host::GnomeTerminal => {
+            vec![Launch::wait("gnome-terminal", with(vec![s("--tab"), s("--")], sh()), Opens::Tab)]
         }
+        Host::Konsole => vec![Launch::detach("konsole", with(vec![s("--new-tab"), s("-e")], sh()), Opens::Tab)],
+        Host::Foot => vec![Launch::detach("foot", sh(), Opens::Window)],
     }
 }
 
-/// Run the split. It returns as soon as the host has the new pane, so the
-/// wait is short; the host's own error text is what's reported on failure.
-pub fn run(prog: &str, args: &[String]) -> Result<(), String> {
+/// Config `split_command`: the user's own launcher, `{cmd}` replaced by the
+/// neboto command as one shell-quoted word. Without `{cmd}`, `sh -c {cmd}`
+/// is appended — what a `-e` / `--` style launcher needs.
+pub fn custom_launch(template: &str, shell_cmd: &str) -> Launch {
+    let quoted = crate::aws::resource::shell_quote(shell_cmd);
+    let line = if template.contains("{cmd}") {
+        template.replace("{cmd}", &quoted)
+    } else {
+        format!("{template} sh -c {quoted}")
+    };
+    Launch::detach("sh", vec!["-c".to_string(), line], Opens::Custom)
+}
+
+fn sh_c(shell_cmd: &str) -> String {
+    format!("sh -c {}", crate::aws::resource::shell_quote(shell_cmd))
+}
+
+/// A string literal's contents in AppleScript.
+fn applescript_text(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn osascript(script: &str) -> Launch {
+    osascript_opens(script, Opens::Pane)
+}
+
+fn osascript_opens(script: &str, opens: Opens) -> Launch {
+    Launch::wait("osascript", vec!["-e".to_string(), script.to_string()], opens)
+}
+
+/// Run one launch. A waited-on CLI's own error text is what's reported; a
+/// detached one only fails if it can't start (a thread reaps it).
+pub fn run(launch: &Launch) -> Result<(), String> {
     #[cfg(test)]
     {
-        LAUNCHED.with(|l| l.borrow_mut().push((prog.to_string(), args.to_vec())));
+        LAUNCHED.with(|l| l.borrow_mut().push((launch.prog.clone(), launch.args.clone())));
+        if FAILING.with(|f| f.borrow().contains(&launch.prog)) {
+            return Err(format!("{}: failed", launch.prog));
+        }
         Ok(())
     }
     #[cfg(not(test))]
     {
-        let out = std::process::Command::new(prog)
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .output()
-            .map_err(|e| format!("{prog}: {e}"))?;
+        use std::process::{Command, Stdio};
+        let prog = &launch.prog;
+        let mut cmd = Command::new(prog);
+        cmd.args(&launch.args).stdin(Stdio::null());
+        if launch.detach {
+            let mut child = cmd
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| format!("{prog}: {e}"))?;
+            std::thread::spawn(move || child.wait());
+            return Ok(());
+        }
+        let out = cmd.output().map_err(|e| format!("{prog}: {e}"))?;
         if out.status.success() {
             Ok(())
         } else {
@@ -257,9 +397,57 @@ mod tests {
 
     #[test]
     fn tmux_splits_neboto_s_own_pane() {
-        let (prog, args) = split_invocation(Host::Tmux, "neboto -r eu-west-1", env(&[("TMUX_PANE", "%4")]));
-        assert_eq!(prog, "tmux");
-        assert_eq!(args, ["split-window", "-h", "-t", "%4", "neboto -r eu-west-1"]);
+        let l = launches(Host::Tmux, "neboto -r eu-west-1", env(&[("TMUX_PANE", "%4")]), true);
+        assert_eq!(l.len(), 1);
+        assert_eq!(l[0].prog, "tmux");
+        assert_eq!(l[0].args, ["split-window", "-h", "-t", "%4", "neboto -r eu-west-1"]);
+        assert_eq!((l[0].opens, l[0].detach), (Opens::Pane, false));
+    }
+
+    #[test]
+    fn terminals_without_a_split_get_a_window_or_tab() {
+        assert_eq!(detect(env(&[("TERM_PROGRAM", "ghostty")])), Some(Host::Ghostty));
+        assert_eq!(detect(env(&[("ALACRITTY_SOCKET", "/tmp/a.sock")])), Some(Host::Alacritty));
+        assert_eq!(detect(env(&[("TERM_PROGRAM", "Apple_Terminal")])), Some(Host::TerminalApp));
+        assert_eq!(detect(env(&[("KONSOLE_VERSION", "230800")])), Some(Host::Konsole));
+        assert_eq!(detect(env(&[("GNOME_TERMINAL_SCREEN", "/org/gnome/x")])), Some(Host::GnomeTerminal));
+        assert_eq!(detect(env(&[("TERM", "foot")])), Some(Host::Foot));
+        // Ghostty under tmux: the tmux pane splits.
+        assert_eq!(detect(env(&[("TERM_PROGRAM", "ghostty"), ("TMUX", "/t,1,0")])), Some(Host::Tmux));
+
+        let alacritty = launches(Host::Alacritty, "x", env(&[]), false);
+        assert_eq!(alacritty[0].args, ["msg", "create-window", "-e", "sh", "-c", "x"]);
+        assert!(!alacritty[0].detach, "msg returns: its error is readable");
+        assert_eq!((alacritty[1].prog.as_str(), alacritty[1].detach), ("alacritty", true));
+        assert_eq!(launches(Host::Foot, "x", env(&[]), false)[0].opens, Opens::Window);
+        assert_eq!(launches(Host::GnomeTerminal, "x", env(&[]), false)[0].opens, Opens::Tab);
+        // Linux Ghostty has no split to script: a window, not osascript.
+        let linux = launches(Host::Ghostty, "x", env(&[]), false);
+        assert_eq!((linux[0].prog.as_str(), linux[0].opens, linux[0].detach), ("ghostty", Opens::Window, true));
+    }
+
+    #[test]
+    fn ghostty_on_macos_scripts_a_split() {
+        let l = launches(Host::Ghostty, "neboto -p 'a b'", env(&[]), true);
+        assert_eq!((l[0].prog.as_str(), l[0].opens), ("osascript", Opens::Pane));
+        let script = &l[0].args[1];
+        assert!(script.contains("split (focused terminal of selected tab of front window) direction right"), "{script}");
+        assert!(script.contains(r#"set command of cfg to "sh -c 'neboto -p '\\''a b'\\'''""#), "{script}");
+    }
+
+    #[test]
+    fn kitty_without_remote_control_falls_back_to_a_window() {
+        let l = launches(Host::Kitty, "x", env(&[]), false);
+        let shape: Vec<_> = l.iter().map(|l| (l.prog.as_str(), l.opens)).collect();
+        assert_eq!(shape, [("kitten", Opens::Pane), ("kitty", Opens::Window)]);
+    }
+
+    #[test]
+    fn split_command_fills_in_the_neboto_command() {
+        let l = custom_launch("my-term --right -- {cmd}", "neboto -r eu-west-1");
+        assert_eq!(l.args, ["-c", "my-term --right -- 'neboto -r eu-west-1'"]);
+        assert_eq!(custom_launch("my-term -e", "neboto").args[1], "my-term -e sh -c neboto");
+        assert_eq!(l.describe(Some(Host::Tmux)), "Split out with split_command");
     }
 
     #[test]
@@ -281,11 +469,10 @@ mod tests {
 
     #[test]
     fn iterm_gets_a_quoted_applescript_command() {
-        let (_, args) = split_invocation(Host::ITerm, "neboto -p 'a b'", env(&[]));
+        let l = launches(Host::ITerm, "neboto -p 'a b'", env(&[]), true);
         assert_eq!(
-            args[1],
-            "tell application \"iTerm\" to tell current session of current window to split \
-             vertically with default profile command \"sh -c 'neboto -p '\\\\''a b'\\\\'''\""
+            l[0].args[1],
+            r#"tell application "iTerm" to tell current session of current window to split vertically with default profile command "sh -c 'neboto -p '\\''a b'\\'''""#
         );
     }
 
