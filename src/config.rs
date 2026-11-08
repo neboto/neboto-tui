@@ -89,6 +89,12 @@ pub struct Config {
     /// current terminal). Unknown values warn at startup and mean `auto`.
     /// `--session-launch` overrides it for one run.
     pub session_launch: Option<String>,
+    /// How `|` (split out) opens the new neboto, instead of the detected
+    /// terminal's own split: a shell command where `{cmd}` is the neboto
+    /// command as one shell-quoted word (`sh -c {cmd}` appended when
+    /// absent). For a terminal neboto doesn't know, or a window-manager rule
+    /// that tiles the new window.
+    pub split_command: Option<String>,
     /// IAM role name assumed when switching into a member account from the
     /// Organizations accounts list (`s`). Default:
     /// `OrganizationAccountAccessRole`; Control Tower shops typically want

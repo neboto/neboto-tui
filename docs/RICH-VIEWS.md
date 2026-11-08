@@ -5,7 +5,9 @@ Moved out of the root `CLAUDE.md` so it loads only when needed.
 Interactive sub-views render **in the detail pane** (not full-screen modals),
 with `Z` toggling full-width (DetailsOnly ↔ Split). Each owns the keymap while
 open via a handler that runs early in `handle_key` and returns, and is listed
-in `any_pane_overlay_active` (which gates the mouse).
+in `any_pane_overlay_active` (which gates the mouse). `|` (split out) is the one key
+checked before them; a view with a text input must report it in
+`in_pane_view_typing`, or `|` typed there splits instead.
 
 - **Metrics** (`m`): one `App.metrics_in_pane: Option<MetricsKind>` +
   `open_metrics_in_pane` + `render_metrics_in_pane` (`metrics_overlay.rs`).

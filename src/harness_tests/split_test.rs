@@ -101,3 +101,114 @@ async fn every_sub_tabbed_service_records_its_sub_tab() {
         .collect();
     assert_eq!(missing, Vec::<ServiceType>::new(), "add a JumpView arm to current_jump_view");
 }
+
+/// Split one tmux pane and hand back the place it was given.
+async fn split_place(app: &mut App, tx: &mpsc::UnboundedSender<Event>) -> crate::app::NavLocation {
+    crate::split::set_test_host(Some(Host::Tmux));
+    app.handle_key(key(KeyCode::Char('|')), tx).await.unwrap();
+    crate::split::set_test_host(None);
+    let launched = crate::split::take_launched();
+    assert_eq!(launched.len(), 1, "{:?}", app.error_message);
+    place_in(launched[0].1.last().unwrap())
+}
+
+#[tokio::test]
+async fn bar_from_the_charts_reopens_them_at_their_range() {
+    use crate::aws::services::ec2::MetricsTimeRange;
+    let (mut app, tx, _rx) = ec2_app().await;
+    app.handle_key(key(KeyCode::Char('m')), &tx).await.unwrap();
+    assert_eq!(app.metrics_in_pane, Some(crate::app::MetricsKind::Spec));
+    // 1h → the next range up, so it can't be the default it opens on.
+    app.handle_key(key(KeyCode::Char(']')), &tx).await.unwrap();
+    let range = app.spec_metrics.as_ref().unwrap().range;
+    assert_ne!(range, MetricsTimeRange::OneHour);
+
+    let loc = split_place(&mut app, &tx).await;
+    assert_eq!(loc.lens, Some(crate::app::NavLens::Metrics { range: Some(range) }));
+
+    let (mut other, tx2, _rx2) = ec2_app().await;
+    other.startup_location = Some(loc);
+    other.restore_startup_location(&tx2);
+    assert_eq!(other.metrics_in_pane, Some(crate::app::MetricsKind::Spec));
+    assert_eq!(other.spec_metrics.as_ref().map(|m| m.range), Some(range));
+}
+
+#[tokio::test]
+async fn bar_in_a_filter_being_typed_is_a_character() {
+    let (mut app, tx, _rx) = ec2_app().await;
+    app.log_tail.visible = true;
+    app.log_tail.filter_active = true;
+    crate::split::set_test_host(Some(Host::Tmux));
+    app.handle_key(key(KeyCode::Char('|')), &tx).await.unwrap();
+    crate::split::set_test_host(None);
+    assert!(crate::split::take_launched().is_empty());
+    assert_eq!(app.log_tail.filter, "|");
+}
+
+/// A place on a folder in the object browser (a split, or a folder
+/// bookmark) opens the listing the folder is in, on the folder — not the
+/// folder's own contents.
+#[tokio::test]
+async fn an_object_browser_place_on_a_folder_opens_its_parent_listing() {
+    let (mut app, tx, _rx) = test_app().await;
+    let loc = crate::app::NavLocation {
+        service: ServiceType::S3,
+        view: crate::app::JumpView::None,
+        query: String::new(),
+        selected_id: Some("logs".into()),
+        label: String::new(),
+        s3_object_path: Some(("logs".into(), "AWSLogs/2023/02/".into())),
+        details_focused: false,
+        detail_section: None,
+        region: None,
+        credentials: None,
+        lens: None,
+    };
+    app.startup_location = Some(loc);
+    app.restore_startup_location(&tx);
+    assert!(app.s3_object_browser.visible);
+    assert_eq!(app.s3_object_browser.prefix, "AWSLogs/2023/");
+    assert_eq!(app.pending_s3_object_key.as_deref(), Some("AWSLogs/2023/02/"));
+}
+
+#[tokio::test]
+async fn kitty_without_remote_control_opens_a_window_and_says_why() {
+    let (mut app, tx, _rx) = ec2_app().await;
+    crate::split::set_test_host(Some(Host::Kitty));
+    crate::split::set_test_failing(&["kitten"]);
+    app.handle_key(key(KeyCode::Char('|')), &tx).await.unwrap();
+    crate::split::set_test_failing(&[]);
+    crate::split::set_test_host(None);
+    let progs: Vec<String> = crate::split::take_launched().into_iter().map(|(p, _)| p).collect();
+    assert_eq!(progs, ["kitten", "kitty"]);
+    let msg = app.success_message.clone().unwrap_or_default();
+    assert!(msg.starts_with("Split out into a new kitty window") && msg.contains("no split: kitten"), "{msg}");
+}
+
+#[tokio::test]
+async fn when_every_launch_fails_the_reason_shows_and_the_command_is_copied() {
+    let (mut app, tx, _rx) = ec2_app().await;
+    crate::split::set_test_host(Some(Host::Ghostty));
+    crate::split::set_test_failing(&["osascript", "ghostty"]);
+    app.handle_key(key(KeyCode::Char('|')), &tx).await.unwrap();
+    crate::split::set_test_failing(&[]);
+    crate::split::set_test_host(None);
+    assert!(!crate::split::take_launched().is_empty());
+    let err = app.error_message.clone().unwrap_or_default();
+    assert!(err.starts_with("Can't split:") && err.contains("copied"), "{err}");
+    assert!(app.clipboard_last().is_some_and(|c| c.contains("--at ")));
+}
+
+#[tokio::test]
+async fn split_command_beats_the_detected_terminal() {
+    let (mut app, tx, _rx) = ec2_app().await;
+    app.split_command = Some("my-term --right -- {cmd}".into());
+    crate::split::set_test_host(Some(Host::Tmux));
+    app.handle_key(key(KeyCode::Char('|')), &tx).await.unwrap();
+    crate::split::set_test_host(None);
+    let launched = crate::split::take_launched();
+    assert_eq!(launched.len(), 1);
+    assert_eq!(launched[0].0, "sh");
+    assert!(launched[0].1[1].starts_with("my-term --right -- '"), "{:?}", launched[0].1);
+    assert!(place_in(&launched[0].1[1]).selected_id.is_some());
+}

@@ -185,7 +185,7 @@ selection. The essentials:
 | `` ` `` | Jump list (navigation history) |
 | `B` / `'` | Bookmark this location / open bookmarks |
 | `M` | Message history (past errors and toasts, `y`-copyable) |
-| `\|` | Split out: open this exact place (row, section, region, account) in a second neboto beside this one — a new tmux, zellij, WezTerm, kitty or iTerm pane; elsewhere the command is copied. With `-w` on, the new pane watches too |
+| `\|` | Split out: open this exact place (row, section, region, account) in a second neboto beside this one — a new pane in tmux, zellij, WezTerm, kitty, iTerm or Ghostty (macOS); a new window or tab in Alacritty, Terminal, GNOME Terminal, Konsole or foot; config `split_command` for anything else, and failing all that the command is copied. Works from the charts (`m`, at their range), the object browser (at the object) and the other in-pane views too. With `-w` on, the new pane watches too |
 | `\` | Toggle flat detail view (all sections in one scroll) |
 | `:` | Command picker: run a key by name (only what works here) |
 | `Ctrl-L` | Repaint the screen |
@@ -419,6 +419,7 @@ template.
 | `show_keys` | Show each key and what it did in a corner box (`--show-keys` for one run) |
 | `export_formats` | Which files exports write: any of `"json"`, `"csv"`, `"md"` (default all three) |
 | `export_dir` | Where exports go (default the working directory; `NEBOTO_EXPORT_DIR` overrides) |
+| `split_command` | How `\|` opens the new neboto instead of the detected terminal's split: a shell command where `{cmd}` is the neboto command as one shell-quoted word, e.g. `"wezterm cli split-pane --bottom -- sh -c {cmd}"`, or a window-manager script that tiles the new window. Without `{cmd}`, ` sh -c {cmd}` is appended |
 | `session_launch` | Where SSM / ECS Exec sessions open: `"auto"` (default: tmux window → new terminal window → this terminal), `"window"` or `"inline"` (`--session-launch` for one run; see [Why read-only](#why-read-only)) |
 | `theme`, `[theme_colors]` | Preset name and per-color overrides |
 | `cache_ttl`, `[cache_ttls]` | Base cache freshness (seconds) and per-service overrides keyed by `@`-prefix |

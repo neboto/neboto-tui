@@ -1256,6 +1256,9 @@ pub enum NavLens {
     },
     /// `U`: the selected referencing resource's id.
     Refs { row: Option<String> },
+    /// `m`: the charts, at the range they were showing. `None` = the
+    /// range they open on (a dashboard's own window, S3's fixed 30 days).
+    Metrics { range: Option<crate::aws::services::ec2::MetricsTimeRange> },
 }
 
 /// Whose credentials a `NavLocation` was captured under: the account they
@@ -2551,6 +2554,9 @@ pub struct App {
     /// `--at`: the place a pane split out with `|` opens at, restored once
     /// the startup load is under way (`restore_startup_location`).
     pub startup_location: Option<NavLocation>,
+    /// Config `split_command`: how `|` opens the new pane, overriding the
+    /// detected terminal (`{cmd}` = the neboto command).
+    pub split_command: Option<String>,
 
     // Route53 sub-tab and detail section state
     pub r53_view: R53View,
@@ -3377,6 +3383,7 @@ impl App {
             .0,
             session_handover_files: Vec::new(),
             startup_location: None,
+            split_command: config.split_command.clone().filter(|c| !c.trim().is_empty()),
             r53_view: R53View::Zones,
             r53_records_skipped: (0, 0),
             cf_view: CloudFrontView::Distributions,
@@ -4672,6 +4679,13 @@ impl App {
         // SSM session modal intercepts all keys while visible
         if self.ssm_session_modal.visible {
             self.handle_ssm_session_modal_key(key);
+            return Ok(());
+        }
+
+        // `|` splits out from every in-pane view (they take every other
+        // key), except while one is taking text — a filter can hold a `|`.
+        if key.code == KeyCode::Char('|') && self.in_pane_view_open() && !self.in_pane_view_typing() {
+            self.split_out();
             return Ok(());
         }
 
@@ -21158,6 +21172,18 @@ impl App {
         if let Some(st) = &self.access_in_pane {
             return Some(NavLens::Access { direction: st.direction, row: st.selected_key() });
         }
+        if let Some(kind) = self.metrics_in_pane {
+            let range = match kind {
+                MetricsKind::Spec => self.spec_metrics.as_ref().map(|m| m.range),
+                // Only a range stepped by hand: otherwise the dashboard's
+                // own window, which a fresh open takes again.
+                MetricsKind::CwDashboard => {
+                    (!self.cw_dashboard_range_from_body).then_some(self.cw_dashboard_metrics_time_range)
+                }
+                MetricsKind::Cost | MetricsKind::S3 => None,
+            };
+            return Some(NavLens::Metrics { range });
+        }
         self.refs_in_pane
             .as_ref()
             .map(|st| NavLens::Refs { row: st.selected_row().map(|r| r.id.clone()) })
@@ -21175,6 +21201,7 @@ impl App {
                     st.rebuild();
                 }
             }
+            NavLens::Metrics { range } => self.open_metrics_in_pane_at(range, event_tx),
             NavLens::Refs { row } => {
                 self.open_refs_lens();
                 if let (Some(st), Some(id)) = (self.refs_in_pane.as_mut(), row) {
@@ -21399,7 +21426,13 @@ impl App {
 
         // If this is an S3 object bookmark, stash the path for the caller to trigger the load.
         if let Some((bucket, key)) = s3_path {
-            let prefix = key.rsplit_once('/').map(|(p, _)| format!("{}/", p)).unwrap_or_default();
+            // The listing the entry sits in: a folder's key ends in `/`,
+            // which would otherwise open the folder itself.
+            let prefix = key
+                .trim_end_matches('/')
+                .rsplit_once('/')
+                .map(|(p, _)| format!("{}/", p))
+                .unwrap_or_default();
             self.s3_object_browser.visible = true;
             self.s3_object_browser.bucket = bucket;
             self.s3_object_browser.region = other_region.unwrap_or(self.current_region).as_str().to_string();
@@ -23528,7 +23561,20 @@ impl App {
     /// (`crate::split`). With no host that can split, the command is copied
     /// instead, so it can be pasted into a pane opened by hand.
     fn split_out(&mut self) {
-        let place = self.current_location().map(|loc| crate::split::encode_place(&loc));
+        let mut loc = self.current_location();
+        // In the object browser: the object, as its bookmark records it.
+        if let (Some(loc), true) = (loc.as_mut(), self.s3_object_browser.visible) {
+            let st = &self.s3_object_browser;
+            if let Some(entry) = st.selected_entry() {
+                loc.s3_object_path = Some((st.bucket.clone(), entry.full_path().to_string()));
+                loc.selected_id = Some(st.bucket.clone());
+                loc.region = Some(st.region.clone());
+                loc.details_focused = false;
+                loc.detail_section = None;
+                loc.lens = None;
+            }
+        }
+        let place = loc.map(|loc| crate::split::encode_place(&loc));
         let exe = std::env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "neboto".to_string());
@@ -23544,10 +23590,11 @@ impl App {
         };
         let neboto = crate::split::neboto_command(&exe, &session, place.as_deref());
 
-        let Some(host) = crate::split::current_host() else {
-            self.copy_to_clipboard(&neboto, "neboto command (no tmux, zellij, WezTerm, kitty or iTerm to split)");
+        let host = crate::split::current_host();
+        if host.is_none() && self.split_command.is_none() {
+            self.copy_to_clipboard(&neboto, "neboto command (no terminal here to split — see split_command)");
             return;
-        };
+        }
         // The same environment rules as an SSM session in a new window: the
         // profile is passed and stale AWS_* env scrubbed, or neboto's
         // non-secret AWS_* env forwarded. Static keys never go in the
@@ -23583,16 +23630,43 @@ impl App {
         } else {
             full_cmd
         };
-        let (prog, args) =
-            crate::split::split_invocation(host, &hold_shell_on_error(&shell_cmd), |k| std::env::var(k).ok());
-        match crate::split::run(&prog, &args) {
-            Ok(()) => {
-                self.keep_handover_file(handover_file);
-                self.success_message = Some(format!("Split out into a new {} pane", host.name()));
-                self.success_message_time = Some(Instant::now());
+        let shell_cmd = hold_shell_on_error(&shell_cmd);
+        // Config `split_command` wins over detection: it's how a terminal
+        // neboto doesn't know (or a window manager rule) gets a pane.
+        let launches = match (&self.split_command, host) {
+            (Some(template), _) => vec![crate::split::custom_launch(template, &shell_cmd)],
+            (None, Some(host)) => {
+                crate::split::launches(host, &shell_cmd, |k| std::env::var(k).ok(), cfg!(target_os = "macos"))
             }
-            Err(e) => self.error_message = Some(format!("Can't split: {e}")),
+            (None, None) => Vec::new(),
+        };
+        // Best first; the first error is the one worth reading (the kitty
+        // split's "remote control is disabled", not the window's).
+        let mut first_err = None;
+        for launch in &launches {
+            match crate::split::run(launch) {
+                Ok(()) => {
+                    self.keep_handover_file(handover_file);
+                    let mut msg = launch.describe(host);
+                    if let Some(e) = first_err {
+                        msg.push_str(&format!(" (no split: {e})"));
+                    }
+                    self.success_message = Some(msg);
+                    self.success_message_time = Some(Instant::now());
+                    return;
+                }
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+            }
         }
+        // Nothing opened: say why, and copy the command to run by hand. The
+        // copy's own toast would replace the reason, so it goes quietly.
+        let _ = self.clipboard.copy(&neboto);
+        self.error_message = Some(format!(
+            "Can't split: {} — the neboto command is copied",
+            first_err.unwrap_or_else(|| "no launcher".to_string())
+        ));
     }
 
     /// `--at`: go to the place this pane was split out at. Called once the
@@ -23600,6 +23674,10 @@ impl App {
     pub fn restore_startup_location(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
         if let Some(loc) = self.startup_location.take() {
             self.jump_to_location(loc, event_tx);
+            // A place in the object browser lists it, as a bookmark does.
+            if self.s3_object_browser.visible {
+                self.trigger_s3_objects_load(event_tx, false);
+            }
         }
     }
 
@@ -24762,6 +24840,31 @@ impl App {
 
     /// True when a modal/overlay covers the main panes — mouse events should
     /// not "pass through" to the list/detail underneath.
+    /// An in-pane view (`m`/`o`/`i`/`t`/`W`/`U`/`N`, the memory browser)
+    /// has the keys.
+    fn in_pane_view_open(&self) -> bool {
+        self.memory_browser.visible
+            || self.ddb_browser.visible
+            || self.s3_object_browser.visible
+            || self.log_tail.visible
+            || self.trail_in_pane.is_some()
+            || self.refs_in_pane.is_some()
+            || self.access_in_pane.is_some()
+            || self.metrics_in_pane.is_some()
+    }
+
+    /// One of them is taking typed text, where `|` is a character.
+    fn in_pane_view_typing(&self) -> bool {
+        use crate::ui::widgets::ddb_item_browser::BrowserFocus;
+        (self.memory_browser.visible && self.memory_browser.filtering)
+            || (self.ddb_browser.visible
+                && (self.ddb_browser.focus == BrowserFocus::Query
+                    || self.ddb_browser.local_editing
+                    || self.ddb_browser.item_searching))
+            || (self.s3_object_browser.visible && self.s3_object_browser.filtering)
+            || (self.log_tail.visible && (self.log_tail.filter_active || self.log_tail.query_active))
+    }
+
     pub(crate) fn any_pane_overlay_active(&self) -> bool {
         self.metrics_in_pane.is_some() || self.overlay_over_pane_view()
     }
@@ -33242,12 +33345,24 @@ impl App {
     /// (kicks off the relevant fetch and focuses the pane). No-op if the
     /// selection has no metrics.
     fn open_metrics_in_pane(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        self.open_metrics_in_pane_at(None, event_tx);
+    }
+
+    /// `m`, or reopening a place's charts at the `range` they were showing
+    /// (`NavLens::Metrics`) — passed in rather than stepped to after
+    /// opening, so the restore fetches once.
+    fn open_metrics_in_pane_at(
+        &mut self,
+        range: Option<MetricsTimeRange>,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
         self.metrics_window_end = epoch_now();
         let kind = if let Some(target) = self.selected_metric_target() {
             // An alarm with a long period opens on a range that holds one,
             // without changing the range the other kinds open on.
-            let range = match self.is_selected_cw_alarm().then(|| self.default_alarm_metrics_range()) {
-                Some(r) if r.duration_secs() > self.spec_metrics_range.duration_secs() => r,
+            let range = match (range, self.is_selected_cw_alarm().then(|| self.default_alarm_metrics_range())) {
+                (Some(r), _) => r,
+                (None, Some(r)) if r.duration_secs() > self.spec_metrics_range.duration_secs() => r,
                 _ => self.spec_metrics_range,
             };
             self.open_spec_metrics(target, range, event_tx);
@@ -33256,8 +33371,12 @@ impl App {
             self.cw_dashboard_scroll = 0;
             self.cw_dashboard_cursor = None;
             self.cw_dashboard_zoomed = false;
-            // A fresh open gets the dashboard's own window again.
-            self.cw_dashboard_range_from_body = true;
+            // A fresh open gets the dashboard's own window again, unless
+            // a restore brings the range that was stepped to.
+            self.cw_dashboard_range_from_body = range.is_none();
+            if let Some(r) = range {
+                self.cw_dashboard_metrics_time_range = r;
+            }
             self.trigger_cw_dashboard_metrics_load(event_tx);
             Some(MetricsKind::CwDashboard)
         } else if self.is_selected_cost_item() {
