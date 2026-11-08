@@ -342,7 +342,7 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
         let noun = st.target.breakdown.as_ref().map_or("rules", |b| b.rows_noun());
         let tables: Vec<(&str, &str)> =
             [tab.then_some(("Tab", noun)), samples.then_some(("x", "samples"))].into_iter().flatten().collect();
-        [&[("[/]", "range"), ("s", "stat"), ("a", "all")][..], &tables, back, changes, &[("y", "copy"), ("e", "edit"), ("Esc", "close")]]
+        [&[("[/]", "range"), ("s", "stat"), ("a", "all")][..], &tables, back, changes, &[("y", "copy"), ("e", "edit"), ("w", "watch"), ("Esc", "close")]]
             .concat()
     };
     // A narrow pane drops hints from the end, but `Esc` stays the last.

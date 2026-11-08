@@ -118,3 +118,24 @@ async fn cost_and_s3_charts_have_nothing_to_refresh() {
     assert_eq!(app.chart_watch_interval(), None);
     assert_eq!(app.watch_cadence(), app.watch.interval);
 }
+
+/// `w` over the charts turns watch on: the charts view takes every key, so
+/// the global `w` never reached it.
+#[tokio::test]
+async fn w_over_the_charts_turns_watch_on() {
+    let (mut app, tx, _rx) = ec2_charts().await;
+    app.watch.enabled = false;
+    app.handle_key(key(KeyCode::Char('w')), &tx).await.unwrap();
+    assert!(app.watch.enabled);
+    assert_eq!(app.metrics_in_pane, Some(MetricsKind::Spec), "the charts stay open");
+    assert!(app.success_message.as_deref().is_some_and(|m| m.contains("charts every 60s")), "{:?}", app.success_message);
+
+    app.metrics_window_end = now() - 61;
+    app.watch_tick(&tx);
+    assert!(app.spec_metrics.as_ref().unwrap().loading);
+
+    app.handle_key(key(KeyCode::Char('+')), &tx).await.unwrap();
+    assert_eq!(app.watch.interval, Duration::from_secs(15));
+    app.handle_key(key(KeyCode::Char('w')), &tx).await.unwrap();
+    assert!(!app.watch.enabled);
+}

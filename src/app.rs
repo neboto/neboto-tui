@@ -4790,6 +4790,19 @@ impl App {
                         _ => LayoutMode::DetailsOnly};
                     return Ok(());
                 }
+                // Watch works over the charts too (`watch_tick_charts`).
+                KeyCode::Char('w') if key.modifiers.is_empty() => {
+                    self.toggle_watch_mode();
+                    return Ok(());
+                }
+                KeyCode::Char('+') | KeyCode::Char('=') if self.watch.enabled => {
+                    self.adjust_watch_interval(true);
+                    return Ok(());
+                }
+                KeyCode::Char('-') if self.watch.enabled => {
+                    self.adjust_watch_interval(false);
+                    return Ok(());
+                }
                 _ => {}
             }
             match kind {
@@ -10986,10 +10999,19 @@ impl App {
         if self.watch.enabled {
             // First refresh fires on the next tick — `w` feels immediate.
             self.watch.last_refresh = None;
-            self.success_message = Some(format!(
-                "Watch on — refreshing every {}s (+/- interval, w off)",
-                self.watch.interval.as_secs()
-            ));
+            self.success_message = Some(match self.chart_watch_interval() {
+                Some(every) => format!(
+                    "Watch on — refreshing the charts every {}s (w off)",
+                    every.as_secs()
+                ),
+                None if self.metrics_in_pane.is_some() => {
+                    "Watch on — these charts are daily, so they aren't refreshed".to_string()
+                }
+                None => format!(
+                    "Watch on — refreshing every {}s (+/- interval, w off)",
+                    self.watch.interval.as_secs()
+                ),
+            });
         } else {
             self.success_message = Some("Watch off".to_string());
         }
