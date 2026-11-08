@@ -26,11 +26,17 @@ fn csv_header(out: &str, columns: usize) -> Vec<String> {
     out.lines().next().unwrap().split(',').take(columns).map(String::from).collect()
 }
 
-/// Every flag, by subcommand ("" = the global/TUI ones).
+/// Every flag, by subcommand ("" = the global/TUI ones). Hidden flags are
+/// neboto talking to itself (`--at`, written by `|`), not a promise.
 fn flags() -> Value {
     let cli = Cli::command();
     let longs = |c: &clap::Command| -> Vec<String> {
-        let mut v: Vec<String> = c.get_arguments().filter_map(|a| a.get_long()).map(|l| format!("--{l}")).collect();
+        let mut v: Vec<String> = c
+            .get_arguments()
+            .filter(|a| !a.is_hide_set())
+            .filter_map(|a| a.get_long())
+            .map(|l| format!("--{l}"))
+            .collect();
         v.sort();
         v
     };

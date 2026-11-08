@@ -243,6 +243,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(Actions, "X", "export (detail · selected rows)").runs(Key('X')),
     cmd(Actions, "^X", "export the list").runs(Ctrl('x')),
     cmd(Actions, "M", "message history").runs(Key('M')),
+    cmd(Actions, "|", "split out: this place in a new pane").runs(Key('|')),
     cmd(Actions, ",", "macros (⏎ run · n record)").runs(Key(',')),
     cmd(Actions, "b", "toggle banner").runs(Key('b')),
     cmd(Actions, "Ctrl-L", "repaint the screen").runs(Ctrl('l')),
