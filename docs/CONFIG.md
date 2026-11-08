@@ -27,6 +27,11 @@ is the reference; this is the annotated list.
   Tower Config aggregator, so the Compliance tab works from the management
   account; **quote it**, a bare 12-digit id is a TOML integer and the whole
   file then fails to parse,
+  `split_command` (how `|` opens the new neboto, overriding the detected
+  terminal — `{cmd}` is the neboto command as one shell-quoted word, so
+  argv-style launchers want `sh -c {cmd}`, which is appended when `{cmd}`
+  is absent; run detached through `sh -c`, so its failures aren't
+  reported),
   `owner_tags` (owner-ish tag keys for the ownership ribbon, default
   `["owner", "team"]`, case-insensitive) + `managed_by_tags` (ManagedBy-marker
   keys, default `["managedby", "managed-by", "managed_by"]`) +
