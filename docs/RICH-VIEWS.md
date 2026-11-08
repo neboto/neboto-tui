@@ -25,6 +25,10 @@ in `any_pane_overlay_active` (which gates the mouse).
   metrics_window_end` − `x_max`); the end is recorded as each fetch starts,
   not at render. Not on the dashboard or Cost (their x axis isn't the fetch
   window).
+  **Watch mode** refreshes the open charts (`watch_tick_charts`, at most
+  once a minute): a new chart kind that fetches should be added to
+  `chart_watch_interval` / `chart_fetch_in_flight`, and keep its drawn
+  data while refetching rather than blanking to `Loading`.
   Opening from the **list** pane sets `details_focused`, so it must also fire
   the default section's on-enter hook (`reset_detail_section_to_default`) —
   focus without the hook leaves the pane behind the overlay focused but

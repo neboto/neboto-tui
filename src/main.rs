@@ -850,13 +850,14 @@ fn render_status_bar(app: &App, area: ratatui::layout::Rect, frame: &mut ratatui
         // Spinner while a watch refresh streams into staging; steady ⟳ between
         // refreshes. This is watch mode's only loading indicator — the list
         // stays populated, so the usual "Loading…" line is suppressed.
-        let icon = if app.watch_refresh_active() {
+        let icon = if app.watch_spinning() {
             theme::spinner(app.tick_count).to_string()
         } else {
             "⟳".to_string()
         };
+        // Over the charts, their cadence (never under a minute).
         right_spans.push(Span::styled(
-            format!("{} watch {}s  ", icon, app.watch.interval.as_secs()),
+            format!("{} watch {}s  ", icon, app.watch_cadence().as_secs()),
             Style::default().fg(theme::success()),
         ));
     }

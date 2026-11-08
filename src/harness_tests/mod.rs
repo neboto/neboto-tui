@@ -80,6 +80,7 @@ mod chart_markers_test;
 mod help_filter_test;
 mod command_picker_test;
 mod split_test;
+mod watch_charts_test;
 mod mocks_compute;
 mod mocks_containers;
 mod mocks_ai;
