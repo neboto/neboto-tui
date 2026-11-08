@@ -61,6 +61,11 @@ pub struct Cli {
     #[arg(short = 'm', long = "macro", value_name = "NAME")]
     pub macro_name: Option<String>,
 
+    /// Open at a place another neboto handed over (`|` splits a pane out
+    /// with it). The value is opaque — written by neboto, not by hand.
+    #[arg(long, value_name = "PLACE", hide = true)]
+    pub at: Option<String>,
+
     /// Try neboto without an AWS account: browse a made-up account from
     /// canned responses, fully offline. Ignores profiles and endpoints.
     #[arg(long, global = true)]
@@ -274,6 +279,7 @@ mod tests {
             watch: false,
             show_keys: false,
             macro_name: None,
+            at: None,
             theme: None,
             demo: false,
             no_update_check: false,

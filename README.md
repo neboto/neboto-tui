@@ -185,6 +185,7 @@ selection. The essentials:
 | `` ` `` | Jump list (navigation history) |
 | `B` / `'` | Bookmark this location / open bookmarks |
 | `M` | Message history (past errors and toasts, `y`-copyable) |
+| `\|` | Split out: open this exact place (row, section, region, account) in a second neboto beside this one — a new tmux, zellij, WezTerm, kitty or iTerm pane; elsewhere the command is copied. With `-w` on, the new pane watches too |
 | `\` | Toggle flat detail view (all sections in one scroll) |
 | `:` | Command picker: run a key by name (only what works here) |
 | `Ctrl-L` | Repaint the screen |

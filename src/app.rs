@@ -2548,6 +2548,9 @@ pub struct App {
     /// The window's shell deletes its file once read; dropping the
     /// `TempPath` here is the backstop (after `HANDOVER_TTL`, or on exit).
     pub session_handover_files: Vec<(tempfile::TempPath, Instant)>,
+    /// `--at`: the place a pane split out with `|` opens at, restored once
+    /// the startup load is under way (`restore_startup_location`).
+    pub startup_location: Option<NavLocation>,
 
     // Route53 sub-tab and detail section state
     pub r53_view: R53View,
@@ -3078,6 +3081,12 @@ impl App {
         if let Some(name) = &cli.macro_name {
             app.arm_startup_macro(name);
         }
+        if let Some(at) = &cli.at {
+            match crate::split::decode_place(at) {
+                Ok(loc) => app.startup_location = Some(loc),
+                Err(e) => app.error_message = Some(e),
+            }
+        }
         Ok(app)
     }
 
@@ -3364,6 +3373,7 @@ impl App {
             )
             .0,
             session_handover_files: Vec::new(),
+            startup_location: None,
             r53_view: R53View::Zones,
             r53_records_skipped: (0, 0),
             cf_view: CloudFrontView::Distributions,
@@ -5431,6 +5441,10 @@ impl App {
                 // Message history works from the detail pane too.
                 KeyCode::Char('M') => {
                     self.toggle_message_history();
+                }
+                // `|` splits out from the detail pane too, at this section.
+                KeyCode::Char('|') => {
+                    self.split_out();
                 }
                 // CLI command picker works from the detail pane too (the
                 // global arm is unreachable here — this block returns first).
@@ -8106,6 +8120,11 @@ impl App {
             // Message history: review past status-bar errors/toasts.
             (KeyCode::Char('M'), _) => {
                 self.toggle_message_history();
+            }
+
+            // Split out: another neboto in a pane beside this one, here.
+            (KeyCode::Char('|'), _) => {
+                self.split_out();
             }
 
             // Search - always start fresh
@@ -20949,6 +20968,15 @@ impl App {
             Some(ServiceType::S3Tables) => JumpView::S3Tables(self.s3tables_view),
             Some(ServiceType::Ecr) => JumpView::Ecr(self.ecr_view),
             Some(ServiceType::Lambda) => JumpView::Lambda(self.lambda_view),
+            Some(ServiceType::IdentityCenter) => JumpView::Ic(self.ic_view),
+            Some(ServiceType::Organizations) => JumpView::Org(self.org_view),
+            Some(ServiceType::EventBridge) => JumpView::Eb(self.eventbridge_view),
+            Some(ServiceType::DirectConnect) => JumpView::Dx(self.dx_view),
+            Some(ServiceType::TransitGateway) => JumpView::Tgw(self.tgw_view),
+            Some(ServiceType::ApiGateway) => JumpView::ApiGw(self.apigw_view),
+            Some(ServiceType::StepFunctions) => JumpView::Sfn(self.sfn_view),
+            Some(ServiceType::SecurityHub) => JumpView::Sh(self.securityhub_view),
+            Some(ServiceType::AgentCore) => JumpView::AgentCore(self.agentcore_view),
             // AWS Config has sub-tabs (config_view) but no JumpView variant, so a
             // back-jump returns to the service with its default sub-tab.
             _ => JumpView::None}
@@ -23380,6 +23408,85 @@ impl App {
         self.pending_session_cmd =
             Some(("sh".to_string(), vec!["-c".to_string(), full_cmd]));
         self.session_requested = true;
+    }
+
+    /// `|`: open another neboto in a pane beside this one, at this place
+    /// (`crate::split`). With no host that can split, the command is copied
+    /// instead, so it can be pasted into a pane opened by hand.
+    fn split_out(&mut self) {
+        let place = self.current_location().map(|loc| crate::split::encode_place(&loc));
+        let exe = std::env::current_exe()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "neboto".to_string());
+        let profile = self.aws_clients.nav_profile().map(str::to_string);
+        let service = self.current_service;
+        let session = crate::split::Session {
+            service: service.as_ref().map(|s| s.prefix()),
+            region: self.current_region.as_str(),
+            profile: profile.as_deref(),
+            endpoint: self.aws_clients.current_endpoint(),
+            demo: crate::demo::enabled(),
+            watch: self.watch.enabled,
+        };
+        let neboto = crate::split::neboto_command(&exe, &session, place.as_deref());
+
+        let Some(host) = crate::split::current_host() else {
+            self.copy_to_clipboard(&neboto, "neboto command (no tmux, zellij, WezTerm, kitty or iTerm to split)");
+            return;
+        };
+        // The same environment rules as an SSM session in a new window: the
+        // profile is passed and stale AWS_* env scrubbed, or neboto's
+        // non-secret AWS_* env forwarded. Static keys never go in the
+        // command — `session_launch = "window"` hands them over in a 0600
+        // temp file, as it does for sessions; otherwise there's no way to.
+        let static_keys = profile.is_none()
+            && !crate::demo::enabled()
+            && session.endpoint.is_none()
+            && env_has_static_keys(std::env::vars());
+        let full_cmd = session_shell_cmd(profile.is_some(), &neboto, std::env::vars());
+        let mut handover_file = None;
+        let shell_cmd = if static_keys {
+            if self.session_launch != crate::session_launch::SessionLaunch::Window {
+                self.error_message = Some(
+                    "Can't split: these credentials are env keys, and a new pane doesn't inherit them \
+                     — use a profile, or set session_launch = \"window\" to hand them over in a temp file"
+                        .to_string(),
+                );
+                return;
+            }
+            let body = crate::session_launch::handover_contents(std::env::vars(), is_secret_aws_var);
+            match crate::session_launch::write_handover_file(&body) {
+                Ok(path) => {
+                    let cmd = crate::session_launch::with_handover(&path, &full_cmd);
+                    handover_file = Some(path);
+                    cmd
+                }
+                Err(e) => {
+                    self.error_message = Some(format!("Can't split: couldn't write the credential handover file ({e})"));
+                    return;
+                }
+            }
+        } else {
+            full_cmd
+        };
+        let (prog, args) =
+            crate::split::split_invocation(host, &hold_shell_on_error(&shell_cmd), |k| std::env::var(k).ok());
+        match crate::split::run(&prog, &args) {
+            Ok(()) => {
+                self.keep_handover_file(handover_file);
+                self.success_message = Some(format!("Split out into a new {} pane", host.name()));
+                self.success_message_time = Some(Instant::now());
+            }
+            Err(e) => self.error_message = Some(format!("Can't split: {e}")),
+        }
+    }
+
+    /// `--at`: go to the place this pane was split out at. Called once the
+    /// startup load is under way, so the restore resolves as the rows land.
+    pub fn restore_startup_location(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(loc) = self.startup_location.take() {
+            self.jump_to_location(loc, event_tx);
+        }
     }
 
     /// Hold a launched window's credential handover file until its shell has

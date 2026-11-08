@@ -24,6 +24,7 @@ mod timeline;
 mod search;
 mod sections;
 mod session_launch;
+mod split;
 mod terraform;
 mod tui;
 mod ui;
@@ -131,6 +132,8 @@ async fn run(cli: cli::Cli) -> Result<()> {
             app.update_search();
         }
     }
+    // `--at` (a pane split out with `|`): go where the other pane was.
+    app.restore_startup_location(&event_tx);
 
     // Load AWS account identity in background
     app.spawn_account_info_fetch(&event_tx);
