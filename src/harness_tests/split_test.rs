@@ -80,16 +80,12 @@ async fn with_nothing_to_split_the_command_is_copied() {
 /// `@orgs net` on Accounts came back as no match on Overview.
 #[tokio::test]
 async fn every_sub_tabbed_service_records_its_sub_tab() {
-    // No `JumpView` variant yet. Toggle rows (S3 objects, Cost, CloudTrail
-    // scope, Service Quotas, RAM, X-Ray window) aren't tabs; the rest are,
-    // and each needs checking that its tab doesn't fetch on entry before it
-    // gets one. Don't add to this list.
+    // Toggle rows, not tabs: S3 objects, Cost, CloudTrail scope, Service
+    // Quotas, RAM, X-Ray window, Trusted Advisor scope. Each rebuilds and
+    // reloads the service, so it isn't a sub-tab to restore. Don't add to
+    // this list.
     use ServiceType::*;
-    const NOT_YET: &[ServiceType] = &[
-        CloudTrail, S3, Cost, Config, TrustedAdvisor, ServiceQuotas, GuardDuty, Cognito,
-        Backup, Fsx, Ram, Kinesis, Bedrock, Athena, Glue, Ses, Fms, Redshift, XRay, Changes,
-        ControlTower, ServiceCatalog,
-    ];
+    const NOT_YET: &[ServiceType] = &[CloudTrail, S3, Cost, TrustedAdvisor, ServiceQuotas, Ram, XRay];
     let (mut app, _tx, _rx) = test_app().await;
     let missing: Vec<ServiceType> = ServiceType::all()
         .into_iter()
@@ -211,4 +207,114 @@ async fn split_command_beats_the_detected_terminal() {
     assert_eq!(launched[0].0, "sh");
     assert!(launched[0].1[1].starts_with("my-term --right -- '"), "{:?}", launched[0].1);
     assert!(place_in(&launched[0].1[1]).selected_id.is_some());
+}
+
+/// A bare row of `kind`: the sub-tabs filter on the resource type alone.
+#[derive(Clone, Debug)]
+struct Row {
+    kind: &'static str,
+    tags: std::collections::HashMap<String, String>,
+}
+
+impl crate::aws::resource::Resource for Row {
+    fn id(&self) -> &str {
+        self.kind
+    }
+    fn name(&self) -> &str {
+        self.kind
+    }
+    fn resource_type(&self) -> &str {
+        self.kind
+    }
+    fn state(&self) -> crate::aws::resource::ResourceState {
+        crate::aws::resource::ResourceState::stateless()
+    }
+    fn tags(&self) -> &std::collections::HashMap<String, String> {
+        &self.tags
+    }
+    fn details(&self) -> Vec<(String, String)> {
+        vec![]
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn clone_box(&self) -> Box<dyn crate::aws::resource::Resource> {
+        Box::new(self.clone())
+    }
+}
+
+/// Rows for services whose mocks all sit on the first tab.
+fn later_tab_rows(service: ServiceType) -> Vec<Box<dyn crate::aws::resource::Resource>> {
+    let kind = match service {
+        ServiceType::Config => "Conformance Pack",
+        ServiceType::Cognito => "Cognito Identity Pool",
+        ServiceType::Bedrock => "Bedrock Inference Profile",
+        ServiceType::Changes => "IAM Change",
+        _ => return vec![],
+    };
+    vec![Box::new(Row { kind, tags: Default::default() })]
+}
+
+/// A place saved on a later sub-tab comes back on that tab with its row
+/// selected, not on tab 1 with nothing matching (#327).
+#[tokio::test]
+async fn a_place_on_a_later_sub_tab_restores_there() {
+    use ServiceType::*;
+    const SERVICES: &[ServiceType] = &[
+        Config, GuardDuty, Cognito, Backup, Fsx, Kinesis, Bedrock, Athena, Glue, Ses, Fms,
+        Redshift, Changes, ControlTower, ServiceCatalog,
+    ];
+    let mut untested = Vec::new();
+    for &service in SERVICES {
+        let mocks = || -> Vec<Box<dyn crate::aws::resource::Resource>> {
+            let mut rs: Vec<_> =
+                all_mocks().into_iter().filter(|(s, _, _)| *s == service).map(|(_, _, r)| r).collect();
+            rs.extend(later_tab_rows(service));
+            rs
+        };
+        let load = |app: &mut App| {
+            let mut rs = mocks().into_iter();
+            select_mock(app, service, rs.next().expect("a mock"));
+            app.resources.extend(rs);
+            app.update_search();
+        };
+        if mocks().is_empty() {
+            untested.push(service);
+            continue;
+        }
+        let (mut app, tx, _rx) = test_app().await;
+        load(&mut app);
+        let first = format!("{:?}", app.current_jump_view());
+        // Step through the tabs to the first later one that has a row.
+        let mut saved = None;
+        for _ in 0..10 {
+            app.handle_key(key(KeyCode::Tab), &tx).await.unwrap();
+            let view = format!("{:?}", app.current_jump_view());
+            if view == first {
+                break;
+            }
+            if app.get_selected_resource().is_some() {
+                saved = app.current_location().map(|l| (view, l));
+                break;
+            }
+        }
+        let Some((view, loc)) = saved else {
+            untested.push(service);
+            continue;
+        };
+        let id = loc.selected_id.clone().unwrap();
+
+        let (mut other, tx2, _rx2) = test_app().await;
+        load(&mut other);
+        assert_eq!(format!("{:?}", other.current_jump_view()), first);
+        other.startup_location = Some(loc);
+        other.restore_startup_location(&tx2);
+        assert_eq!(format!("{:?}", other.current_jump_view()), view, "{service:?}");
+        assert_eq!(
+            other.get_selected_resource().map(|r| r.id().to_string()),
+            Some(id),
+            "{service:?}: the row on {view}"
+        );
+    }
+    assert_eq!(untested, Vec::<ServiceType>::new(), "no mock on a later tab");
 }
