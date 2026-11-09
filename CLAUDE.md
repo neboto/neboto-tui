@@ -933,9 +933,9 @@ and the approaches you rejected are the part nobody can recover from your code.
   (Control Tower parameters + landing-zone manifest, AgentCore agent cards and
   memory event blobs).
 
-### Headless subcommands (`neboto ls` / `get`, `src/headless.rs`)
+### Subcommands (`neboto ls` / `get` / `open`, `src/headless.rs`, `src/open.rs`)
 
-`neboto services` / `ls` / `get` print instead of starting the TUI. **Before touching `src/headless.rs`, `src/headless/`, or `skills/neboto/SKILL.md`, read [`docs/HEADLESS.md`](docs/HEADLESS.md)** — the output contract is pinned and section/type renames are breaking changes.
+`neboto services` / `ls` / `get` print instead of starting the TUI; `open` (and `--bookmark`) start the TUI at a resource — the public form of `--at`. **Before touching `src/headless.rs`, `src/headless/`, `src/open.rs`, or `skills/neboto/SKILL.md`, read [`docs/HEADLESS.md`](docs/HEADLESS.md)** — the output contract is pinned and section/type renames are breaking changes.
 
 ### Local emulator (floci / LocalStack)
 

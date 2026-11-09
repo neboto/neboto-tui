@@ -1273,7 +1273,17 @@ pub enum NavLens {
     Refs { row: Option<String> },
     /// `m`: the charts, at the range they were showing. `None` = the
     /// range they open on (a dashboard's own window, S3's fixed 30 days).
-    Metrics { range: Option<crate::aws::services::ec2::MetricsTimeRange> },
+    /// `metric`: the row the cursor was on, by label — `None` for the
+    /// first row, the kinds without a metric cursor, and places saved
+    /// before it existed.
+    Metrics {
+        range: Option<crate::aws::services::ec2::MetricsTimeRange>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metric: Option<String>,
+        /// Charted alone (`open --only`, or the view narrowed to it).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        only: bool,
+    },
 }
 
 /// Whose credentials a `NavLocation` was captured under: the account they
@@ -2569,6 +2579,15 @@ pub struct App {
     /// `--at`: the place a pane split out with `|` opens at, restored once
     /// the startup load is under way (`restore_startup_location`).
     pub startup_location: Option<NavLocation>,
+    /// `open` / `--bookmark`: what the startup place asked for beyond the
+    /// place itself, checked as it resolves (`resolve_pending_jump`) — the
+    /// section by any-case name, that the charts opened, `--full`, and a
+    /// message instead of a silent first row when the resource isn't there.
+    pub pending_open: Option<crate::open::OpenRequest>,
+    /// An `open` complaint (no such section, no charts) raised as the row
+    /// resolves mid-stream — re-shown when the load completes, whose
+    /// clear of `error_message` would otherwise wipe it unseen.
+    pub open_notice: Option<String>,
     /// Config `split_command`: how `|` opens the new pane, overriding the
     /// detected terminal (`{cmd}` = the neboto command).
     pub split_command: Option<String>,
@@ -3053,6 +3072,25 @@ impl App {
         let mut config = crate::config::Config::load();
         // CLI switches override the config file for this run.
         cli.apply_to(&mut config);
+        // `open` / `--bookmark` (#331): the place to start at. `main` already
+        // refused one that doesn't resolve, so a miss here is just ignored.
+        let startup_open = match &cli.command {
+            Some(crate::cli::Command::Open(args)) => crate::open::plan(args).ok(),
+            _ => None,
+        };
+        let startup_bookmark = cli.bookmark.as_deref().and_then(|name| {
+            crate::open::pick_bookmark(&crate::bookmarks::load(), name).ok().cloned()
+        });
+        // Start on the bookmark's service and region, so the startup load is
+        // the one it resolves against rather than one thrown away.
+        if let Some(b) = &startup_bookmark {
+            config.default_service = Some(b.service.prefix().trim_start_matches('@').to_string());
+            if cli.region.is_none() {
+                if let Some(region) = &b.region {
+                    config.default_region = Some(region.clone());
+                }
+            }
+        }
         if cli.demo {
             crate::demo::enable();
         }
@@ -3110,6 +3148,18 @@ impl App {
                 Ok(loc) => app.startup_location = Some(loc),
                 Err(e) => app.error_message = Some(e),
             }
+        }
+        if let Some((loc, req)) = startup_open {
+            app.startup_location = Some(loc);
+            app.pending_open = Some(req);
+        }
+        if let Some(loc) = startup_bookmark {
+            app.pending_open = Some(crate::open::OpenRequest {
+                query: loc.label.clone(),
+                charts: matches!(loc.lens, Some(NavLens::Metrics { .. })),
+                ..Default::default()
+            });
+            app.startup_location = Some(loc);
         }
         Ok(app)
     }
@@ -3398,6 +3448,8 @@ impl App {
             .0,
             session_handover_files: Vec::new(),
             startup_location: None,
+            pending_open: None,
+            open_notice: None,
             split_command: config.split_command.clone().filter(|c| !c.trim().is_empty()),
             r53_view: R53View::Zones,
             r53_records_skipped: (0, 0),
@@ -4056,6 +4108,7 @@ impl App {
         self.pending_jump_focus_details = false;
         self.pending_jump_section = None;
         self.pending_jump_lens = None;
+        self.pending_open = None;
         self.iam_pending_policy_doc = None;
 
         // Stash the key for the recorder before anything can consume it — the
@@ -8600,6 +8653,9 @@ impl App {
                 self.error_message =
                     Some(format!("Partial load — {}", self.load_warnings.join("; ")));
                 self.load_warnings.clear();
+            }
+            if let Some(msg) = self.open_notice.take() {
+                self.error_message = Some(msg);
             }
             // Resolve a cross-service jump that hadn't matched mid-stream yet.
             self.resolve_pending_jump(event_tx);
@@ -20538,18 +20594,53 @@ impl App {
                     // Exact match: land straight in the detail pane when the
                     // jump asked for it (follow-link semantics / nav restore),
                     // then re-enter the captured section for nav restores.
-                    let section = self.pending_jump_section.take();
+                    let mut section = self.pending_jump_section.take();
                     let lens = self.pending_jump_lens.take();
+                    let open = self.pending_open.take();
                     if std::mem::take(&mut self.pending_jump_focus_details) {
                         self.focus_details_panel(event_tx);
+                        // `open --section`: any case, and a name the
+                        // resource doesn't have says so instead of
+                        // quietly opening the default section.
+                        if let Some(want) = open.as_ref().and_then(|o| o.section.as_deref()) {
+                            match crate::open::match_section(&self.headless_section_labels(), want) {
+                                Ok(label) => section = Some(label),
+                                Err(e) => self.set_open_notice(e),
+                            }
+                        }
                         if let Some(name) = section {
                             self.restore_detail_section_by_name(&name, event_tx);
                         }
+                        let lens_metric = lens.as_ref().map(|l| match l {
+                            NavLens::Metrics { metric, .. } => metric.clone(),
+                            _ => None,
+                        });
                         if let Some(lens) = lens {
                             self.reopen_nav_lens(lens, event_tx);
                         }
+                        if let Some(open) = &open {
+                            // `--metric`: a name the charts don't have says so.
+                            if let Some(want) = self.spec_metrics.as_mut().and_then(|st| st.want_metric.as_mut()) {
+                                want.report = true;
+                            }
+                            let cursorless = self.metrics_in_pane.is_some_and(|k| k != MetricsKind::Spec);
+                            if cursorless && matches!(&lens_metric, Some(Some(_))) {
+                                self.set_open_notice("open: --metric picks a row of a resource's charts; these have none".into());
+                            }
+                            if open.charts && self.metrics_in_pane.is_none() {
+                                let what = self
+                                    .get_selected_resource()
+                                    .map(|r| r.resource_type().to_string())
+                                    .unwrap_or_default();
+                                self.set_open_notice(format!("open: no charts for a {what}"));
+                            }
+                            if open.full {
+                                self.layout_mode = LayoutMode::DetailsOnly;
+                            }
+                        }
                     }
                 }
+                None if self.pending_open.is_some() => self.resolve_pending_open_miss(id, event_tx),
                 None => {
                     // A digest-pinned image URI targets `repo@sha256:…`, but
                     // the Images tab holds only each repo's newest rows — an
@@ -20588,6 +20679,61 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// An `open` / `--bookmark` target not in the list as filtered. Among
+    /// the loaded rows: go to its sub-tab. Still loading: wait. Otherwise
+    /// it isn't there, so say so and leave its id in the search bar, never
+    /// the first row looking like the answer.
+    fn resolve_pending_open_miss(&mut self, id: String, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(seek_tab) = self.pending_open.as_ref().map(|o| o.seek_tab) else { return };
+        if seek_tab && !self.all_search_mode {
+            let hit = self
+                .resources
+                .iter()
+                .find(|r| r.id() == id)
+                .or_else(|| self.resources.iter().find(|r| r.name() == id));
+            // Loaded but not in the list as filtered: another tab, or a
+            // filter not yet rebuilt for this one. Show its tab (the
+            // `sub_tab_table!` an `@all` jump uses), refilter, try again —
+            // once, so a type no tab shows can't loop.
+            if let Some(r) = hit {
+                let rtype = r.resource_type().to_string();
+                if let Some(open) = self.pending_open.as_mut() {
+                    open.seek_tab = false;
+                }
+                self.align_view_to_resource_type(&rtype);
+                self.update_search();
+                self.resolve_pending_jump(event_tx);
+                return;
+            }
+        }
+        if self.loading {
+            return;
+        }
+        let Some(open) = self.pending_open.take() else { return };
+        self.pending_jump = None;
+        self.pending_jump_region = None;
+        self.pending_jump_focus_details = false;
+        self.pending_jump_section = None;
+        self.pending_jump_lens = None;
+        let service = self.current_service.map(|s| s.name().to_string()).unwrap_or_default();
+        self.search_query = open.query.clone();
+        self.update_search();
+        self.set_open_notice(format!(
+            "open: no {service} resource {:?} in {} — searching for it instead",
+            open.query,
+            self.current_region.as_str()
+        ));
+    }
+
+    /// Show an `open` complaint now, and again once the load completes
+    /// (`open_notice`).
+    fn set_open_notice(&mut self, msg: String) {
+        self.error_message = Some(msg.clone());
+        if self.loading {
+            self.open_notice = Some(msg);
         }
     }
 
@@ -21228,7 +21374,18 @@ impl App {
                 }
                 MetricsKind::Cost | MetricsKind::S3 => None,
             };
-            return Some(NavLens::Metrics { range });
+            // The charts' metric cursor, past the first row (which a fresh
+            // open is on anyway) — and charted alone when the view is
+            // narrowed to a curated row (`--only`). A metric picked from `a`
+            // isn't in the curated set, so a restore can't name it: it
+            // comes back on the set.
+            let spec = self.spec_metrics.as_ref().filter(|_| kind == MetricsKind::Spec);
+            let only = spec.is_some_and(|m| !m.curated && m.drilled.is_none());
+            let metric = spec
+                .filter(|m| m.selected > 0 || only)
+                .and_then(|m| m.selected_series())
+                .map(|s| s.query.label.clone());
+            return Some(NavLens::Metrics { range, metric, only });
         }
         self.refs_in_pane
             .as_ref()
@@ -21247,7 +21404,13 @@ impl App {
                     st.rebuild();
                 }
             }
-            NavLens::Metrics { range } => self.open_metrics_in_pane_at(range, event_tx),
+            NavLens::Metrics { range, metric, only } => {
+                self.open_metrics_in_pane_at(range, event_tx);
+                if let (Some(name), Some(st)) = (metric, self.spec_metrics.as_mut()) {
+                    st.want_metric =
+                        Some(crate::ui::widgets::spec_metrics::WantMetric { name, report: false, only });
+                }
+            }
             NavLens::Refs { row } => {
                 self.open_refs_lens();
                 if let (Some(st), Some(id)) = (self.refs_in_pane.as_mut(), row) {
@@ -33240,6 +33403,17 @@ impl App {
                     let rows = st.table_rows();
                     st.table_cursor = st.table_cursor.filter(|_| rows > 0).map(|c| c.min(rows - 1));
                     st.set_series(end, series);
+                    // A place's metric (`open --metric`, a restore): matched
+                    // against the rows that came back, not the set asked for
+                    // — a resolver can reshape it.
+                    if let Some(want) = st.want_metric.take() {
+                        match crate::open::match_metric(&st.series, &want.name) {
+                            Ok(i) if want.only => st.narrow_to(i),
+                            Ok(i) => st.selected = i,
+                            Err(e) if want.report => app.set_open_notice(e),
+                            Err(_) => {}
+                        }
+                    }
                 }
             });
             let _ = tx.send(Event::Lazy(crate::lazy::LazyApply { epoch, apply }));

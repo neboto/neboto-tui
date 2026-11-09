@@ -1,4 +1,4 @@
-# Headless subcommands (`neboto ls` / `get`, `src/headless.rs`)
+# Subcommands (`neboto ls` / `get` / `open`, `src/headless.rs`, `src/open.rs`)
 
 Moved out of the root `CLAUDE.md` so it loads only when needed.
 
@@ -40,3 +40,53 @@ read `demo::TEST_LOG` (every demo request in the test process).
 **`skills/neboto/SKILL.md`** is the agent-facing guide to these commands —
 change it with the CLI (its `neboto …` examples are parse-checked by
 `skill_examples_parse`, but prose about output shapes and exit codes isn't).
+
+## `neboto open` / `--bookmark` (`src/open.rs`, #331)
+
+The one subcommand that **runs the TUI**: `main` routes `Command::Open` to
+`run`, not `headless::run`. It is the public way in to what the hidden
+`--at` does for a `|` split — **`open`'s arguments are the stable contract**
+(its flags are pinned in `contract.json` with the rest); the `NavLocation`
+it builds, and `--at`'s encoding of one, are not, so never document or
+script `--at`.
+
+- `open::plan` resolves what it can before the TUI starts — the service
+  (`resolve_service`, as `get`), an ARN's service and sub-tab via
+  `resource_jump_target` (the `Enter` classifiers), the `--charts` range —
+  and `main` exits 2 with the reason on a miss. `apply_to` starts on the
+  target's service so the startup load is the one it resolves against.
+- The rest resolves in `resolve_pending_jump` through the ordinary restore
+  path (`restore_startup_location` → `jump_to_location`), with
+  `App.pending_open` adding what a bookmark restore doesn't do: a row
+  loaded but not in the filtered list goes to its sub-tab
+  (`align_view_to_resource_type`, the `sub_tab_table!` an `@all` jump
+  uses — `open ec2 sg-…` needs no view); `--section` matches any case
+  against the resource's own labels; `--charts` on a type without them,
+  an unknown section, and a resource that isn't there each say so
+  (`set_open_notice` — re-shown at load completion, whose
+  `error_message` clear would otherwise wipe it), the last leaving the id
+  in the search bar instead of selecting row 0.
+- `--metric NAME` (implies `--charts`) rides `NavLens::Metrics.metric`, so
+  a `|` split from the charts and a bookmark saved there keep the metric
+  cursor too (`current_nav_lens` records it past row 0). It is matched in
+  the series' apply closure, against the rows that came back — a target's
+  resolver can reshape the asked-for set — by label or CloudWatch metric
+  name, then a unique label prefix, never a hidden row
+  (`open::match_metric`). A miss is reported for `open` only; a restore
+  quietly stays on row 0.
+- `--only` (needs `--metric`; `NavLens::Metrics.only`) narrows the fetched
+  rows in place — `SpecMetricsState::narrow_to`, the single-metric mode
+  the `a` picker charts into, so `d` restores the set. It keeps the row's
+  group (they share its chart) and, to a fixed point, every row a kept
+  expression reads (`{MetricName}`), re-marked hidden: series hold only
+  shown rows, hidden inputs live in `queries` alone, so the two are
+  narrowed separately — a computed row narrowed without its inputs
+  charts on the first fetch and fails on the next.
+- `--bookmark NAME` picks one saved bookmark (`open::pick_bookmark`: exact
+  label or id, else a unique label substring; ambiguous or none lists
+  them, exit 2) and restores it like `'` would — its own sub-tab, section,
+  lens, region and credentials. It starts on the bookmark's service and
+  region (unless `-r` says otherwise).
+- TUI flags (`-w`, `--theme`, `--no-banner`…) are top-level, not global:
+  they go **before** `open`. Making them global would have `ls`/`get`
+  accept and ignore them.

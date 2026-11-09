@@ -18,6 +18,7 @@ mod keycast;
 mod lazy;
 mod macros;
 mod navigation;
+mod open;
 mod ownership;
 mod references;
 mod timeline;
@@ -84,12 +85,33 @@ fn main() -> Result<()> {
         .build()
         .expect("failed to build tokio runtime");
 
+    // `open` / `--bookmark` name a place: check it before the TUI takes the
+    // screen, so a typo exits with the reason (code 2, like a bad `get`).
+    if let Err(e) = check_startup_place(&cli) {
+        eprintln!("neboto: {e}");
+        std::process::exit(2);
+    }
+
     // A subcommand (`neboto ls @ec2 …`) runs once and prints — no TUI.
-    if cli.command.is_some() {
+    // `open` is the one that opens the TUI.
+    if cli.command.is_some() && !matches!(cli.command, Some(cli::Command::Open(_))) {
         let code = runtime.block_on(headless::run(cli));
         std::process::exit(code);
     }
     runtime.block_on(run(cli))
+}
+
+fn check_startup_place(cli: &cli::Cli) -> std::result::Result<(), String> {
+    if let Some(cli::Command::Open(args)) = &cli.command {
+        if cli.at.is_some() || cli.bookmark.is_some() {
+            return Err("open: can't be combined with --bookmark".into());
+        }
+        open::plan(args)?;
+    }
+    if let Some(name) = &cli.bookmark {
+        open::pick_bookmark(&bookmarks::load(), name)?;
+    }
+    Ok(())
 }
 
 async fn run(cli: cli::Cli) -> Result<()> {

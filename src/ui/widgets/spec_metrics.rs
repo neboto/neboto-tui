@@ -56,6 +56,25 @@ pub struct SpecMetricsState {
     /// Said on a row in place of "no data", by label (`TargetFix::notes`):
     /// why the metric can't exist.
     pub notes: Vec<(String, &'static str)>,
+    /// The row to put the cursor on once the series land — a place's
+    /// metric (`NavLens::Metrics`).
+    pub want_metric: Option<WantMetric>,
+}
+
+/// The `{MetricName}` placeholders of a metric-math expression.
+fn placeholders(expr: &str) -> Vec<String> {
+    expr.split('{').skip(1).filter_map(|p| p.split_once('}').map(|(name, _)| name.to_string())).collect()
+}
+
+/// A place's metric, applied when the series land (`App::fetch_spec_metrics`).
+#[derive(Debug, Clone)]
+pub struct WantMetric {
+    /// A row label or CloudWatch metric name (`open::match_metric`).
+    pub name: String,
+    /// Report a miss (`open --metric`); a restore quietly stays on row 0.
+    pub report: bool,
+    /// Chart only that row (`--only`, `narrow_to`).
+    pub only: bool,
 }
 
 impl SpecMetricsState {
@@ -72,6 +91,7 @@ impl SpecMetricsState {
             end: 0,
             picker: None,
             breakdown: None,
+            want_metric: None,
             breakdown_for: None,
             table_cursor: None,
             drilled: None,
@@ -133,6 +153,45 @@ impl SpecMetricsState {
         self.series.clear();
         self.selected = 0;
         true
+    }
+
+    /// `--only`: chart just row `i`, as the single-metric mode `a` picks
+    /// into (`d` returns to the set). Kept with it: the rest of its group,
+    /// which shares its chart, and every row a kept expression reads
+    /// (`{MetricName}`) — fetched, hidden, since a computed row can't be
+    /// charted without its inputs. Narrows the rows already fetched, so it
+    /// costs no refetch; later fetches (range, `r`, watch) ask for these.
+    pub fn narrow_to(&mut self, i: usize) {
+        use crate::aws::metrics::MetricQuery;
+        let Some(label) = self.series.get(i).map(|s| s.query.label.clone()) else { return };
+        let group = self.series[i].query.group.clone();
+        let charted = |q: &MetricQuery| q.label == label || (group.is_some() && q.group == group);
+        // The inputs, to a fixed point: an input can be computed too.
+        let mut needed: Vec<String> = Vec::new();
+        loop {
+            let reads: Vec<String> = self
+                .queries
+                .iter()
+                .filter(|q| charted(q) || (!q.metric.is_empty() && needed.contains(&q.metric)))
+                .filter_map(|q| q.expression.as_deref())
+                .flat_map(placeholders)
+                .filter(|m| !needed.contains(m))
+                .collect();
+            if reads.is_empty() {
+                break;
+            }
+            needed.extend(reads);
+        }
+        // The series hold only what's shown; the hidden rows live in
+        // `queries` alone, so each is narrowed on its own.
+        self.queries.retain(|q| charted(q) || (!q.metric.is_empty() && needed.contains(&q.metric)));
+        for q in self.queries.iter_mut().filter(|q| !charted(q)) {
+            q.hidden = true;
+        }
+        self.queries.sort_by_key(|q| q.hidden);
+        self.series.retain(|s| charted(&s.query));
+        self.selected = self.series.iter().position(|s| s.query.label == label).unwrap_or(0);
+        self.curated = false;
     }
 
     pub fn set_series(&mut self, end: i64, series: Vec<MetricSeries>) {

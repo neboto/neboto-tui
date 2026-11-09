@@ -120,7 +120,7 @@ async fn bar_from_the_charts_reopens_them_at_their_range() {
     assert_ne!(range, MetricsTimeRange::OneHour);
 
     let loc = split_place(&mut app, &tx).await;
-    assert_eq!(loc.lens, Some(crate::app::NavLens::Metrics { range: Some(range) }));
+    assert_eq!(loc.lens, Some(crate::app::NavLens::Metrics { range: Some(range), metric: None, only: false }));
 
     let (mut other, tx2, _rx2) = ec2_app().await;
     other.startup_location = Some(loc);

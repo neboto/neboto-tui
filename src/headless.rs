@@ -68,7 +68,8 @@ pub async fn run(cli: Cli) -> i32 {
             Ok((config, clients)) => audit(&config, &clients, args, format).await,
             Err(f) => Err(f),
         },
-        None => Ok((String::new(), 0)),
+        // `open` runs the TUI; `main` never routes it here.
+        None | Some(Command::Open(_)) => Ok((String::new(), 0)),
     };
     match result {
         Ok((out, code)) => {
