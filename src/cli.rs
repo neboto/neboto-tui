@@ -14,7 +14,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Debug, Parser)]
 #[command(name = "neboto", version, about, long_about = None)]
 pub struct Cli {
-    /// Run once and print instead of opening the TUI.
+    /// Run once and print instead of opening the TUI (`open` is the
+    /// exception: it opens the TUI at a resource).
     #[command(subcommand)]
     pub command: Option<Command>,
 
@@ -66,6 +67,12 @@ pub struct Cli {
     #[arg(long, value_name = "PLACE", hide = true)]
     pub at: Option<String>,
 
+    /// Open at a saved bookmark (`B` in the TUI saves one): part of its
+    /// name as the `'` list shows it, or the id it holds, any case. Must
+    /// pick just one.
+    #[arg(long, value_name = "NAME", conflicts_with = "at")]
+    pub bookmark: Option<String>,
+
     /// Try neboto without an AWS account: browse a made-up account from
     /// canned responses, fully offline. Ignores profiles and endpoints.
     #[arg(long, global = true)]
@@ -105,6 +112,40 @@ pub enum Command {
     /// facts and capped per-resource reads, run every check, print the
     /// findings. Exits 3 when a finding reaches --fail-on.
     Audit(AuditArgs),
+    /// Open the TUI at a resource: its detail pane, a section, or its
+    /// charts — e.g. `neboto open ec2 i-0abc --charts 1h`.
+    Open(OpenArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct OpenArgs {
+    /// `<SERVICE> <ID>` — a service prefix or alias and the resource's id,
+    /// ARN or exact name — or an ARN on its own, whose service is inferred.
+    #[arg(value_name = "TARGET", required = true, num_args = 1..=2)]
+    pub target: Vec<String>,
+
+    /// Open this detail section (any case), e.g. --section security.
+    #[arg(long, value_name = "NAME", conflicts_with = "charts")]
+    pub section: Option<String>,
+
+    /// Open the resource's charts at this range: 1h, 6h, 24h, 7d or 30d.
+    #[arg(long, value_name = "RANGE")]
+    pub charts: Option<String>,
+
+    /// Open the charts on this metric: its row label or CloudWatch metric
+    /// name, any case, or the start of one label (e.g. --metric cpu,
+    /// --metric NetworkIn). Implies --charts.
+    #[arg(long, value_name = "NAME", conflicts_with = "section")]
+    pub metric: Option<String>,
+
+    /// Chart only the --metric row (with the rows sharing its chart);
+    /// `d` in the charts brings the rest back.
+    #[arg(long, requires = "metric")]
+    pub only: bool,
+
+    /// Give the detail pane (or the charts) the whole width — `Z`.
+    #[arg(long)]
+    pub full: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -222,6 +263,14 @@ impl Cli {
         if self.service.is_some() {
             config.default_service = self.service.clone();
         }
+        // `open` starts on its resource's service, so the startup load is
+        // the one the place resolves against. (A bad target never gets
+        // here: `main` checks the plan before the TUI starts.)
+        if let Some(Command::Open(args)) = &self.command {
+            if let Ok((loc, _)) = crate::open::plan(args) {
+                config.default_service = Some(loc.service.prefix().trim_start_matches('@').to_string());
+            }
+        }
         if self.region.is_some() {
             config.default_region = self.region.clone();
         }
@@ -280,6 +329,7 @@ mod tests {
             show_keys: false,
             macro_name: None,
             at: None,
+            bookmark: None,
             theme: None,
             demo: false,
             no_update_check: false,

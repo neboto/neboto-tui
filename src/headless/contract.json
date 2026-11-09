@@ -3,6 +3,7 @@
   "flags": {
     "": [
       "--banner",
+      "--bookmark",
       "--demo",
       "--endpoint-url",
       "--macro",
@@ -33,6 +34,13 @@
     ],
     "audit": [
       "--fail-on"
+    ],
+    "open": [
+      "--charts",
+      "--full",
+      "--metric",
+      "--only",
+      "--section"
     ]
   },
   "services": {

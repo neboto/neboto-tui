@@ -151,6 +151,7 @@ Every flag overrides the config file for that run only.
 | `-p`, `--profile <PROFILE>` | Use this named AWS profile |
 | `-w`, `--watch` | Start in watch mode (auto-refresh) |
 | `-m`, `--macro <NAME>` | Run a saved macro on startup |
+| `--bookmark <NAME>` | Open at a saved bookmark (`B`): part of its name as `'` lists it, or its id |
 | `--theme <THEME>` | Color preset (see [Themes](#themes)) |
 | `--show-keys` | Show each key and what it did in a corner box, for recordings and screen shares |
 | `--session-launch <MODE>` | Where SSM / ECS Exec sessions open: `auto`, `window` or `inline` (see [Why read-only](#why-read-only)) |
@@ -161,6 +162,29 @@ Every flag overrides the config file for that run only.
 
 With no arguments and no `default_service` configured, neboto shows a welcome
 splash and loads nothing until you pick a service — so startup is instant.
+
+### Open at a resource
+
+`neboto open` starts the TUI on one resource, focused in its detail pane:
+
+```bash
+neboto open ec2 i-0abc123                       # the Overview
+neboto open ec2 sg-0abc123 --section inbound    # a section, any case
+neboto open rds prod-main --charts 24h --full   # its charts (1h 6h 24h 7d 30d), full width
+neboto open ec2 i-0abc123 --metric networkout  # the charts, on that metric (label or CloudWatch name)
+neboto open ec2 i-0abc123 --metric cpu --only   # …charting only it (d in the charts brings the rest back)
+neboto open arn:aws:iam::123456789012:role/app  # an ARN alone: the service is inferred
+neboto -w -r eu-west-1 open lambda my-fn --charts 1h   # TUI flags go before `open`
+```
+
+The id can be the resource's id, ARN or exact name, on whichever sub-tab it
+lives. A typo in the service, range or ARN exits with the reason; a resource
+that isn't there opens the list searching for it, and a section it doesn't
+have — or a metric its charts don't — lists the ones it does. [`scripts/tmux-metrics.sh`](./scripts/tmux-metrics.sh)
+builds a tmux window from three of these: a resource's detail pane beside
+its charts at two ranges; [`scripts/tmux-metrics-grid.sh`](./scripts/tmux-metrics-grid.sh)
+tiles a detail pane with one pane per metric (`--metric … --only`) — five
+for an RDS instance by default, any list via `METRICS`.
 
 ---
 
