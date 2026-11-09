@@ -714,7 +714,7 @@ impl EcrView {
 }
 
 /// Sub-tab view for the Kinesis service (Data Streams / Firehose).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum KinesisView {
     Streams,
     Firehose}
@@ -788,7 +788,7 @@ impl ExecStatusFilter {
 
 /// Sub-tab view for the Control Tower service (Landing Zone / Controls /
 /// Baselines / Operations / Catalog / Compliance / Accounts).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ControlTowerView {
     LandingZone,
     Controls,
@@ -814,7 +814,7 @@ impl ControlTowerView {
 }
 
 /// Sub-tab view for the Redshift service (Clusters / Serverless / Snapshots).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum RedshiftView {
     Clusters,
     Workgroups,
@@ -1009,7 +1009,7 @@ impl DmsView {
 }
 
 /// Sub-tab view for the Athena service.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum AthenaView {
     Workgroups,
     DataCatalogs,
@@ -1030,7 +1030,7 @@ impl AthenaView {
 
 
 /// Sub-tab view for the Firewall Manager service.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum FmsView {
     Policies,
     AppsLists,
@@ -1048,7 +1048,7 @@ impl FmsView {
 }
 
 /// Sub-tab view for the Glue service.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum GlueView {
     Databases,
     Tables,
@@ -1068,7 +1068,7 @@ impl GlueView {
 }
 
 /// Sub-tab view for the SES service.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SesView {
     Identities,
     ConfigurationSets,
@@ -1188,6 +1188,21 @@ pub enum JumpView {
     S3Tables(S3TablesView),
     Ecr(EcrView),
     Lambda(LambdaView),
+    Config(ConfigView),
+    Gd(GuardDutyView),
+    Cognito(CognitoView),
+    Backup(BackupView),
+    Fsx(FsxView),
+    Kinesis(KinesisView),
+    Bedrock(BedrockView),
+    Athena(AthenaView),
+    Glue(GlueView),
+    Ses(SesView),
+    Fms(FmsView),
+    Redshift(RedshiftView),
+    Changes(ChangesView),
+    ControlTower(ControlTowerView),
+    Sc(ScView),
     /// WAF carries both the sub-tab and the scope (CLOUDFRONT vs REGIONAL) — a
     /// CloudFront distribution's Web ACL is always CLOUDFRONT scope, which lives
     /// in a separate (us-east-1) variant of the WAF list.
@@ -1693,7 +1708,7 @@ impl NfwView {
 pub use crate::aws::services::code::CodeView;
 
 /// Sub-tab view for the GuardDuty service.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum GuardDutyView {
     Findings,
     Summary,
@@ -1758,7 +1773,7 @@ impl SecurityHubView {
 }
 
 /// Sub-tab view for the Cognito service.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum CognitoView {
     UserPools,
     IdentityPools,
@@ -1892,7 +1907,7 @@ impl InspectorView {
 }
 
 /// Sub-tab view for the AWS Backup service.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum BackupView {
     Vaults,
     Plans,
@@ -1991,7 +2006,7 @@ impl SsmView {
 }
 
 /// Sub-tab view for AWS Config (rules, conformance packs)
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ConfigView {
     Rules,
     ConformancePacks}
@@ -20455,6 +20470,21 @@ impl App {
             JumpView::S3Tables(v) => self.s3tables_view = *v,
             JumpView::Ecr(v) => self.ecr_view = *v,
             JumpView::Lambda(v) => self.lambda_view = *v,
+            JumpView::Config(x) => self.config_view = *x,
+            JumpView::Gd(x) => self.guardduty_view = *x,
+            JumpView::Cognito(x) => self.cognito_view = *x,
+            JumpView::Backup(x) => self.backup_view = *x,
+            JumpView::Fsx(x) => self.fsx_view = *x,
+            JumpView::Kinesis(x) => self.kinesis_view = *x,
+            JumpView::Bedrock(x) => self.bedrock_view = *x,
+            JumpView::Athena(x) => self.athena_view = *x,
+            JumpView::Glue(x) => self.glue_view = *x,
+            JumpView::Ses(x) => self.ses_view = *x,
+            JumpView::Fms(x) => self.fms_view = *x,
+            JumpView::Redshift(x) => self.redshift_view = *x,
+            JumpView::Changes(x) => self.changes_view = *x,
+            JumpView::ControlTower(x) => self.controltower_view = *x,
+            JumpView::Sc(x) => self.sc_view = *x,
             JumpView::Waf(v, scope) => {
                 self.waf_view = *v;
                 // CloudFront Web ACLs live in the CLOUDFRONT-scope variant; if we
@@ -21105,8 +21135,24 @@ impl App {
             Some(ServiceType::StepFunctions) => JumpView::Sfn(self.sfn_view),
             Some(ServiceType::SecurityHub) => JumpView::Sh(self.securityhub_view),
             Some(ServiceType::AgentCore) => JumpView::AgentCore(self.agentcore_view),
-            // AWS Config has sub-tabs (config_view) but no JumpView variant, so a
-            // back-jump returns to the service with its default sub-tab.
+            Some(ServiceType::Config) => JumpView::Config(self.config_view),
+            Some(ServiceType::GuardDuty) => JumpView::Gd(self.guardduty_view),
+            Some(ServiceType::Cognito) => JumpView::Cognito(self.cognito_view),
+            Some(ServiceType::Backup) => JumpView::Backup(self.backup_view),
+            Some(ServiceType::Fsx) => JumpView::Fsx(self.fsx_view),
+            Some(ServiceType::Kinesis) => JumpView::Kinesis(self.kinesis_view),
+            Some(ServiceType::Bedrock) => JumpView::Bedrock(self.bedrock_view),
+            Some(ServiceType::Athena) => JumpView::Athena(self.athena_view),
+            Some(ServiceType::Glue) => JumpView::Glue(self.glue_view),
+            Some(ServiceType::Ses) => JumpView::Ses(self.ses_view),
+            Some(ServiceType::Fms) => JumpView::Fms(self.fms_view),
+            Some(ServiceType::Redshift) => JumpView::Redshift(self.redshift_view),
+            Some(ServiceType::Changes) => JumpView::Changes(self.changes_view),
+            Some(ServiceType::ControlTower) => JumpView::ControlTower(self.controltower_view),
+            Some(ServiceType::ServiceCatalog) => JumpView::Sc(self.sc_view),
+            // Single-list services, and the toggle rows (S3 objects, Cost,
+            // CloudTrail scope, Service Quotas, RAM, X-Ray window, Trusted
+            // Advisor scope), which aren't tabs.
             _ => JumpView::None}
     }
 
