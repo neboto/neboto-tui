@@ -18,8 +18,10 @@ fn bookmarks_path() -> Option<PathBuf> {
     Some(PathBuf::from(format!("{}/neboto/bookmarks.json", xdg)))
 }
 
-/// Load saved bookmarks. Returns empty on a missing file or any parse error
-/// (e.g. an older schema) — bookmarks are best-effort, never fatal.
+/// Load saved bookmarks. Returns empty on a missing file or a file that
+/// isn't a JSON list — bookmarks are best-effort, never fatal. An entry this
+/// build can't read (one saved by a newer neboto, e.g. on a sub-tab this
+/// build doesn't know) is skipped, not the whole file; `save` keeps it.
 pub fn load() -> Vec<NavLocation> {
     let Some(path) = bookmarks_path() else {
         return Vec::new();
@@ -27,10 +29,27 @@ pub fn load() -> Vec<NavLocation> {
     let Ok(data) = std::fs::read_to_string(&path) else {
         return Vec::new();
     };
-    serde_json::from_str(&data).unwrap_or_default()
+    parse(&data).0
 }
 
-/// Persist bookmarks (best-effort; creates the parent dir if needed).
+/// The entries this build reads, and the ones it can't, verbatim.
+fn parse(data: &str) -> (Vec<NavLocation>, Vec<serde_json::Value>) {
+    let entries: Vec<serde_json::Value> = serde_json::from_str(data).unwrap_or_default();
+    let mut read = Vec::new();
+    let mut unread = Vec::new();
+    for entry in entries {
+        match serde_json::from_value::<NavLocation>(entry.clone()) {
+            Ok(loc) => read.push(loc),
+            Err(_) => unread.push(entry),
+        }
+    }
+    (read, unread)
+}
+
+/// Persist bookmarks (best-effort; creates the parent dir if needed). The
+/// entries already on disk that this build can't read are written back
+/// after them, so going back a version doesn't erase the newer one's
+/// bookmarks.
 pub fn save(bookmarks: &[NavLocation]) {
     let Some(path) = bookmarks_path() else {
         return;
@@ -38,9 +57,18 @@ pub fn save(bookmarks: &[NavLocation]) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(json) = serde_json::to_string_pretty(bookmarks) {
+    let on_disk = std::fs::read_to_string(&path).unwrap_or_default();
+    if let Some(json) = merged(bookmarks, &on_disk) {
         let _ = write_private(&path, json.as_bytes());
     }
+}
+
+/// `bookmarks`, then `on_disk`'s unreadable entries, as the file's JSON.
+fn merged(bookmarks: &[NavLocation], on_disk: &str) -> Option<String> {
+    let mut entries: Vec<serde_json::Value> =
+        bookmarks.iter().filter_map(|b| serde_json::to_value(b).ok()).collect();
+    entries.extend(parse(on_disk).1);
+    serde_json::to_string_pretty(&entries).ok()
 }
 
 /// Write `data` readable by the owner only. Bookmarks name accounts, ARNs,
@@ -155,6 +183,57 @@ mod tests {
 
     #[test]
     fn corrupt_json_loads_as_empty() {
-        assert!(serde_json::from_str::<Vec<NavLocation>>("not json").is_err());
+        assert!(super::parse("not json").0.is_empty());
+        assert!(super::parse(r#"{"not": "a list"}"#).0.is_empty());
+    }
+
+    fn bookmark(label: &str) -> NavLocation {
+        NavLocation {
+            service: ServiceType::ECS,
+            view: JumpView::Ecs(EcsView::Tasks),
+            query: String::new(),
+            selected_id: None,
+            label: label.to_string(),
+            s3_object_path: None,
+            details_focused: false,
+            detail_section: None,
+            region: None,
+            credentials: None,
+            lens: None,
+        }
+    }
+
+    /// A file holding a bookmark from a newer neboto — here a sub-tab this
+    /// build has no variant for.
+    fn file_with_a_newer_entry() -> String {
+        let mut newer = serde_json::to_value(bookmark("newer")).unwrap();
+        newer["view"] = serde_json::json!({ "Quantum": "Circuits" });
+        serde_json::to_string(&vec![serde_json::to_value(bookmark("web")).unwrap(), newer]).unwrap()
+    }
+
+    #[test]
+    fn an_unreadable_entry_skips_only_itself() {
+        let (read, unread) = super::parse(&file_with_a_newer_entry());
+        assert_eq!(read.iter().map(|b| b.label.as_str()).collect::<Vec<_>>(), ["web"]);
+        assert_eq!(unread.len(), 1);
+    }
+
+    #[test]
+    fn saving_keeps_the_entries_it_cannot_read() {
+        let on_disk = file_with_a_newer_entry();
+        let (mut read, _) = super::parse(&on_disk);
+        read.push(bookmark("api"));
+        let saved = super::merged(&read, &on_disk).unwrap();
+        let (read, unread) = super::parse(&saved);
+        assert_eq!(read.iter().map(|b| b.label.as_str()).collect::<Vec<_>>(), ["web", "api"]);
+        assert_eq!(unread.len(), 1);
+        assert_eq!(unread[0]["view"], serde_json::json!({ "Quantum": "Circuits" }));
+        assert_eq!(unread[0]["label"], "newer");
+
+        // A deleted bookmark this build can read stays deleted.
+        let saved = super::merged(&read[1..], &saved).unwrap();
+        let (read, unread) = super::parse(&saved);
+        assert_eq!(read.iter().map(|b| b.label.as_str()).collect::<Vec<_>>(), ["api"]);
+        assert_eq!(unread.len(), 1);
     }
 }
