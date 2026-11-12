@@ -40,6 +40,12 @@ pub(super) fn ac_row(label: &str, value: &str) -> Option<(String, String)> {
     (!value.is_empty()).then(|| (format!("  {}", label), value.to_string()))
 }
 
+/// `(label, value)` when the value is non-empty — the flush-key form of
+/// [`ac_row`], for top-level rows.
+pub(super) fn ac_flush_row(label: &str, value: &str) -> Option<(String, String)> {
+    (!value.is_empty()).then(|| (label.to_string(), value.to_string()))
+}
+
 pub(super) fn ac_list_rows(rows: &mut Vec<(String, String)>, label: &str, values: &[String]) {
     if values.is_empty() {
         return;
@@ -583,15 +589,23 @@ pub fn agentcore_gateway_section_lines(
                 rows.push(("Rule".to_string(), r.rule_id.clone()));
                 rows.push(("  Priority".to_string(), r.priority.to_string()));
                 rows.extend(ac_row("Status", &r.status));
-                rows.push((
-                    "  Conditions / Actions".to_string(),
-                    format!("{} / {}", r.condition_count, r.action_count),
-                ));
-                if r.system_managed {
-                    rows.push(("  Managed By".to_string(), "AWS".to_string()));
-                }
+                rows.extend(ac_row("Managed By", &r.managed_by));
                 rows.extend(ac_row("Description", &r.description));
+                // No condition means the rule matches every request — say so
+                // rather than leaving the block empty.
+                if r.conditions.is_empty() {
+                    rows.push(("  When".to_string(), "every request".to_string()));
+                } else {
+                    for (i, (k, v)) in r.conditions.iter().enumerate() {
+                        let label = if i == 0 { "  When" } else { "  And" };
+                        rows.push((format!("{} {}", label, k), v.clone()));
+                    }
+                }
+                for (k, v) in &r.actions {
+                    rows.push((format!("  Then {}", k), v.clone()));
+                }
                 rows.extend(ac_row("Created", &r.created));
+                rows.extend(ac_row("Updated", &r.updated));
                 rows.push((String::new(), String::new()));
             }
             rows
@@ -1273,6 +1287,16 @@ pub fn agentcore_registry_section_lines(
             };
             let mut rows = vec![(format!("Records ({})", rs.len()), String::new())];
             rows.push((String::new(), String::new()));
+            if rs.len() > crate::aws::services::agentcore::MAX_REGISTRY_RECORDS {
+                rows.push((
+                    format!(
+                        "  · descriptors fetched for the first {} (capped)",
+                        crate::aws::services::agentcore::MAX_REGISTRY_RECORDS
+                    ),
+                    String::new(),
+                ));
+                rows.push((String::new(), String::new()));
+            }
             for r in rs {
                 rows.push(("Record".to_string(), r.name.clone()));
                 rows.extend(ac_row("ID", &r.record_id));
@@ -1281,7 +1305,481 @@ pub fn agentcore_registry_section_lines(
                 rows.extend(ac_row("Status", &r.status));
                 rows.extend(ac_row("Description", &r.description));
                 rows.extend(ac_row("Updated", &r.updated));
+                rows.extend(ac_row("Sync", &r.sync_type));
+                rows.extend(ac_row("Sync From", &r.sync_url));
+                if !r.sync_credential_types.is_empty() {
+                    rows.extend(ac_row("Sync Credentials", &r.sync_credential_types.join(", ")));
+                }
+                if !r.status_reason.is_empty() {
+                    rows.push((format!("  ⚠ {}", r.status_reason), String::new()));
+                }
+                if !r.described {
+                    // Past the cap, or the record wouldn't describe — never
+                    // let that read as a record with no content.
+                    rows.push(("  · descriptor not fetched".to_string(), String::new()));
+                }
+                for (label, content) in &r.descriptors {
+                    rows.push((String::new(), String::new()));
+                    rows.push((format!("{} — {}", r.name, label), String::new()));
+                    ac_text_rows(&mut rows, content);
+                }
                 rows.push((String::new(), String::new()));
+            }
+            rows
+        }
+    }
+}
+
+// ── Evaluation ────────────────────────────────────────────────────────────────
+
+/// The `Loading…` / error preamble for a single-bundle lazy detail. Pushes the
+/// placeholder rows and returns `None` until the bundle has loaded.
+fn ac_detail<'a, T>(
+    rows: &mut Vec<(String, String)>,
+    state: Option<&'a crate::lazy::Lazy<T>>,
+) -> Option<&'a T> {
+    use crate::lazy::Lazy;
+    match state {
+        None | Some(Lazy::Loading) => {
+            rows.push((String::new(), String::new()));
+            rows.push(("  Loading…".to_string(), String::new()));
+            None
+        }
+        Some(Lazy::Error(err)) => {
+            rows.push((String::new(), String::new()));
+            rows.extend(error_rows(err));
+            None
+        }
+        Some(Lazy::Loaded(d)) => Some(d),
+    }
+}
+
+/// Free text as content rows, one per line — `/`, visual selection and copy
+/// then work over it like any other body text.
+fn ac_text_rows(rows: &mut Vec<(String, String)>, text: &str) {
+    for line in text.lines() {
+        rows.push((format!("  {}", line), String::new()));
+    }
+}
+
+pub(super) fn render_agentcore_evaluator_split(
+    app: &App,
+    e: &crate::aws::services::agentcore::AgentCoreEvaluator,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    render_waf_simple_split(
+        app,
+        "AgentCore Evaluator",
+        e.name(),
+        &e.evaluator_id,
+        &e.status,
+        &descriptor_tabs(
+            app,
+            &crate::aws::services::agentcore::AGENTCORE_EVALUATOR_SECTIONS,
+        ),
+        area,
+        frame,
+    );
+}
+
+pub fn agentcore_evaluator_section_lines(
+    e: &crate::aws::services::agentcore::AgentCoreEvaluator,
+    section: crate::aws::services::agentcore::AgentCoreEvaluatorDetailSection,
+    detail: Option<
+        &crate::lazy::Lazy<Box<crate::aws::services::agentcore::AgentCoreEvaluatorDetail>>,
+    >,
+    tags: Option<&crate::lazy::Lazy<Vec<(String, String)>>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::agentcore::AgentCoreEvaluatorDetailSection as S;
+    match section {
+        S::Tags => agentcore_tags_lines(tags),
+        S::Overview => {
+            let mut rows = vec![
+                ("Name".to_string(), e.name.clone()),
+                ("ID".to_string(), e.evaluator_id.clone()),
+                ("ARN".to_string(), e.arn.clone()),
+                ("Type".to_string(), e.evaluator_type.clone()),
+                ("Level".to_string(), e.level.clone()),
+                ("Status".to_string(), e.status.clone()),
+                (
+                    "Locked".to_string(),
+                    if e.locked { "✓ yes" } else { "✗ no" }.to_string(),
+                ),
+                ("Created".to_string(), e.created.clone()),
+                ("Updated".to_string(), e.updated.clone()),
+            ];
+            if !e.kms_key_arn.is_empty() {
+                rows.push(("KMS Key".to_string(), e.kms_key_arn.clone()));
+            }
+            if !e.description.is_empty() {
+                rows.push(("Description".to_string(), e.description.clone()));
+            }
+            if let Some(d) = ac_detail(&mut rows, detail) {
+                rows.push((String::new(), String::new()));
+                rows.push(("Scoring".to_string(), String::new()));
+                rows.extend(ac_row("Provider", &d.provider));
+                rows.extend(ac_row(
+                    "Method",
+                    if d.config_kind.is_empty() { "—" } else { &d.config_kind },
+                ));
+                if let Some((_, model)) = d.model.iter().find(|(k, _)| k == "Model") {
+                    rows.extend(ac_row("Model", model));
+                }
+                if !d.scale_kind.is_empty() {
+                    rows.push((
+                        "  Rating Scale".to_string(),
+                        format!("{} · {} points", d.scale_kind, d.scale.len()),
+                    ));
+                }
+            }
+            rows
+        }
+        S::Config => {
+            let mut rows = Vec::new();
+            let Some(d) = ac_detail(&mut rows, detail) else {
+                return rows;
+            };
+            if d.config_kind.is_empty() {
+                // Built-in evaluators are AWS's: GetEvaluator returns no config.
+                rows.push((
+                    "  (no evaluator config returned — built-in evaluators don't expose theirs)"
+                        .to_string(),
+                    String::new(),
+                ));
+                return rows;
+            }
+            rows.push(("Method".to_string(), d.config_kind.clone()));
+            if !d.lambda_arn.is_empty() {
+                rows.push(("Lambda".to_string(), d.lambda_arn.clone()));
+                if let Some(t) = d.lambda_timeout {
+                    rows.push(("Timeout".to_string(), format!("{}s", t)));
+                }
+            }
+            if !d.base_evaluator_id.is_empty() {
+                rows.push(("Base Evaluator".to_string(), d.base_evaluator_id.clone()));
+            }
+            if !d.model.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Judge Model".to_string(), String::new()));
+                for (k, v) in &d.model {
+                    rows.push((k.clone(), v.clone()));
+                }
+            }
+            if !d.scale.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push((format!("Rating Scale ({})", d.scale_kind), String::new()));
+                for (label, value, definition) in &d.scale {
+                    let key = if value.is_empty() {
+                        label.clone()
+                    } else {
+                        format!("{} = {}", label, value)
+                    };
+                    rows.push((key, definition.clone()));
+                }
+            }
+            if !d.instructions.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push(("Instructions".to_string(), String::new()));
+                ac_text_rows(&mut rows, &d.instructions);
+            }
+            rows
+        }
+    }
+}
+
+pub(super) fn render_agentcore_online_eval_split(
+    app: &App,
+    c: &crate::aws::services::agentcore::AgentCoreOnlineEval,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    render_waf_simple_split(
+        app,
+        "AgentCore Online Evaluation",
+        c.name(),
+        &c.config_id,
+        &c.state_label(),
+        &descriptor_tabs(
+            app,
+            &crate::aws::services::agentcore::AGENTCORE_ONLINE_EVAL_SECTIONS,
+        ),
+        area,
+        frame,
+    );
+}
+
+/// One evaluator reference, named from the sibling evaluator rows when the
+/// Evaluation tab has listed it (no fetch — the Policy Engine precedent).
+fn online_eval_evaluator_row(
+    id: &str,
+    evaluators: &[&crate::aws::services::agentcore::AgentCoreEvaluator],
+) -> (String, String) {
+    match evaluators.iter().find(|e| e.evaluator_id == id) {
+        Some(e) => (
+            format!("  {}", e.name()),
+            format!("{} · {} · {}", id, e.evaluator_type, e.level),
+        ),
+        None => (format!("  {}", id), String::new()),
+    }
+}
+
+pub fn agentcore_online_eval_section_lines(
+    c: &crate::aws::services::agentcore::AgentCoreOnlineEval,
+    section: crate::aws::services::agentcore::AgentCoreOnlineEvalDetailSection,
+    detail: Option<
+        &crate::lazy::Lazy<Box<crate::aws::services::agentcore::AgentCoreOnlineEvalDetail>>,
+    >,
+    evaluators: &[&crate::aws::services::agentcore::AgentCoreEvaluator],
+    tags: Option<&crate::lazy::Lazy<Vec<(String, String)>>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::agentcore::AgentCoreOnlineEvalDetailSection as S;
+    const PREVIEW: usize = 8;
+    match section {
+        S::Tags => agentcore_tags_lines(tags),
+        S::Overview => {
+            let mut rows = vec![
+                ("Name".to_string(), c.name.clone()),
+                ("ID".to_string(), c.config_id.clone()),
+                ("ARN".to_string(), c.arn.clone()),
+                ("Status".to_string(), c.status.clone()),
+                (
+                    "Execution".to_string(),
+                    if c.execution_status.eq_ignore_ascii_case("DISABLED") {
+                        // Configured but scoring nothing — the case worth spotting.
+                        format!("{} (not evaluating)", c.execution_status)
+                    } else {
+                        c.execution_status.clone()
+                    },
+                ),
+                ("Created".to_string(), c.created.clone()),
+                ("Updated".to_string(), c.updated.clone()),
+            ];
+            if !c.description.is_empty() {
+                rows.push(("Description".to_string(), c.description.clone()));
+            }
+            if !c.failure_reason.is_empty() {
+                rows.push((String::new(), String::new()));
+                rows.push((format!("  ⚠ {}", c.failure_reason), String::new()));
+            }
+            if let Some(d) = ac_detail(&mut rows, detail) {
+                rows.push((String::new(), String::new()));
+                rows.push(("Scoring".to_string(), String::new()));
+                rows.push((
+                    "  Sampling".to_string(),
+                    d.sampling_percentage
+                        .map(|p| format!("{}% of sessions", p))
+                        .unwrap_or_else(|| "—".to_string()),
+                ));
+                rows.push(("  Filters".to_string(), d.filters.len().to_string()));
+                rows.extend(ac_row("Execution Role", &d.execution_role_arn));
+                rows.push((String::new(), String::new()));
+                rows.push((
+                    format!("Evaluators ({})", d.evaluator_ids.len()),
+                    String::new(),
+                ));
+                for id in d.evaluator_ids.iter().take(PREVIEW) {
+                    rows.push(online_eval_evaluator_row(id, evaluators));
+                }
+                if d.evaluator_ids.len() > PREVIEW {
+                    rows.push((
+                        format!(
+                            "  · {} more — 3 <Tab>",
+                            d.evaluator_ids.len() - PREVIEW
+                        ),
+                        String::new(),
+                    ));
+                }
+            }
+            rows
+        }
+        S::Rule => {
+            let mut rows = Vec::new();
+            let Some(d) = ac_detail(&mut rows, detail) else {
+                return rows;
+            };
+            rows.push((
+                "Sampling".to_string(),
+                d.sampling_percentage
+                    .map(|p| format!("{}% of sessions", p))
+                    .unwrap_or_else(|| "—".to_string()),
+            ));
+            rows.push((
+                "Session Timeout".to_string(),
+                d.session_timeout_minutes
+                    .map(|m| format!("{} min", m))
+                    .unwrap_or_else(|| "—".to_string()),
+            ));
+            rows.push((String::new(), String::new()));
+            rows.push((format!("Filters ({})", d.filters.len()), String::new()));
+            if d.filters.is_empty() {
+                rows.push(("  every sampled session".to_string(), String::new()));
+            }
+            for (k, op, v) in &d.filters {
+                rows.push((format!("  {}", k), format!("{} {}", op, v).trim().to_string()));
+            }
+            rows.push((String::new(), String::new()));
+            rows.push(("Data Source".to_string(), String::new()));
+            ac_list_rows(&mut rows, "Log Groups", &d.log_groups);
+            ac_list_rows(&mut rows, "Log Group Prefixes", &d.log_group_prefixes);
+            ac_list_rows(&mut rows, "Services", &d.service_names);
+            if d.log_groups.is_empty()
+                && d.log_group_prefixes.is_empty()
+                && d.service_names.is_empty()
+            {
+                rows.push(("Source".to_string(), "—".to_string()));
+            }
+            rows
+        }
+        S::Evaluators => {
+            let mut rows = Vec::new();
+            let Some(d) = ac_detail(&mut rows, detail) else {
+                return rows;
+            };
+            if d.evaluator_ids.is_empty() {
+                rows.push(("  (no evaluators)".to_string(), String::new()));
+                return rows;
+            }
+            rows.push((
+                format!("Evaluators ({})", d.evaluator_ids.len()),
+                String::new(),
+            ));
+            for id in &d.evaluator_ids {
+                rows.push(online_eval_evaluator_row(id, evaluators));
+            }
+            rows
+        }
+        S::Output => {
+            let mut rows = Vec::new();
+            let Some(d) = ac_detail(&mut rows, detail) else {
+                return rows;
+            };
+            rows.push((
+                "Log Group".to_string(),
+                if d.output_log_group.is_empty() {
+                    "—".to_string()
+                } else {
+                    d.output_log_group.clone()
+                },
+            ));
+            rows.extend(ac_flush_row("Results Written To", &d.output_destination));
+            rows.extend(ac_flush_row("Metrics Namespace", &d.output_namespace));
+            rows.push((String::new(), String::new()));
+            rows.push(("Insights".to_string(), String::new()));
+            ac_list_rows(&mut rows, "Insight IDs", &d.insight_ids);
+            ac_list_rows(&mut rows, "Clustering", &d.clustering);
+            if d.insight_ids.is_empty() && d.clustering.is_empty() {
+                rows.push(("Insights".to_string(), "—".to_string()));
+            }
+            rows
+        }
+    }
+}
+
+pub(super) fn render_agentcore_dataset_split(
+    app: &App,
+    d: &crate::aws::services::agentcore::AgentCoreDataset,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    render_waf_simple_split(
+        app,
+        "AgentCore Dataset",
+        d.name(),
+        &d.dataset_id,
+        &d.status,
+        &descriptor_tabs(
+            app,
+            &crate::aws::services::agentcore::AGENTCORE_DATASET_SECTIONS,
+        ),
+        area,
+        frame,
+    );
+}
+
+pub fn agentcore_dataset_section_lines(
+    ds: &crate::aws::services::agentcore::AgentCoreDataset,
+    section: crate::aws::services::agentcore::AgentCoreDatasetDetailSection,
+    detail: Option<&crate::lazy::Lazy<crate::aws::services::agentcore::AgentCoreDatasetDetail>>,
+    versions: Option<
+        &crate::lazy::Lazy<Vec<crate::aws::services::agentcore::AgentCoreDatasetVersion>>,
+    >,
+    examples: Option<&crate::lazy::Lazy<crate::aws::services::agentcore::AgentCoreDatasetExamples>>,
+    tags: Option<&crate::lazy::Lazy<Vec<(String, String)>>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::agentcore::AgentCoreDatasetDetailSection as S;
+    use crate::lazy::Lazy;
+    match section {
+        S::Tags => agentcore_tags_lines(tags),
+        S::Overview => {
+            let mut rows = vec![
+                ("Name".to_string(), ds.name.clone()),
+                ("ID".to_string(), ds.dataset_id.clone()),
+                ("ARN".to_string(), ds.arn.clone()),
+                ("Status".to_string(), ds.status.clone()),
+                ("Schema".to_string(), ds.schema_type.clone()),
+                ("Examples".to_string(), ds.example_count.to_string()),
+                ("Created".to_string(), ds.created.clone()),
+                ("Updated".to_string(), ds.updated.clone()),
+            ];
+            if !ds.draft_status.is_empty() {
+                rows.push(("Draft".to_string(), ds.draft_status.clone()));
+            }
+            if !ds.description.is_empty() {
+                rows.push(("Description".to_string(), ds.description.clone()));
+            }
+            if let Some(d) = ac_detail(&mut rows, detail) {
+                rows.extend(ac_flush_row("Version", &d.version));
+                rows.extend(ac_flush_row("KMS Key", &d.kms_key_arn));
+                if !d.failure_reason.is_empty() {
+                    rows.push((String::new(), String::new()));
+                    rows.push((format!("  ⚠ {}", d.failure_reason), String::new()));
+                }
+            }
+            rows
+        }
+        S::Versions => {
+            if let Some(rows) = agentcore_list_preamble(versions, "no published versions") {
+                return rows;
+            }
+            let Some(Lazy::Loaded(vs)) = versions else {
+                return Vec::new();
+            };
+            let mut rows = vec![(format!("Versions ({})", vs.len()), String::new())];
+            for v in vs {
+                rows.push((
+                    format!("  {}", v.version),
+                    format!("{} examples · {}", v.example_count, v.created),
+                ));
+            }
+            rows
+        }
+        S::Examples => {
+            let mut rows = Vec::new();
+            let Some(ex) = ac_detail(&mut rows, examples) else {
+                return rows;
+            };
+            if ex.examples.is_empty() {
+                rows.push(("  (no examples)".to_string(), String::new()));
+                return rows;
+            }
+            let shown = if ex.truncated {
+                format!(
+                    "Examples (first {} of {})",
+                    ex.examples.len(),
+                    ds.example_count
+                )
+            } else {
+                format!("Examples ({})", ex.examples.len())
+            };
+            rows.push((shown, String::new()));
+            if !ex.version.is_empty() {
+                rows.push(("Version".to_string(), ex.version.clone()));
+            }
+            for (i, json) in ex.examples.iter().enumerate() {
+                rows.push((String::new(), String::new()));
+                rows.push((format!("Example {}", i + 1), String::new()));
+                ac_text_rows(&mut rows, json);
             }
             rows
         }
@@ -1496,6 +1994,8 @@ pub fn agentcore_harness_section_lines(
                         rows.push((format!("  {}", line), String::new()));
                     }
                 }
+                rows.push((String::new(), String::new()));
+                rows.push(("  · e opens the prompt in $EDITOR".to_string(), String::new()));
             }
             rows
         }
@@ -1861,6 +2361,7 @@ pub fn agentcore_bundle_section_lines(
                     }
                     rows.push((String::new(), String::new()));
                 }
+                rows.push(("  · e opens the components in $EDITOR".to_string(), String::new()));
             }
             rows
         }
@@ -1871,11 +2372,20 @@ pub fn agentcore_bundle_section_lines(
             let Some(Lazy::Loaded(vs)) = versions else {
                 return Vec::new();
             };
-            let live = match detail {
-                Some(Lazy::Loaded(d)) => d.version_id.clone(),
-                _ => String::new(),
+            let (live, live_components) = match detail {
+                Some(Lazy::Loaded(d)) => (d.version_id.clone(), Some(&d.components)),
+                _ => (String::new(), None),
             };
             let mut rows = vec![(format!("Versions ({})", vs.len()), String::new())];
+            if vs.len() > crate::aws::services::agentcore::MAX_BUNDLE_VERSIONS {
+                rows.push((
+                    format!(
+                        "  · components fetched for the newest {} (capped)",
+                        crate::aws::services::agentcore::MAX_BUNDLE_VERSIONS
+                    ),
+                    String::new(),
+                ));
+            }
             rows.push((String::new(), String::new()));
             for v in vs {
                 let marker = if !live.is_empty() && v.version_id == live {
@@ -1893,6 +2403,43 @@ pub fn agentcore_bundle_section_lines(
                 rows.extend(ac_row("Commit", &v.commit_message));
                 if !v.parent_versions.is_empty() {
                     rows.extend(ac_row("Parents", &v.parent_versions.join(", ")));
+                }
+                match &v.components {
+                    None => rows.push(("  · components not fetched".to_string(), String::new())),
+                    Some(comps) => {
+                        // Diffed per component against the live version, so the
+                        // question "what changed?" doesn't need two panes open.
+                        // The live version itself and unchanged components
+                        // print no JSON; only what differs is shown in full.
+                        let is_live = !live.is_empty() && v.version_id == live;
+                        for (name, json) in comps {
+                            let vs_live = match live_components {
+                                _ if is_live => "",
+                                Some(lc) => match lc.iter().find(|(n, _)| n == name) {
+                                    Some((_, l)) if l == json => "same as live",
+                                    Some(_) => "≠ live",
+                                    None => "not in live",
+                                },
+                                None => "",
+                            };
+                            rows.push((format!("  Component {}", name), vs_live.to_string()));
+                            if !is_live && vs_live != "same as live" {
+                                for line in json.lines() {
+                                    rows.push((format!("    {}", line), String::new()));
+                                }
+                            }
+                        }
+                        if let Some(lc) = live_components.filter(|_| !is_live) {
+                            for (name, _) in lc {
+                                if !comps.iter().any(|(n, _)| n == name) {
+                                    rows.push((
+                                        format!("  Component {}", name),
+                                        "only in live".to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
                 rows.push((String::new(), String::new()));
             }

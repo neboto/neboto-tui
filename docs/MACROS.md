@@ -51,6 +51,14 @@ app already knows it:
   also paginates on its **own** `loading` flag, not `App::loading`, so
   `macro_ready` tests both; without that a step fires into a half-listed
   folder.
+- **AgentCore memory browsing → `MemoryLocation { memory_id, records,
+  strategy, actor, session, row }`.** The same treatment for the same
+  reasons: modal for the recorder, location diffed and collapsed, drill path
+  carried by id. Replay opens the browser at the recorded level and
+  `pending_memory_row` selects the row by id when `MemoryBrowserLoaded`
+  lands; `macro_ready` waits on the browser's own `loading` too. Records
+  mode needs only the strategy id to list, so replay works even when the
+  store's lazy detail (the strategy pick list) never loaded.
 
 **How recording works.** `macro_note_key` stashes the key pre-dispatch (the
 search query has to be snapshotted there — `Esc` clears it), then

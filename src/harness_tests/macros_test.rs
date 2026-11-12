@@ -19,6 +19,7 @@ fn recorder(app: &mut App) {
         last_profile: None,
         last_assumed: None,
         last_s3: None,
+        last_memory: None,
         last_service: app.current_service,
         service_selector_was_open: false,
     });

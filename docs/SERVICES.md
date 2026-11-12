@@ -285,6 +285,11 @@ the service you're touching.
     section. `TargetConfiguration` is a union nested two deep
     (`TargetConfiguration::Mcp(McpTargetConfiguration::Lambda(..))`) — flatten
     to (backend kind, backend ref) so the Lambda ARN lands in a jumpable row.
+    Rules render every condition (`When` / `And` — all must match; a
+    condition matches when any of its entries does; none at all means every
+    request) and every action (`Then …`, one row per leg of a weighted
+    split). `ListGatewayRules` already returns the full `GatewayRuleDetail`,
+    so there is no `GetGatewayRule` pass — see "look like gaps" below.
     `ListGateways` carries **no ARN**. `m` prefers the one on the lazy
     `GetGateway` bundle and otherwise synthesizes
     `arn:aws:bedrock-agentcore:<region>:<account>:gateway/<id>` from
@@ -308,7 +313,8 @@ the service you're touching.
     that jumps to the bucket, enterprise policies, signing). The AWS-managed
     defaults (`aws.browser.v1` / `aws.codeinterpreter.v1`) come back in the
     lists alongside custom ones; both are real, neither is `is_noise()`.
-    Browser Profiles stay flat `details()`.
+    Browser Profiles stay flat `details()`: `GetBrowserProfile` adds only
+    `lastUpdatedAt` over the list summary, which isn't worth a pane.
   - **Identity** — the three thinnest list ops in the service:
     `WorkloadIdentityType` is **two fields** (name + ARN) and the two provider
     items add only a vendor and timestamps, so all three panes are lazy over
@@ -405,8 +411,31 @@ the service you're touching.
       three-arm union, and the Cedar/statement text becomes an
       `editor_override_content` with a **`.txt`** suffix, not `.json`: Cedar
       isn't JSON and `$EDITOR` would flag every line) and **Registry**
-      (Overview / Records, lazy `ListRegistryRecords`). Evaluators, online
-      evaluation configs and datasets are flat.
+      (Overview / Records, lazy `ListRegistryRecords`, each record deepened
+      with `GetRegistryRecord` for its descriptors, capped at
+      `MAX_REGISTRY_RECORDS = 25`). `Descriptors` is four optional parts
+      (MCP server + tools, A2A card, custom, skill `SKILL.md` + definition)
+      and a record commonly carries two of them — render all, not the first.
+      Inline JSON is pretty-printed; `SKILL.md` is Markdown and kept as
+      written. A record past the cap (or one that won't describe) says
+      "descriptor not fetched" rather than showing no content.
+    - **Evaluation panes** — the shapes were checked unchanged from 1.80 to
+      1.97 before building these (the "wait until they settle" note).
+      - **Evaluator** (Overview / Config): `GetEvaluator`'s `EvaluatorConfig`
+        is three arms — LLM-as-a-judge (instructions, rating scale,
+        `EvaluatorModelConfig`), code-based Lambda, or **derived** (a base
+        evaluator re-run on another model). Built-in evaluators return no
+        config at all, and the pane says so rather than looking empty.
+      - **Online evaluation** (Overview / Rule / Evaluators / Output):
+        `GetOnlineEvaluationConfig`. Evaluator references are bare ids, named
+        from the sibling evaluator rows already in the Evaluation tab (the
+        Policy Engine precedent — no fetch per id).
+      - **Dataset** (Overview / Versions / Examples): `GetDataset` +
+        `ListDatasetVersions` + `ListDatasetExamples`, examples capped at
+        `MAX_DATASET_EXAMPLES = 50` and labelled "first N of M" when cut.
+        **`downloadUrl` is never shown**: it is a presigned bearer link to
+        the whole dataset, one `y` from a chat window — the Secrets Manager
+        line. The Examples section previews the content instead.
     - `EnforcementMode::LOG_ONLY` drives `AgentCorePolicy::state()` — a
       log-only policy is healthy *and* blocking nothing, which the lifecycle
       status alone would hide. Likewise `OnlineEvaluationExecutionStatus` is
@@ -469,7 +498,7 @@ the service you're touching.
       values are bearer tokens as often as not.
     - The system prompt is free text and routinely multi-line, so it renders
       one content row per line: `/`, the visual selection and copy all work
-      over it normally.
+      over it normally. `e` on the Prompt section opens it as `.txt`.
   - **Configuration bundles** (in the **Runtimes** tab, no key of their own) —
     a versioned blob of component configuration that a runtime endpoint's
     traffic split points at (`TrafficSplitEntry.configurationBundle`). That
@@ -479,6 +508,13 @@ the service you're touching.
     `GetConfigurationBundle` + `ListConfigurationBundleVersions`. Components
     are untyped `Document`s keyed by component name, so the pane pretty-prints
     them (`aws::document::document_pretty`) instead of inventing a schema.
+    `e` on Components opens them as one JSON object (name → `configuration`),
+    the shape `UpdateConfigurationBundle` takes. The Versions section deepens
+    the newest `MAX_BUNDLE_VERSIONS = 10` with `GetConfigurationBundleVersion`
+    and diffs each component against live (`≠ live` / `same as live` /
+    `not in live` / `only in live`), printing JSON only for what differs —
+    the question that section answers is "what changed?". Its hook also
+    fires the live-bundle fetch, since the diff needs both.
     No status field — `state()` is deliberately empty rather than faked.
   - **Payments** (tab 0) — **metadata only, and that is a rule, not a
     limitation.** The data plane carries `GetPaymentInstrument`,
@@ -590,9 +626,9 @@ the service you're touching.
       ahead of the AgentCore arms. Two renderers cross clippy's argument limit
       as a result and carry an explicit `allow` — each parameter is one lazy
       map the pane reads, and a struct no other pane uses would hide that.
-  - **Not built**: nothing from the deferred families remains. What's still
-    open is depth on the shipped surface: console deep links, deeper
-    evaluation panes, and a few flat types with a `Get*` behind them (#97).
+  - **Not built**: console deep links and harness metrics / log tail —
+    both need a live account to confirm (a real console URL fragment; one
+    `list-metrics` / `describe-log-groups` call) and must not be guessed.
     This is a preview SDK whose shape still moves between minor versions, so
     check `aws-sdk-bedrockagentcorecontrol` before starting any of it.
   - **Four policy ops look like gaps and are NOT.** This was checked field by
@@ -603,7 +639,9 @@ the service you're touching.
     `ListPolicyGenerations` already hands us, and
     `GetPolicyGenerationSummary` returns the same minus `statusReasons`. So
     the Generations section needs no per-row deepening. Don't re-add any of
-    them.
+    them. Same for **`GetGatewayRule`** (`ListGatewayRules` returns the
+    identical `GatewayRuleDetail`) and **`GetBrowserProfile`** (adds only
+    `lastUpdatedAt`).
   - **`console_url()` is the service home, not a deep link.** AWS documents
     exactly one console URL for AgentCore
     (`https://console.aws.amazon.com/bedrock-agentcore/home#`) and every

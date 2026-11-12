@@ -328,6 +328,21 @@ pub struct LazyStore {
     /// `raw` means no policy is attached, which is a normal state.
     pub agentcore_resource_policy:
         LazyMap<crate::aws::services::agentcore::AgentCoreResourcePolicy>,
+    /// `GetEvaluator` — the scoring config, keyed by evaluator id.
+    pub agentcore_evaluator_detail:
+        LazyMap<Box<crate::aws::services::agentcore::AgentCoreEvaluatorDetail>>,
+    /// `GetOnlineEvaluationConfig` — feeds every section but Tags, keyed by
+    /// config id.
+    pub agentcore_online_eval_detail:
+        LazyMap<Box<crate::aws::services::agentcore::AgentCoreOnlineEvalDetail>>,
+    /// `GetDataset`, `ListDatasetVersions` and a capped `ListDatasetExamples`,
+    /// each keyed by dataset id.
+    pub agentcore_dataset_detail:
+        LazyMap<crate::aws::services::agentcore::AgentCoreDatasetDetail>,
+    pub agentcore_dataset_versions:
+        LazyMap<Vec<crate::aws::services::agentcore::AgentCoreDatasetVersion>>,
+    pub agentcore_dataset_examples:
+        LazyMap<crate::aws::services::agentcore::AgentCoreDatasetExamples>,
 
     // ── Bedrock ──────────────────────────────────────────────────────────
     /// A guardrail's full policy detail, keyed by guardrail id.

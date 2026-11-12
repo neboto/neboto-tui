@@ -2504,6 +2504,9 @@ pub struct App {
     pub s3_object_browser: crate::ui::widgets::s3_object_browser::S3ObjectBrowserState,
     pub terraform_state: Option<crate::terraform::TfState>,
     pub pending_s3_object_key: Option<String>,
+    /// Row id a macro's `MemoryLocation` step wants selected once the memory
+    /// browser's listing lands — the `pending_s3_object_key` shape.
+    pub pending_memory_row: Option<String>,
     pub log_tail: crate::ui::widgets::log_tail::LogTailState,
     // Live-tail poll loop control: flipped to false to stop the background loop;
     // generation guards against a stale loop appending after close/reopen.
@@ -3419,6 +3422,7 @@ impl App {
             s3_object_browser: crate::ui::widgets::s3_object_browser::S3ObjectBrowserState::new(),
             terraform_state: None,
             pending_s3_object_key: None,
+            pending_memory_row: None,
             log_tail: crate::ui::widgets::log_tail::LogTailState::default(),
             log_tail_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             log_tail_generation: 0,
@@ -3830,6 +3834,17 @@ impl App {
                     }
                     self.memory_browser.next_token = next_token;
                     self.memory_browser.loading = false;
+                    // A macro step's row, resolved by id against what landed.
+                    if let Some(target) = self.pending_memory_row.take() {
+                        let b = &mut self.memory_browser;
+                        if let Some(pos) = b
+                            .filtered_indices()
+                            .iter()
+                            .position(|&i| b.rows[i].id == target)
+                        {
+                            b.selected = pos;
+                        }
+                    }
                 }
             }
             Event::MemoryBrowserError { message } => {
@@ -21969,6 +21984,8 @@ impl App {
         // arbitrary. Its location is captured as an `S3Object` checkpoint
         // instead — the same outcome-over-keystrokes treatment as the pickers.
         self.s3_object_browser.visible
+            // Same for the memory browser — `MemoryLocation` checkpoint.
+            || self.memory_browser.visible
             || self.service_selector.visible
             || self.region_selector.visible
             || self.profile_selector.visible
@@ -22061,6 +22078,23 @@ impl App {
                     .map(|e| e.full_path().to_string())
                     .unwrap_or_default(),
             )
+        });
+        let memory_here = self.memory_browser.visible.then(|| {
+            use crate::ui::widgets::memory_browser::MemoryLevel;
+            let b = &self.memory_browser;
+            let records = b.level == MemoryLevel::Records;
+            MacroStep::MemoryLocation {
+                memory_id: b.memory_id.clone(),
+                records,
+                strategy: if records {
+                    b.current_strategy().map(|(id, _)| id.clone()).unwrap_or_default()
+                } else {
+                    String::new()
+                },
+                actor: b.actor_id.clone(),
+                session: b.session_id.clone(),
+                row: b.selected_row().map(|r| r.id.clone()).unwrap_or_default(),
+            }
         });
         let selected = self
             .get_selected_resource_id()
@@ -22167,6 +22201,18 @@ impl App {
             }
         } else {
             rec.last_s3 = None;
+        }
+        // Memory browser location, collapsed the same way.
+        if let Some(here) = memory_here {
+            if rec.last_memory.as_ref() != Some(&here) {
+                if matches!(rec.steps.last(), Some(MacroStep::MemoryLocation { .. })) {
+                    rec.steps.pop();
+                }
+                rec.steps.push(here.clone());
+                rec.last_memory = Some(here);
+            }
+        } else {
+            rec.last_memory = None;
         }
 
         // Only on the picker's closing edge: `current_service` also moves on
@@ -22312,6 +22358,8 @@ impl App {
             // without this a step fires into a half-listed folder, and the
             // `pending_s3_object_key` selection hasn't resolved yet either.
             && !self.s3_object_browser.loading
+            // Likewise the memory browser, and its pending row.
+            && !self.memory_browser.loading
     }
 
     /// Drive recording and playback. Called once per main-loop iteration,
@@ -22389,6 +22437,53 @@ impl App {
                 self.pending_s3_object_key =
                     (!key.is_empty()).then(|| key.clone());
                 self.trigger_s3_objects_load(event_tx, false);
+            }
+            MacroStep::MemoryLocation {
+                memory_id,
+                records,
+                strategy,
+                actor,
+                session,
+                row,
+            } => {
+                use crate::ui::widgets::memory_browser::MemoryLevel;
+                // Strategies come from the store's lazy detail when it has
+                // loaded; the recorded one is added if not, since Records
+                // only needs its id to list.
+                let mut strategies: Vec<(String, String)> =
+                    match self.lazy.agentcore_memory_detail.get(memory_id) {
+                        Some(crate::lazy::Lazy::Loaded(d)) => d
+                            .strategies
+                            .iter()
+                            .map(|s| (s.strategy_id.clone(), s.name.clone()))
+                            .collect(),
+                        _ => Vec::new(),
+                    };
+                if !strategy.is_empty() && !strategies.iter().any(|(id, _)| id == strategy) {
+                    strategies.push((strategy.clone(), strategy.clone()));
+                }
+                self.memory_browser.open(memory_id.clone(), strategies);
+                let b = &mut self.memory_browser;
+                if *records {
+                    b.level = MemoryLevel::Records;
+                    b.strategy_idx = b
+                        .strategies
+                        .iter()
+                        .position(|(id, _)| id == strategy)
+                        .unwrap_or(0);
+                } else {
+                    b.actor_id = actor.clone();
+                    b.session_id = session.clone();
+                    b.level = if !session.is_empty() {
+                        MemoryLevel::Events
+                    } else if !actor.is_empty() {
+                        MemoryLevel::Sessions
+                    } else {
+                        MemoryLevel::Actors
+                    };
+                }
+                self.pending_memory_row = (!row.is_empty()).then(|| row.clone());
+                self.trigger_memory_browser_load(event_tx, false);
             }
             MacroStep::AssumeRole {
                 account_id,
@@ -22479,6 +22574,7 @@ impl App {
                 )
             }),
             last_s3: None,
+            last_memory: None,
             last_service: self.current_service,
             service_selector_was_open: false,
         });
@@ -28145,6 +28241,52 @@ impl App {
                     tags,
                 );
             }
+            if let Some(e) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::agentcore::AgentCoreEvaluator>()
+            {
+                return crate::ui::widgets::details_pane::agentcore_evaluator_section_lines(
+                    e,
+                    crate::aws::services::agentcore::AgentCoreEvaluatorDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.agentcore_evaluator_detail.get(&e.evaluator_id),
+                    tags,
+                );
+            }
+            if let Some(c) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::agentcore::AgentCoreOnlineEval>()
+            {
+                // Evaluator references are bare ids; name them from the
+                // Evaluation tab's own rows rather than a fetch per id.
+                let evaluators: Vec<&crate::aws::services::agentcore::AgentCoreEvaluator> = self
+                    .resources
+                    .iter()
+                    .filter_map(|r| {
+                        r.as_any()
+                            .downcast_ref::<crate::aws::services::agentcore::AgentCoreEvaluator>()
+                    })
+                    .collect();
+                return crate::ui::widgets::details_pane::agentcore_online_eval_section_lines(
+                    c,
+                    crate::aws::services::agentcore::AgentCoreOnlineEvalDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.agentcore_online_eval_detail.get(&c.config_id),
+                    &evaluators,
+                    tags,
+                );
+            }
+            if let Some(d) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::agentcore::AgentCoreDataset>()
+            {
+                return crate::ui::widgets::details_pane::agentcore_dataset_section_lines(
+                    d,
+                    crate::aws::services::agentcore::AgentCoreDatasetDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.agentcore_dataset_detail.get(&d.dataset_id),
+                    self.lazy.agentcore_dataset_versions.get(&d.dataset_id),
+                    self.lazy.agentcore_dataset_examples.get(&d.dataset_id),
+                    tags,
+                );
+            }
             if let Some(reg) = resource
                 .as_any()
                 .downcast_ref::<crate::aws::services::agentcore::AgentCoreRegistry>()
@@ -29483,6 +29625,52 @@ impl App {
                     self.lazy.agentcore_agent_card.get(&r.runtime_id)
                 {
                     return Some((card.clone(), ".json"));
+                }
+            }
+        }
+
+        // AgentCore harness: the system prompt, on the Prompt section. `.txt`
+        // — it's free text, routinely long, and reads badly as JSON-escaped
+        // snapshot rows. Blocks are joined with a blank line, as the pane
+        // separates them.
+        if let Some(h) = any.downcast_ref::<crate::aws::services::agentcore::AgentCoreHarness>() {
+            use crate::aws::services::agentcore::AgentCoreHarnessDetailSection as S;
+            if S::from_index(self.detail_section_idx) == S::Prompt {
+                if let Some(crate::lazy::Lazy::Loaded(d)) =
+                    self.lazy.agentcore_harness_detail.get(&h.harness_id)
+                {
+                    if !d.system_prompt.is_empty() {
+                        return Some((d.system_prompt.join("\n\n"), ".txt"));
+                    }
+                }
+            }
+        }
+
+        // AgentCore configuration bundle: the live version's components as
+        // one JSON object (component name → configuration), on the Components
+        // section — the shape `UpdateConfigurationBundle` takes back.
+        if let Some(b) =
+            any.downcast_ref::<crate::aws::services::agentcore::AgentCoreConfigBundle>()
+        {
+            use crate::aws::services::agentcore::AgentCoreConfigBundleDetailSection as S;
+            if S::from_index(self.detail_section_idx) == S::Components {
+                if let Some(crate::lazy::Lazy::Loaded(d)) =
+                    self.lazy.agentcore_bundle_detail.get(&b.bundle_id)
+                {
+                    if !d.components.is_empty() {
+                        let obj: serde_json::Map<String, serde_json::Value> = d
+                            .components
+                            .iter()
+                            .map(|(name, json)| {
+                                let v = serde_json::from_str(json)
+                                    .unwrap_or_else(|_| serde_json::Value::String(json.clone()));
+                                (name.clone(), serde_json::json!({ "configuration": v }))
+                            })
+                            .collect();
+                        if let Ok(text) = serde_json::to_string_pretty(&obj) {
+                            return Some((text, ".json"));
+                        }
+                    }
                 }
             }
         }
@@ -31422,6 +31610,123 @@ impl App {
         }
     }
 
+    pub(crate) fn trigger_agentcore_evaluator_detail_load(
+        &mut self,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
+        if let Some(x) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::agentcore::AgentCoreEvaluator>()
+        }) {
+            let id = x.evaluator_id.clone();
+            let ctl = self.aws_clients.agentcore_control_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.agentcore_evaluator_detail,
+                id.clone(),
+                event_tx,
+                async move {
+                    crate::aws::services::agentcore::fetch_evaluator_detail(ctl, id)
+                        .await
+                        .map(Box::new)
+                        .map_err(|e| format!("Evaluator detail unavailable: {}", e))
+                },
+            );
+        }
+    }
+
+    pub(crate) fn trigger_agentcore_online_eval_detail_load(
+        &mut self,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
+        if let Some(x) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::agentcore::AgentCoreOnlineEval>()
+        }) {
+            let id = x.config_id.clone();
+            let ctl = self.aws_clients.agentcore_control_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.agentcore_online_eval_detail,
+                id.clone(),
+                event_tx,
+                async move {
+                    crate::aws::services::agentcore::fetch_online_eval_detail(ctl, id)
+                        .await
+                        .map(Box::new)
+                        .map_err(|e| format!("Online evaluation detail unavailable: {}", e))
+                },
+            );
+        }
+    }
+
+    pub(crate) fn trigger_agentcore_dataset_detail_load(
+        &mut self,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
+        if let Some(x) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::agentcore::AgentCoreDataset>()
+        }) {
+            let id = x.dataset_id.clone();
+            let ctl = self.aws_clients.agentcore_control_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.agentcore_dataset_detail,
+                id.clone(),
+                event_tx,
+                async move {
+                    crate::aws::services::agentcore::fetch_dataset_detail(ctl, id)
+                        .await
+                        .map_err(|e| format!("Dataset detail unavailable: {}", e))
+                },
+            );
+        }
+    }
+
+    pub(crate) fn trigger_agentcore_dataset_versions_load(
+        &mut self,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
+        if let Some(x) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::agentcore::AgentCoreDataset>()
+        }) {
+            let id = x.dataset_id.clone();
+            let ctl = self.aws_clients.agentcore_control_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.agentcore_dataset_versions,
+                id.clone(),
+                event_tx,
+                async move {
+                    crate::aws::services::agentcore::fetch_dataset_versions(ctl, id)
+                        .await
+                        .map_err(|e| format!("Versions unavailable: {}", e))
+                },
+            );
+        }
+    }
+
+    pub(crate) fn trigger_agentcore_dataset_examples_load(
+        &mut self,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) {
+        if let Some(x) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::agentcore::AgentCoreDataset>()
+        }) {
+            let id = x.dataset_id.clone();
+            let ctl = self.aws_clients.agentcore_control_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.agentcore_dataset_examples,
+                id.clone(),
+                event_tx,
+                async move {
+                    crate::aws::services::agentcore::fetch_dataset_examples(ctl, id)
+                        .await
+                        .map_err(|e| format!("Examples unavailable: {}", e))
+                },
+            );
+        }
+    }
+
     pub(crate) fn trigger_agentcore_bundle_detail_load(
         &mut self,
         event_tx: &mpsc::UnboundedSender<Event>,
@@ -31450,6 +31755,9 @@ impl App {
         &mut self,
         event_tx: &mpsc::UnboundedSender<Event>,
     ) {
+        // The section diffs each version against live, which is the
+        // `GetConfigurationBundle` bundle — make sure it's on its way too.
+        self.trigger_agentcore_bundle_detail_load(event_tx);
         if let Some(b) = self.get_selected_resource().and_then(|r| {
             r.as_any()
                 .downcast_ref::<crate::aws::services::agentcore::AgentCoreConfigBundle>()
