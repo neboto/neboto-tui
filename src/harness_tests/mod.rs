@@ -25,6 +25,7 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
 mod deep_export_test;
+mod agentcore_depth_test;
 mod ssm_jump_test;
 mod iam_permissions_test;
 mod ddb_browser_test;

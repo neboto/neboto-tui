@@ -51,6 +51,29 @@ pub enum MacroStep {
         /// Full key of the selected entry; empty means "just open the folder".
         key: String,
     },
+    /// Open the AgentCore memory browser at a level, with one row selected —
+    /// the `S3Object` treatment for the same reasons: the browser's cursor
+    /// indexes a filtered, paginated listing of actors / sessions / events,
+    /// so a keystroke replay lands somewhere arbitrary. The drill path is
+    /// carried by id, which is what the data-plane calls take.
+    MemoryLocation {
+        memory_id: String,
+        /// Records mode (`t`) rather than the Actors → Sessions → Events path.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        records: bool,
+        /// Records mode's strategy scope; empty on the event path.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        strategy: String,
+        /// Empty at Actors.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        actor: String,
+        /// Empty above Events.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        session: String,
+        /// Id of the selected row; empty means "just open the level".
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        row: String,
+    },
     /// Assume an org member-account role (`s` on an Organizations account).
     AssumeRole {
         account_id: String,
@@ -104,6 +127,29 @@ impl MacroStep {
             } => {
                 let at = if key.is_empty() { prefix } else { key };
                 format!("s3      s3://{}/{}", bucket, at)
+            }
+            MacroStep::MemoryLocation {
+                memory_id,
+                records,
+                strategy,
+                actor,
+                session,
+                row,
+            } => {
+                let mut at = memory_id.clone();
+                if *records {
+                    at.push_str(" / records");
+                    if !strategy.is_empty() {
+                        at.push_str(&format!(" ({})", strategy));
+                    }
+                }
+                for part in [actor, session, row] {
+                    if !part.is_empty() {
+                        at.push_str(" / ");
+                        at.push_str(part);
+                    }
+                }
+                format!("memory  {}", at)
             }
             MacroStep::AssumeRole {
                 account_id,
@@ -271,6 +317,9 @@ pub struct MacroRecorder {
     pub last_assumed: Option<(String, String, String)>,
     /// `(bucket, prefix, selected key)` while the object browser is open.
     pub last_s3: Option<(String, String, String)>,
+    /// The memory browser's location while it's open, as the step it would
+    /// record — compared whole, so any part moving re-records.
+    pub last_memory: Option<MacroStep>,
     pub last_service: Option<crate::aws::service::ServiceType>,
     /// Whether the `S` picker was open on the previous pass. A service change
     /// is only checkpointed when it came out of that picker — `current_service`

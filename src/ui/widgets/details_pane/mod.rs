@@ -1460,6 +1460,27 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         render_agentcore_policy_split(app, p, area, frame);
         return;
     }
+    if let Some(x) = resource.and_then(|r| {
+        r.as_any()
+            .downcast_ref::<crate::aws::services::agentcore::AgentCoreEvaluator>()
+    }) {
+        render_agentcore_evaluator_split(app, x, area, frame);
+        return;
+    }
+    if let Some(x) = resource.and_then(|r| {
+        r.as_any()
+            .downcast_ref::<crate::aws::services::agentcore::AgentCoreOnlineEval>()
+    }) {
+        render_agentcore_online_eval_split(app, x, area, frame);
+        return;
+    }
+    if let Some(x) = resource.and_then(|r| {
+        r.as_any()
+            .downcast_ref::<crate::aws::services::agentcore::AgentCoreDataset>()
+    }) {
+        render_agentcore_dataset_split(app, x, area, frame);
+        return;
+    }
     if let Some(reg) = resource.and_then(|r| {
         r.as_any()
             .downcast_ref::<crate::aws::services::agentcore::AgentCoreRegistry>()

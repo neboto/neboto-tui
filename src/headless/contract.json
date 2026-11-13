@@ -299,10 +299,15 @@
       "Tags"
     ],
     "AgentCore Dataset": [
-      "Details"
+      "Overview",
+      "Versions",
+      "Examples",
+      "Tags"
     ],
     "AgentCore Evaluator": [
-      "Details"
+      "Overview",
+      "Config",
+      "Tags"
     ],
     "AgentCore Gateway": [
       "Overview",
@@ -341,7 +346,11 @@
       "Tags"
     ],
     "AgentCore Online Evaluation": [
-      "Details"
+      "Overview",
+      "Rule",
+      "Evaluators",
+      "Output",
+      "Tags"
     ],
     "AgentCore Payment Credentials": [
       "Overview",

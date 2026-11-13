@@ -1168,12 +1168,98 @@ pub struct AgentCoreGatewayRule {
     pub priority: i32,
     pub status: String,
     pub description: String,
-    pub condition_count: usize,
-    pub action_count: usize,
-    pub system_managed: bool,
+    /// Every condition flattened to `(kind, value)` — all of them must
+    /// match for the rule to fire, so dropping one makes it read broader.
+    pub conditions: Vec<(String, String)>,
+    /// Every action flattened to `(kind, value)`; a weighted split is one row
+    /// per leg so each bundle / target reference lands in its own row.
+    pub actions: Vec<(String, String)>,
+    /// `SystemManagedBlock.managed_by` — who owns the rule when it isn't you.
+    pub managed_by: String,
     pub created: String,
+    pub updated: String,
 }
 
+/// Flatten a rule's `Condition` union. A rule fires only when every condition
+/// matches, and each condition matches when **any** of its entries does.
+fn gateway_rule_conditions(
+    cs: &[aws_sdk_bedrockagentcorecontrol::types::Condition],
+) -> Vec<(String, String)> {
+    use aws_sdk_bedrockagentcorecontrol::types::{Condition, MatchPrincipalEntry};
+    let mut out = Vec::new();
+    for c in cs {
+        match c {
+            Condition::MatchPaths(m) => {
+                out.push(("Path is any of".to_string(), m.any_of().join(", ")));
+            }
+            Condition::MatchPrincipals(m) => {
+                for e in m.any_of() {
+                    match e {
+                        MatchPrincipalEntry::IamPrincipal(p) => {
+                            let op = p
+                                .operator()
+                                .map(|o| format!(" ({})", o.as_str()))
+                                .unwrap_or_default();
+                            out.push((format!("IAM Principal{}", op), p.arn().to_string()));
+                        }
+                        _ => out.push(("Principal".to_string(), "(unrecognised)".to_string())),
+                    }
+                }
+            }
+            _ => out.push(("Condition".to_string(), "(unrecognised)".to_string())),
+        }
+    }
+    out
+}
+
+/// Flatten a rule's `Action` union — two families (configuration-bundle
+/// override / route to target), each static or weighted.
+fn gateway_rule_actions(
+    acts: &[aws_sdk_bedrockagentcorecontrol::types::Action],
+) -> Vec<(String, String)> {
+    use aws_sdk_bedrockagentcorecontrol::types::{
+        Action, ConfigurationBundleAction, RouteToTargetAction,
+    };
+    let mut out = Vec::new();
+    for a in acts {
+        match a {
+            Action::ConfigurationBundle(ConfigurationBundleAction::StaticOverride(o)) => {
+                out.push((
+                    "Bundle Override".to_string(),
+                    format!("{} @ {}", o.bundle_arn(), o.bundle_version()),
+                ));
+            }
+            Action::ConfigurationBundle(ConfigurationBundleAction::WeightedOverride(w)) => {
+                for e in w.traffic_split() {
+                    let bundle = e
+                        .configuration_bundle()
+                        .map(|b| format!(" → {} @ {}", b.bundle_arn(), b.bundle_version()))
+                        .unwrap_or_default();
+                    out.push((
+                        format!("Bundle Split {}%", e.weight()),
+                        format!("{}{}", e.name(), bundle),
+                    ));
+                }
+            }
+            Action::RouteToTarget(RouteToTargetAction::StaticRoute(r)) => {
+                out.push(("Route To".to_string(), r.target_name().to_string()));
+            }
+            Action::RouteToTarget(RouteToTargetAction::WeightedRoute(w)) => {
+                for e in w.traffic_split() {
+                    out.push((
+                        format!("Route Split {}%", e.weight()),
+                        format!("{} → {}", e.name(), e.target_name()),
+                    ));
+                }
+            }
+            _ => out.push(("Action".to_string(), "(unrecognised)".to_string())),
+        }
+    }
+    out
+}
+
+/// `ListGatewayRules` returns the full `GatewayRuleDetail` — the same shape
+/// `GetGatewayRule` does — so there is no per-rule deepening pass to make.
 pub async fn fetch_gateway_rules(
     ctl: CtlClient,
     gateway_id: String,
@@ -1192,10 +1278,14 @@ pub async fn fetch_gateway_rules(
                 priority: r.priority(),
                 status: r.status().as_str().to_string(),
                 description: r.description().unwrap_or_default().to_string(),
-                condition_count: r.conditions().len(),
-                action_count: r.actions().len(),
-                system_managed: r.system().is_some(),
+                conditions: gateway_rule_conditions(r.conditions()),
+                actions: gateway_rule_actions(r.actions()),
+                managed_by: r
+                    .system()
+                    .map(|m| m.managed_by().to_string())
+                    .unwrap_or_default(),
                 created: fmt_dt(Some(r.created_at())),
+                updated: fmt_dt(r.updated_at()),
             });
         }
     }
@@ -2846,7 +2936,19 @@ impl AgentCoreEvaluator {
     }
 }
 
+crate::sections! {
+    pub enum AgentCoreEvaluatorDetailSection,
+    pub static AGENTCORE_EVALUATOR_SECTIONS = [
+        Overview "Overview" => crate::app::App::trigger_agentcore_evaluator_detail_load,
+        Config "Config" => crate::app::App::trigger_agentcore_evaluator_detail_load,
+        Tags "Tags" => crate::app::App::trigger_agentcore_tags_load,
+    ]
+}
+
 impl Resource for AgentCoreEvaluator {
+    fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
+        Some(&AGENTCORE_EVALUATOR_SECTIONS)
+    }
     fn id(&self) -> &str {
         &self.evaluator_id
     }
@@ -2963,7 +3065,21 @@ impl AgentCoreOnlineEval {
     }
 }
 
+crate::sections! {
+    pub enum AgentCoreOnlineEvalDetailSection,
+    pub static AGENTCORE_ONLINE_EVAL_SECTIONS = [
+        Overview "Overview" => crate::app::App::trigger_agentcore_online_eval_detail_load,
+        Rule "Rule" => crate::app::App::trigger_agentcore_online_eval_detail_load,
+        Evaluators "Evaluators" => crate::app::App::trigger_agentcore_online_eval_detail_load,
+        Output "Output" => crate::app::App::trigger_agentcore_online_eval_detail_load,
+        Tags "Tags" => crate::app::App::trigger_agentcore_tags_load,
+    ]
+}
+
 impl Resource for AgentCoreOnlineEval {
+    fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
+        Some(&AGENTCORE_ONLINE_EVAL_SECTIONS)
+    }
     fn id(&self) -> &str {
         &self.config_id
     }
@@ -3078,7 +3194,20 @@ impl AgentCoreDataset {
     }
 }
 
+crate::sections! {
+    pub enum AgentCoreDatasetDetailSection,
+    pub static AGENTCORE_DATASET_SECTIONS = [
+        Overview "Overview" => crate::app::App::trigger_agentcore_dataset_detail_load,
+        Versions "Versions" => crate::app::App::trigger_agentcore_dataset_versions_load,
+        Examples "Examples" => crate::app::App::trigger_agentcore_dataset_examples_load,
+        Tags "Tags" => crate::app::App::trigger_agentcore_tags_load,
+    ]
+}
+
 impl Resource for AgentCoreDataset {
+    fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
+        Some(&AGENTCORE_DATASET_SECTIONS)
+    }
     fn id(&self) -> &str {
         &self.dataset_id
     }
@@ -3146,6 +3275,332 @@ impl Resource for AgentCoreDataset {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+/// Cap on `ListDatasetExamples` rows kept for the Examples section. Examples
+/// are whole conversations; a dataset can hold thousands and this is a
+/// preview, not an export.
+pub const MAX_DATASET_EXAMPLES: usize = 50;
+
+/// `GetEvaluator` — the scoring config the summary leaves out.
+///
+/// `EvaluatorConfig` is a three-arm union: an LLM-as-a-judge (instructions +
+/// rating scale + model), a code-based Lambda, or a *derived* evaluator that
+/// re-runs a base evaluator on another model. Built-in evaluators return no
+/// config at all — they are AWS's — and the pane says so.
+#[derive(Debug, Clone, Default)]
+pub struct AgentCoreEvaluatorDetail {
+    pub provider: String,
+    /// `LLM-as-a-judge` / `Code (Lambda)` / `Derived`, empty when none.
+    pub config_kind: String,
+    pub instructions: String,
+    /// `Numerical` / `Categorical`, empty when unset.
+    pub scale_kind: String,
+    /// `(label, value-or-empty, definition)` per scale point.
+    pub scale: Vec<(String, String, String)>,
+    /// Flattened `EvaluatorModelConfig`: `(key, value)` rows.
+    pub model: Vec<(String, String)>,
+    pub lambda_arn: String,
+    pub lambda_timeout: Option<i32>,
+    pub base_evaluator_id: String,
+}
+
+fn evaluator_model_rows(
+    m: &aws_sdk_bedrockagentcorecontrol::types::EvaluatorModelConfig,
+) -> Vec<(String, String)> {
+    use aws_sdk_bedrockagentcorecontrol::types::EvaluatorModelConfig as M;
+    let mut rows = Vec::new();
+    let mut opt = |k: &str, v: Option<String>| {
+        if let Some(v) = v {
+            rows.push((k.to_string(), v));
+        }
+    };
+    match m {
+        M::BedrockEvaluatorModelConfig(b) => {
+            opt("Provider", Some("Bedrock".to_string()));
+            opt("Model", Some(b.model_id().to_string()));
+            if let Some(i) = b.inference_config() {
+                opt("Max Tokens", i.max_tokens().map(|v| v.to_string()));
+                opt("Temperature", i.temperature().map(|v| v.to_string()));
+                opt("Top P", i.top_p().map(|v| v.to_string()));
+                let stops = i.stop_sequences();
+                if !stops.is_empty() {
+                    opt("Stop Sequences", Some(stops.join(", ")));
+                }
+            }
+            opt(
+                "Extra Request Fields",
+                b.additional_model_request_fields()
+                    .map(crate::aws::document::document_display),
+            );
+        }
+        M::ResponsesEvaluatorModelConfig(o) => {
+            opt("Provider", Some("OpenResponses".to_string()));
+            opt("Model", Some(o.model_id().to_string()));
+            opt("Max Output Tokens", o.max_output_tokens().map(|v| v.to_string()));
+            opt("Temperature", o.temperature().map(|v| v.to_string()));
+            opt("Top P", o.top_p().map(|v| v.to_string()));
+            opt(
+                "Reasoning Effort",
+                o.reasoning().and_then(|r| r.effort()).map(|s| s.to_string()),
+            );
+        }
+        _ => opt("Provider", Some("(unrecognised)".to_string())),
+    }
+    rows
+}
+
+pub async fn fetch_evaluator_detail(
+    ctl: CtlClient,
+    evaluator_id: String,
+) -> std::result::Result<AgentCoreEvaluatorDetail, String> {
+    use aws_sdk_bedrockagentcorecontrol::types::{
+        CodeBasedEvaluatorConfig, EvaluatorConfig, RatingScale,
+    };
+    let e = ctl
+        .get_evaluator()
+        .evaluator_id(&evaluator_id)
+        .send()
+        .await
+        .map_err(|e| crate::error::sdk_error_message(&e))?;
+    let mut d = AgentCoreEvaluatorDetail {
+        provider: e
+            .provider()
+            .map(|p| p.as_str().to_string())
+            .unwrap_or_default(),
+        ..Default::default()
+    };
+    match e.evaluator_config() {
+        Some(EvaluatorConfig::LlmAsAJudge(j)) => {
+            d.config_kind = "LLM-as-a-judge".to_string();
+            d.instructions = j.instructions().to_string();
+            match j.rating_scale() {
+                Some(RatingScale::Numerical(points)) => {
+                    d.scale_kind = "Numerical".to_string();
+                    d.scale = points
+                        .iter()
+                        .map(|p| {
+                            (
+                                p.label().to_string(),
+                                p.value().to_string(),
+                                p.definition().to_string(),
+                            )
+                        })
+                        .collect();
+                }
+                Some(RatingScale::Categorical(points)) => {
+                    d.scale_kind = "Categorical".to_string();
+                    d.scale = points
+                        .iter()
+                        .map(|p| (p.label().to_string(), String::new(), p.definition().to_string()))
+                        .collect();
+                }
+                _ => {}
+            }
+            if let Some(m) = j.model_config() {
+                d.model = evaluator_model_rows(m);
+            }
+        }
+        Some(EvaluatorConfig::CodeBased(CodeBasedEvaluatorConfig::LambdaConfig(l))) => {
+            d.config_kind = "Code (Lambda)".to_string();
+            d.lambda_arn = l.lambda_arn().to_string();
+            d.lambda_timeout = l.lambda_timeout_in_seconds();
+        }
+        Some(EvaluatorConfig::Derived(der)) => {
+            d.config_kind = "Derived".to_string();
+            d.base_evaluator_id = der.base_evaluator_id().to_string();
+            if let Some(m) = der.model_config() {
+                d.model = evaluator_model_rows(m);
+            }
+        }
+        Some(_) => d.config_kind = "(unrecognised)".to_string(),
+        None => {}
+    }
+    Ok(d)
+}
+
+/// `GetOnlineEvaluationConfig` — what gets sampled, from where, scored by
+/// which evaluators, and where the scores land.
+#[derive(Debug, Clone, Default)]
+pub struct AgentCoreOnlineEvalDetail {
+    pub execution_role_arn: String,
+    pub sampling_percentage: Option<f64>,
+    pub session_timeout_minutes: Option<i32>,
+    /// `(key, operator, value)` — every filter; all must match.
+    pub filters: Vec<(String, String, String)>,
+    pub log_groups: Vec<String>,
+    pub log_group_prefixes: Vec<String>,
+    pub service_names: Vec<String>,
+    pub evaluator_ids: Vec<String>,
+    pub insight_ids: Vec<String>,
+    pub clustering: Vec<String>,
+    pub output_log_group: String,
+    pub output_namespace: String,
+    pub output_destination: String,
+}
+
+pub async fn fetch_online_eval_detail(
+    ctl: CtlClient,
+    config_id: String,
+) -> std::result::Result<AgentCoreOnlineEvalDetail, String> {
+    use aws_sdk_bedrockagentcorecontrol::types::{DataSourceConfig, EvaluatorReference, FilterValue};
+    let c = ctl
+        .get_online_evaluation_config()
+        .online_evaluation_config_id(&config_id)
+        .send()
+        .await
+        .map_err(|e| crate::error::sdk_error_message(&e))?;
+    let mut d = AgentCoreOnlineEvalDetail {
+        execution_role_arn: c.evaluation_execution_role_arn().unwrap_or_default().to_string(),
+        ..Default::default()
+    };
+    if let Some(r) = c.rule() {
+        d.sampling_percentage = r.sampling_config().map(|s| s.sampling_percentage());
+        d.session_timeout_minutes = r.session_config().map(|s| s.session_timeout_minutes());
+        d.filters = r
+            .filters()
+            .iter()
+            .map(|f| {
+                let v = match f.value() {
+                    Some(FilterValue::StringValue(v)) => format!("\"{}\"", v),
+                    Some(FilterValue::DoubleValue(v)) => v.to_string(),
+                    Some(FilterValue::BooleanValue(v)) => v.to_string(),
+                    _ => String::new(),
+                };
+                (f.key().to_string(), f.operator().as_str().to_string(), v)
+            })
+            .collect();
+    }
+    if let Some(DataSourceConfig::CloudWatchLogs(l)) = c.data_source_config() {
+        d.log_groups = l.log_group_names().to_vec();
+        d.log_group_prefixes = l.log_group_name_prefixes().to_vec();
+        d.service_names = l.service_names().to_vec();
+    }
+    d.evaluator_ids = c
+        .evaluators()
+        .iter()
+        .filter_map(|e| match e {
+            EvaluatorReference::EvaluatorId(id) => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    d.insight_ids = c.insights().iter().map(|i| i.insight_id().to_string()).collect();
+    if let Some(cl) = c.clustering_config() {
+        d.clustering = cl.frequencies().iter().map(|f| f.as_str().to_string()).collect();
+    }
+    if let Some(cw) = c.output_config().and_then(|o| o.cloud_watch_config()) {
+        d.output_log_group = cw.log_group_name().to_string();
+        d.output_namespace = cw.metrics_namespace().unwrap_or_default().to_string();
+        d.output_destination = cw.result_destination().as_str().to_string();
+    }
+    Ok(d)
+}
+
+/// `GetDataset` — the fields the summary lacks.
+///
+/// **`downloadUrl` is deliberately not kept.** It is a presigned S3 URL: a
+/// bearer link to the whole dataset that anyone holding it can fetch until it
+/// expires. Showing it would put it one `y` away from a chat window, which is
+/// the line neboto draws around secret values. The Examples section previews
+/// the content through `ListDatasetExamples` instead.
+#[derive(Debug, Clone, Default)]
+pub struct AgentCoreDatasetDetail {
+    pub version: String,
+    pub kms_key_arn: String,
+    pub failure_reason: String,
+}
+
+pub async fn fetch_dataset_detail(
+    ctl: CtlClient,
+    dataset_id: String,
+) -> std::result::Result<AgentCoreDatasetDetail, String> {
+    let d = ctl
+        .get_dataset()
+        .dataset_id(&dataset_id)
+        .send()
+        .await
+        .map_err(|e| crate::error::sdk_error_message(&e))?;
+    Ok(AgentCoreDatasetDetail {
+        version: d.dataset_version().to_string(),
+        kms_key_arn: d.kms_key_arn().unwrap_or_default().to_string(),
+        failure_reason: d.failure_reason().unwrap_or_default().to_string(),
+    })
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentCoreDatasetVersion {
+    pub version: String,
+    pub example_count: i64,
+    pub created: String,
+}
+
+pub async fn fetch_dataset_versions(
+    ctl: CtlClient,
+    dataset_id: String,
+) -> std::result::Result<Vec<AgentCoreDatasetVersion>, String> {
+    let mut out = Vec::new();
+    let mut pager = ctl
+        .list_dataset_versions()
+        .dataset_id(&dataset_id)
+        .into_paginator()
+        .send();
+    while let Some(page) = pager.next().await {
+        let page = page.map_err(|e| crate::error::sdk_error_message(&e))?;
+        for v in page.versions() {
+            out.push(AgentCoreDatasetVersion {
+                version: v.dataset_version().to_string(),
+                example_count: v.example_count(),
+                created: fmt_dt(Some(v.created_at())),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// The first [`MAX_DATASET_EXAMPLES`] examples of the dataset's current
+/// version. Each is an untyped `Document` (its shape follows the dataset's
+/// schema type), pretty-printed rather than given a guessed schema.
+#[derive(Debug, Clone, Default)]
+pub struct AgentCoreDatasetExamples {
+    pub version: String,
+    pub examples: Vec<String>,
+    /// More examples exist past the cap.
+    pub truncated: bool,
+}
+
+pub async fn fetch_dataset_examples(
+    ctl: CtlClient,
+    dataset_id: String,
+) -> std::result::Result<AgentCoreDatasetExamples, String> {
+    let mut out = AgentCoreDatasetExamples::default();
+    let mut token: Option<String> = None;
+    loop {
+        let resp = ctl
+            .list_dataset_examples()
+            .dataset_id(&dataset_id)
+            .set_next_token(token.clone())
+            .send()
+            .await
+            .map_err(|e| crate::error::sdk_error_message(&e))?;
+        out.version = resp.dataset_version().to_string();
+        for ex in resp.examples() {
+            if out.examples.len() >= MAX_DATASET_EXAMPLES {
+                out.truncated = true;
+                return Ok(out);
+            }
+            out.examples.push(crate::aws::document::document_pretty(ex));
+        }
+        match crate::aws::pagination::next_page_token(resp.next_token(), &token) {
+            // A full cap with another page behind it is still truncated.
+            Some(_) if out.examples.len() >= MAX_DATASET_EXAMPLES => {
+                out.truncated = true;
+                break;
+            }
+            Some(t) => token = Some(t),
+            None => break,
+        }
+    }
+    Ok(out)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3272,6 +3727,70 @@ pub struct AgentCoreRegistryRecord {
     pub status: String,
     pub created: String,
     pub updated: String,
+    /// `false` past [`MAX_REGISTRY_RECORDS`] or when the record wouldn't
+    /// describe — the pane says "not described" rather than showing an empty
+    /// descriptor, which would read as a record with no content.
+    pub described: bool,
+    pub status_reason: String,
+    pub sync_type: String,
+    pub sync_url: String,
+    pub sync_credential_types: Vec<String>,
+    /// `(label, inline content)` for every populated descriptor part — a
+    /// record can carry an MCP server *and* its tools, or a skill's
+    /// `SKILL.md` *and* its definition; all of them, not the first.
+    pub descriptors: Vec<(String, String)>,
+}
+
+/// Each catalogued record needs a `GetRegistryRecord` for its descriptors;
+/// cap that second pass the way gateway targets are capped.
+pub const MAX_REGISTRY_RECORDS: usize = 25;
+
+/// Descriptor inline content is usually JSON (an MCP server/tools definition,
+/// an A2A card); pretty-print it when it parses so it reads like the other
+/// JSON in the pane, else keep the text as-is (`SKILL.md` is Markdown).
+fn pretty_if_json(s: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(s)
+        .ok()
+        .and_then(|v| serde_json::to_string_pretty(&v).ok())
+        .unwrap_or_else(|| s.to_string())
+}
+
+fn registry_descriptor_parts(
+    d: &aws_sdk_bedrockagentcorecontrol::types::Descriptors,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut push = |label: &str, version: Option<&str>, content: Option<&str>| {
+        if let Some(c) = content.filter(|c| !c.is_empty()) {
+            let label = match version.filter(|v| !v.is_empty()) {
+                Some(v) => format!("{} (v{})", label, v),
+                None => label.to_string(),
+            };
+            out.push((label, pretty_if_json(c)));
+        }
+    };
+    if let Some(m) = d.mcp() {
+        if let Some(sv) = m.server() {
+            push("MCP Server", sv.schema_version(), sv.inline_content());
+        }
+        if let Some(t) = m.tools() {
+            push("MCP Tools", t.protocol_version(), t.inline_content());
+        }
+    }
+    if let Some(card) = d.a2_a().and_then(|a| a.agent_card()) {
+        push("A2A Agent Card", card.schema_version(), card.inline_content());
+    }
+    if let Some(c) = d.custom() {
+        push("Custom", None, c.inline_content());
+    }
+    if let Some(sk) = d.agent_skills() {
+        if let Some(md) = sk.skill_md() {
+            push("SKILL.md", None, md.inline_content());
+        }
+        if let Some(def) = sk.skill_definition() {
+            push("Skill Definition", def.schema_version(), def.inline_content());
+        }
+    }
+    out
 }
 
 pub async fn fetch_registry_records(
@@ -3297,7 +3816,43 @@ pub async fn fetch_registry_records(
                 status: r.status().as_str().to_string(),
                 created: fmt_dt(Some(r.created_at())),
                 updated: fmt_dt(Some(r.updated_at())),
+                described: false,
+                status_reason: String::new(),
+                sync_type: String::new(),
+                sync_url: String::new(),
+                sync_credential_types: Vec::new(),
+                descriptors: Vec::new(),
             });
+        }
+    }
+
+    for r in out.iter_mut().take(MAX_REGISTRY_RECORDS) {
+        let Ok(full) = ctl
+            .get_registry_record()
+            .registry_id(&registry_id)
+            .record_id(&r.record_id)
+            .send()
+            .await
+        else {
+            // One record that won't describe shouldn't blank the section.
+            continue;
+        };
+        r.described = true;
+        r.status_reason = full.status_reason().unwrap_or_default().to_string();
+        r.sync_type = full
+            .synchronization_type()
+            .map(|t| t.as_str().to_string())
+            .unwrap_or_default();
+        if let Some(u) = full.synchronization_configuration().and_then(|c| c.from_url()) {
+            r.sync_url = u.url().to_string();
+            r.sync_credential_types = u
+                .credential_provider_configurations()
+                .iter()
+                .map(|c| c.credential_provider_type().as_str().to_string())
+                .collect();
+        }
+        if let Some(d) = full.descriptors() {
+            r.descriptors = registry_descriptor_parts(d);
         }
     }
     Ok(out)
@@ -4062,13 +4617,7 @@ pub async fn fetch_bundle_detail(
         d.created_by = m.created_by().map(|c| c.name().to_string()).unwrap_or_default();
         d.parent_versions = m.parent_version_ids().to_vec();
     }
-    let mut comps: Vec<(String, String)> = b
-        .components()
-        .iter()
-        .map(|(k, v)| (k.clone(), crate::aws::document::document_pretty(v.configuration())))
-        .collect();
-    comps.sort_by(|a, b| a.0.cmp(&b.0));
-    d.components = comps;
+    d.components = bundle_components(b.components());
     Ok(d)
 }
 
@@ -4080,13 +4629,33 @@ pub struct AgentCoreConfigBundleVersion {
     pub commit_message: String,
     pub created_by: String,
     pub parent_versions: Vec<String>,
+    /// This version's components (name → pretty JSON, sorted), from
+    /// `GetConfigurationBundleVersion`. `None` past [`MAX_BUNDLE_VERSIONS`] or
+    /// when the version wouldn't describe — distinct from `Some(empty)`.
+    pub components: Option<Vec<(String, String)>>,
+}
+
+/// Each version's components need a `GetConfigurationBundleVersion`; history
+/// is append-only and the recent end is the one you compare against live, so
+/// only the newest are deepened.
+pub const MAX_BUNDLE_VERSIONS: usize = 10;
+
+fn bundle_components(
+    m: &HashMap<String, aws_sdk_bedrockagentcorecontrol::types::ComponentConfiguration>,
+) -> Vec<(String, String)> {
+    let mut comps: Vec<(String, String)> = m
+        .iter()
+        .map(|(k, v)| (k.clone(), crate::aws::document::document_pretty(v.configuration())))
+        .collect();
+    comps.sort_by(|a, b| a.0.cmp(&b.0));
+    comps
 }
 
 pub async fn fetch_bundle_versions(
     ctl: CtlClient,
     bundle_id: String,
 ) -> std::result::Result<Vec<AgentCoreConfigBundleVersion>, String> {
-    let mut out = Vec::new();
+    let mut out: Vec<(i64, AgentCoreConfigBundleVersion)> = Vec::new();
     let mut pager = ctl
         .list_configuration_bundle_versions()
         .bundle_id(&bundle_id)
@@ -4106,14 +4675,35 @@ pub async fn fetch_bundle_versions(
                 ),
                 None => (String::new(), String::new(), String::new(), Vec::new()),
             };
-            out.push(AgentCoreConfigBundleVersion {
-                version_id: v.version_id().to_string(),
-                created: fmt_dt(Some(v.version_created_at())),
-                branch_name,
-                commit_message,
-                created_by,
-                parent_versions,
-            });
+            out.push((
+                v.version_created_at().secs(),
+                AgentCoreConfigBundleVersion {
+                    version_id: v.version_id().to_string(),
+                    created: fmt_dt(Some(v.version_created_at())),
+                    branch_name,
+                    commit_message,
+                    created_by,
+                    parent_versions,
+                    components: None,
+                },
+            ));
+        }
+    }
+    // Newest first, so the cap below deepens the versions you'd compare.
+    out.sort_by_key(|v| std::cmp::Reverse(v.0));
+    let mut out: Vec<AgentCoreConfigBundleVersion> = out.into_iter().map(|(_, v)| v).collect();
+
+    for v in out.iter_mut().take(MAX_BUNDLE_VERSIONS) {
+        // A version that won't describe stays `None` rather than blanking
+        // the section.
+        if let Ok(full) = ctl
+            .get_configuration_bundle_version()
+            .bundle_id(&bundle_id)
+            .version_id(&v.version_id)
+            .send()
+            .await
+        {
+            v.components = Some(bundle_components(full.components()));
         }
     }
     Ok(out)
@@ -5332,4 +5922,121 @@ pub async fn fetch_agentcore_tags(
     // The API returns a map; sort so the pane is stable across refetches.
     out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+    use aws_sdk_bedrockagentcorecontrol::types as t;
+
+    #[test]
+    fn rule_conditions_keep_every_entry() {
+        // Two conditions, the second with two principals: all of them must
+        // survive, or the rule reads broader than it is.
+        let cs = vec![
+            t::Condition::MatchPaths(
+                t::MatchPaths::builder()
+                    .any_of("/a")
+                    .any_of("/b")
+                    .build()
+                    .unwrap(),
+            ),
+            t::Condition::MatchPrincipals(
+                t::MatchPrincipals::builder()
+                    .any_of(t::MatchPrincipalEntry::IamPrincipal(
+                        t::IamPrincipal::builder().arn("arn:aws:iam::1:role/x").build().unwrap(),
+                    ))
+                    .any_of(t::MatchPrincipalEntry::IamPrincipal(
+                        t::IamPrincipal::builder().arn("arn:aws:iam::1:role/y").build().unwrap(),
+                    ))
+                    .build()
+                    .unwrap(),
+            ),
+        ];
+        let rows = gateway_rule_conditions(&cs);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], ("Path is any of".to_string(), "/a, /b".to_string()));
+        assert_eq!(rows[2].1, "arn:aws:iam::1:role/y");
+    }
+
+    #[test]
+    fn weighted_actions_are_one_row_per_leg() {
+        let acts = vec![t::Action::RouteToTarget(t::RouteToTargetAction::WeightedRoute(
+            t::WeightedRoute::builder()
+                .traffic_split(
+                    t::TargetTrafficSplitEntry::builder()
+                        .name("blue")
+                        .weight(90)
+                        .target_name("tgt-blue")
+                        .build()
+                        .unwrap(),
+                )
+                .traffic_split(
+                    t::TargetTrafficSplitEntry::builder()
+                        .name("green")
+                        .weight(10)
+                        .target_name("tgt-green")
+                        .build()
+                        .unwrap(),
+                )
+                .build()
+                .unwrap(),
+        ))];
+        let rows = gateway_rule_actions(&acts);
+        assert_eq!(
+            rows,
+            vec![
+                ("Route Split 90%".to_string(), "blue → tgt-blue".to_string()),
+                ("Route Split 10%".to_string(), "green → tgt-green".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn registry_descriptors_take_every_part_and_pretty_print_json() {
+        let d = t::Descriptors::builder()
+            .mcp(
+                t::McpDescriptor::builder()
+                    .server(
+                        t::ServerDefinition::builder()
+                            .schema_version("1")
+                            .inline_content(r#"{"name":"s"}"#)
+                            .build(),
+                    )
+                    .tools(t::ToolsDefinition::builder().inline_content(r#"{"tools":[]}"#).build())
+                    .build(),
+            )
+            .agent_skills(
+                t::AgentSkillsDescriptor::builder()
+                    .skill_md(t::SkillMdDefinition::builder().inline_content("# Skill").build())
+                    .build(),
+            )
+            .build();
+        let parts = registry_descriptor_parts(&d);
+        let labels: Vec<&str> = parts.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(labels, vec!["MCP Server (v1)", "MCP Tools", "SKILL.md"]);
+        assert!(parts[0].1.contains("\n"), "JSON should be pretty-printed");
+        // Markdown is not JSON and stays as written.
+        assert_eq!(parts[2].1, "# Skill");
+    }
+
+    #[test]
+    fn evaluator_model_rows_skip_unset_parameters() {
+        let m = t::EvaluatorModelConfig::BedrockEvaluatorModelConfig(
+            t::BedrockEvaluatorModelConfig::builder()
+                .model_id("anthropic.claude")
+                .inference_config(t::InferenceConfiguration::builder().temperature(0.0).build())
+                .build()
+                .unwrap(),
+        );
+        let rows = evaluator_model_rows(&m);
+        assert_eq!(
+            rows,
+            vec![
+                ("Provider".to_string(), "Bedrock".to_string()),
+                ("Model".to_string(), "anthropic.claude".to_string()),
+                ("Temperature".to_string(), "0".to_string()),
+            ]
+        );
+    }
 }
