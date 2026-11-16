@@ -3379,7 +3379,7 @@ pub fn resource_jump_target(
     //    etc.) → that service's list, when we have a browsable view for it.
     for field in [value, key] {
         if let Some(target) = arn_jump_target(field) {
-            return Some(target);
+            return Some(stay_in_rds_family(target, current));
         }
     }
 
@@ -3466,6 +3466,26 @@ pub fn arn_jump_region(value: &str, target: crate::aws::service::ServiceType) ->
         return None;
     }
     crate::aws::region::Region::from_str(parts[3])
+}
+
+/// DocumentDB and Neptune resources carry `arn:aws:rds:` ARNs, which the ARN
+/// classifier sends to `@rds`. Followed from inside `@docdb` / `@neptune`,
+/// an instance or cluster ARN stays in that service instead: its rows only
+/// ever name their own engine.
+fn stay_in_rds_family(
+    target: crate::app::JumpTarget,
+    current: crate::aws::service::ServiceType,
+) -> crate::app::JumpTarget {
+    use crate::app::{DocDbView, JumpView, NeptuneView, RdsView};
+    use crate::aws::service::ServiceType;
+    let view = match (current, &target.view) {
+        (ServiceType::DocumentDB, JumpView::Rds(RdsView::Clusters)) => JumpView::DocDb(DocDbView::Clusters),
+        (ServiceType::DocumentDB, JumpView::Rds(RdsView::Instances)) => JumpView::DocDb(DocDbView::Instances),
+        (ServiceType::Neptune, JumpView::Rds(RdsView::Clusters)) => JumpView::Neptune(NeptuneView::Clusters),
+        (ServiceType::Neptune, JumpView::Rds(RdsView::Instances)) => JumpView::Neptune(NeptuneView::Instances),
+        _ => return target,
+    };
+    crate::app::JumpTarget { service: current, view, id: target.id }
 }
 
 fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {

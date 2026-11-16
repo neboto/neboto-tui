@@ -58,6 +58,7 @@ pub mod changes_tabs;
 pub mod beanstalk_tabs;
 pub mod datasync_tabs;
 pub mod dms_tabs;
+pub mod docdb_tabs;
 pub mod quota_service_selector;
 pub mod command_picker;
 pub mod cost_key_picker;

@@ -368,7 +368,7 @@ and `neboto services` prints every prefix.
 | **Compute** | EC2 `@ec2` · Lambda `@lambda` · Auto Scaling `@asg` · Batch `@batch` · Elastic Beanstalk `@eb` · WorkSpaces `@workspaces` |
 | **Containers** | ECS `@ecs` · EKS `@eks` · ECR `@ecr` |
 | **Storage** | S3 `@s3` · S3 Files `@s3files` · S3 Tables `@s3tables` · EFS `@efs` · FSx `@fsx` · Backup `@backup` · Transfer Family `@transfer` · DataSync `@datasync` |
-| **Database** | RDS `@rds` · DynamoDB `@ddb` · ElastiCache `@elasticache` · DMS `@dms` |
+| **Database** | RDS `@rds` · DynamoDB `@ddb` · ElastiCache `@elasticache` · DMS `@dms` · DocumentDB `@docdb` · Neptune `@neptune` |
 | **Networking & Content Delivery** | VPC `@vpc` · ELB `@elb` · Route 53 `@r53` · Route 53 Resolver `@resolver` · Route 53 Profiles `@profiles` · CloudFront `@cloudfront` · Transit Gateway `@tgw` · Direct Connect `@dx` · Global Accelerator `@ga` · API Gateway `@apigw` |
 | **Security & Identity** | IAM `@iam` · Identity Center `@idc` · Cognito `@cognito` · KMS `@kms` · Secrets Manager `@secrets` · ACM `@acm` · WAF `@waf` · Network Firewall `@anfw` · GuardDuty `@gd` · Security Hub `@sh` · Inspector `@inspector` · Firewall Manager `@fms` · Audit `@audit` (findings from loaded data) |
 | **Analytics** | Athena `@athena` · Glue `@glue` · Kinesis `@kinesis` · MSK `@msk` · Redshift `@redshift` · OpenSearch `@opensearch` |

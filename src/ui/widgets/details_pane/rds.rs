@@ -6,7 +6,7 @@ pub(super) fn render_rds_snapshot_split(app: &App, snap: &RdsSnapshot, area: Rec
         app,
         area,
         frame,
-        "RDS Snapshot",
+        snap.resource_type(),
         &snap.id,
         &subtitle,
         &descriptor_tabs(app, &crate::aws::services::rds::RDS_SNAPSHOT_SECTIONS),
@@ -135,7 +135,7 @@ pub(super) fn render_rds_param_group_split(
         app,
         area,
         frame,
-        "RDS Parameter Group",
+        pg.resource_type(),
         &pg.name,
         &subtitle,
         &descriptor_tabs(app, &crate::aws::services::rds::RDS_PARAM_GROUP_SECTIONS),
@@ -483,7 +483,7 @@ pub(super) fn render_rds_instance_split(app: &App, db: &RdsInstance, area: Rect,
     };
     let footer = detail_footer(app, focused, 9, extras);
 
-    let mut block = theme::pane_block("RDS Instance", focused);
+    let mut block = theme::pane_block(db.resource_type(), focused);
     block = block.title_bottom(
         Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
             .right_aligned(),
@@ -1133,7 +1133,7 @@ pub(super) fn render_rds_cluster_split(app: &App, c: &RdsCluster, area: Rect, fr
     let focused = app.details_focused;
     let footer = detail_footer(app, focused, 7, "");
 
-    let mut block = theme::pane_block("RDS Cluster", focused);
+    let mut block = theme::pane_block(c.resource_type(), focused);
     block = block.title_bottom(
         Line::from(Span::styled(footer, Style::default().fg(theme::text_dim())))
             .right_aligned(),

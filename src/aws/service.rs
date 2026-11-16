@@ -76,6 +76,8 @@ pub enum ServiceType {
     XRay,
     Changes,
     Dms,
+    DocumentDB,
+    Neptune,
     DataSync,
     Beanstalk,
     AppSync,
@@ -162,6 +164,8 @@ impl ServiceType {
             ServiceType::XRay,
             ServiceType::Changes,
             ServiceType::Dms,
+            ServiceType::DocumentDB,
+            ServiceType::Neptune,
             ServiceType::DataSync,
             ServiceType::Beanstalk,
             ServiceType::Budgets,
@@ -241,7 +245,9 @@ impl ServiceType {
             ServiceType::RDS
             | ServiceType::DynamoDb
             | ServiceType::ElastiCache
-            | ServiceType::Dms => "Database",
+            | ServiceType::Dms
+            | ServiceType::DocumentDB
+            | ServiceType::Neptune => "Database",
             ServiceType::VPC
             | ServiceType::Elb
             | ServiceType::Route53
@@ -364,6 +370,8 @@ impl ServiceType {
             ServiceType::Ses => "SES",
             ServiceType::Msk => "MSK",
             ServiceType::Dms => "DMS",
+            ServiceType::DocumentDB => "DocumentDB",
+            ServiceType::Neptune => "Neptune",
             ServiceType::DataSync => "DataSync",
             ServiceType::Beanstalk => "Elastic Beanstalk",
             ServiceType::AppSync => "AppSync",
@@ -447,6 +455,8 @@ impl ServiceType {
             ServiceType::Ses => "SES",
             ServiceType::Msk => "MSK",
             ServiceType::Dms => "DMS",
+            ServiceType::DocumentDB => "DocumentDB",
+            ServiceType::Neptune => "Neptune",
             ServiceType::DataSync => "DataSync",
             ServiceType::Beanstalk => "EB",
             ServiceType::AppSync => "GQL",
@@ -534,6 +544,8 @@ impl ServiceType {
             ServiceType::Redshift => "Clusters, Serverless Workgroups, Snapshots",
             ServiceType::Batch => "Job Queues, Compute Environments, Jobs, Job Definitions",
             ServiceType::Dms => "Replication Tasks, Instances, Endpoints, Serverless Replications",
+            ServiceType::DocumentDB => "Document Database Clusters, Instances, Snapshots",
+            ServiceType::Neptune => "Graph Database Clusters, Instances, Snapshots",
             ServiceType::DataSync => "Transfer Tasks, Locations, Agents",
             ServiceType::Beanstalk => "Environments (Standard + Cluster Mode), Applications, Versions",
             ServiceType::AppSync => "GraphQL APIs, Data Sources, Resolvers, Functions",
@@ -649,6 +661,8 @@ impl ServiceType {
             "ses" | "sesv2" | "email" | "identities" | "suppression" => Some(ServiceType::Ses),
             "msk" | "kafka" | "managedkafka" => Some(ServiceType::Msk),
             "dms" | "migration" | "databasemigration" | "replication" => Some(ServiceType::Dms),
+            "docdb" | "documentdb" => Some(ServiceType::DocumentDB),
+            "neptune" => Some(ServiceType::Neptune),
             "datasync" | "sync" => Some(ServiceType::DataSync),
             "fms" | "firewallmanager" | "fwmanager" => Some(ServiceType::Fms),
             "redshift" | "rs" | "warehouse" | "datawarehouse" | "dwh" => {
@@ -733,6 +747,8 @@ impl ServiceType {
             ServiceType::Ses => "@ses",
             ServiceType::Msk => "@msk",
             ServiceType::Dms => "@dms",
+            ServiceType::DocumentDB => "@docdb",
+            ServiceType::Neptune => "@neptune",
             ServiceType::DataSync => "@datasync",
             ServiceType::Beanstalk => "@eb",
             ServiceType::AppSync => "@appsync",

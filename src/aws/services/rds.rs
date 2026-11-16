@@ -10,14 +10,146 @@ use std::any::Any;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
+/// Which console "product" a row belongs to. DocumentDB and Neptune are
+/// served by the RDS API (same operations, same `rds:` IAM actions, same
+/// `arn:aws:rds:` ARNs) and differ only by `Engine`, so `@docdb` and
+/// `@neptune` are this service listed with an engine filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RdsFamily {
+    Rds,
+    DocDb,
+    Neptune,
+}
+
+impl RdsFamily {
+    /// The family an engine name belongs to. Everything that isn't
+    /// DocumentDB or Neptune is RDS proper (Aurora included).
+    pub fn from_engine(engine: &str) -> Self {
+        match engine {
+            "docdb" => RdsFamily::DocDb,
+            "neptune" => RdsFamily::Neptune,
+            _ => RdsFamily::Rds,
+        }
+    }
+
+    /// From a parameter group family (`docdb5.0`, `neptune1.3`, `postgres16`).
+    pub fn from_param_family(family: &str) -> Self {
+        if family.starts_with("docdb") {
+            RdsFamily::DocDb
+        } else if family.starts_with("neptune") {
+            RdsFamily::Neptune
+        } else {
+            RdsFamily::Rds
+        }
+    }
+
+    pub fn service_type(self) -> ServiceType {
+        match self {
+            RdsFamily::Rds => ServiceType::RDS,
+            RdsFamily::DocDb => ServiceType::DocumentDB,
+            RdsFamily::Neptune => ServiceType::Neptune,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RdsFamily::Rds => "RDS",
+            RdsFamily::DocDb => "DocumentDB",
+            RdsFamily::Neptune => "Neptune",
+        }
+    }
+
+    /// The AWS CLI service a copied command uses, and the segment in the
+    /// CloudWatch log group (`/aws/docdb/<cluster>/audit`).
+    pub fn cli(self) -> &'static str {
+        match self {
+            RdsFamily::Rds => "rds",
+            RdsFamily::DocDb => "docdb",
+            RdsFamily::Neptune => "neptune",
+        }
+    }
+
+    pub fn metric_namespace(self) -> &'static str {
+        match self {
+            RdsFamily::Rds => "AWS/RDS",
+            RdsFamily::DocDb => "AWS/DocDB",
+            RdsFamily::Neptune => "AWS/Neptune",
+        }
+    }
+
+    /// The `engine` filter value for the list calls. `None` for RDS: `@rds`
+    /// keeps listing every engine, as the RDS console does.
+    fn engine_filter(self) -> Option<&'static str> {
+        match self {
+            RdsFamily::Rds => None,
+            RdsFamily::DocDb => Some("docdb"),
+            RdsFamily::Neptune => Some("neptune"),
+        }
+    }
+
+    /// Whether a row of this engine belongs in this family's list. RDS
+    /// takes all of them.
+    fn lists(self, row: RdsFamily) -> bool {
+        self == RdsFamily::Rds || self == row
+    }
+
+    pub fn instance_type(self) -> &'static str {
+        match self {
+            RdsFamily::Rds => "RDS Instance",
+            RdsFamily::DocDb => "DocumentDB Instance",
+            RdsFamily::Neptune => "Neptune Instance",
+        }
+    }
+
+    pub fn cluster_type(self) -> &'static str {
+        match self {
+            RdsFamily::Rds => "RDS Cluster",
+            RdsFamily::DocDb => "DocumentDB Cluster",
+            RdsFamily::Neptune => "Neptune Cluster",
+        }
+    }
+
+    pub fn snapshot_type(self) -> &'static str {
+        match self {
+            RdsFamily::Rds => "RDS Snapshot",
+            RdsFamily::DocDb => "DocumentDB Snapshot",
+            RdsFamily::Neptune => "Neptune Snapshot",
+        }
+    }
+
+    pub fn param_group_type(self) -> &'static str {
+        match self {
+            RdsFamily::Rds => "RDS Parameter Group",
+            RdsFamily::DocDb => "DocumentDB Parameter Group",
+            RdsFamily::Neptune => "Neptune Parameter Group",
+        }
+    }
+
+    pub fn subnet_group_type(self) -> &'static str {
+        match self {
+            RdsFamily::Rds => "RDS Subnet Group",
+            RdsFamily::DocDb => "DocumentDB Subnet Group",
+            RdsFamily::Neptune => "Neptune Subnet Group",
+        }
+    }
+}
+
 pub struct RdsService {
     client: RdsClient,
+    family: RdsFamily,
 }
 
 impl RdsService {
     pub fn new(aws_clients: &AwsClients) -> Self {
+        Self::for_family(aws_clients, RdsFamily::Rds)
+    }
+
+    /// `@docdb` / `@neptune`: the same client and calls, filtered to one
+    /// engine.
+    pub fn for_family(aws_clients: &AwsClients, family: RdsFamily) -> Self {
         Self {
             client: aws_clients.rds_client(),
+            family,
         }
     }
 }
@@ -25,16 +157,16 @@ impl RdsService {
 #[async_trait]
 impl AwsService for RdsService {
     fn service_type(&self) -> ServiceType {
-        ServiceType::RDS
+        self.family.service_type()
     }
 
     fn name(&self) -> &str {
-        "RDS"
+        self.family.label()
     }
 
     async fn list_resources(&self) -> Result<Vec<Box<dyn Resource>>> {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        self.list_resources_streaming(tx, ServiceType::RDS).await?;
+        self.list_resources_streaming(tx, self.family.service_type()).await?;
         Ok(vec![])
     }
 
@@ -44,11 +176,27 @@ impl AwsService for RdsService {
         service_type: ServiceType,
     ) -> Result<()> {
         let mut total = 0usize;
+        let fam = self.family;
+        let rds_only = fam == RdsFamily::Rds;
+        // Server-side for the four calls that take an `engine` filter; every
+        // batch is also checked client-side (`fam.lists`), which is what
+        // holds when the filter is ignored (emulators, demo fixtures).
+        let engine_filter = fam.engine_filter().map(|e| {
+            vec![aws_sdk_rds::types::Filter::builder()
+                .name("engine")
+                .values(e)
+                .build()]
+        });
 
         // Blue/green deployments, joined onto their source and target
         // instances/clusters below. One account-wide call; a failure warns and
         // the rows just carry no deployment.
-        let mut blue_green = match fetch_blue_green_map(&self.client).await {
+        let blue_green_map = if rds_only {
+            fetch_blue_green_map(&self.client).await
+        } else {
+            Ok(HashMap::new())
+        };
+        let mut blue_green = match blue_green_map {
             Ok(m) => m,
             Err(e) => {
                 let _ = event_tx.send(Event::ResourceLoadWarning {
@@ -59,15 +207,21 @@ impl AwsService for RdsService {
             }
         };
 
-        let mut inst_paginator = self.client.describe_db_instances().into_paginator().send();
+        let mut inst_paginator = self
+            .client
+            .describe_db_instances()
+            .set_filters(engine_filter.clone())
+            .into_paginator()
+            .send();
         while let Some(result) = inst_paginator.next().await {
             match result {
                 Ok(page) => {
                     let batch: Vec<Box<dyn Resource>> = page
                         .db_instances()
                         .iter()
+                        .filter(|db| fam.lists(RdsFamily::from_engine(db.engine().unwrap_or(""))))
                         .map(|db| {
-                            let mut inst = RdsInstance::from_sdk(db);
+                            let mut inst = RdsInstance::from_sdk(db).listed(fam);
                             inst.blue_green = blue_green.remove(&inst.arn);
                             Box::new(inst) as Box<dyn Resource>
                         })
@@ -90,22 +244,28 @@ impl AwsService for RdsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list RDS instances: {}", crate::error::sdk_error_message(&e)),
+                        error: format!("Failed to list {} instances: {}", fam.label(), crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }
             }
         }
 
-        let mut cluster_paginator = self.client.describe_db_clusters().into_paginator().send();
+        let mut cluster_paginator = self
+            .client
+            .describe_db_clusters()
+            .set_filters(engine_filter.clone())
+            .into_paginator()
+            .send();
         while let Some(result) = cluster_paginator.next().await {
             match result {
                 Ok(page) => {
                     let batch: Vec<Box<dyn Resource>> = page
                         .db_clusters()
                         .iter()
+                        .filter(|c| fam.lists(RdsFamily::from_engine(c.engine().unwrap_or(""))))
                         .map(|c| {
-                            let mut cluster = RdsCluster::from_sdk(c);
+                            let mut cluster = RdsCluster::from_sdk(c).listed(fam);
                             cluster.blue_green = blue_green.remove(&cluster.arn);
                             Box::new(cluster) as Box<dyn Resource>
                         })
@@ -128,7 +288,7 @@ impl AwsService for RdsService {
                 Err(e) => {
                     let _ = event_tx.send(Event::ResourceLoadError {
                         service: service_type,
-                        error: format!("Failed to list RDS clusters: {}", crate::error::sdk_error_message(&e)),
+                        error: format!("Failed to list {} clusters: {}", fam.label(), crate::error::sdk_error_message(&e)),
                     });
                     return Ok(());
                 }
@@ -138,48 +298,55 @@ impl AwsService for RdsService {
         // Snapshots (instance + cluster). Self-owned only — the APIs default to
         // your own snapshots. Error-tolerant: a snapshot failure never aborts the
         // (already-sent) instances/clusters.
-        let mut snap_paginator = self.client.describe_db_snapshots().into_paginator().send();
-        while let Some(result) = snap_paginator.next().await {
-            match result {
-                Ok(page) => {
-                    let batch: Vec<Box<dyn Resource>> = page
-                        .db_snapshots()
-                        .iter()
-                        .map(|s| Box::new(RdsSnapshot::from_db(s)) as Box<dyn Resource>)
-                        .collect();
-                    if batch.is_empty() {
-                        continue;
+        if rds_only {
+            let mut snap_paginator = self.client.describe_db_snapshots().into_paginator().send();
+            while let Some(result) = snap_paginator.next().await {
+                match result {
+                    Ok(page) => {
+                        let batch: Vec<Box<dyn Resource>> = page
+                            .db_snapshots()
+                            .iter()
+                            .map(|s| Box::new(RdsSnapshot::from_db(s)) as Box<dyn Resource>)
+                            .collect();
+                        if batch.is_empty() {
+                            continue;
+                        }
+                        total += batch.len();
+                        let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                            service: service_type,
+                            resources: batch,
+                            progress: LoadProgress {
+                                loaded_count: total,
+                                total_count: None,
+                                status_message: Some("Loading snapshots…".to_string()),
+                            },
+                        });
                     }
-                    total += batch.len();
-                    let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
-                        service: service_type,
-                        resources: batch,
-                        progress: LoadProgress {
-                            loaded_count: total,
-                            total_count: None,
-                            status_message: Some("Loading snapshots…".to_string()),
-                        },
-                    });
-                }
-                Err(e) => {
-                    let _ = event_tx.send(Event::ResourceLoadWarning {
-                        service: service_type,
-                        warning: format!("DB snapshots: {}", crate::error::sdk_error_message(&e)),
-                    });
-                    break;
+                    Err(e) => {
+                        let _ = event_tx.send(Event::ResourceLoadWarning {
+                            service: service_type,
+                            warning: format!("DB snapshots: {}", crate::error::sdk_error_message(&e)),
+                        });
+                        break;
+                    }
                 }
             }
         }
 
-        let mut csnap_paginator =
-            self.client.describe_db_cluster_snapshots().into_paginator().send();
+        let mut csnap_paginator = self
+            .client
+            .describe_db_cluster_snapshots()
+            .set_filters(engine_filter.clone())
+            .into_paginator()
+            .send();
         while let Some(result) = csnap_paginator.next().await {
             match result {
                 Ok(page) => {
                     let batch: Vec<Box<dyn Resource>> = page
                         .db_cluster_snapshots()
                         .iter()
-                        .map(|s| Box::new(RdsSnapshot::from_cluster(s)) as Box<dyn Resource>)
+                        .filter(|s| fam.lists(RdsFamily::from_engine(s.engine().unwrap_or(""))))
+                        .map(|s| Box::new(RdsSnapshot::from_cluster(s).listed(fam)) as Box<dyn Resource>)
                         .collect();
                     if batch.is_empty() {
                         continue;
@@ -214,7 +381,10 @@ impl AwsService for RdsService {
                     let batch: Vec<Box<dyn Resource>> = page
                         .db_parameter_groups()
                         .iter()
-                        .map(|g| Box::new(RdsParamGroup::from_sdk(g)) as Box<dyn Resource>)
+                        .filter(|g| {
+                            fam.lists(RdsFamily::from_param_family(g.db_parameter_group_family().unwrap_or("")))
+                        })
+                        .map(|g| Box::new(RdsParamGroup::from_sdk(g).listed(fam)) as Box<dyn Resource>)
                         .collect();
                     if batch.is_empty() {
                         continue;
@@ -251,7 +421,10 @@ impl AwsService for RdsService {
                     let batch: Vec<Box<dyn Resource>> = page
                         .db_cluster_parameter_groups()
                         .iter()
-                        .map(|g| Box::new(RdsParamGroup::from_cluster_sdk(g)) as Box<dyn Resource>)
+                        .filter(|g| {
+                            fam.lists(RdsFamily::from_param_family(g.db_parameter_group_family().unwrap_or("")))
+                        })
+                        .map(|g| Box::new(RdsParamGroup::from_cluster_sdk(g).listed(fam)) as Box<dyn Resource>)
                         .collect();
                     if batch.is_empty() {
                         continue;
@@ -277,35 +450,37 @@ impl AwsService for RdsService {
             }
         }
 
-        let mut og_paginator = self.client.describe_option_groups().into_paginator().send();
-        while let Some(result) = og_paginator.next().await {
-            match result {
-                Ok(page) => {
-                    let batch: Vec<Box<dyn Resource>> = page
-                        .option_groups_list()
-                        .iter()
-                        .map(|g| Box::new(RdsOptionGroup::from_sdk(g)) as Box<dyn Resource>)
-                        .collect();
-                    if batch.is_empty() {
-                        continue;
+        if rds_only {
+            let mut og_paginator = self.client.describe_option_groups().into_paginator().send();
+            while let Some(result) = og_paginator.next().await {
+                match result {
+                    Ok(page) => {
+                        let batch: Vec<Box<dyn Resource>> = page
+                            .option_groups_list()
+                            .iter()
+                            .map(|g| Box::new(RdsOptionGroup::from_sdk(g)) as Box<dyn Resource>)
+                            .collect();
+                        if batch.is_empty() {
+                            continue;
+                        }
+                        total += batch.len();
+                        let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                            service: service_type,
+                            resources: batch,
+                            progress: LoadProgress {
+                                loaded_count: total,
+                                total_count: None,
+                                status_message: Some("Loading option groups…".to_string()),
+                            },
+                        });
                     }
-                    total += batch.len();
-                    let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
-                        service: service_type,
-                        resources: batch,
-                        progress: LoadProgress {
-                            loaded_count: total,
-                            total_count: None,
-                            status_message: Some("Loading option groups…".to_string()),
-                        },
-                    });
-                }
-                Err(e) => {
-                    let _ = event_tx.send(Event::ResourceLoadWarning {
-                        service: service_type,
-                        warning: format!("Option groups: {}", crate::error::sdk_error_message(&e)),
-                    });
-                    break;
+                    Err(e) => {
+                        let _ = event_tx.send(Event::ResourceLoadWarning {
+                            service: service_type,
+                            warning: format!("Option groups: {}", crate::error::sdk_error_message(&e)),
+                        });
+                        break;
+                    }
                 }
             }
         }
@@ -317,7 +492,7 @@ impl AwsService for RdsService {
                     let batch: Vec<Box<dyn Resource>> = page
                         .db_subnet_groups()
                         .iter()
-                        .map(|g| Box::new(RdsSubnetGroup::from_sdk(g)) as Box<dyn Resource>)
+                        .map(|g| Box::new(RdsSubnetGroup::from_sdk(g).listed(fam)) as Box<dyn Resource>)
                         .collect();
                     if batch.is_empty() {
                         continue;
@@ -345,35 +520,37 @@ impl AwsService for RdsService {
 
         // RDS Proxy — best-effort like the groups above; accounts without
         // proxies just list none.
-        let mut proxy_paginator = self.client.describe_db_proxies().into_paginator().send();
-        while let Some(result) = proxy_paginator.next().await {
-            match result {
-                Ok(page) => {
-                    let batch: Vec<Box<dyn Resource>> = page
-                        .db_proxies()
-                        .iter()
-                        .map(|p| Box::new(RdsProxy::from_sdk(p)) as Box<dyn Resource>)
-                        .collect();
-                    if batch.is_empty() {
-                        continue;
+        if rds_only {
+            let mut proxy_paginator = self.client.describe_db_proxies().into_paginator().send();
+            while let Some(result) = proxy_paginator.next().await {
+                match result {
+                    Ok(page) => {
+                        let batch: Vec<Box<dyn Resource>> = page
+                            .db_proxies()
+                            .iter()
+                            .map(|p| Box::new(RdsProxy::from_sdk(p)) as Box<dyn Resource>)
+                            .collect();
+                        if batch.is_empty() {
+                            continue;
+                        }
+                        total += batch.len();
+                        let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
+                            service: service_type,
+                            resources: batch,
+                            progress: LoadProgress {
+                                loaded_count: total,
+                                total_count: None,
+                                status_message: Some("Loading proxies…".to_string()),
+                            },
+                        });
                     }
-                    total += batch.len();
-                    let _ = event_tx.send(Event::ResourcesPartiallyLoaded {
-                        service: service_type,
-                        resources: batch,
-                        progress: LoadProgress {
-                            loaded_count: total,
-                            total_count: None,
-                            status_message: Some("Loading proxies…".to_string()),
-                        },
-                    });
-                }
-                Err(e) => {
-                    let _ = event_tx.send(Event::ResourceLoadWarning {
-                        service: service_type,
-                        warning: format!("DB proxies: {}", crate::error::sdk_error_message(&e)),
-                    });
-                    break;
+                    Err(e) => {
+                        let _ = event_tx.send(Event::ResourceLoadWarning {
+                            service: service_type,
+                            warning: format!("DB proxies: {}", crate::error::sdk_error_message(&e)),
+                        });
+                        break;
+                    }
                 }
             }
         }
@@ -401,6 +578,10 @@ fn fmt_dt(t: &aws_sdk_rds::primitives::DateTime) -> String {
 
 #[derive(Debug, Clone)]
 pub struct RdsInstance {
+    /// The service that listed this row (`@rds` lists every engine, so a
+    /// DocumentDB instance is an "RDS Instance" there). Decides the type name
+    /// and so the sub-tab; the engine decides everything else.
+    pub listed_as: RdsFamily,
     /// Set by the list load when a blue/green deployment names this ARN.
     pub blue_green: Option<RdsBlueGreen>,
     pub db_identifier: String,
@@ -665,6 +846,16 @@ pub async fn fetch_blue_green_map(
 }
 
 impl RdsInstance {
+    pub fn listed(mut self, family: RdsFamily) -> Self {
+        self.listed_as = family;
+        self
+    }
+
+    /// RDS, DocumentDB or Neptune, by engine — whichever service listed it.
+    pub fn engine_family(&self) -> RdsFamily {
+        RdsFamily::from_engine(&self.engine)
+    }
+
     pub fn from_sdk(db: &aws_sdk_rds::types::DbInstance) -> Self {
         let tags: HashMap<String, String> = db
             .tag_list()
@@ -679,6 +870,7 @@ impl RdsInstance {
             .collect();
 
         Self {
+            listed_as: RdsFamily::Rds,
             blue_green: None,
             db_identifier: db.db_instance_identifier().unwrap_or("").to_string(),
             arn: db.db_instance_arn().unwrap_or("").to_string(),
@@ -793,10 +985,12 @@ impl RdsInstance {
     /// export, if any (instances publish to `/aws/rds/instance/<id>/<type>`).
     pub fn preferred_log_group(&self) -> Option<(String, String)> {
         let t = pick_log_export(&self.enabled_log_exports)?;
-        Some((
-            format!("/aws/rds/instance/{}/{}", self.db_identifier, t),
-            t.clone(),
-        ))
+        let group = match self.engine_family() {
+            RdsFamily::Rds => format!("/aws/rds/instance/{}/{}", self.db_identifier, t),
+            // DocumentDB and Neptune export per cluster, never per instance.
+            fam => format!("/aws/{}/{}/{}", fam.cli(), self.cluster_identifier.as_deref()?, t),
+        };
+        Some((group, t.clone()))
     }
 
     pub fn endpoint_display(&self) -> String {
@@ -857,7 +1051,8 @@ impl Resource for RdsInstance {
     }
     fn cli_command(&self) -> Option<String> {
         Some(format!(
-            "aws rds describe-db-instances --db-instance-identifier {}",
+            "aws {} describe-db-instances --db-instance-identifier {}",
+            self.engine_family().cli(),
             crate::aws::resource::shell_quote(self.id())
         ))
     }
@@ -871,7 +1066,7 @@ impl Resource for RdsInstance {
     }
 
     fn resource_type(&self) -> &str {
-        "RDS Instance"
+        self.listed_as.instance_type()
     }
 
     fn state(&self) -> ResourceState {
@@ -920,10 +1115,19 @@ impl Resource for RdsInstance {
     }
 
     fn console_url(&self, region: &str) -> Option<String> {
-        Some(format!(
-            "https://{}.console.aws.amazon.com/rds/home?region={}#database:id={};is-cluster=false",
-            region, region, self.db_identifier
-        ))
+        Some(match self.engine_family() {
+            RdsFamily::DocDb => format!(
+                "https://{}.console.aws.amazon.com/docdb/home?region={}#instance-details/{}",
+                region, region, self.db_identifier
+            ),
+            fam => format!(
+                "https://{}.console.aws.amazon.com/{}/home?region={}#database:id={};is-cluster=false",
+                region,
+                fam.cli(),
+                region,
+                self.db_identifier
+            ),
+        })
     }
 }
 
@@ -931,6 +1135,8 @@ impl Resource for RdsInstance {
 
 #[derive(Debug, Clone)]
 pub struct RdsCluster {
+    /// See `RdsInstance::listed_as`.
+    pub listed_as: RdsFamily,
     /// Set by the list load when a blue/green deployment names this ARN.
     pub blue_green: Option<RdsBlueGreen>,
     pub cluster_identifier: String,
@@ -986,6 +1192,16 @@ pub struct RdsCluster {
 }
 
 impl RdsCluster {
+    pub fn listed(mut self, family: RdsFamily) -> Self {
+        self.listed_as = family;
+        self
+    }
+
+    /// RDS, DocumentDB or Neptune, by engine — whichever service listed it.
+    pub fn engine_family(&self) -> RdsFamily {
+        RdsFamily::from_engine(&self.engine)
+    }
+
     pub fn from_sdk(c: &aws_sdk_rds::types::DbCluster) -> Self {
         let tags: HashMap<String, String> = c
             .tag_list()
@@ -1006,6 +1222,7 @@ impl RdsCluster {
             c.availability_zones().iter().map(|az| az.to_string()).collect();
 
         Self {
+            listed_as: RdsFamily::Rds,
             blue_green: None,
             cluster_identifier: c.db_cluster_identifier().unwrap_or("").to_string(),
             arn: c.db_cluster_arn().unwrap_or("").to_string(),
@@ -1082,10 +1299,12 @@ impl RdsCluster {
     /// export, if any (clusters publish to `/aws/rds/cluster/<id>/<type>`).
     pub fn preferred_log_group(&self) -> Option<(String, String)> {
         let t = pick_log_export(&self.enabled_log_exports)?;
-        Some((
-            format!("/aws/rds/cluster/{}/{}", self.cluster_identifier, t),
-            t.clone(),
-        ))
+        let group = match self.engine_family() {
+            RdsFamily::Rds => format!("/aws/rds/cluster/{}/{}", self.cluster_identifier, t),
+            // `/aws/docdb/<cluster>/audit`, `/aws/neptune/<cluster>/audit`.
+            fam => format!("/aws/{}/{}/{}", fam.cli(), self.cluster_identifier, t),
+        };
+        Some((group, t.clone()))
     }
 }
 
@@ -1149,7 +1368,8 @@ impl Resource for RdsCluster {
     }
     fn cli_command(&self) -> Option<String> {
         Some(format!(
-            "aws rds describe-db-clusters --db-cluster-identifier {}",
+            "aws {} describe-db-clusters --db-cluster-identifier {}",
+            self.engine_family().cli(),
             crate::aws::resource::shell_quote(self.id())
         ))
     }
@@ -1163,7 +1383,7 @@ impl Resource for RdsCluster {
     }
 
     fn resource_type(&self) -> &str {
-        "RDS Cluster"
+        self.listed_as.cluster_type()
     }
 
     fn state(&self) -> ResourceState {
@@ -1212,10 +1432,19 @@ impl Resource for RdsCluster {
     }
 
     fn console_url(&self, region: &str) -> Option<String> {
-        Some(format!(
-            "https://{}.console.aws.amazon.com/rds/home?region={}#database:id={};is-cluster=true",
-            region, region, self.cluster_identifier
-        ))
+        Some(match self.engine_family() {
+            RdsFamily::DocDb => format!(
+                "https://{}.console.aws.amazon.com/docdb/home?region={}#cluster-details/{}",
+                region, region, self.cluster_identifier
+            ),
+            fam => format!(
+                "https://{}.console.aws.amazon.com/{}/home?region={}#database:id={};is-cluster=true",
+                region,
+                fam.cli(),
+                region,
+                self.cluster_identifier
+            ),
+        })
     }
 }
 
@@ -1226,6 +1455,8 @@ impl Resource for RdsCluster {
 /// (manual + automated), which is what we want; shared/public are excluded.
 #[derive(Debug, Clone)]
 pub struct RdsSnapshot {
+    /// See `RdsInstance::listed_as`.
+    pub listed_as: RdsFamily,
     pub id: String,
     /// Source DB instance or cluster identifier.
     pub source: String,
@@ -1257,8 +1488,14 @@ pub struct RdsSnapshot {
 }
 
 impl RdsSnapshot {
+    pub fn listed(mut self, family: RdsFamily) -> Self {
+        self.listed_as = family;
+        self
+    }
+
     pub fn from_db(s: &aws_sdk_rds::types::DbSnapshot) -> Self {
         Self {
+            listed_as: RdsFamily::Rds,
             id: s.db_snapshot_identifier().unwrap_or("").to_string(),
             source: s.db_instance_identifier().unwrap_or("").to_string(),
             is_cluster: false,
@@ -1290,6 +1527,7 @@ impl RdsSnapshot {
 
     pub fn from_cluster(s: &aws_sdk_rds::types::DbClusterSnapshot) -> Self {
         Self {
+            listed_as: RdsFamily::Rds,
             id: s.db_cluster_snapshot_identifier().unwrap_or("").to_string(),
             source: s.db_cluster_identifier().unwrap_or("").to_string(),
             is_cluster: true,
@@ -1337,7 +1575,8 @@ impl Resource for RdsSnapshot {
     fn cli_command(&self) -> Option<String> {
         Some(if self.is_cluster {
             format!(
-                "aws rds describe-db-cluster-snapshots --db-cluster-snapshot-identifier {}",
+                "aws {} describe-db-cluster-snapshots --db-cluster-snapshot-identifier {}",
+                RdsFamily::from_engine(&self.engine).cli(),
                 crate::aws::resource::shell_quote(&self.id)
             )
         } else {
@@ -1357,7 +1596,7 @@ impl Resource for RdsSnapshot {
     }
 
     fn resource_type(&self) -> &str {
-        "RDS Snapshot"
+        self.listed_as.snapshot_type()
     }
 
     fn state(&self) -> ResourceState {
@@ -1535,6 +1774,8 @@ pub async fn fetch_rds_pi(
 
 #[derive(Debug, Clone)]
 pub struct RdsParamGroup {
+    /// See `RdsInstance::listed_as`.
+    pub listed_as: RdsFamily,
     pub name: String,
     pub arn: String,
     pub family: String,
@@ -1546,8 +1787,14 @@ pub struct RdsParamGroup {
 }
 
 impl RdsParamGroup {
+    pub fn listed(mut self, family: RdsFamily) -> Self {
+        self.listed_as = family;
+        self
+    }
+
     pub fn from_sdk(g: &aws_sdk_rds::types::DbParameterGroup) -> Self {
         Self {
+            listed_as: RdsFamily::Rds,
             name: g.db_parameter_group_name().unwrap_or("").to_string(),
             arn: g.db_parameter_group_arn().unwrap_or("").to_string(),
             family: g.db_parameter_group_family().unwrap_or("").to_string(),
@@ -1559,6 +1806,7 @@ impl RdsParamGroup {
 
     pub fn from_cluster_sdk(g: &aws_sdk_rds::types::DbClusterParameterGroup) -> Self {
         Self {
+            listed_as: RdsFamily::Rds,
             name: g.db_cluster_parameter_group_name().unwrap_or("").to_string(),
             arn: g.db_cluster_parameter_group_arn().unwrap_or("").to_string(),
             family: g.db_parameter_group_family().unwrap_or("").to_string(),
@@ -1594,12 +1842,14 @@ impl Resource for RdsParamGroup {
     fn cli_command(&self) -> Option<String> {
         Some(if self.is_cluster {
             format!(
-                "aws rds describe-db-cluster-parameter-groups --db-cluster-parameter-group-name {}",
+                "aws {} describe-db-cluster-parameter-groups --db-cluster-parameter-group-name {}",
+                RdsFamily::from_param_family(&self.family).cli(),
                 crate::aws::resource::shell_quote(&self.name)
             )
         } else {
             format!(
-                "aws rds describe-db-parameter-groups --db-parameter-group-name {}",
+                "aws {} describe-db-parameter-groups --db-parameter-group-name {}",
+                RdsFamily::from_param_family(&self.family).cli(),
                 crate::aws::resource::shell_quote(&self.name)
             )
         })
@@ -1614,7 +1864,7 @@ impl Resource for RdsParamGroup {
     }
 
     fn resource_type(&self) -> &str {
-        "RDS Parameter Group"
+        self.listed_as.param_group_type()
     }
 
     fn state(&self) -> ResourceState {
@@ -1900,6 +2150,9 @@ impl Resource for RdsOptionGroup {
 
 #[derive(Debug, Clone)]
 pub struct RdsSubnetGroup {
+    /// See `RdsInstance::listed_as`. Subnet groups have no engine: one group
+    /// serves RDS, DocumentDB and Neptune alike, so every list shows them all.
+    pub listed_as: RdsFamily,
     pub name: String,
     pub arn: String,
     pub description: String,
@@ -1912,8 +2165,14 @@ pub struct RdsSubnetGroup {
 }
 
 impl RdsSubnetGroup {
+    pub fn listed(mut self, family: RdsFamily) -> Self {
+        self.listed_as = family;
+        self
+    }
+
     pub fn from_sdk(g: &aws_sdk_rds::types::DbSubnetGroup) -> Self {
         Self {
+            listed_as: RdsFamily::Rds,
             name: g.db_subnet_group_name().unwrap_or("").to_string(),
             arn: g.db_subnet_group_arn().unwrap_or("").to_string(),
             description: g.db_subnet_group_description().unwrap_or("").to_string(),
@@ -1946,7 +2205,8 @@ impl RdsSubnetGroup {
 impl Resource for RdsSubnetGroup {
     fn cli_command(&self) -> Option<String> {
         Some(format!(
-            "aws rds describe-db-subnet-groups --db-subnet-group-name {}",
+            "aws {} describe-db-subnet-groups --db-subnet-group-name {}",
+            self.listed_as.cli(),
             crate::aws::resource::shell_quote(&self.name)
         ))
     }
@@ -1960,7 +2220,7 @@ impl Resource for RdsSubnetGroup {
     }
 
     fn resource_type(&self) -> &str {
-        "RDS Subnet Group"
+        self.listed_as.subnet_group_type()
     }
 
     fn state(&self) -> ResourceState {
@@ -2577,5 +2837,27 @@ mod blue_green_tests {
         assert!(!bg("a", "SWITCHOVER_FAILED").is_active());
         assert!(bg("a", "SWITCHOVER_COMPLETED").is_switched_over());
         assert!(!bg("a", "AVAILABLE").is_switched_over());
+    }
+}
+
+/// The `m` chart title and metric table for an instance or cluster, by
+/// engine: DocumentDB and Neptune publish under their own namespaces with
+/// their own metric names, so the RDS table charts nothing for them.
+pub fn rds_metric_title(family: RdsFamily, kind: &str) -> &'static str {
+    match (family, kind) {
+        (RdsFamily::Rds, "cluster") => "RDS cluster",
+        (RdsFamily::Rds, _) => "RDS instance",
+        (RdsFamily::DocDb, "cluster") => "DocumentDB cluster",
+        (RdsFamily::DocDb, _) => "DocumentDB instance",
+        (RdsFamily::Neptune, "cluster") => "Neptune cluster",
+        (RdsFamily::Neptune, _) => "Neptune instance",
+    }
+}
+
+pub fn rds_metric_specs(family: RdsFamily) -> &'static [crate::aws::metrics::MetricSpec] {
+    match family {
+        RdsFamily::Rds => crate::aws::metrics::RDS_DATABASE,
+        RdsFamily::DocDb => crate::aws::metrics::DOCDB_DATABASE,
+        RdsFamily::Neptune => crate::aws::metrics::NEPTUNE_DATABASE,
     }
 }

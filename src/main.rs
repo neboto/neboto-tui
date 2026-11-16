@@ -62,6 +62,7 @@ use ui::widgets::{
     xray_tabs, changes_tabs,
     datasync_tabs,
     dms_tabs,
+    docdb_tabs,
     beanstalk_tabs,
     region_selector, resolver_tabs, resource_list,
     s3_tabs, search_bar, ses_tabs, service_selector, service_tabs, sh_tabs, splash, sq_tabs,
@@ -390,6 +391,12 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
             }
             Some(ServiceType::RDS) => {
                 rds_tabs::render_rds_tabs(app, sub_tabs_area, frame);
+            }
+            Some(ServiceType::DocumentDB) => {
+                docdb_tabs::render_cluster_db_tabs(app, app.docdb_view.index(), sub_tabs_area, frame);
+            }
+            Some(ServiceType::Neptune) => {
+                docdb_tabs::render_cluster_db_tabs(app, app.neptune_view.index(), sub_tabs_area, frame);
             }
             Some(ServiceType::IAM) => {
                 iam_tabs::render_iam_tabs(app, sub_tabs_area, frame);
