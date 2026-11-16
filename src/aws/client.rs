@@ -756,6 +756,10 @@ impl AwsClients {
         aws_sdk_databasemigration::Client::new(&self.config)
     }
 
+    pub fn datasync_client(&self) -> aws_sdk_datasync::Client {
+        aws_sdk_datasync::Client::new(&self.config)
+    }
+
     pub fn beanstalk_client(&self) -> aws_sdk_elasticbeanstalk::Client {
         aws_sdk_elasticbeanstalk::Client::new(&self.config)
     }

@@ -1400,6 +1400,75 @@ the service you're touching.
   **`C`**: tasks/serverless offer `start … resume-processing` and `stop`
   (Change); endpoints offer `test-connection` per instance they've been
   tested from. Never `reload-target`, never a delete.
+- **DataSync** (`@datasync` / `@sync`, `datasync.rs`, **aws-sdk-datasync**) —
+  browse-only, three sub-tabs **Tasks / Locations / Agents** (#96).
+  **SDK pin**: an unpinned add resolved to `1.124.0` against the current
+  lock without moving any smithy/runtime crate. Bump it with the rest of the
+  SDK, not on its own.
+  **Load**: `ListLocations` first (the entry already carries the URI, and
+  URIs label the task rows — joined by ARN at load time), `ListAgents` +
+  `DescribeAgent` each, then `ListTasks` + `DescribeTask` each, both at
+  `buffered(5)` (DataSync's control plane throttles early); locations and
+  agents go out in one batch, tasks stream in chunks of 25. A failed
+  describe keeps the row from its **list entry** (`described = false`, the
+  Overview says so) and the failures fold into one warning — never one per
+  task. All three lists failing is a `ResourceLoadError`; any one is a
+  warning. **Tags** come from `ListTimeTags` (`tag:GetResources`, type
+  `datasync`) — DataSync's own `ListTagsForResource` is per ARN, which would
+  be a second N+1; `list_tags_slot` is the full ARN.
+  **ids are ARNs** (`id()` = ARN), as in DMS: `arn_jump_target` routes
+  `datasync` ARNs (`task/` / `location/` / `agent/`) to
+  `JumpView::DataSync(view)`, and an **execution** ARN
+  (`task/<id>/execution/<id>`) lands on its task — executions have no rows
+  of their own. Every `search_text()` includes the ARN (the jump searches by
+  it). EC2 ARNs the API hands back (task ENIs, agent / location subnets and
+  security groups) are shown as their **id** (`arn_tail`) so the id-prefix
+  jump follows them; `arn_jump_target`'s `ec2` arm only knows instances.
+  **Locations have no type field**: `LocationKind::from_uri` reads the URI
+  scheme (`s3` `efs` `nfs` `smb` `hdfs` `object-storage` `azure-blob` `fsxl`
+  `fsxw` `fsxz` `fsxn-*`), and that also picks the `DescribeLocation<Type>`
+  call. An unknown scheme is `Other`: listed, no Configuration fetch, no `C`
+  read command. Locations are **stateless** (no lifecycle in AWS).
+  **Executions are not a sub-tab** — `ListTaskExecutions` returns only ARN +
+  status, so a cross-task tab would be an N+1 over all history. They are one
+  lazy fetch per task (`lazy.datasync_executions`, keyed by task ARN): every
+  listed ARN, then `DescribeTaskExecution` for the **last 30 listed**
+  (`MAX_EXECUTIONS`), sorted newest-first by start time. That **assumes
+  the list is oldest-first** — the API doesn't document an order and this
+  wasn't checked against a live account. It only matters past 30
+  executions; if a long-history task shows stale runs, that's where to
+  look. The task **Overview shares the fetch** (hook on both sections;
+  the trigger accepts Overview or Executions) for its Last Execution block,
+  and both render through `datasync_execution_rows`. Some describes failing
+  still shows the rest; all failing is the section's error.
+  **Schedule**: a schedule DataSync itself switched off after repeated
+  failures (`ScheduleDetails.DisabledBy = SERVICE`) leaves the task
+  AVAILABLE — the Overview marks it `✗ disabled by DataSync` with the
+  reason; a user-disabled one is `⚠`.
+  **Sections**: task Overview (status, error, schedule, source / destination
+  with jumpable location ARN rows — an `s3://` URI also jumps to its bucket
+  — last execution, log group) / Executions / Options (transfer options,
+  include + exclude patterns — every rule kept, split on `|` — manifest,
+  task report, ENIs) / Tags. Location: Overview (+ Used By, capped preview)
+  / Configuration (lazy per-type describe, flattened to rows in the fetch
+  because the eleven outputs share no type) / Tasks (**sibling-filtered**,
+  no fetch) / Tags. Agent: Overview (status, last connection, PrivateLink
+  endpoint, subnets, security groups) / Tags.
+  **Credentials**: location describes return Secrets Manager references
+  (`ManagedSecretConfig` / `CmkSecretConfig` / `CustomSecretConfig`) — the
+  ARNs are shown, never resolved. SMB / FSx Windows `User` and object
+  storage's `AccessKey` id are deliberately **not** rendered.
+  **`m`** (tasks): `AWS/DataSync`, dim `TaskId` (`task-…`, the ARN tail):
+  bytes transferred / written, files transferred / verified, `Sum`. Only
+  published while an execution runs, hence the overlay hint. **Not checked
+  against a live account** — the statistic is the open question.
+  **`t`** (tasks): the task's `CloudWatchLogGroupArn` → group name, whole
+  group (each execution writes its own stream). No log group, no `t`.
+  **`C`**: tasks offer `list-task-executions` (Inspect),
+  `start-task-execution` (Change, noted: runs with the saved overwrite /
+  delete settings) and `cancel-task-execution` while one is running.
+  Locations read via the matching `describe-location-<type>`.
+  **Demo**: no fixtures — `@datasync` lists empty under `--demo`.
 - **Elastic Beanstalk** (`@eb`, `beanstalk.rs`, **aws-sdk-elasticbeanstalk**)
   — browse-only, three sub-tabs **Environments / Applications / Versions**.
   **`@eb` was EventBridge's alias** until this landed; EventBridge keeps

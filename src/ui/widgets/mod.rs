@@ -56,6 +56,7 @@ pub mod redshift_tabs;
 pub mod xray_tabs;
 pub mod changes_tabs;
 pub mod beanstalk_tabs;
+pub mod datasync_tabs;
 pub mod dms_tabs;
 pub mod quota_service_selector;
 pub mod command_picker;

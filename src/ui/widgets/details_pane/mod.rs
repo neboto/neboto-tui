@@ -208,6 +208,7 @@ mod config;
 mod controltower;
 mod cost;
 mod direct_connect;
+mod datasync;
 mod dms;
 mod dynamodb;
 mod ec2;
@@ -278,6 +279,7 @@ pub use config::*;
 pub use controltower::*;
 pub use cost::*;
 pub use direct_connect::*;
+pub use datasync::*;
 pub use dms::*;
 pub use dynamodb::*;
 pub use ec2::*;
@@ -900,6 +902,21 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         }
         if let Some(v) = r.as_any().downcast_ref::<EbVersion>() {
             render_eb_version_split(app, v, area, frame);
+            return;
+        }
+    }
+    if let Some(r) = resource {
+        use crate::aws::services::datasync::{DataSyncAgent, DataSyncLocation, DataSyncTask};
+        if let Some(t) = r.as_any().downcast_ref::<DataSyncTask>() {
+            render_datasync_task_split(app, t, area, frame);
+            return;
+        }
+        if let Some(l) = r.as_any().downcast_ref::<DataSyncLocation>() {
+            render_datasync_location_split(app, l, area, frame);
+            return;
+        }
+        if let Some(a) = r.as_any().downcast_ref::<DataSyncAgent>() {
+            render_datasync_agent_split(app, a, area, frame);
             return;
         }
     }
@@ -3508,6 +3525,24 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
                 _ => return None,
             };
             mk(ServiceType::Dms, JumpView::Dms(view), arn)
+        }
+        // DataSync rows are keyed by ARN too. An execution ARN
+        // (`task/<id>/execution/<id>`) lands on its task.
+        "datasync" => {
+            use crate::app::DataSyncView;
+            let (kind, rest) = resource.split_once('/')?;
+            match kind {
+                "task" => {
+                    let task_arn = match rest.split_once("/execution/") {
+                        Some(_) => arn.split_once("/execution/")?.0,
+                        None => arn,
+                    };
+                    mk(ServiceType::DataSync, JumpView::DataSync(DataSyncView::Tasks), task_arn)
+                }
+                "location" => mk(ServiceType::DataSync, JumpView::DataSync(DataSyncView::Locations), arn),
+                "agent" => mk(ServiceType::DataSync, JumpView::DataSync(DataSyncView::Agents), arn),
+                _ => None,
+            }
         }
         // Beanstalk: environment/<app>/<env>, application/<app>,
         // applicationversion/<app>/<label>. Environments resolve by name

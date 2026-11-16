@@ -667,6 +667,15 @@ pub const OPENSEARCH_DOMAIN: &[MetricSpec] = &[
     m("IndexingRate", "Indexing rate (/min)", Avg, Unit::Raw).group("rates"),
 ];
 
+/// Dimension `TaskId`. Published only while an execution runs, so a task
+/// that runs nightly charts as a spike per run.
+pub const DATASYNC_TASK: &[MetricSpec] = &[
+    m("BytesTransferred", "Transferred", Sum, Unit::Bytes).group("bytes"),
+    m("BytesWritten", "Written", Sum, Unit::Bytes).group("bytes"),
+    m("FilesTransferred", "Files transferred", Sum, Unit::Count),
+    m("FilesVerifiedDestination", "Files verified (destination)", Sum, Unit::Count),
+];
+
 pub const DMS_INSTANCE: &[MetricSpec] = &[
     m("CPUUtilization", "CPU", Avg, Unit::Percent),
     m("FreeableMemory", "Freeable memory", Avg, Unit::Bytes),

@@ -190,6 +190,7 @@
     "@controltower",
     "@cost",
     "@cw",
+    "@datasync",
     "@ddb",
     "@dms",
     "@dx",
@@ -683,6 +684,22 @@
     "DX Virtual Interface": [
       "Overview",
       "BGP",
+      "Tags"
+    ],
+    "DataSync Agent": [
+      "Overview",
+      "Tags"
+    ],
+    "DataSync Location": [
+      "Overview",
+      "Configuration",
+      "Tasks",
+      "Tags"
+    ],
+    "DataSync Task": [
+      "Overview",
+      "Executions",
+      "Options",
       "Tags"
     ],
     "DynamoDB Table": [
