@@ -260,6 +260,34 @@ pub const RDS_DATABASE: &[MetricSpec] = &[
     m("FreeStorageSpace", "Free storage", Avg, Unit::Bytes),
 ];
 
+/// `AWS/DocDB`, dimension `DBInstanceIdentifier` or `DBClusterIdentifier`.
+/// The opcounters are counts per one-minute period.
+pub const DOCDB_DATABASE: &[MetricSpec] = &[
+    m("CPUUtilization", "CPU", Avg, Unit::Percent),
+    m("DatabaseConnections", "Connections", Avg, Unit::Count),
+    m("ReadIOPS", "Read IOPS", Avg, Unit::PerSec).group("iops"),
+    m("WriteIOPS", "Write IOPS", Avg, Unit::PerSec).group("iops"),
+    m("FreeableMemory", "Freeable memory", Avg, Unit::Bytes),
+    m("OpcountersQuery", "Queries", Sum, Unit::Count).group("ops"),
+    m("OpcountersInsert", "Inserts", Sum, Unit::Count).group("ops"),
+    m("OpcountersUpdate", "Updates", Sum, Unit::Count).group("ops"),
+    m("OpcountersDelete", "Deletes", Sum, Unit::Count).group("ops"),
+];
+
+/// `AWS/Neptune`, dimension `DBInstanceIdentifier` or `DBClusterIdentifier`.
+pub const NEPTUNE_DATABASE: &[MetricSpec] = &[
+    m("CPUUtilization", "CPU", Avg, Unit::Percent),
+    m("FreeableMemory", "Freeable memory", Avg, Unit::Bytes),
+    m("TotalRequestsPerSec", "Requests", Avg, Unit::PerSec),
+    m("GremlinRequestsPerSec", "Gremlin", Avg, Unit::PerSec).group("queries"),
+    m("SparqlRequestsPerSec", "SPARQL", Avg, Unit::PerSec).group("queries"),
+    m("OpenCypherRequestsPerSec", "openCypher", Avg, Unit::PerSec).group("queries"),
+    m("MainRequestQueuePendingRequests", "Queued requests", Avg, Unit::Count),
+    m("TotalServerErrorsPerSec", "Server errors", Avg, Unit::PerSec).group("errors"),
+    m("TotalClientErrorsPerSec", "Client errors", Avg, Unit::PerSec).group("errors"),
+    m("BufferCacheHitRatio", "Buffer cache hits", Avg, Unit::Percent),
+];
+
 pub const EBS_VOLUME: &[MetricSpec] = &[
     m("VolumeReadOps", "Read IOPS", Sum, Unit::PerSec).rate().group("iops"),
     m("VolumeWriteOps", "Write IOPS", Sum, Unit::PerSec).rate().group("iops"),

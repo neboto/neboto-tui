@@ -74,6 +74,8 @@ pub fn has_sub_tabs(service: ServiceType) -> bool {
             | ServiceType::Route53
             | ServiceType::CloudWatch
             | ServiceType::RDS
+            | ServiceType::DocumentDB
+            | ServiceType::Neptune
             | ServiceType::IAM
             | ServiceType::Organizations
             | ServiceType::Elb
@@ -337,6 +339,8 @@ macro_rules! sub_tab_table {
             CloudFront => cf_view: CloudFrontView [Distributions, Functions, Policies, Oacs],
             CloudWatch => cw_view: CwView [Alarms, LogGroups, Dashboards, Metrics, CrossAccount, Streams, Insights, AccountPolicies],
             RDS => rds_view: RdsView [Instances, Clusters, Snapshots, ParamGroups, OptionGroups, SubnetGroups, Proxies],
+            DocumentDB => docdb_view: DocDbView [Clusters, Instances, Snapshots, ParamGroups, SubnetGroups],
+            Neptune => neptune_view: NeptuneView [Clusters, Instances, Snapshots, ParamGroups, SubnetGroups],
             IAM => iam_view: IamView [Roles, Policies, Users, Groups, AccessAnalyzer, IdentityProviders, Account, InstanceProfiles],
             Organizations => org_view: OrgView [Overview, Accounts, Ous, Policies, Delegated, Trusted],
             Elb => elb_view: ElbView [LoadBalancers, TargetGroups],
@@ -1135,6 +1139,57 @@ pub use crate::aws::services::inspector::InspSeverityScope;
 /// EC2 metrics types (CloudWatch-backed).
 pub use crate::aws::services::ec2::MetricsTimeRange;
 
+/// Sub-tab views for DocumentDB and Neptune: the RDS API filtered to one
+/// engine, cluster-first. Same five tabs each; the type names come from the
+/// service's `RdsFamily`.
+macro_rules! cluster_db_view {
+    ($name:ident, $family:ident) => {
+        #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+        pub enum $name {
+            Clusters,
+            Instances,
+            Snapshots,
+            ParamGroups,
+            SubnetGroups,
+        }
+
+        impl $name {
+            const ALL: [$name; 5] =
+                [$name::Clusters, $name::Instances, $name::Snapshots, $name::ParamGroups, $name::SubnetGroups];
+
+            pub fn resource_type_filter(&self) -> &'static str {
+                let family = crate::aws::services::rds::RdsFamily::$family;
+                match self {
+                    $name::Clusters => family.cluster_type(),
+                    $name::Instances => family.instance_type(),
+                    $name::Snapshots => family.snapshot_type(),
+                    $name::ParamGroups => family.param_group_type(),
+                    $name::SubnetGroups => family.subnet_group_type(),
+                }
+            }
+
+            /// Position in the tab strip (0-based).
+            pub fn index(self) -> usize {
+                self as usize
+            }
+
+            /// The view a sub-tab key selects: a digit, or `Tab` / `Shift-Tab`
+            /// from this one.
+            fn for_key(self, code: KeyCode) -> Option<Self> {
+                let n = Self::ALL.len();
+                match code {
+                    KeyCode::Char(c @ '1'..='5') => Some(Self::ALL[c as usize - '1' as usize]),
+                    KeyCode::Tab => Some(Self::ALL[(self.index() + 1) % n]),
+                    KeyCode::BackTab => Some(Self::ALL[(self.index() + n - 1) % n]),
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+cluster_db_view!(DocDbView, DocDb);
+cluster_db_view!(NeptuneView, Neptune);
+
 /// Sub-tab view for RDS resources
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum RdsView {
@@ -1193,6 +1248,8 @@ pub enum JumpView {
     Iam(IamView),
     Cfn(CfnView),
     Rds(RdsView),
+    DocDb(DocDbView),
+    Neptune(NeptuneView),
     Ecs(EcsView),
     Elb(ElbView),
     Msg(MsgView),
@@ -2829,6 +2886,8 @@ pub struct App {
 
     // RDS sub-tab and detail section
     pub rds_view: RdsView,
+    pub docdb_view: DocDbView,
+    pub neptune_view: NeptuneView,
 
     // ELB sub-tab and detail section state
     pub elb_view: ElbView,
@@ -3579,6 +3638,8 @@ impl App {
             lambda_code_downloading: None,
             invoice_pdf_downloading: None,
             rds_view: RdsView::Instances,
+            docdb_view: DocDbView::Clusters,
+            neptune_view: NeptuneView::Clusters,
             elb_view: ElbView::LoadBalancers,
             msg_view: MsgView::Queues,
             s3_metrics: HashMap::new(),
@@ -6145,6 +6206,24 @@ impl App {
         }
 
         // RDS sub-tab switching
+        // DocumentDB / Neptune (Clusters / Instances / Snapshots / Param
+        // Groups / Subnet Groups) sub-tab switching
+        if !self.search_active {
+            let switched = match self.current_service {
+                Some(ServiceType::DocumentDB) => {
+                    self.docdb_view.for_key(key.code).map(|v| self.docdb_view = v).is_some()
+                }
+                Some(ServiceType::Neptune) => {
+                    self.neptune_view.for_key(key.code).map(|v| self.neptune_view = v).is_some()
+                }
+                _ => false,
+            };
+            if switched {
+                self.update_search();
+                return Ok(());
+            }
+        }
+
         if !self.search_active && self.current_service == Some(ServiceType::RDS) {
             match key.code {
                 KeyCode::Char('1') => {
@@ -8803,6 +8882,8 @@ impl App {
             Some(ServiceType::CloudFront) => Some(self.cf_view.resource_type_filter()),
             Some(ServiceType::CloudWatch) => Some(self.cw_view.resource_type_filter()),
             Some(ServiceType::RDS) => Some(self.rds_view.resource_type_filter()),
+            Some(ServiceType::DocumentDB) => Some(self.docdb_view.resource_type_filter()),
+            Some(ServiceType::Neptune) => Some(self.neptune_view.resource_type_filter()),
             Some(ServiceType::IAM) => Some(self.iam_view.resource_type_filter()),
             Some(ServiceType::Organizations) => Some(self.org_view.resource_type_filter()),
             Some(ServiceType::Elb) => Some(self.elb_view.resource_type_filter()),
@@ -10384,6 +10465,13 @@ impl App {
             Arc::new(lambda::LambdaService::new(aws_clients)),
         );
         services.insert(ServiceType::RDS, Arc::new(rds::RdsService::new(aws_clients)));
+        // DocumentDB and Neptune are the RDS API under one engine each.
+        for family in [rds::RdsFamily::DocDb, rds::RdsFamily::Neptune] {
+            services.insert(
+                family.service_type(),
+                Arc::new(rds::RdsService::for_family(aws_clients, family)),
+            );
+        }
         services.insert(ServiceType::Acm, Arc::new(acm::AcmService::new(aws_clients)));
         services.insert(
             ServiceType::CloudWatch,
@@ -20584,6 +20672,8 @@ impl App {
             JumpView::Iam(v) => self.iam_view = *v,
             JumpView::Cfn(v) => self.cfn_view = *v,
             JumpView::Rds(v) => self.rds_view = *v,
+            JumpView::DocDb(v) => self.docdb_view = *v,
+            JumpView::Neptune(v) => self.neptune_view = *v,
             JumpView::Ecs(v) => self.ecs_view = *v,
             JumpView::Elb(v) => self.elb_view = *v,
             JumpView::Msg(v) => self.msg_view = *v,
@@ -21339,6 +21429,8 @@ impl App {
             Some(ServiceType::IAM) => JumpView::Iam(self.iam_view),
             Some(ServiceType::CloudFormation) => JumpView::Cfn(self.cfn_view),
             Some(ServiceType::RDS) => JumpView::Rds(self.rds_view),
+            Some(ServiceType::DocumentDB) => JumpView::DocDb(self.docdb_view),
+            Some(ServiceType::Neptune) => JumpView::Neptune(self.neptune_view),
             Some(ServiceType::ECS) => JumpView::Ecs(self.ecs_view),
             Some(ServiceType::Elb) => JumpView::Elb(self.elb_view),
             Some(ServiceType::Messaging) => JumpView::Msg(self.msg_view),
@@ -23030,25 +23122,36 @@ impl App {
     /// "Cluster" / "Source Cluster" to Clusters, and "Snapshot" rows (the
     /// Backups sections) to the Snapshots sub-tab.
     pub fn rds_row_jump_target(&self, key: &str, value: &str) -> Option<JumpTarget> {
-        if value.is_empty() || self.current_service != Some(ServiceType::RDS) {
+        let service = self.current_service.filter(|s| {
+            matches!(s, ServiceType::RDS | ServiceType::DocumentDB | ServiceType::Neptune)
+        })?;
+        if value.is_empty() {
             return None;
         }
-        let view = match key.trim_start() {
-            "Cluster" | "Source Cluster" | "Replication Source" => RdsView::Clusters,
+        // The same rows under `@docdb` / `@neptune` stay in that service
+        // (their lists hold the same ids, under their own sub-tabs).
+        let (rds, tab) = match key.trim_start() {
+            "Cluster" | "Source Cluster" | "Replication Source" => (RdsView::Clusters, 0),
             "Writer" | "Reader" | "Source DB" | "Replica Source" | "Read Replica" | "Target DB" => {
-                RdsView::Instances
+                (RdsView::Instances, 1)
             }
-            "Snapshot" => RdsView::Snapshots,
-            "Parameter Group" => RdsView::ParamGroups,
-            "Option Group" => RdsView::OptionGroups,
-            "Subnet Group" => RdsView::SubnetGroups,
+            "Snapshot" => (RdsView::Snapshots, 2),
+            "Parameter Group" => (RdsView::ParamGroups, 3),
+            // Neither engine has option groups.
+            "Option Group" if service == ServiceType::RDS => (RdsView::OptionGroups, 0),
+            "Subnet Group" => (RdsView::SubnetGroups, 4),
             _ => return None,
+        };
+        let view = match service {
+            ServiceType::DocumentDB => JumpView::DocDb(DocDbView::ALL[tab]),
+            ServiceType::Neptune => JumpView::Neptune(NeptuneView::ALL[tab]),
+            _ => JumpView::Rds(rds),
         };
         // Group rows carry a status suffix ("name (in-sync)") — jump by name.
         let id = value.split(" (").next().unwrap_or(value);
         Some(JumpTarget {
-            service: ServiceType::RDS,
-            view: JumpView::Rds(view),
+            service,
+            view,
             id: id.to_string(),
         })
     }
@@ -33385,11 +33488,23 @@ impl App {
         } else if let Some(f) = is!(s::lambda::LambdaFunction) {
             target("Lambda function", "AWS/Lambda", dim("FunctionName", &f.function_name), m::LAMBDA_FUNCTION)
         } else if let Some(db) = is!(s::rds::RdsInstance) {
-            target("RDS instance", "AWS/RDS", dim("DBInstanceIdentifier", &db.db_identifier), m::RDS_DATABASE)
+            let fam = db.engine_family();
+            target(
+                s::rds::rds_metric_title(fam, "instance"),
+                fam.metric_namespace(),
+                dim("DBInstanceIdentifier", &db.db_identifier),
+                s::rds::rds_metric_specs(fam),
+            )
         } else if let Some(c) = is!(s::rds::RdsCluster) {
             // Aurora / Multi-AZ clusters roll up under the cluster id; some
             // per-instance metrics (free storage) aren't published there.
-            target("RDS cluster", "AWS/RDS", dim("DBClusterIdentifier", &c.cluster_identifier), m::RDS_DATABASE)
+            let fam = c.engine_family();
+            target(
+                s::rds::rds_metric_title(fam, "cluster"),
+                fam.metric_namespace(),
+                dim("DBClusterIdentifier", &c.cluster_identifier),
+                s::rds::rds_metric_specs(fam),
+            )
         } else if let Some(t) = is!(s::dynamodb::DdbTable) {
             target("DynamoDB table", "AWS/DynamoDB", dim("TableName", &t.name), m::DDB_TABLE)
         } else if let Some(f) = is!(s::efs::EfsFileSystem) {

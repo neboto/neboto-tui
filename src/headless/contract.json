@@ -193,6 +193,7 @@
     "@datasync",
     "@ddb",
     "@dms",
+    "@docdb",
     "@dx",
     "@eb",
     "@ec2",
@@ -218,6 +219,7 @@
     "@kms",
     "@lambda",
     "@msk",
+    "@neptune",
     "@opensearch",
     "@orgs",
     "@profiles",
@@ -702,6 +704,38 @@
       "Options",
       "Tags"
     ],
+    "DocumentDB Cluster": [
+      "Overview",
+      "Endpoints",
+      "Members",
+      "Backups",
+      "Maintenance",
+      "Events",
+      "Tags"
+    ],
+    "DocumentDB Instance": [
+      "Overview",
+      "Storage",
+      "Network",
+      "Perf Insights",
+      "Backups",
+      "Maintenance",
+      "Events",
+      "Logs",
+      "Tags"
+    ],
+    "DocumentDB Parameter Group": [
+      "Overview",
+      "Parameters"
+    ],
+    "DocumentDB Snapshot": [
+      "Overview",
+      "Encryption",
+      "Tags"
+    ],
+    "DocumentDB Subnet Group": [
+      "Details"
+    ],
     "DynamoDB Table": [
       "Overview",
       "Indexes",
@@ -1063,6 +1097,38 @@
       "Overview",
       "Network",
       "Tags"
+    ],
+    "Neptune Cluster": [
+      "Overview",
+      "Endpoints",
+      "Members",
+      "Backups",
+      "Maintenance",
+      "Events",
+      "Tags"
+    ],
+    "Neptune Instance": [
+      "Overview",
+      "Storage",
+      "Network",
+      "Perf Insights",
+      "Backups",
+      "Maintenance",
+      "Events",
+      "Logs",
+      "Tags"
+    ],
+    "Neptune Parameter Group": [
+      "Overview",
+      "Parameters"
+    ],
+    "Neptune Snapshot": [
+      "Overview",
+      "Encryption",
+      "Tags"
+    ],
+    "Neptune Subnet Group": [
+      "Details"
     ],
     "Network Interface": [
       "Overview",
