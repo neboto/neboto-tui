@@ -76,6 +76,7 @@ pub enum ServiceType {
     XRay,
     Changes,
     Dms,
+    DataSync,
     Beanstalk,
     AppSync,
     Budgets,
@@ -161,6 +162,7 @@ impl ServiceType {
             ServiceType::XRay,
             ServiceType::Changes,
             ServiceType::Dms,
+            ServiceType::DataSync,
             ServiceType::Beanstalk,
             ServiceType::Budgets,
             ServiceType::Invoices,
@@ -234,7 +236,8 @@ impl ServiceType {
             | ServiceType::Efs
             | ServiceType::Fsx
             | ServiceType::Backup
-            | ServiceType::Transfer => "Storage",
+            | ServiceType::Transfer
+            | ServiceType::DataSync => "Storage",
             ServiceType::RDS
             | ServiceType::DynamoDb
             | ServiceType::ElastiCache
@@ -361,6 +364,7 @@ impl ServiceType {
             ServiceType::Ses => "SES",
             ServiceType::Msk => "MSK",
             ServiceType::Dms => "DMS",
+            ServiceType::DataSync => "DataSync",
             ServiceType::Beanstalk => "Elastic Beanstalk",
             ServiceType::AppSync => "AppSync",
             ServiceType::Fms => "Firewall Manager",
@@ -443,6 +447,7 @@ impl ServiceType {
             ServiceType::Ses => "SES",
             ServiceType::Msk => "MSK",
             ServiceType::Dms => "DMS",
+            ServiceType::DataSync => "DataSync",
             ServiceType::Beanstalk => "EB",
             ServiceType::AppSync => "GQL",
             ServiceType::Fms => "FMS",
@@ -529,6 +534,7 @@ impl ServiceType {
             ServiceType::Redshift => "Clusters, Serverless Workgroups, Snapshots",
             ServiceType::Batch => "Job Queues, Compute Environments, Jobs, Job Definitions",
             ServiceType::Dms => "Replication Tasks, Instances, Endpoints, Serverless Replications",
+            ServiceType::DataSync => "Transfer Tasks, Locations, Agents",
             ServiceType::Beanstalk => "Environments (Standard + Cluster Mode), Applications, Versions",
             ServiceType::AppSync => "GraphQL APIs, Data Sources, Resolvers, Functions",
             ServiceType::Budgets => "Cost & Usage Budgets, Alerts, Subscribers",
@@ -643,6 +649,7 @@ impl ServiceType {
             "ses" | "sesv2" | "email" | "identities" | "suppression" => Some(ServiceType::Ses),
             "msk" | "kafka" | "managedkafka" => Some(ServiceType::Msk),
             "dms" | "migration" | "databasemigration" | "replication" => Some(ServiceType::Dms),
+            "datasync" | "sync" => Some(ServiceType::DataSync),
             "fms" | "firewallmanager" | "fwmanager" => Some(ServiceType::Fms),
             "redshift" | "rs" | "warehouse" | "datawarehouse" | "dwh" => {
                 Some(ServiceType::Redshift)
@@ -726,6 +733,7 @@ impl ServiceType {
             ServiceType::Ses => "@ses",
             ServiceType::Msk => "@msk",
             ServiceType::Dms => "@dms",
+            ServiceType::DataSync => "@datasync",
             ServiceType::Beanstalk => "@eb",
             ServiceType::AppSync => "@appsync",
             ServiceType::Fms => "@fms",

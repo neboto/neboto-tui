@@ -83,7 +83,8 @@ checked before them; a view with a text input must report it in
   `EndpointId`, regional — both direction volumes fetched, the wrong one is
   just empty)/CodeBuild projects (`AWS/CodeBuild` dim `ProjectName`)/DMS tasks +
   replication instances (`AWS/DMS` — a task needs **two** dims, the
-  instance's *name* and the task's ARN *resource id*; a spec table each). Each is
+  instance's *name* and the task's ARN *resource id*; a spec table each)/DataSync
+  tasks (`AWS/DataSync` dim `TaskId`, published only while an execution runs). Each is
   namespace +
   dimension-set specific — see its spec table in `src/aws/metrics.rs`, or a
   hand-built kind's `fetch_*_metrics` fn and `MetricsKind` arm. **New kinds go through the spec table**

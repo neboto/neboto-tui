@@ -449,6 +449,12 @@ pub struct LazyStore {
     pub firehose_tags: LazyMap<Vec<(String, String)>>,
     /// X-Ray trace Segments section (`BatchGetTraces`), keyed by trace id.
     pub xray_traces: LazyMap<crate::aws::services::xray::XRayTraceDetail>,
+    /// DataSync task Executions section (and the Overview's last run), keyed
+    /// by task ARN.
+    pub datasync_executions: LazyMap<crate::aws::services::datasync::DataSyncExecutions>,
+    /// DataSync location Configuration section (the per-type describe), keyed
+    /// by location ARN.
+    pub datasync_location_config: LazyMap<crate::aws::services::datasync::LocationConfig>,
     /// DMS task Tables section (`DescribeTableStatistics`), keyed by task ARN.
     pub dms_table_stats: LazyMap<crate::aws::services::dms::DmsTableStats>,
     /// DMS task Assessments section, keyed by task ARN.

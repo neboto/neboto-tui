@@ -27,6 +27,7 @@ pub mod config;
 pub mod cost;
 pub mod cloudtrail;
 pub mod direct_connect;
+pub mod datasync;
 pub mod dms;
 pub mod dynamodb;
 pub mod efs;

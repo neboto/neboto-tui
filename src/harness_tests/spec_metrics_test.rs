@@ -196,7 +196,7 @@ async fn every_spec_target_has_a_mock_that_charts() {
         "AWS/ECS", "AWS/AutoScaling", "ContainerInsights", "AWS/ApiGateway", "AWS/ApplicationELB", "AWS/ES",
         "AWS/DMS", "ECS/ContainerInsights", "AWS/WAFV2", "AWS/FSx", "AWS/SES", "AWS/Cognito",
         "AWS/NetworkFirewall", "AWS/Kafka", "AWS/PrivateLinkEndpoints", "AWS/Bedrock-AgentCore",
-        "AWS/AppSync", "AWS/CertificateManager", "AWS/ElasticBeanstalk", "AWS/Backup",
+        "AWS/AppSync", "AWS/CertificateManager", "AWS/ElasticBeanstalk", "AWS/Backup", "AWS/DataSync",
     ] {
         assert!(seen.contains_key(ns), "no mock reaches the {ns} spec arm: {seen:?}");
     }

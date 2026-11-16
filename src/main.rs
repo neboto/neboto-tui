@@ -60,6 +60,7 @@ use ui::widgets::{
     redshift_tabs,
     batch_tabs,
     xray_tabs, changes_tabs,
+    datasync_tabs,
     dms_tabs,
     beanstalk_tabs,
     region_selector, resolver_tabs, resource_list,
@@ -455,6 +456,9 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
             }
             Some(ServiceType::Dms) => {
                 dms_tabs::render_dms_tabs(app, sub_tabs_area, frame);
+            }
+            Some(ServiceType::DataSync) => {
+                datasync_tabs::render_datasync_tabs(app, sub_tabs_area, frame);
             }
             Some(ServiceType::Beanstalk) => {
                 beanstalk_tabs::render_beanstalk_tabs(app, sub_tabs_area, frame);

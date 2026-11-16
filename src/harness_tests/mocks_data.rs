@@ -110,6 +110,43 @@ pub(super) fn mocks() -> Vec<Mock> {
             )),
         ),
         (
+            ServiceType::DataSync,
+            "DataSyncTask",
+            Box::new(svc::datasync::DataSyncTask::from_describe(
+                &aws_sdk_datasync::operation::describe_task::DescribeTaskOutput::builder()
+                    .task_arn("arn:aws:datasync:us-east-1:123456789012:task/task-0mock")
+                    .name("mock-task")
+                    .status(aws_sdk_datasync::types::TaskStatus::Available)
+                    .build(),
+                "arn:aws:datasync:us-east-1:123456789012:task/task-0mock",
+                &HashMap::new(),
+            )),
+        ),
+        (
+            ServiceType::DataSync,
+            "DataSyncLocation",
+            Box::new(
+                svc::datasync::DataSyncLocation::from_sdk(
+                    &aws_sdk_datasync::types::LocationListEntry::builder()
+                        .location_arn("arn:aws:datasync:us-east-1:123456789012:location/loc-0mock")
+                        .location_uri("s3://mock-bucket/prefix/")
+                        .build(),
+                )
+                .unwrap(),
+            ),
+        ),
+        (
+            ServiceType::DataSync,
+            "DataSyncAgent",
+            Box::new(svc::datasync::DataSyncAgent::from_list_entry(
+                &aws_sdk_datasync::types::AgentListEntry::builder()
+                    .agent_arn("arn:aws:datasync:us-east-1:123456789012:agent/agent-0mock")
+                    .name("mock-agent")
+                    .status(aws_sdk_datasync::types::AgentStatus::Online)
+                    .build(),
+            )),
+        ),
+        (
             ServiceType::Dms,
             "DmsTask",
             Box::new(svc::dms::DmsTask::from_sdk(

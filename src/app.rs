@@ -110,6 +110,7 @@ pub fn has_sub_tabs(service: ServiceType) -> bool {
             | ServiceType::XRay
             | ServiceType::Changes
             | ServiceType::Dms
+            | ServiceType::DataSync
             | ServiceType::Beanstalk
             | ServiceType::Athena
             | ServiceType::Glue
@@ -365,6 +366,7 @@ macro_rules! sub_tab_table {
             XRay => xray_view: XRayView [ServiceMap, Traces, Config],
             Changes => changes_view: ChangesView [All, Iam, Trail, Config, Deploys, Ops],
             Dms => dms_view: DmsView [Tasks, Instances, Endpoints, Serverless],
+            DataSync => datasync_view: DataSyncView [Tasks, Locations, Agents],
             Beanstalk => beanstalk_view: BeanstalkView [Environments, Applications, Versions],
             ControlTower => controltower_view: ControlTowerView [LandingZone, Controls, Baselines, Operations, Catalog, Compliance, Accounts],
             Athena => athena_view: AthenaView [Workgroups, DataCatalogs, Databases, Queries, SavedQueries],
@@ -974,6 +976,36 @@ impl BeanstalkView {
     }
 }
 
+/// Sub-tab view for DataSync (Tasks / Locations / Agents).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum DataSyncView {
+    Tasks,
+    Locations,
+    Agents}
+
+impl DataSyncView {
+    pub fn resource_type_filter(&self) -> &'static str {
+        match self {
+            DataSyncView::Tasks => "DataSync Task",
+            DataSyncView::Locations => "DataSync Location",
+            DataSyncView::Agents => "DataSync Agent"}
+    }
+
+    fn next(self) -> Self {
+        match self {
+            DataSyncView::Tasks => DataSyncView::Locations,
+            DataSyncView::Locations => DataSyncView::Agents,
+            DataSyncView::Agents => DataSyncView::Tasks}
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            DataSyncView::Tasks => DataSyncView::Agents,
+            DataSyncView::Locations => DataSyncView::Tasks,
+            DataSyncView::Agents => DataSyncView::Locations}
+    }
+}
+
 /// Sub-tab view for DMS (Tasks / Instances / Endpoints / Serverless).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum DmsView {
@@ -1184,6 +1216,7 @@ pub enum JumpView {
     AgentCore(AgentCoreView),
     Batch(BatchView),
     Dms(DmsView),
+    DataSync(DataSyncView),
     Beanstalk(BeanstalkView),
     S3Tables(S3TablesView),
     Ecr(EcrView),
@@ -2685,6 +2718,7 @@ pub struct App {
     pub xray_window: crate::aws::services::xray::XRayWindow,
     pub beanstalk_view: BeanstalkView,
     pub dms_view: DmsView,
+    pub datasync_view: DataSyncView,
 
 
     // Athena sub-tab view + per-type detail sections
@@ -3494,6 +3528,7 @@ impl App {
             xray_window: crate::aws::services::xray::XRayWindow::default(),
             beanstalk_view: BeanstalkView::Environments,
             dms_view: DmsView::Tasks,
+            datasync_view: DataSyncView::Tasks,
 
             athena_view: AthenaView::Workgroups,
             fms_view: FmsView::Policies,
@@ -6473,6 +6508,22 @@ impl App {
             }
         }
 
+        // DataSync (Tasks / Locations / Agents) sub-tab switching
+        if !self.search_active && self.current_service == Some(ServiceType::DataSync) {
+            let view = match key.code {
+                KeyCode::Char('1') => Some(DataSyncView::Tasks),
+                KeyCode::Char('2') => Some(DataSyncView::Locations),
+                KeyCode::Char('3') => Some(DataSyncView::Agents),
+                KeyCode::Tab => Some(self.datasync_view.next()),
+                KeyCode::BackTab => Some(self.datasync_view.prev()),
+                _ => None};
+            if let Some(v) = view {
+                self.datasync_view = v;
+                self.update_search();
+                return Ok(());
+            }
+        }
+
         // Elastic Beanstalk (Environments / Applications / Versions) sub-tab switching
         if !self.search_active && self.current_service == Some(ServiceType::Beanstalk) {
             let view = match key.code {
@@ -8781,6 +8832,7 @@ impl App {
             Some(ServiceType::XRay) => Some(self.xray_view.resource_type_filter()),
             Some(ServiceType::Changes) => Some(self.changes_view.resource_type_filter()),
             Some(ServiceType::Dms) => Some(self.dms_view.resource_type_filter()),
+            Some(ServiceType::DataSync) => Some(self.datasync_view.resource_type_filter()),
             Some(ServiceType::Beanstalk) => Some(self.beanstalk_view.resource_type_filter()),
             Some(ServiceType::ControlTower) => {
                 Some(self.controltower_view.resource_type_filter())
@@ -10473,6 +10525,14 @@ impl App {
         services.insert(
             ServiceType::Dms,
             Arc::new(crate::aws::services::dms::DmsService::new(aws_clients)),
+        );
+        services.insert(
+            ServiceType::DataSync,
+            ListTimeTags::wrap(
+                Arc::new(crate::aws::services::datasync::DataSyncService::new(aws_clients)),
+                aws_clients,
+                &["datasync"],
+            ),
         );
         services.insert(
             ServiceType::Beanstalk,
@@ -17160,6 +17220,9 @@ impl App {
                     matches!(self.lazy.r53_zone_detail.get(&z.id), Some(crate::lazy::Lazy::Loaded(_)))
                 });
 
+        // A DataSync task names its log group; every execution is a stream in it.
+        let datasync_task_log = self.selected_datasync_task_log();
+
         // A DMS task's group/stream are derived from its instance + ARN.
         let dms_task_log = self.selected_dms_task_log();
 
@@ -17385,6 +17448,13 @@ impl App {
                         return;
                     }
                 }
+            } else if let Some((group, name)) = datasync_task_log {
+                (
+                    Src::Group {
+                        group,
+                        streams: Vec::new()},
+                    format!("DataSync task {}", name),
+                )
             } else if let Some((group, stream, name)) = dms_task_log {
                 (
                     Src::Group {
@@ -20537,6 +20607,7 @@ impl App {
             JumpView::AgentCore(v) => self.agentcore_view = *v,
             JumpView::Batch(v) => self.batch_view = *v,
             JumpView::Dms(v) => self.dms_view = *v,
+            JumpView::DataSync(v) => self.datasync_view = *v,
             JumpView::Beanstalk(v) => self.beanstalk_view = *v,
             JumpView::S3Tables(v) => self.s3tables_view = *v,
             JumpView::Ecr(v) => self.ecr_view = *v,
@@ -21283,6 +21354,7 @@ impl App {
             Some(ServiceType::Waf) => JumpView::Waf(self.waf_view, self.waf_scope),
             Some(ServiceType::Batch) => JumpView::Batch(self.batch_view),
             Some(ServiceType::Dms) => JumpView::Dms(self.dms_view),
+            Some(ServiceType::DataSync) => JumpView::DataSync(self.datasync_view),
             Some(ServiceType::Beanstalk) => JumpView::Beanstalk(self.beanstalk_view),
             Some(ServiceType::S3Tables) => JumpView::S3Tables(self.s3tables_view),
             Some(ServiceType::Ecr) => JumpView::Ecr(self.ecr_view),
@@ -24163,6 +24235,7 @@ impl App {
     /// rely on this rather than repeating an `m …` footer extra.
     pub fn supports_metrics_overlay(&self) -> bool {
         self.selected_dms_metrics_target().is_some()
+            || self.selected_datasync_task().is_some()
             || self.is_selected_ec2_instance()
             || self.is_selected_ebs_volume()
             || self.is_selected_lambda_function()
@@ -24267,6 +24340,7 @@ impl App {
 
     pub fn supports_log_tail(&self) -> bool {
         self.selected_dms_task_log().is_some()
+            || self.selected_datasync_task_log().is_some()
             || self.is_selected_cw_log_group()
             // Runtime application logs + spans, gateway and memory vended logs.
             || self.is_selected_agentcore_tailable()
@@ -27326,6 +27400,40 @@ impl App {
                         v,
                         EbVersionDetailSection::from_index(self.detail_section_idx),
                         &deployed,
+                    );
+                }
+            }
+            {
+                use crate::aws::services::datasync::{
+                    DataSyncAgent, DataSyncAgentDetailSection, DataSyncLocation,
+                    DataSyncLocationDetailSection, DataSyncTask, DataSyncTaskDetailSection,
+                };
+                use crate::ui::widgets::details_pane as dp;
+                if let Some(t) = resource.as_any().downcast_ref::<DataSyncTask>() {
+                    return dp::datasync_task_section_lines(
+                        t,
+                        DataSyncTaskDetailSection::from_index(self.detail_section_idx),
+                        self.lazy.datasync_executions.get(&t.arn),
+                    );
+                }
+                if let Some(l) = resource.as_any().downcast_ref::<DataSyncLocation>() {
+                    let tasks: Vec<&DataSyncTask> = self
+                        .resources
+                        .iter()
+                        .filter_map(|r| r.as_any().downcast_ref::<DataSyncTask>())
+                        .filter(|t| t.source_arn == l.arn || t.destination_arn == l.arn)
+                        .collect();
+                    return dp::datasync_location_section_lines(
+                        l,
+                        DataSyncLocationDetailSection::from_index(self.detail_section_idx),
+                        self.lazy.datasync_location_config.get(&l.arn),
+                        &tasks,
+                    );
+                }
+                if let Some(a) = resource.as_any().downcast_ref::<DataSyncAgent>() {
+                    return dp::datasync_agent_section_lines(
+                        a,
+                        DataSyncAgentDetailSection::from_index(self.detail_section_idx),
                     );
                 }
             }
@@ -33534,6 +33642,11 @@ impl App {
                 ("DomainName".to_string(), d.domain_name.clone()),
             ];
             target("OpenSearch domain", "AWS/ES", dims, m::OPENSEARCH_DOMAIN)
+        } else if let Some(t) = is!(s::datasync::DataSyncTask) {
+            MetricTarget {
+                hint: Some("DataSync publishes these only while an execution runs — widen the range to cover a run"),
+                ..target("DataSync task", "AWS/DataSync", dim("TaskId", t.task_id()), m::DATASYNC_TASK)
+            }
         } else if let Some((_, flavor, instance, task)) = self.selected_dms_metrics_target() {
             let mut dims = dim("ReplicationInstanceIdentifier", &instance);
             match (flavor, task) {
@@ -34700,6 +34813,72 @@ impl App {
                 fetch_resources(client, id)
                     .await
                     .map_err(|e| format!("Environment resources unavailable: {e}"))
+            },
+        );
+    }
+
+    // ── DataSync: log location, lazy sections ────────────────────────────────
+
+    fn selected_datasync_task(&self) -> Option<&crate::aws::services::datasync::DataSyncTask> {
+        self.get_selected_resource()?
+            .as_any()
+            .downcast_ref::<crate::aws::services::datasync::DataSyncTask>()
+    }
+
+    /// `(log group, title)` for `t` on a DataSync task — `None` when the
+    /// task has no CloudWatch log group configured.
+    fn selected_datasync_task_log(&self) -> Option<(String, String)> {
+        let t = self.selected_datasync_task()?;
+        Some((t.log_group()?, t.name().to_string()))
+    }
+
+    /// A task's executions — the Executions tab, and the Overview's "last
+    /// execution" block (one fetch feeds both).
+    pub(crate) fn trigger_datasync_executions_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::datasync::DataSyncTaskDetailSection as S;
+        let Some(arn) = self.selected_datasync_task().map(|t| t.arn.clone()) else {
+            return;
+        };
+        if !matches!(S::from_index(self.detail_section_idx), S::Overview | S::Executions) {
+            return;
+        }
+        let client = self.aws_clients.datasync_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.datasync_executions,
+            arn.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::datasync::fetch_task_executions(client, arn)
+                    .await
+                    .map_err(|e| format!("Executions unavailable: {}", e))
+            },
+        );
+    }
+
+    pub(crate) fn trigger_datasync_location_config_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        use crate::aws::services::datasync::{DataSyncLocation, DataSyncLocationDetailSection as S, LocationKind};
+        if S::from_index(self.detail_section_idx) != S::Configuration {
+            return;
+        }
+        let Some((arn, kind)) = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<DataSyncLocation>())
+            .map(|l| (l.arn.clone(), l.kind))
+        else {
+            return;
+        };
+        if kind == LocationKind::Other {
+            return;
+        }
+        let client = self.aws_clients.datasync_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.datasync_location_config,
+            arn.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::datasync::fetch_location_config(client, arn, kind)
+                    .await
+                    .map_err(|e| format!("Location configuration unavailable: {}", e))
             },
         );
     }
