@@ -574,14 +574,15 @@ fn render_series(app: &App, st: &SpecMetricsState, area: Rect, frame: &mut Frame
         render_chart(st, &drawn, chart_area, frame);
     }
     if let Some(area) = table_area {
-        render_breakdown(st, area, frame);
+        render_breakdown(app, st, area, frame);
     }
 }
 
 /// The target's breakdown tables (WAF's requests by rule and by label, an
 /// FSx file system's volumes and tiers) for the view's range. What doesn't
-/// fit is left to `e`, which lists them all.
-fn render_breakdown(st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
+/// fit is left to `e`, which lists them all. Each drawn row is recorded as
+/// a click target under its cursor index (rows counted through every table).
+fn render_breakdown(app: &App, st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
     let dim = Style::default().fg(theme::text_dim());
     let focused = st.table_cursor.is_some();
     let border = if focused { theme::border_focused() } else { theme::border_dim() };
@@ -594,6 +595,7 @@ fn render_breakdown(st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
     frame.render_widget(block, area);
     let height = inner.height as usize;
     let mut lines: Vec<Line> = Vec::new();
+    let mut targets: Vec<(usize, Rect)> = Vec::new();
     match &st.breakdown {
         None => lines.push(Line::styled(if st.loading { " Reading…" } else { " Nothing to show" }, dim)),
         Some(Err(e)) => lines.push(Line::styled(format!(" ⚠ {e}"), Style::default().fg(theme::warning()))),
@@ -610,7 +612,10 @@ fn render_breakdown(st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
             }
             let tables = &data.tables;
             let cursor = st.cursor_pos();
+            let mut before = 0;
             for (i, t) in tables.iter().enumerate() {
+                let first = before;
+                before += t.rows.len();
                 if i > 0 {
                     lines.push(Line::raw(""));
                 }
@@ -634,6 +639,10 @@ fn render_breakdown(st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
                 for (k, row) in rows.into_iter().enumerate() {
                     let r = skip + k;
                     let name = &t.rows[r].0;
+                    if lines.len() < height {
+                        let y = inner.y + lines.len() as u16;
+                        targets.push((first + r, Rect { y, height: 1, ..inner }));
+                    }
                     let line = if here == Some(r) {
                         // The cursor: `▸` in the leading space, bold.
                         Line::styled(
@@ -655,6 +664,7 @@ fn render_breakdown(st: &SpecMetricsState, area: Rect, frame: &mut Frame) {
         }
     }
     frame.render_widget(Paragraph::new(lines), inner);
+    app.popup_hits.borrow_mut().record_body_rows(inner, targets);
 }
 
 /// The selected metric (with its group) as braille lines over the window.

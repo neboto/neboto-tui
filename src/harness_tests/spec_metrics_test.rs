@@ -763,3 +763,68 @@ fn a_sum_alarm_is_scaled_and_a_math_alarm_explains() {
     let t = alarm_metric_target(&a);
     assert!(t.extra.is_empty() && t.hint.unwrap().contains("no single metric"));
 }
+
+/// The tables take the mouse: a click puts the cursor on that rule (what
+/// `Tab` + `j` reach), a double-click charts it, the wheel steps the cursor
+/// while over them, and a click on a metric row hands the cursor back.
+#[tokio::test]
+async fn a_click_on_a_rule_selects_it_and_a_double_click_charts_it() {
+    use crate::aws::services::waf::{WafRuleTraffic, WafTraffic};
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let acl = all_mocks().into_iter().find(|(_, l, _)| *l == "WafWebAcl").unwrap().2;
+    select_mock(&mut app, ServiceType::Waf, acl.clone_box());
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    settle(&mut app, &tx, &mut rx).await;
+    let region = app.aws_clients.current_region().to_string();
+    let base = vec![("WebACL".to_string(), "mock-web-acl".to_string()), ("Region".to_string(), region)];
+    let row = |name: &str, blocked: f64| WafRuleTraffic { name: name.into(), blocked, ..Default::default() };
+    let traffic = WafTraffic {
+        totals: Default::default(),
+        rules: vec![row("Default_Action", 900.0), row("RateLimit-per-IP", 40.0)],
+        labels: vec![row("awswaf:managed:aws:bot-control:bot:category:http_library", 5.0)],
+    };
+    app.spec_metrics.as_mut().unwrap().breakdown =
+        Some(Ok(crate::aws::metrics::BreakdownData { summary: traffic.summary(), tables: traffic.tables(&base) }));
+    press(&mut app, &tx, KeyCode::Char('Z')).await;
+
+    let table_row = |app: &App, idx: usize| {
+        screen_of(app);
+        let hits = app.popup_hits.borrow();
+        let r = hits.body_rows.iter().find(|(i, _)| *i == idx).unwrap_or_else(|| panic!("row {idx}: {:?}", hits.body_rows)).1;
+        (r.x + 2, r.y)
+    };
+    let mouse = |kind, (column, row): (u16, u16)| Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE });
+    let left = MouseEventKind::Down(MouseButton::Left);
+
+    // One click selects, across the table boundary too (row 2 is the label).
+    let at = table_row(&app, 2);
+    app.handle_event(mouse(left, at), &tx).await.unwrap();
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert_eq!((st.table_cursor, st.drilled.as_deref()), (Some(2), None), "a single click never charts");
+
+    // The wheel steps the tables' cursor while over them.
+    app.handle_event(mouse(MouseEventKind::ScrollUp, at), &tx).await.unwrap();
+    assert_eq!(app.spec_metrics.as_ref().unwrap().table_cursor, Some(1));
+
+    // A double-click is ⏎: the rule's own series.
+    let at = table_row(&app, 1);
+    app.handle_event(mouse(left, at), &tx).await.unwrap();
+    app.handle_event(mouse(left, at), &tx).await.unwrap();
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert_eq!(st.drilled.as_deref(), Some("RateLimit-per-IP"));
+    assert_eq!(st.series.len(), 5);
+
+    // A metric row takes the cursor back, so j/k and ⏎ are the metrics' again.
+    screen_of(&app);
+    let metric = {
+        let hits = app.popup_hits.borrow();
+        let r = hits.rows.iter().find(|(i, _)| *i == 1).expect("metric row").1;
+        (r.x + 2, r.y)
+    };
+    app.handle_event(mouse(left, metric), &tx).await.unwrap();
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert_eq!((st.table_cursor, st.selected), (None, 1));
+}
