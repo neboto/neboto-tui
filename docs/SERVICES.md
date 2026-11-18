@@ -3629,3 +3629,15 @@ the service you're touching.
     unverified; revisit). `warehouse_location` is an S3-style URI whose
     bucket is internal to the service — its jump indicator may render but
     won't resolve to anything in `@s3`; harmless, left alone.
+
+
+## ECS
+
+**ECS task visibility**: the streaming load fetches running tasks **plus a
+capped, most-recent-first window of recently-stopped tasks** (ECS retains them
+~1h) so a failed/cycled-out task doesn't vanish before you read its stop reason
+/ exit codes. The ECS **service** pane has a lazy Tasks section; the cluster-wide
+Tasks sub-tab has an `f` status filter (All/Running/Stopped).
+`EcsServiceInfo::state()` reflects rollout health (FAILED→red, IN_PROGRESS→yellow);
+past that, an ACTIVE service at 0/0 is `ResourceState::Idle` (muted `◌`,
+label `scaled to 0`, sorted next to stopped) — not a healthy green row.
