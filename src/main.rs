@@ -61,6 +61,7 @@ use ui::widgets::{
     batch_tabs,
     xray_tabs, changes_tabs,
     datasync_tabs,
+    mq_tabs,
     dms_tabs,
     docdb_tabs,
     beanstalk_tabs,
@@ -466,6 +467,9 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
             }
             Some(ServiceType::DataSync) => {
                 datasync_tabs::render_datasync_tabs(app, sub_tabs_area, frame);
+            }
+            Some(ServiceType::Mq) => {
+                mq_tabs::render_mq_tabs(app, sub_tabs_area, frame);
             }
             Some(ServiceType::Beanstalk) => {
                 beanstalk_tabs::render_beanstalk_tabs(app, sub_tabs_area, frame);

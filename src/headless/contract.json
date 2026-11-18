@@ -218,6 +218,7 @@
     "@kinesis",
     "@kms",
     "@lambda",
+    "@mq",
     "@msk",
     "@neptune",
     "@opensearch",
@@ -1085,6 +1086,20 @@
       "Overview",
       "Listeners",
       "Attributes",
+      "Tags"
+    ],
+    "MQ Broker": [
+      "Overview",
+      "Endpoints",
+      "Security",
+      "Users",
+      "Maintenance",
+      "Tags"
+    ],
+    "MQ Configuration": [
+      "Overview",
+      "Document",
+      "Revisions",
       "Tags"
     ],
     "MSK Cluster": [

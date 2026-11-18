@@ -57,6 +57,7 @@ pub mod xray_tabs;
 pub mod changes_tabs;
 pub mod beanstalk_tabs;
 pub mod datasync_tabs;
+pub mod mq_tabs;
 pub mod dms_tabs;
 pub mod docdb_tabs;
 pub mod quota_service_selector;

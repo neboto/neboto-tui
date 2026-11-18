@@ -113,6 +113,7 @@ pub fn has_sub_tabs(service: ServiceType) -> bool {
             | ServiceType::Changes
             | ServiceType::Dms
             | ServiceType::DataSync
+            | ServiceType::Mq
             | ServiceType::Beanstalk
             | ServiceType::Athena
             | ServiceType::Glue
@@ -379,6 +380,7 @@ macro_rules! sub_tab_table {
             Changes => changes_view: ChangesView [All, Iam, Trail, Config, Deploys, Ops],
             Dms => dms_view: DmsView [Tasks, Instances, Endpoints, Serverless],
             DataSync => datasync_view: DataSyncView [Tasks, Locations, Agents],
+            Mq => mq_view: MqView [Brokers, Configurations],
             Beanstalk => beanstalk_view: BeanstalkView [Environments, Applications, Versions],
             ControlTower => controltower_view: ControlTowerView [LandingZone, Controls, Baselines, Operations, Catalog, Compliance, Accounts],
             Athena => athena_view: AthenaView [Workgroups, DataCatalogs, Databases, Queries, SavedQueries],
@@ -1018,6 +1020,26 @@ impl DataSyncView {
     }
 }
 
+/// Sub-tab view for Amazon MQ (Brokers / Configurations).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum MqView {
+    Brokers,
+    Configurations}
+
+impl MqView {
+    pub fn resource_type_filter(&self) -> &'static str {
+        match self {
+            MqView::Brokers => "MQ Broker",
+            MqView::Configurations => "MQ Configuration"}
+    }
+
+    fn other(self) -> Self {
+        match self {
+            MqView::Brokers => MqView::Configurations,
+            MqView::Configurations => MqView::Brokers}
+    }
+}
+
 /// Sub-tab view for DMS (Tasks / Instances / Endpoints / Serverless).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum DmsView {
@@ -1282,6 +1304,7 @@ pub enum JumpView {
     Batch(BatchView),
     Dms(DmsView),
     DataSync(DataSyncView),
+    Mq(MqView),
     Beanstalk(BeanstalkView),
     S3Tables(S3TablesView),
     Ecr(EcrView),
@@ -2784,6 +2807,7 @@ pub struct App {
     pub beanstalk_view: BeanstalkView,
     pub dms_view: DmsView,
     pub datasync_view: DataSyncView,
+    pub mq_view: MqView,
 
 
     // Athena sub-tab view + per-type detail sections
@@ -3596,6 +3620,7 @@ impl App {
             beanstalk_view: BeanstalkView::Environments,
             dms_view: DmsView::Tasks,
             datasync_view: DataSyncView::Tasks,
+            mq_view: MqView::Brokers,
 
             athena_view: AthenaView::Workgroups,
             fms_view: FmsView::Policies,
@@ -6611,6 +6636,20 @@ impl App {
             }
         }
 
+        // Amazon MQ (Brokers / Configurations) sub-tab switching
+        if !self.search_active && self.current_service == Some(ServiceType::Mq) {
+            let view = match key.code {
+                KeyCode::Char('1') => Some(MqView::Brokers),
+                KeyCode::Char('2') => Some(MqView::Configurations),
+                KeyCode::Tab | KeyCode::BackTab => Some(self.mq_view.other()),
+                _ => None};
+            if let Some(v) = view {
+                self.mq_view = v;
+                self.update_search();
+                return Ok(());
+            }
+        }
+
         // Elastic Beanstalk (Environments / Applications / Versions) sub-tab switching
         if !self.search_active && self.current_service == Some(ServiceType::Beanstalk) {
             let view = match key.code {
@@ -8922,6 +8961,7 @@ impl App {
             Some(ServiceType::Changes) => Some(self.changes_view.resource_type_filter()),
             Some(ServiceType::Dms) => Some(self.dms_view.resource_type_filter()),
             Some(ServiceType::DataSync) => Some(self.datasync_view.resource_type_filter()),
+            Some(ServiceType::Mq) => Some(self.mq_view.resource_type_filter()),
             Some(ServiceType::Beanstalk) => Some(self.beanstalk_view.resource_type_filter()),
             Some(ServiceType::ControlTower) => {
                 Some(self.controltower_view.resource_type_filter())
@@ -10629,6 +10669,10 @@ impl App {
                 aws_clients,
                 &["datasync"],
             ),
+        );
+        services.insert(
+            ServiceType::Mq,
+            Arc::new(crate::aws::services::mq::MqService::new(aws_clients)),
         );
         services.insert(
             ServiceType::Beanstalk,
@@ -17352,6 +17396,9 @@ impl App {
         // A DataSync task names its log group; every execution is a stream in it.
         let datasync_task_log = self.selected_datasync_task_log();
 
+        // An Amazon MQ broker's general (else audit) log group.
+        let mq_broker_log = self.selected_mq_broker_log();
+
         // A DMS task's group/stream are derived from its instance + ARN.
         let dms_task_log = self.selected_dms_task_log();
 
@@ -17583,6 +17630,13 @@ impl App {
                         group,
                         streams: Vec::new()},
                     format!("DataSync task {}", name),
+                )
+            } else if let Some((group, name)) = mq_broker_log {
+                (
+                    Src::Group {
+                        group,
+                        streams: Vec::new()},
+                    format!("MQ broker {}", name),
                 )
             } else if let Some((group, stream, name)) = dms_task_log {
                 (
@@ -20739,6 +20793,7 @@ impl App {
             JumpView::Batch(v) => self.batch_view = *v,
             JumpView::Dms(v) => self.dms_view = *v,
             JumpView::DataSync(v) => self.datasync_view = *v,
+            JumpView::Mq(v) => self.mq_view = *v,
             JumpView::Beanstalk(v) => self.beanstalk_view = *v,
             JumpView::S3Tables(v) => self.s3tables_view = *v,
             JumpView::Ecr(v) => self.ecr_view = *v,
@@ -21488,6 +21543,7 @@ impl App {
             Some(ServiceType::Batch) => JumpView::Batch(self.batch_view),
             Some(ServiceType::Dms) => JumpView::Dms(self.dms_view),
             Some(ServiceType::DataSync) => JumpView::DataSync(self.datasync_view),
+            Some(ServiceType::Mq) => JumpView::Mq(self.mq_view),
             Some(ServiceType::Beanstalk) => JumpView::Beanstalk(self.beanstalk_view),
             Some(ServiceType::S3Tables) => JumpView::S3Tables(self.s3tables_view),
             Some(ServiceType::Ecr) => JumpView::Ecr(self.ecr_view),
@@ -23480,6 +23536,7 @@ impl App {
                     .or_else(|| self.sh_row_jump_target(k, v))
                     .or_else(|| self.eb_row_jump_target(k, v))
                     .or_else(|| self.appsync_row_jump_target(k, v))
+                    .or_else(|| self.mq_row_jump_target(k, v))
                     .or_else(|| {
                         crate::ui::widgets::details_pane::resource_jump_target(k, v, current)
                             .filter(|t| self.generic_jump_allowed(t, v))
@@ -24397,6 +24454,7 @@ impl App {
     pub fn supports_metrics_overlay(&self) -> bool {
         self.selected_dms_metrics_target().is_some()
             || self.selected_datasync_task().is_some()
+            || self.selected_mq_broker().is_some()
             || self.is_selected_ec2_instance()
             || self.is_selected_ebs_volume()
             || self.is_selected_lambda_function()
@@ -24503,6 +24561,7 @@ impl App {
     pub fn supports_log_tail(&self) -> bool {
         self.selected_dms_task_log().is_some()
             || self.selected_datasync_task_log().is_some()
+            || self.selected_mq_broker_log().is_some()
             || self.is_selected_cw_log_group()
             // Runtime application logs + spans, gateway and memory vended logs.
             || self.is_selected_agentcore_tailable()
@@ -27596,6 +27655,31 @@ impl App {
                     return dp::datasync_agent_section_lines(
                         a,
                         DataSyncAgentDetailSection::from_index(self.detail_section_idx),
+                    );
+                }
+            }
+            {
+                use crate::aws::services::mq::{
+                    MqBroker, MqBrokerDetailSection, MqConfigDetailSection, MqConfiguration,
+                };
+                use crate::ui::widgets::details_pane as dp;
+                if let Some(b) = resource.as_any().downcast_ref::<MqBroker>() {
+                    return dp::mq_broker_section_lines(b, MqBrokerDetailSection::from_index(self.detail_section_idx));
+                }
+                if let Some(c) = resource.as_any().downcast_ref::<MqConfiguration>() {
+                    let uses = |slot: &Option<(String, i32)>| slot.as_ref().is_some_and(|(id, _)| *id == c.id);
+                    let brokers: Vec<&MqBroker> = self
+                        .resources
+                        .iter()
+                        .filter_map(|r| r.as_any().downcast_ref::<MqBroker>())
+                        .filter(|b| uses(&b.config_current) || uses(&b.config_pending))
+                        .collect();
+                    return dp::mq_config_section_lines(
+                        c,
+                        MqConfigDetailSection::from_index(self.detail_section_idx),
+                        self.lazy.mq_config_document.get(&c.id),
+                        self.lazy.mq_config_revisions.get(&c.id),
+                        &brokers,
                     );
                 }
             }
@@ -33839,6 +33923,17 @@ impl App {
                 hint: Some("DataSync publishes these only while an execution runs — widen the range to cover a run"),
                 ..target("DataSync task", "AWS/DataSync", dim("TaskId", t.task_id()), m::DATASYNC_TASK)
             }
+        } else if let Some(b) = is!(s::mq::MqBroker) {
+            let dims = dim("Broker", &b.metric_broker());
+            if b.is_rabbit() {
+                target("RabbitMQ broker", "AWS/AmazonMQ", dims, m::MQ_RABBITMQ_BROKER)
+            } else {
+                MetricTarget {
+                    hint: (b.deployment_mode == "ACTIVE_STANDBY_MULTI_AZ")
+                        .then_some("Charted for instance 1 — after a failover the active instance is <name>-2"),
+                    ..target("ActiveMQ broker", "AWS/AmazonMQ", dims, m::MQ_ACTIVEMQ_BROKER)
+                }
+            }
         } else if let Some((_, flavor, instance, task)) = self.selected_dms_metrics_target() {
             let mut dims = dim("ReplicationInstanceIdentifier", &instance);
             match (flavor, task) {
@@ -35116,6 +35211,83 @@ impl App {
                     .map_err(|e| format!("Location configuration unavailable: {}", e))
             },
         );
+    }
+
+    // ── Amazon MQ: log location, lazy sections, row jumps ────────────────────
+
+    fn selected_mq_broker(&self) -> Option<&crate::aws::services::mq::MqBroker> {
+        self.get_selected_resource()?
+            .as_any()
+            .downcast_ref::<crate::aws::services::mq::MqBroker>()
+    }
+
+    fn selected_mq_config(&self) -> Option<&crate::aws::services::mq::MqConfiguration> {
+        self.get_selected_resource()?
+            .as_any()
+            .downcast_ref::<crate::aws::services::mq::MqConfiguration>()
+    }
+
+    /// `(log group, title)` for `t` on a broker — `None` while CloudWatch
+    /// logging is off.
+    fn selected_mq_broker_log(&self) -> Option<(String, String)> {
+        let b = self.selected_mq_broker()?;
+        Some((b.log_group()?, b.name().to_string()))
+    }
+
+    /// A configuration's latest revision, decoded.
+    pub(crate) fn trigger_mq_config_document_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some((id, revision)) = self.selected_mq_config().map(|c| (c.id.clone(), c.latest_revision)) else {
+            return;
+        };
+        let client = self.aws_clients.mq_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.mq_config_document,
+            id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::mq::fetch_config_document(client, id, revision)
+                    .await
+                    .map_err(|e| format!("Configuration document unavailable: {}", e))
+            },
+        );
+    }
+
+    pub(crate) fn trigger_mq_config_revisions_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(id) = self.selected_mq_config().map(|c| c.id.clone()) else {
+            return;
+        };
+        let client = self.aws_clients.mq_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.mq_config_revisions,
+            id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::mq::fetch_config_revisions(client, id)
+                    .await
+                    .map_err(|e| format!("Revisions unavailable: {}", e))
+            },
+        );
+    }
+
+    /// Under `@mq`, a row whose value is the id of a loaded broker or
+    /// configuration leads to it: a broker's Configuration, a configuration's
+    /// Used By. Keyed on the value, not the label; the selected row's own id
+    /// leads nowhere. Both tabs load together, so a configuration a broker
+    /// names is in the list unless its list call failed.
+    pub fn mq_row_jump_target(&self, _key: &str, value: &str) -> Option<JumpTarget> {
+        if self.current_service != Some(ServiceType::Mq) {
+            return None;
+        }
+        let v = value.trim();
+        if v.contains(char::is_whitespace) || self.get_selected_resource().is_some_and(|r| r.id() == v) {
+            return None;
+        }
+        let view = match self.resources.iter().find(|r| r.id() == v)?.resource_type() {
+            "MQ Broker" => MqView::Brokers,
+            "MQ Configuration" => MqView::Configurations,
+            _ => return None,
+        };
+        Some(JumpTarget { service: ServiceType::Mq, view: JumpView::Mq(view), id: v.to_string() })
     }
 
     // ── DMS: metrics target, log location, lazy sections ─────────────────────

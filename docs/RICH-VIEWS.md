@@ -88,7 +88,9 @@ checked before them; a view with a text input must report it in
   just empty)/CodeBuild projects (`AWS/CodeBuild` dim `ProjectName`)/DMS tasks +
   replication instances (`AWS/DMS` — a task needs **two** dims, the
   instance's *name* and the task's ARN *resource id*; a spec table each)/DataSync
-  tasks (`AWS/DataSync` dim `TaskId`, published only while an execution runs)/DocumentDB
+  tasks (`AWS/DataSync` dim `TaskId`, published only while an execution runs)/Amazon MQ
+  brokers (`AWS/AmazonMQ` dim `Broker` — the broker name for RabbitMQ, the *instance*
+  `<name>-1` for ActiveMQ; a spec table per engine)/DocumentDB
   and Neptune instances + clusters (`AWS/DocDB`, `AWS/Neptune`, the RDS dims; picked
   by the row's engine, `rds_metric_specs`, so it holds under `@rds` too). Each is
   namespace +

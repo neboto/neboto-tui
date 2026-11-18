@@ -373,7 +373,7 @@ and `neboto services` prints every prefix.
 | **Security & Identity** | IAM `@iam` · Identity Center `@idc` · Cognito `@cognito` · KMS `@kms` · Secrets Manager `@secrets` · ACM `@acm` · WAF `@waf` · Network Firewall `@anfw` · GuardDuty `@gd` · Security Hub `@sh` · Inspector `@inspector` · Firewall Manager `@fms` · Audit `@audit` (findings from loaded data) |
 | **Analytics** | Athena `@athena` · Glue `@glue` · Kinesis `@kinesis` · MSK `@msk` · Redshift `@redshift` · OpenSearch `@opensearch` |
 | **ML & AI** | Bedrock `@bedrock` · Bedrock AgentCore `@agentcore` |
-| **App Integration** | SQS/SNS `@sqs` · EventBridge `@events` · Step Functions `@sfn` · SES `@ses` · AppSync `@appsync` |
+| **App Integration** | SQS/SNS `@sqs` · EventBridge `@events` · Step Functions `@sfn` · SES `@ses` · AppSync `@appsync` · Amazon MQ `@mq` |
 | **Management & Governance** | CloudFormation `@cfn` · CloudWatch `@cw` · X-Ray `@xray` · Changes `@changes` (what changed recently, account-wide) · CloudTrail `@cloudtrail` · AWS Config `@config` · Systems Manager `@ssm` · Organizations `@orgs` · Trusted Advisor `@ta` · Health `@health` · Service Quotas `@quotas` · Resource Explorer `@explorer` · Resource Groups `@resourcegroups` · RAM `@ram` · Control Tower `@controltower` · Service Catalog `@sc` |
 | **Developer Tools** | CodeSuite `@code` (CodeCommit, CodeBuild, CodePipeline) |
 | **Cost Management** | Cost Explorer `@cost` · Budgets `@budgets` · Invoices `@invoices` |

@@ -233,6 +233,7 @@ mod kms;
 mod lambda;
 mod messaging;
 mod msk;
+mod mq;
 mod network_firewall;
 mod oam;
 mod opensearch;
@@ -304,6 +305,7 @@ pub use kms::*;
 pub use lambda::*;
 pub use messaging::*;
 pub use msk::*;
+pub use mq::*;
 pub use network_firewall::*;
 pub use oam::*;
 pub use opensearch::*;
@@ -917,6 +919,17 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         }
         if let Some(a) = r.as_any().downcast_ref::<DataSyncAgent>() {
             render_datasync_agent_split(app, a, area, frame);
+            return;
+        }
+    }
+    if let Some(r) = resource {
+        use crate::aws::services::mq::{MqBroker, MqConfiguration};
+        if let Some(b) = r.as_any().downcast_ref::<MqBroker>() {
+            render_mq_broker_split(app, b, area, frame);
+            return;
+        }
+        if let Some(c) = r.as_any().downcast_ref::<MqConfiguration>() {
+            render_mq_config_split(app, c, area, frame);
             return;
         }
     }
@@ -3565,6 +3578,16 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
                 }
                 "location" => mk(ServiceType::DataSync, JumpView::DataSync(DataSyncView::Locations), arn),
                 "agent" => mk(ServiceType::DataSync, JumpView::DataSync(DataSyncView::Agents), arn),
+                _ => None,
+            }
+        }
+        // Amazon MQ: `broker:<name>:<id>` and `configuration:<id>`; rows are
+        // keyed by the id.
+        "mq" => {
+            use crate::app::MqView;
+            match resource.split_once(':')? {
+                ("broker", _) => mk(ServiceType::Mq, JumpView::Mq(MqView::Brokers), last_seg()),
+                ("configuration", id) => mk(ServiceType::Mq, JumpView::Mq(MqView::Configurations), id),
                 _ => None,
             }
         }

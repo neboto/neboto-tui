@@ -79,6 +79,7 @@ pub enum ServiceType {
     DocumentDB,
     Neptune,
     DataSync,
+    Mq,
     Beanstalk,
     AppSync,
     Budgets,
@@ -167,6 +168,7 @@ impl ServiceType {
             ServiceType::DocumentDB,
             ServiceType::Neptune,
             ServiceType::DataSync,
+            ServiceType::Mq,
             ServiceType::Beanstalk,
             ServiceType::Budgets,
             ServiceType::Invoices,
@@ -282,7 +284,8 @@ impl ServiceType {
             | ServiceType::EventBridge
             | ServiceType::StepFunctions
             | ServiceType::Ses
-            | ServiceType::AppSync => "App Integration",
+            | ServiceType::AppSync
+            | ServiceType::Mq => "App Integration",
             ServiceType::CloudFormation
             | ServiceType::CloudWatch
             | ServiceType::XRay
@@ -373,6 +376,7 @@ impl ServiceType {
             ServiceType::DocumentDB => "DocumentDB",
             ServiceType::Neptune => "Neptune",
             ServiceType::DataSync => "DataSync",
+            ServiceType::Mq => "Amazon MQ",
             ServiceType::Beanstalk => "Elastic Beanstalk",
             ServiceType::AppSync => "AppSync",
             ServiceType::Fms => "Firewall Manager",
@@ -458,6 +462,7 @@ impl ServiceType {
             ServiceType::DocumentDB => "DocumentDB",
             ServiceType::Neptune => "Neptune",
             ServiceType::DataSync => "DataSync",
+            ServiceType::Mq => "MQ",
             ServiceType::Beanstalk => "EB",
             ServiceType::AppSync => "GQL",
             ServiceType::Fms => "FMS",
@@ -547,6 +552,7 @@ impl ServiceType {
             ServiceType::DocumentDB => "Document Database Clusters, Instances, Snapshots",
             ServiceType::Neptune => "Graph Database Clusters, Instances, Snapshots",
             ServiceType::DataSync => "Transfer Tasks, Locations, Agents",
+            ServiceType::Mq => "ActiveMQ & RabbitMQ Brokers, Configurations",
             ServiceType::Beanstalk => "Environments (Standard + Cluster Mode), Applications, Versions",
             ServiceType::AppSync => "GraphQL APIs, Data Sources, Resolvers, Functions",
             ServiceType::Budgets => "Cost & Usage Budgets, Alerts, Subscribers",
@@ -664,6 +670,7 @@ impl ServiceType {
             "docdb" | "documentdb" => Some(ServiceType::DocumentDB),
             "neptune" => Some(ServiceType::Neptune),
             "datasync" | "sync" => Some(ServiceType::DataSync),
+            "mq" | "amazonmq" | "activemq" | "rabbitmq" | "rabbit" => Some(ServiceType::Mq),
             "fms" | "firewallmanager" | "fwmanager" => Some(ServiceType::Fms),
             "redshift" | "rs" | "warehouse" | "datawarehouse" | "dwh" => {
                 Some(ServiceType::Redshift)
@@ -750,6 +757,7 @@ impl ServiceType {
             ServiceType::DocumentDB => "@docdb",
             ServiceType::Neptune => "@neptune",
             ServiceType::DataSync => "@datasync",
+            ServiceType::Mq => "@mq",
             ServiceType::Beanstalk => "@eb",
             ServiceType::AppSync => "@appsync",
             ServiceType::Fms => "@fms",
