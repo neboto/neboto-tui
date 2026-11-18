@@ -250,6 +250,13 @@ impl PopupHits {
             .collect();
     }
 
+    /// Record the second body from rows that aren't one per line (the spec
+    /// metrics view's breakdown tables, with titles and headers between).
+    pub fn record_body_rows(&mut self, area: Rect, rows: Vec<(usize, Rect)>) {
+        self.body = Some(area);
+        self.body_rows = rows;
+    }
+
     /// Record a popup with no clickable rows (help, a text-input stage):
     /// only a click outside it means anything.
     pub fn record_area(&mut self, popup: Rect) {
@@ -34561,7 +34568,11 @@ impl App {
                 let Some(m) = self.spec_metrics.as_mut() else { return false };
                 match m.picker.as_mut() {
                     Some(p) => p.selected = idx,
-                    None => m.selected = idx,
+                    // A metric row takes the cursor back from the tables.
+                    None => {
+                        m.selected = idx;
+                        m.table_cursor = None;
+                    }
                 }
             }
             PaneView::LogTail => return false,
@@ -34576,7 +34587,8 @@ impl App {
     /// jump, or open. Like the list pane, one click never acts. Right-click
     /// anywhere is `Esc`. The hand-built metrics kinds only take the
     /// right-click (a wheel that changed the time range would be a
-    /// surprise); the spec view's wheel and clicks move its row cursor. The view stays open on any
+    /// surprise); the spec view's wheel and clicks move its row cursor, or
+    /// its breakdown tables' when over those. The view stays open on any
     /// other click, since it *is* the pane. Returns whether a view was open;
     /// when one is, it owns every mouse event.
     async fn handle_pane_view_mouse(
@@ -34597,6 +34609,42 @@ impl App {
                 hits.rows.iter().find(|(_, r)| point_in(*r, col, row)).map(|(i, _)| *i),
             )
         };
+        // The spec view's breakdown tables (a web ACL's rules and labels):
+        // a click is `Tab` + `j` to that row, the wheel steps their cursor.
+        if view == PaneView::Metrics && self.spec_metrics.as_ref().is_some_and(|m| m.picker.is_none()) {
+            let (over, table_hit) = {
+                let hits = self.popup_hits.borrow();
+                (
+                    hits.body.is_some_and(|a| point_in(a, col, row)),
+                    hits.body_rows.iter().find(|(_, r)| point_in(*r, col, row)).map(|(i, _)| *i),
+                )
+            };
+            let step = match mouse.kind {
+                MouseEventKind::ScrollDown => Some(1),
+                MouseEventKind::ScrollUp => Some(-1),
+                _ => None,
+            };
+            let left = mouse.kind == MouseEventKind::Down(MouseButton::Left);
+            if let (true, Some(delta), Some(m)) = (over, step, self.spec_metrics.as_mut()) {
+                if m.table_rows() > 0 {
+                    match m.table_cursor {
+                        Some(_) => m.move_by(delta),
+                        None => m.table_cursor = Some(0),
+                    }
+                }
+                return Ok(true);
+            }
+            if let (true, Some(idx)) = (left, table_hit) {
+                let double = self.note_left_click(col, row);
+                if let Some(m) = self.spec_metrics.as_mut() {
+                    m.table_cursor = Some(idx);
+                }
+                if double {
+                    self.handle_key(press(KeyCode::Enter), event_tx).await?;
+                }
+                return Ok(true);
+            }
+        }
         match mouse.kind {
             MouseEventKind::ScrollDown if inside && (view != PaneView::Metrics || self.spec_metrics.is_some()) => {
                 self.handle_key(press(KeyCode::Down), event_tx).await?;

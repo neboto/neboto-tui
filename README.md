@@ -280,7 +280,7 @@ the faster route, but nothing needs it.
 | Gesture | Does |
 |---|---|
 | Click | Select a row, switch a tab or section, open a picker from a badge, press a status-bar hint (`m metrics`, `W trail`…) |
-| Double-click | `⏎`: open the detail pane, follow a link, confirm a picker row |
+| Double-click | `⏎`: open the detail pane, follow a link, confirm a picker row, chart a rule from a web ACL's totals |
 | Click a `→` | Follow that link |
 | Click the `↑ vX.Y.Z` chip | Copy the upgrade command (shown when a newer release is out) |
 | Click the detail pane's title bar | Full width (`Z`) |

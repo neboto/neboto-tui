@@ -106,7 +106,7 @@ checked before them; a view with a text input must report it in
   series and whether additional metrics are on). A `TargetFix` can set
   dimensions by name, re-key a row by label, add rows (curated set only)
   and give a row a note in place of "no data" (why it can't exist); it
-  lands on the target too, so `d` rebuilds the fixed set. `Tab` moves into those tables and `⏎` on a row charts that
+  lands on the target too, so `d` rebuilds the fixed set. `Tab` — or a click on a row — moves into those tables and `⏎` (a double-click) on a row charts that
   row's own series (`Drill`: specs against the row's dimensions) in
   place of the set, `d` going back; the tables are refetched only for a
   new range or `r`, never for a new charted set. A spec row can be

@@ -853,7 +853,8 @@ and the approaches you rejected are the part nobody can recover from your code.
   click never acts, as in the list), right-click = `Esc`, anything else is
   swallowed. Their renderers record the view rect + visible rows into the
   same `popup_hits`; a new in-pane view needs `open_pane_view` /
-  `select_pane_view_row` arms. Metrics takes only the right-click. The README's Mouse
+  `select_pane_view_row` arms. The hand-built metrics kinds take only the right-click; the spec view's
+  metric rows and breakdown tables (a web ACL's rules) take clicks and the wheel. The README's Mouse
   table and the `?` help's Mouse section list the gestures; keep them in
   step. `mouse_smash_never_panics` clicks every recorded region over every
   mock.
