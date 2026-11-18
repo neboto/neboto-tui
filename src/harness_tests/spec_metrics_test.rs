@@ -195,7 +195,7 @@ async fn every_spec_target_has_a_mock_that_charts() {
         "AWS/Route53Resolver", "AWS/CodeBuild", "AWS/CloudFront", "AWS/Route53", "AWS/GlobalAccelerator",
         "AWS/ECS", "AWS/AutoScaling", "ContainerInsights", "AWS/ApiGateway", "AWS/ApplicationELB", "AWS/ES",
         "AWS/DMS", "ECS/ContainerInsights", "AWS/WAFV2", "AWS/FSx", "AWS/SES", "AWS/Cognito",
-        "AWS/NetworkFirewall", "AWS/Kafka", "AWS/PrivateLinkEndpoints", "AWS/Bedrock-AgentCore",
+        "AWS/NetworkFirewall", "AWS/Kafka", "AWS/PrivateLinkEndpoints", "AWS/PrivateLinkServices", "AWS/Bedrock-AgentCore",
         "AWS/AppSync", "AWS/CertificateManager", "AWS/ElasticBeanstalk", "AWS/Backup", "AWS/DataSync",
         "AWS/DocDB", "AWS/Neptune",
     ] {

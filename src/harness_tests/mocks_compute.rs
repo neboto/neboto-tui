@@ -160,6 +160,20 @@ pub(super) fn mocks() -> Vec<Mock> {
         ),
         (
             ServiceType::VPC,
+            "VpcEndpointService",
+            Box::new(svc::vpc::VpcEndpointService::from_sdk(
+                &aws_sdk_ec2::types::ServiceConfiguration::builder()
+                    .service_id("vpce-svc-0123456789abcdef0")
+                    .service_name("com.amazonaws.vpce.us-east-1.vpce-svc-0123456789abcdef0")
+                    .acceptance_required(true)
+                    .network_load_balancer_arns(
+                        "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/net/api/0123456789abcdef",
+                    )
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::VPC,
             "VpcPeering",
             Box::new(svc::vpc::VpcPeering::from_sdk(
                 &aws_sdk_ec2::types::VpcPeeringConnection::builder()

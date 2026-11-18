@@ -105,6 +105,10 @@ pub struct LazyStore {
     pub vpc_flow_logs: LazyMap<Vec<crate::aws::services::vpc::FlowLogInfo>>,
     /// (enableDnsSupport, enableDnsHostnames), keyed by VPC id.
     pub vpc_dns_attrs: LazyMap<(bool, bool)>,
+    /// An endpoint service's connected endpoints + notifications, keyed by `vpce-svc-` id.
+    pub eps_connections: LazyMap<crate::aws::services::vpc::EpsConnections>,
+    /// An endpoint service's allowed principals, keyed by `vpce-svc-` id.
+    pub eps_permissions: LazyMap<Vec<crate::aws::services::vpc::EpsPermission>>,
 
     // ── SSM ──────────────────────────────────────────────────────────────
     /// Parameter history + tags (one fetch, two sections), keyed by name.

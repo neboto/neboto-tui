@@ -71,7 +71,11 @@ checked before them; a view with a text input must report it in
   (`AWS/PrivateLinkEndpoints` — publishes under the full 4-dim schema, so it
   needs its rows folded across that schema, keyed `VPC Endpoint Id`;
   **gateway** endpoints (S3/DDB) publish nothing → the pane explains instead
-  of fetching)/Transit Gateways + attachments (`AWS/TransitGateway` dim
+  of fetching)/endpoint services, the provider side (`AWS/PrivateLinkServices`
+  dim `Service Id`; traffic publishes per load balancer, so it is summed
+  across `Load Balancer Arn,Service Id`; `EndpointsCount` is the service's
+  own — dimension sets from AWS's docs, not yet checked against a live
+  account)/Transit Gateways + attachments (`AWS/TransitGateway` dim
   `TransitGateway`, attachments add `TransitGatewayAttachment`; one
   one spec table for both)/CW log groups (`AWS/Logs` dim
   `LogGroupName` — incoming events+bytes, the "is this group receiving

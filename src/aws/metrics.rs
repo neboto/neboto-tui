@@ -929,6 +929,21 @@ pub const VPC_ENDPOINT: &[MetricSpec] = &[
         .tone(Tone::Warn),
 ];
 
+/// `AWS/PrivateLinkServices`: traffic publishes per load balancer (and per
+/// AZ / per endpoint), so those rows sum over the service's load balancers;
+/// the endpoint count is the service's own.
+pub const VPC_ENDPOINT_SERVICE: &[MetricSpec] = &[
+    m("BytesProcessed", "Bytes processed", Sum, Unit::BytesPerSec)
+        .rate()
+        .across(Agg::Sum, "Load Balancer Arn,Service Id"),
+    m("ActiveConnections", "Active connections", Max, Unit::Count).across(Agg::Sum, "Load Balancer Arn,Service Id"),
+    m("NewConnections", "New connections", Sum, Unit::Count).across(Agg::Sum, "Load Balancer Arn,Service Id"),
+    m("RstPacketsSent", "RST sent", Sum, Unit::Count)
+        .across(Agg::Sum, "Load Balancer Arn,Service Id")
+        .tone(Tone::Warn),
+    m("EndpointsCount", "Connected endpoints", Max, Unit::Count),
+];
+
 // AgentCore: AWS documents a different dimension set per family and none
 // for a runtime's invocation metrics, so those match the ARN as a token
 // and fold the per-operation series together. A runtime's usage publishes

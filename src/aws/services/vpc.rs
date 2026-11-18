@@ -280,6 +280,15 @@ impl AwsService for VpcService {
             "VPC endpoints"
         );
 
+        // Phase 8b: endpoint services this account publishes (PrivateLink
+        // provider side) — same tab as the endpoints.
+        stream_phase!(
+            self.client.describe_vpc_endpoint_service_configurations(),
+            service_configurations,
+            VpcEndpointService,
+            "endpoint services"
+        );
+
         // Phase 9: Site-to-Site VPN — customer gateways stream as their own
         // rows AND feed the ip/asn map the connections join against.
         let mut cgw_map: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
@@ -2081,6 +2090,341 @@ impl Resource for VpcEndpoint {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+// ── Endpoint service (PrivateLink, provider side) ─────────────────────────────
+
+/// A PrivateLink endpoint service this account **publishes** (`vpce-svc-…`,
+/// `DescribeVpcEndpointServiceConfigurations`): the provider side of the
+/// consumer's `VpcEndpoint`. Who is connected and who may connect are lazy
+/// (`EpsConnections`, `EpsPermission`).
+#[derive(Clone, Debug)]
+pub struct VpcEndpointService {
+    pub id: String,
+    /// `com.amazonaws.vpce.<region>.vpce-svc-…` — what a consumer's endpoint
+    /// names as its `service_name`.
+    pub service_name: String,
+    /// Interface / GatewayLoadBalancer (a list in the API; one in practice).
+    pub service_types: Vec<String>,
+    pub state: String,
+    pub acceptance_required: bool,
+    /// Set when an AWS service owns the endpoints (not a customer service).
+    pub manages_vpc_endpoints: bool,
+    pub nlb_arns: Vec<String>,
+    pub gwlb_arns: Vec<String>,
+    pub availability_zones: Vec<String>,
+    pub base_dns_names: Vec<String>,
+    pub private_dns_name: Option<String>,
+    /// pendingVerification / verified / failed.
+    pub private_dns_state: Option<String>,
+    /// The TXT record that proves domain ownership: `(name, value)`.
+    pub private_dns_txt: Option<(String, String)>,
+    pub payer: Option<String>,
+    pub ip_types: Vec<String>,
+    /// Cross-region access: `(region, state)`.
+    pub supported_regions: Vec<(String, String)>,
+    pub remote_access_enabled: Option<bool>,
+    pub tags: HashMap<String, String>,
+}
+
+impl VpcEndpointService {
+    pub fn from_sdk(s: &aws_sdk_ec2::types::ServiceConfiguration) -> Self {
+        let dns = s.private_dns_name_configuration();
+        Self {
+            id: s.service_id().unwrap_or_default().to_string(),
+            service_name: s.service_name().unwrap_or_default().to_string(),
+            service_types: s
+                .service_type()
+                .iter()
+                .filter_map(|t| t.service_type().map(|x| x.as_str().to_string()))
+                .collect(),
+            state: s.service_state().map(|x| x.as_str().to_string()).unwrap_or_default(),
+            acceptance_required: s.acceptance_required().unwrap_or(false),
+            manages_vpc_endpoints: s.manages_vpc_endpoints().unwrap_or(false),
+            nlb_arns: s.network_load_balancer_arns().to_vec(),
+            gwlb_arns: s.gateway_load_balancer_arns().to_vec(),
+            availability_zones: s.availability_zones().to_vec(),
+            base_dns_names: s.base_endpoint_dns_names().to_vec(),
+            private_dns_name: s.private_dns_name().filter(|n| !n.is_empty()).map(str::to_string),
+            private_dns_state: dns.and_then(|d| d.state()).map(|x| x.as_str().to_string()),
+            private_dns_txt: dns.and_then(|d| Some((d.name()?.to_string(), d.value()?.to_string()))),
+            payer: s.payer_responsibility().map(|p| p.as_str().to_string()),
+            ip_types: s.supported_ip_address_types().iter().map(|t| t.as_str().to_string()).collect(),
+            supported_regions: s
+                .supported_regions()
+                .iter()
+                .filter_map(|r| Some((r.region()?.to_string(), r.service_state().unwrap_or("—").to_string())))
+                .collect(),
+            remote_access_enabled: s.remote_access_enabled(),
+            tags: ec2_tags(s.tags()),
+        }
+    }
+
+    pub fn kind(&self) -> String {
+        if self.service_types.is_empty() {
+            "—".to_string()
+        } else {
+            self.service_types.join(", ")
+        }
+    }
+
+    /// Every load balancer behind the service, NLBs then GWLBs.
+    pub fn load_balancer_arns(&self) -> impl Iterator<Item = &String> {
+        self.nlb_arns.iter().chain(&self.gwlb_arns)
+    }
+}
+
+crate::sections! {
+    pub enum VpcEndpointServiceDetailSection,
+    pub static VPC_ENDPOINT_SERVICE_SECTIONS = [
+        Overview "Overview" => crate::app::App::trigger_eps_connections_load,
+        Connections "Connections" => crate::app::App::trigger_eps_connections_load,
+        Permissions "Permissions" => crate::app::App::trigger_eps_permissions_load,
+        Tags "Tags",
+    ]
+}
+
+impl Resource for VpcEndpointService {
+    fn references(&self) -> Vec<(String, String)> {
+        self.load_balancer_arns().map(|a| ("Load Balancer".to_string(), a.clone())).collect()
+    }
+    fn detail_sections(&self) -> Option<&'static crate::sections::SectionDescriptor> {
+        Some(&VPC_ENDPOINT_SERVICE_SECTIONS)
+    }
+    fn cli_command(&self) -> Option<String> {
+        Some(format!(
+            "aws ec2 describe-vpc-endpoint-service-configurations --service-ids {}",
+            crate::aws::resource::shell_quote(self.id())
+        ))
+    }
+    fn cli_actions(&self) -> Vec<crate::aws::cli_actions::CliAction> {
+        use crate::aws::cli_actions::{CliAction, CliTier};
+        let id = crate::aws::resource::shell_quote(&self.id);
+        vec![
+            CliAction::new(
+                CliTier::Inspect,
+                "describe-vpc-endpoint-connections",
+                format!("aws ec2 describe-vpc-endpoint-connections --filters Name=service-id,Values={id}"),
+            ),
+            CliAction::new(
+                CliTier::Inspect,
+                "describe-vpc-endpoint-service-permissions",
+                format!("aws ec2 describe-vpc-endpoint-service-permissions --service-id {id}"),
+            ),
+        ]
+    }
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn name(&self) -> &str {
+        name_or(&self.tags, &self.id)
+    }
+    fn resource_type(&self) -> &str {
+        "Endpoint Service"
+    }
+    fn list_summary(&self) -> Option<String> {
+        Some(if self.acceptance_required {
+            format!("{} · acceptance required", self.kind())
+        } else {
+            self.kind()
+        })
+    }
+    fn state(&self) -> ResourceState {
+        match self.state.as_str() {
+            "Available" => ResourceState::Available,
+            "Pending" => ResourceState::Pending,
+            "Deleting" => ResourceState::Deleting,
+            "Deleted" => ResourceState::Stopped,
+            "Failed" => ResourceState::Unavailable,
+            other => ResourceState::Unknown(other.to_string()),
+        }
+    }
+    fn state_label(&self) -> String {
+        native_state_label(&self.state, || self.state())
+    }
+    fn tags(&self) -> &HashMap<String, String> {
+        &self.tags
+    }
+    fn search_text(&self) -> String {
+        let mut s = format!("{} {} {}", self.id, self.service_name, self.kind());
+        if let Some(d) = &self.private_dns_name {
+            s.push(' ');
+            s.push_str(d);
+        }
+        for a in self.load_balancer_arns() {
+            s.push(' ');
+            s.push_str(a);
+        }
+        append_tags(s, &self.tags)
+    }
+    fn details(&self) -> Vec<(String, String)> {
+        vec![
+            ("Service ID".to_string(), self.id.clone()),
+            ("Service Name".to_string(), self.service_name.clone()),
+            ("Type".to_string(), self.kind()),
+            ("State".to_string(), self.state.clone()),
+            ("Acceptance Required".to_string(), self.acceptance_required.to_string()),
+        ]
+    }
+    fn console_url(&self, region: &str) -> Option<String> {
+        Some(format!(
+            "https://{region}.console.aws.amazon.com/vpcconsole/home?region={region}#EndpointServiceDetails:endpointServiceId={}",
+            self.id
+        ))
+    }
+    fn clone_box(&self) -> Box<dyn Resource> {
+        Box::new(self.clone())
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// One endpoint connected to (or asking to connect to) an endpoint service —
+/// usually in another account, so its id is not jumpable here.
+#[derive(Clone, Debug)]
+pub struct EpsConnection {
+    pub endpoint_id: String,
+    pub owner: String,
+    /// pendingAcceptance / pending / available / rejected / … (the endpoint's state).
+    pub state: String,
+    pub created: Option<String>,
+    /// Set for a cross-region connection.
+    pub region: Option<String>,
+    pub ip_type: Option<String>,
+    pub dns_names: Vec<String>,
+    pub lb_arns: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct EpsNotification {
+    pub id: String,
+    pub topic_arn: String,
+    pub events: Vec<String>,
+    pub state: String,
+}
+
+/// The Connections section's one lazy value: the connected endpoints and the
+/// SNS notifications on them. Notifications fail on their own.
+#[derive(Clone, Debug)]
+pub struct EpsConnections {
+    pub connections: Vec<EpsConnection>,
+    /// The fetch stopped at `MAX_EPS_CONNECTIONS`.
+    pub truncated: bool,
+    pub notifications: std::result::Result<Vec<EpsNotification>, String>,
+}
+
+impl EpsConnections {
+    pub fn pending(&self) -> usize {
+        self.connections.iter().filter(|c| c.state.eq_ignore_ascii_case("pendingAcceptance")).count()
+    }
+}
+
+/// A principal allowed to create an endpoint to the service.
+#[derive(Clone, Debug)]
+pub struct EpsPermission {
+    pub principal: String,
+    pub principal_type: String,
+}
+
+pub const MAX_EPS_CONNECTIONS: usize = 1000;
+
+pub async fn fetch_eps_connections(
+    client: &Ec2Client,
+    service_id: &str,
+) -> std::result::Result<EpsConnections, String> {
+    let filter = || {
+        aws_sdk_ec2::types::Filter::builder()
+            .name("service-id")
+            .values(service_id)
+            .build()
+    };
+    let mut pages = client
+        .describe_vpc_endpoint_connections()
+        .filters(filter())
+        .into_paginator()
+        .send();
+    let mut connections = Vec::new();
+    let mut truncated = false;
+    'pages: while let Some(page) = pages.next().await {
+        let page = page.map_err(|e| crate::error::sdk_error_message(&e))?;
+        for c in page.vpc_endpoint_connections() {
+            if connections.len() >= MAX_EPS_CONNECTIONS {
+                truncated = true;
+                break 'pages;
+            }
+            connections.push(EpsConnection {
+                endpoint_id: c.vpc_endpoint_id().unwrap_or("—").to_string(),
+                owner: c.vpc_endpoint_owner().unwrap_or("—").to_string(),
+                state: c.vpc_endpoint_state().map(|s| s.as_str().to_string()).unwrap_or_default(),
+                created: c.creation_timestamp().map(fmt_ts),
+                region: c.vpc_endpoint_region().filter(|r| !r.is_empty()).map(str::to_string),
+                ip_type: c.ip_address_type().map(|t| t.as_str().to_string()),
+                dns_names: c.dns_entries().iter().filter_map(|d| d.dns_name().map(str::to_string)).collect(),
+                lb_arns: c
+                    .network_load_balancer_arns()
+                    .iter()
+                    .chain(c.gateway_load_balancer_arns())
+                    .cloned()
+                    .collect(),
+            });
+        }
+    }
+    // Requests waiting on the provider first, then newest.
+    connections.sort_by(|a, b| {
+        let pa = !a.state.eq_ignore_ascii_case("pendingAcceptance");
+        let pb = !b.state.eq_ignore_ascii_case("pendingAcceptance");
+        pa.cmp(&pb).then_with(|| b.created.cmp(&a.created))
+    });
+
+    let notifications = async {
+        let mut pages = client
+            .describe_vpc_endpoint_connection_notifications()
+            .filters(filter())
+            .into_paginator()
+            .send();
+        let mut out = Vec::new();
+        while let Some(page) = pages.next().await {
+            let page = page.map_err(|e| crate::error::sdk_error_message(&e))?;
+            for n in page.connection_notification_set() {
+                out.push(EpsNotification {
+                    id: n.connection_notification_id().unwrap_or("—").to_string(),
+                    topic_arn: n.connection_notification_arn().unwrap_or("—").to_string(),
+                    events: n.connection_events().to_vec(),
+                    state: n
+                        .connection_notification_state()
+                        .map(|s| s.as_str().to_string())
+                        .unwrap_or_default(),
+                });
+            }
+        }
+        Ok(out)
+    }
+    .await;
+
+    Ok(EpsConnections { connections, truncated, notifications })
+}
+
+pub async fn fetch_eps_permissions(
+    client: &Ec2Client,
+    service_id: &str,
+) -> std::result::Result<Vec<EpsPermission>, String> {
+    let mut pages = client
+        .describe_vpc_endpoint_service_permissions()
+        .service_id(service_id)
+        .into_paginator()
+        .send();
+    let mut out = Vec::new();
+    while let Some(page) = pages.next().await {
+        let page = page.map_err(|e| crate::error::sdk_error_message(&e))?;
+        for p in page.allowed_principals() {
+            out.push(EpsPermission {
+                principal: p.principal().unwrap_or("—").to_string(),
+                principal_type: p.principal_type().map(|t| t.as_str().to_string()).unwrap_or_default(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 // ── VpnConnection (Site-to-Site VPN) ──────────────────────────────────────────

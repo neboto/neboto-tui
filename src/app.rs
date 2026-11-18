@@ -319,7 +319,8 @@ impl VpcView {
             VpcView::Peering => "Peering Connection",
             VpcView::SecurityGroups => "SecurityGroup",
             VpcView::NetworkAcls => "NetworkAcl",
-            VpcView::Endpoints => "VPC Endpoint",
+            // Grouped: the consumer side and the services this account publishes.
+            VpcView::Endpoints => "VPC Endpoint|Endpoint Service",
             VpcView::VpnConnections => "VPN Connection|VPN Gateway|Customer Gateway",
             VpcView::DhcpOptions => "DHCP Options"}
     }
@@ -14550,6 +14551,39 @@ impl App {
         }
     }
 
+    fn selected_endpoint_service_id(&self) -> Option<String> {
+        self.get_selected_resource()?
+            .as_any()
+            .downcast_ref::<crate::aws::services::vpc::VpcEndpointService>()
+            .map(|s| s.id.clone())
+    }
+
+    /// An endpoint service's connected endpoints (Overview + Connections).
+    pub(crate) fn trigger_eps_connections_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(id) = self.selected_endpoint_service_id() {
+            let client = self.aws_clients.ec2_vpc_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.eps_connections,
+                id.clone(),
+                event_tx,
+                async move { crate::aws::services::vpc::fetch_eps_connections(&client, &id).await },
+            );
+        }
+    }
+
+    /// An endpoint service's allowed principals (Permissions).
+    pub(crate) fn trigger_eps_permissions_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(id) = self.selected_endpoint_service_id() {
+            let client = self.aws_clients.ec2_vpc_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.eps_permissions,
+                id.clone(),
+                event_tx,
+                async move { crate::aws::services::vpc::fetch_eps_permissions(&client, &id).await },
+            );
+        }
+    }
+
     fn is_selected_nat_gateway(&self) -> bool {
         self.get_selected_resource()
             .map(|r| r.as_any().is::<crate::aws::services::vpc::NatGateway>())
@@ -23373,6 +23407,23 @@ impl App {
         self.get_selected_resource().is_some_and(|r| r.id() == id)
     }
 
+    /// Whether a target the generic id/ARN classifier found is worth
+    /// offering on the row: not the resource on screen, and not an endpoint
+    /// in a consumer's account (an endpoint service's connections) — those
+    /// ids are only jumpable when the endpoint is one of the loaded rows.
+    pub(crate) fn generic_jump_allowed(&self, t: &JumpTarget, value: &str) -> bool {
+        if self.names_selected_resource(&t.id) || self.names_selected_resource(value.trim()) {
+            return false;
+        }
+        let on_endpoint_service = self
+            .get_selected_resource()
+            .is_some_and(|r| r.as_any().is::<crate::aws::services::vpc::VpcEndpointService>());
+        if on_endpoint_service && t.id.starts_with("vpce-") && !t.id.starts_with("vpce-svc-") {
+            return self.resources.iter().any(|r| r.id() == t.id);
+        }
+        true
+    }
+
     fn trigger_jump(
         &mut self,
         allow_cross_service: bool,
@@ -23431,7 +23482,7 @@ impl App {
                     .or_else(|| self.appsync_row_jump_target(k, v))
                     .or_else(|| {
                         crate::ui::widgets::details_pane::resource_jump_target(k, v, current)
-                            .filter(|t| !self.names_selected_resource(&t.id) && !self.names_selected_resource(v.trim()))
+                            .filter(|t| self.generic_jump_allowed(t, v))
                     })
             });
         let target = match target {
@@ -24403,6 +24454,7 @@ impl App {
             // this hint gate just lagged behind.
             || self.is_selected_dx_vif()
             || self.is_selected_vpc_endpoint()
+            || self.selected_endpoint_service_id().is_some()
             || self.is_selected_tgw()
             || self.is_selected_tgw_attachment()
             || self.is_selected_cw_log_group()
@@ -28298,9 +28350,27 @@ impl App {
                 .as_any()
                 .downcast_ref::<crate::aws::services::vpc::VpcEndpoint>()
             {
+                // The endpoint service behind it, when this account publishes it.
+                let own_service = self
+                    .resources
+                    .iter()
+                    .filter_map(|r| r.as_any().downcast_ref::<crate::aws::services::vpc::VpcEndpointService>())
+                    .find(|s| s.service_name == ep.service_name);
                 return crate::ui::widgets::details_pane::vpc_endpoint_section_lines(
                     ep,
                     crate::aws::services::vpc::VpcEndpointDetailSection::from_index(self.detail_section_idx),
+                    own_service,
+                );
+            }
+            if let Some(svc) = resource
+                .as_any()
+                .downcast_ref::<crate::aws::services::vpc::VpcEndpointService>()
+            {
+                return crate::ui::widgets::details_pane::vpc_endpoint_service_section_lines(
+                    svc,
+                    crate::aws::services::vpc::VpcEndpointServiceDetailSection::from_index(self.detail_section_idx),
+                    self.lazy.eps_connections.get(&svc.id),
+                    self.lazy.eps_permissions.get(&svc.id),
                 );
             }
             if let Some(vpn) = resource
@@ -33818,6 +33888,8 @@ impl App {
             } else {
                 t
             }
+        } else if let Some(svc) = is!(s::vpc::VpcEndpointService) {
+            target("Endpoint service", "AWS/PrivateLinkServices", dim("Service Id", &svc.id), m::VPC_ENDPOINT_SERVICE)
         } else if let Some((_, arn, flavor)) = self.selected_agentcore_metric_target() {
             use s::agentcore::AgentCoreMetricsFlavor as F;
             let specs = match flavor {

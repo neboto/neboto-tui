@@ -1390,6 +1390,10 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         render_vpc_endpoint_split(app, ep, area, frame);
         return;
     }
+    if let Some(svc) = resource.and_then(|r| r.as_any().downcast_ref::<crate::aws::services::vpc::VpcEndpointService>()) {
+        render_vpc_endpoint_service_split(app, svc, area, frame);
+        return;
+    }
     if let Some(vpn) = resource.and_then(|r| r.as_any().downcast_ref::<VpnConnection>()) {
         render_vpn_connection_split(app, vpn, area, frame);
         return;
@@ -4687,7 +4691,7 @@ fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
         .or_else(|| app.sh_row_jump_target(key, value))
         .or_else(|| app.eb_row_jump_target(key, value))
         .or_else(|| app.appsync_row_jump_target(key, value))
-        .or_else(|| resource_jump_target(key, value, current).filter(|t| !app.names_selected_resource(&t.id) && !app.names_selected_resource(value.trim())))?;
+        .or_else(|| resource_jump_target(key, value, current).filter(|t| app.generic_jump_allowed(t, value)))?;
     Some(target.service != current)
 }
 
