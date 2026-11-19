@@ -4714,6 +4714,7 @@ fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
         .or_else(|| app.sh_row_jump_target(key, value))
         .or_else(|| app.eb_row_jump_target(key, value))
         .or_else(|| app.appsync_row_jump_target(key, value))
+        .or_else(|| app.mq_row_jump_target(key, value))
         .or_else(|| resource_jump_target(key, value, current).filter(|t| app.generic_jump_allowed(t, value)))?;
     Some(target.service != current)
 }

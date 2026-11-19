@@ -186,6 +186,16 @@ async fn ids_and_arns_jump_between_the_two_tabs() {
     assert!(app.mq_row_jump_target("  team", "c-suite").is_none(), "a tag value is not an id");
     let t = app.mq_row_jump_target("  Configuration", "c-9876fedc-54ba").expect("configuration row");
     assert!(matches!(t.view, JumpView::Mq(MqView::Configurations)));
+    // …and the row says so with a `→`: the arrow chain asks the same
+    // classifier as ⏎ (it once only reached ⏎).
+    app.details_focused = true;
+    app.layout_mode = crate::app::LayoutMode::DetailsOnly;
+    let screen = screen_of(&app);
+    let row = screen
+        .lines()
+        .find(|l| l.contains("Configuration") && l.contains("c-9876fedc-54ba"))
+        .unwrap_or_else(|| panic!("no Configuration row:\n{screen}"));
+    assert!(row.contains('→'), "no arrow on {row:?}");
     assert!(app.mq_row_jump_target("Broker ID", "b-1234abcd-56ef").is_none());
     assert!(app.mq_row_jump_target("  Pending", "c-1 revision 2").is_none());
     app.current_service = Some(ServiceType::EC2);
