@@ -879,6 +879,12 @@ pub struct Ec2Instance {
     pub key_name: Option<String>,
     pub architecture: Option<String>,
     pub platform: Option<String>,
+    /// `PlatformDetails` — the AMI's platform and licensing label
+    /// (`Linux/UNIX`, `Red Hat Enterprise Linux`, `Ubuntu Pro`, `Windows with
+    /// SQL Server Standard`, …). Set for every instance, unlike `platform`
+    /// (`windows` or nothing). It is what the image is billed as, not the OS
+    /// the instance actually runs.
+    pub platform_details: Option<String>,
     pub monitoring_state: Option<String>,
     pub iam_profile_arn: Option<String>,
     #[allow(dead_code)] // used during from_sdk to compute block_devices[].is_root
@@ -949,6 +955,7 @@ impl Ec2Instance {
         let key_name = instance.key_name().map(|s| s.to_string());
         let architecture = instance.architecture().map(|a| a.as_str().to_string());
         let platform = instance.platform().map(|p| p.as_str().to_string());
+        let platform_details = instance.platform_details().filter(|s| !s.is_empty()).map(|s| s.to_string());
         let monitoring_state = instance
             .monitoring()
             .and_then(|m| m.state())
@@ -1074,6 +1081,7 @@ impl Ec2Instance {
             key_name,
             architecture,
             platform,
+            platform_details,
             monitoring_state,
             iam_profile_arn,
             root_device_name,
@@ -1107,10 +1115,66 @@ crate::sections! {
     ]
 }
 
+/// The OS family an EC2 platform label belongs to: everything AWS bills as
+/// non-Windows is a Linux distribution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsFamily {
+    Windows,
+    Linux,
+}
+
+impl OsFamily {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OsFamily::Windows => "Windows",
+            OsFamily::Linux => "Linux",
+        }
+    }
+}
+
+impl Ec2Instance {
+    /// `None` only when AWS returned neither field (an emulator, a very old
+    /// response): no guess.
+    pub fn os_family(&self) -> Option<OsFamily> {
+        let windows = self.platform.as_deref().is_some_and(|p| p.eq_ignore_ascii_case("windows"))
+            || self.platform_details.as_deref().is_some_and(|d| d.starts_with("Windows"));
+        if windows {
+            Some(OsFamily::Windows)
+        } else {
+            self.platform_details.as_ref().map(|_| OsFamily::Linux)
+        }
+    }
+
+    /// The short OS label the list shows beside the instance type: the
+    /// family, or the distribution when AWS names one.
+    pub fn os_label(&self) -> Option<String> {
+        let family = self.os_family()?;
+        let d = self.platform_details.as_deref().unwrap_or("");
+        Some(
+            match d {
+                "" | "Linux/UNIX" | "Windows" => family.as_str(),
+                d if d.starts_with("Red Hat") => "RHEL",
+                d if d.starts_with("SUSE") => "SUSE",
+                d if d.starts_with("Ubuntu Pro") => "Ubuntu Pro",
+                d if d.starts_with("Windows with SQL Server") => "Windows + SQL",
+                d if d.starts_with("Linux with SQL Server") => "Linux + SQL",
+                d => d,
+            }
+            .to_string(),
+        )
+    }
+}
+
 impl Resource for Ec2Instance {
     fn list_summary(&self) -> Option<String> {
-        (!self.instance_type.is_empty())
-            .then(|| crate::aws::resource::summary_with_id(self, &self.instance_type))
+        if self.instance_type.is_empty() {
+            return None;
+        }
+        let summary = match self.os_label() {
+            Some(os) => format!("{} · {os}", self.instance_type),
+            None => self.instance_type.clone(),
+        };
+        Some(crate::aws::resource::summary_with_id(self, &summary))
     }
 
     fn references(&self) -> Vec<(String, String)> {
@@ -1264,6 +1328,22 @@ impl Resource for Ec2Instance {
             search_parts.push(subnet_id.clone());
         }
 
+        // The OS: the family word (so "linux" finds Ubuntu Pro too) and
+        // AWS's own label (so "sql", "rhel", "suse" find theirs).
+        // Lowercase too: the matcher scores an exact-case hit higher, and
+        // queries are typed lowercase — "linux" should rank a Linux box
+        // above a tag that happens to spell it out.
+        if let Some(family) = self.os_family() {
+            search_parts.push(family.as_str().to_ascii_lowercase());
+            search_parts.push(family.as_str().to_string());
+        }
+        if let Some(d) = &self.platform_details {
+            search_parts.push(d.clone());
+        }
+        if let Some(label) = self.os_label() {
+            search_parts.push(label);
+        }
+
         // Add tags
         for (k, v) in &self.tags {
             search_parts.push(format!("{}:{}", k, v));
@@ -1288,6 +1368,9 @@ impl Resource for Ec2Instance {
             ("Type".to_string(), self.instance_type.clone()),
             ("State".to_string(), self.state.clone()),
         ];
+        if let Some(p) = self.platform_details.clone().or_else(|| self.os_family().map(|f| f.as_str().to_string())) {
+            details.push(("Platform".to_string(), p));
+        }
 
         if let Some(az) = &self.availability_zone {
             details.push(("Availability Zone".to_string(), az.clone()));
