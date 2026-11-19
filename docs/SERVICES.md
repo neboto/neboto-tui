@@ -2397,6 +2397,22 @@ the service you're touching.
   built from region + `account_id`; `AsgGroup.arn` is captured from the SDK
   (contains a UUID). "No recommendation" (`Loaded(None)`) is a normal state, not
   an error.
+- **EC2 instance OS** — from `PlatformDetails`, which `DescribeInstances`
+  returns for every instance (`Platform` is set only for Windows, so a
+  Linux instance used to carry nothing and the pane guessed `Linux/UNIX`).
+  `Ec2Instance::os_family` (Windows / Linux — every non-Windows label is a
+  Linux distribution) and `os_label` (`Linux`, `RHEL`, `SUSE`, `Ubuntu
+  Pro`, `Windows + SQL`, …) feed the list's second column (`t3.large ·
+  RHEL`), `search_text` (the family in lowercase as well, because the
+  fuzzy matcher scores an exact-case hit higher and a tag that happens to
+  spell `l…i…n…u…x` outranked real Linux boxes) and the Overview's
+  Platform row (AWS's label as-is; an Architecture row only when AWS sent
+  no platform, never a guess). **It is the AMI's billing label, not the
+  running OS**: a custom or BYOL image can say `Linux/UNIX` over anything,
+  and distro / version (Amazon Linux 2023, Ubuntu 22.04) aren't in it — the
+  SSM agent's `PlatformName` / `PlatformVersion` (`@ssm` Fleet) are, for
+  managed instances only. An exact `os:` filter (like `tag:`) was
+  considered and left until someone asks.
 - **EC2 instance Console section** (key 7, `GetConsoleOutput`) — the system
   log the console shows under *Get system log*; lazy `lazy.ec2_instance_console`
   keyed by instance id, same shape as User Data. The buffer comes back
@@ -3658,3 +3674,15 @@ the service you're touching.
     unverified; revisit). `warehouse_location` is an S3-style URI whose
     bucket is internal to the service — its jump indicator may render but
     won't resolve to anything in `@s3`; harmless, left alone.
+
+
+## ECS
+
+**ECS task visibility**: the streaming load fetches running tasks **plus a
+capped, most-recent-first window of recently-stopped tasks** (ECS retains them
+~1h) so a failed/cycled-out task doesn't vanish before you read its stop reason
+/ exit codes. The ECS **service** pane has a lazy Tasks section; the cluster-wide
+Tasks sub-tab has an `f` status filter (All/Running/Stopped).
+`EcsServiceInfo::state()` reflects rollout health (FAILED→red, IN_PROGRESS→yellow);
+past that, an ACTIVE service at 0/0 is `ResourceState::Idle` (muted `◌`,
+label `scaled to 0`, sorted next to stopped) — not a healthy green row.

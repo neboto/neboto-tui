@@ -1,7 +1,8 @@
 # Detail pane internals: flat view, wrap, export
 
 Moved out of the root `CLAUDE.md` so it loads only when needed. The
-split-pane architecture and `style_detail_row` conventions stayed there.
+split-pane architecture stayed there; the `style_detail_row` conventions are
+in `src/ui/widgets/details_pane/CLAUDE.md`.
 
 **Flat detail view** (`\`, config `detail_flat`): a sticky toggle that swaps
 the tabbed view for **all sections concatenated in one scroll**, each headed by
@@ -68,3 +69,32 @@ deletes a word.
   test harness sets it to a temp dir). The detail Markdown synthesizes
   a `## Tags` section when no captured section is named "Tags" (exact
   case-insensitive match — `contains` would hit "Stages").
+
+## Editor
+
+`$EDITOR` (`e`), moved out of the root `CLAUDE.md`.
+
+- `editor.rs` (`e`): `main.rs` fully tears down the TUI, spawns `$EDITOR`
+  (falls back to `vim`), recreates on return. **Gotcha**: async-fetched content
+  bound for the editor must land *before* the flag — the fetch handler stashes
+  it in `App.pending_editor_content` then sets `editor_requested`; `main.rs`
+  handles `editor_requested || session_requested` in one tear-down block (SSM
+  inline sessions reuse it). **Second gotcha**: `e` has **two** trigger-fetch
+  chains in `handle_key` — the detail-pane one (inside the `details_focused`
+  block) and the list-pane one further down. A fetch keyed off the *body
+  cursor row* (e.g. RDS "Log File" rows) must go in the detail-pane chain —
+  in the list chain it can never fire (this shipped once as dead code).
+- **What `e` opens** (`App::open_in_editor`, fixed resolution order): ①
+  async-stashed `pending_editor_content` (IAM policy docs, ECS task logs, WAF
+  sampled requests, secrets, S3 objects…); ② a contextual override
+  (`editor_override_content` — CFN template/events, KMS / VPC-endpoint /
+  OpenSearch policies **section-gated**, EC2 console log / user data (raw text, section-gated), REST-API / S3 bucket policies, SSM doc
+  body, CW dashboard JSON, buildspec, launch-template data, SFN definition, DMS task/serverless settings (section-gated)) —
+  overrides **fall through** when they have nothing, never error; ③
+  `Resource::raw_content()` — **raw AWS JSON only** (CloudTrail events,
+  GuardDuty / Inspector / Security Hub findings); ④ the default: the full
+  detail-pane snapshot as JSON (`export::detail_json` over
+  `detail_sections_snapshot()` — every section incl. lazy data, same fidelity
+  as the pane), so `e` always opens something. Don't add hand-picked field
+  summaries to `raw_content()` (the snapshot supersedes them) and don't make an
+  override error on a miss.

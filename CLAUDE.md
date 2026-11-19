@@ -25,6 +25,9 @@ the AWS SDK for Rust).
 | Demo mode fixtures (`--demo`) | [`src/demo/CLAUDE.md`](src/demo/CLAUDE.md) |
 | Flat detail view / detail wrap / export internals | [`docs/DETAIL-PANE.md`](docs/DETAIL-PANE.md) |
 | Every config option | [`docs/CONFIG.md`](docs/CONFIG.md) |
+| Search (`@all`), jumps, history / bookmarks, keymap, visual selection, mouse, clipboard, split out, `C` | [`docs/NAVIGATION.md`](docs/NAVIGATION.md) — **before adding a key, modal, in-pane view or click target** |
+| Refresh, watch mode, `R` region fan-out | [`docs/CACHING.md`](docs/CACHING.md) |
+| Overview order, `style_detail_row` row shapes, ownership ribbon | [`src/ui/widgets/details_pane/CLAUDE.md`](src/ui/widgets/details_pane/CLAUDE.md) (loads when working there) |
 
 A note on counts: descriptive numbers ("~60 types do X") rot silently here —
 three of them had drifted 25–170% before anyone noticed. Prefer a grep the
@@ -33,9 +36,6 @@ reader can run over a number they have to trust.
 ## Commands
 
 ```bash
-cargo build            # debug   (cargo build --release for release)
-cargo run              # run
-cargo test             # all tests; `cargo test <module>` for one
 cargo clippy --all-targets -- -D warnings   # lint; CI fails on any warning (cargo check for a fast type-check)
 python3 scripts/check-readonly.py   # read-only guard: every SDK op + IAM action must be read-only (CI runs it)
 ```
@@ -62,33 +62,9 @@ AWS.
   the colon is literal, so a pasted ARN (`arn:aws:…`) fuzzy-searches instead of
   erroring "invalid service prefix". `tag:key[=value]` terms are split out by
   `split_tag_filters` as **exact** (case-insensitive) tag filters; the rest of
-  the query fuzzy-matches as usual. **`@all <text>`** (checked by
-  `parse_all_query` *before* `parse_query`) searches **every warm cache
-  entry** — it never fires fetches: while `App.all_search_mode`, `resources`
-  holds the flattened cached lists (`rebuild_all_search_resources`, rebuilt
-  each keystroke so background loads show up) with a parallel
-  `all_search_sources: Vec<ServiceType>` feeding the per-row service badge;
-  `active_type_filter` returns None; Enter = `jump_to_all_result` (exit mode →
-  `switch_service` → exact-id pending jump, detail-focused) while `l`/`→`
-  **peek** — `focus_details_panel` over the results, as a click does (panes
-  render from the resource, not the service on screen; an other-region S3
-  stub jumps instead). Under @all the sub-tab row is hidden and the list
-  pane's `Tab`/`Shift-Tab`/`H`/`L` step the **service-strip pick** instead
-  (`step_all_search_filter`: all → each service with matches → all; digits
-  only hint) — never the sub-tab handlers, which would switch the hidden
-  service's view; the **service strip** leads with an active `@all` chip and counts
-  each chip's matches (`all_search_match_counts`), `–` for a visited
-  service with no warm cache (`all_search_searched` — so "no match" never
-  reads as "not searched"); clicking a searched chip narrows the results to
-  that service (`all_search_service_filter`, `ClickAction::AllSearchFilter`
-  — never a service switch, which would change the hidden service under
-  the still-held `@all` query), counts are taken **before** that narrowing
-  (`all_search_counts`), and `z` gains a `service` sort, and `r` refreshes the peeked sections + rebuilds from the caches
-  instead of reloading the service underneath. Guards: the
-  stream handlers drop batches and **skip the cache insert** while the mode
-  holds foreign rows in `resources` (else a completing load would poison that
-  service's cache), watch mode holds off, and `prepare_service_view`
-  force-exits the mode on any explicit service switch.
+  the query fuzzy-matches as usual. **`@all <text>`** searches every warm
+  cache entry and never fires fetches — its mechanics and guards are in
+  [`docs/NAVIGATION.md`](docs/NAVIGATION.md#all-search).
 
 ### Service / Resource traits
 
@@ -216,20 +192,10 @@ Vpc and DxLag panes fill their Subnets/Gateways/Connections sections by
 fetches). Deliberately still flat: `ElasticIp` (the flat view is complete),
 `CognitoUser` (would need a lazy `AdminGetUser`).
 
-**Section 1 is the Overview** (label and variant `Overview`), in this order:
-the resource's own id and identity rows — always, even where the header
-repeats them, since `y` copies the cursor row and the header can't be
-copied; then a short block answering what people open the resource for (a
-security group's Exposure, a NACL's Effect, a target group's Health); then
-previews of the main tabs, capped at 8 rows with a `· N more — <digit>
-<Tab>` note. Every block that can grow carries a cap. A preview reuses its
-tab's row formatter (`sg_rule_line`) so the two can't drift, and an Overview
-that needs a lazy fetch shares the tab's on-enter hook. The one-row header
-drops what doesn't fit; the Overview is where those facts live. Name
-section 1 otherwise only when the resource *is* one document (an SCP's
-`Document`, a dashboard's `JSON`, Cost's `Breakdown`); older panes opening
-elsewhere are candidates for an Overview, not precedents. Reference:
-`sg_overview_rows` (`details_pane/ec2.rs`).
+**Section 1 is the Overview** (label and variant `Overview`): identity rows,
+then what people open the resource for, then capped previews of the main
+tabs. The full order, caps and exceptions are in
+[`src/ui/widgets/details_pane/CLAUDE.md`](src/ui/widgets/details_pane/CLAUDE.md).
 
 **How it works (section descriptors, ADR 0002):** every split pane declares
 its sections **once** with the `sections!` macro in its service file
@@ -263,36 +229,9 @@ cache); a new body renderer must go through `layout_detail_body` and pass
 coloured footer silently don't apply to it.
 
 **`style_detail_row` conventions** (the `(key, value)` tuples
-`*_section_lines` return):
-- **Key-value row**: key padded to the body's **adaptive key column**
-  (`key_col_widths`: the widest key in the section by display width, clamped
-  to `[KEY_COL_MIN=18, KEY_COL_MAX=48]` (keys carry their 2-space indent) and to what the pane can spare; keys
-  past the cap are ellipsised, never left to push the `:` out — the flat
-  view's `━━` headers split the body so sections align independently); key
-  `ACCENT` orange, value conditional colour (state / ✓ / ✗ / ⚠ / white).
-  Never pad keys yourself in a `*_section_lines` fn. A flush key is drawn
-  two columns in, under its group header (`display_key`); a key you indent
-  yourself keeps your indent, so indent only to nest. An **empty value**
-  makes the row a group header — write `—` for a missing value instead.
-- **Empty-key note**: empty key, non-empty value (`("", "No tags")`) →
-  rendered exactly like a plain content line (`"  No tags"`, no colon); the
-  two shapes are interchangeable.
-- **Group header**: non-empty key, empty value, *not* leading-space → Magenta
-  bold subsection label. (No `=== X ===` markers.)
-- **Plain content line**: leading-space key, empty value → `Line::raw`, no
-  colon. For fixed-width tables, CIDR lists, template previews. Exception:
-  `⚠`/`✗`-prefixed content lines render WARNING/ERROR-coloured. A run of
-  them that reads as JSON / YAML / shell is syntax-coloured at render
-  (`ui/syntax.rs`, see `docs/DETAIL-PANE.md`) — emit code this way, never
-  styled per pane.
-- **Blank spacer**: both empty → blank line. Spacing is evened out
-  centrally (`tidy_section_rows`): none at either end of a section, none
-  under a group header, never two in a row — so emit them freely between
-  groups and don't hand-tune them.
-- **Lazy-fetch error**: always via the `error_rows(&err)` helper (blank spacer
-  + `  ⚠ {msg}`) — never hand-rolled `("Error", e)` rows. (An `Error` *group
-  header* is still fine for a resource's own failure data, e.g. a FAILED
-  Athena query or a Glue run error.)
+`*_section_lines` return — row shapes, key padding, `error_rows`): in the
+same file, which loads when you work in `details_pane/`. Read it before
+writing a `*_section_lines` fn.
 
 **Lazy-loaded sections (canonical pattern).** Many sections aren't fetched
 until first viewed. **Every lazy detail section** lives on the `LazyStore`
@@ -322,26 +261,11 @@ from a `Tab` press, and the flat view's trigger sweep would fire it for every
 runtime you looked at — so it's `x`-gated on the Secrets Manager precedent
 instead (`sections!` makes the hook optional). Use that shape for any fetch
 with a real cost; the default remains an on-enter hook.
-The `Loading…` text is rewritten centrally at render time (`spin_loading_row`):
-detail pane focused → animated spinner (a fetch really is in flight); list
-pane focused → a static dim `· not loaded — ⏎ to open` hint, because the
-unfocused preview's state is untriggered and nothing is loading. Keep emitting
-plain `Loading…` from `*_section_lines` — never per-service spinners/hints.
-(`style_detail_row` dims any content/value row starting `· ` — the
-annotation-row convention.)
+Emit plain `Loading…` from `*_section_lines`; the render layer rewrites it
+(spinner or hint — see the same file).
 
-**Ownership ribbon** (`src/ownership.rs`): every detail pane shows a dim
-`⛓ stack my-stack (AppServer) · terraform · team payments` line bottom-left
-on the pane border, resolved **from tags alone** (`resource_ownership` —
-CFN's `aws:cloudformation:*` tags, the ManagedBy convention (config
-`managed_by_tags`), config `owner_tags` default `owner`/`team`, all
-case-insensitive). Config `ownership_ribbon = false` hides the ribbon —
-display only, the timeline lens still resolves ownership. One central hook
-(`render_ownership_ribbon`, called from the `render_details_pane` wrapper) —
-no per-pane wiring; its overlay guard mirrors the dispatch's early returns,
-keep them in step. `Enter` on the `aws:cloudformation:stack-name` tag row
-jumps to the owning stack (classifier arm 0b). The planned change-timeline
-lens reuses the resolver to pick which stack's events to merge.
+**Ownership ribbon** (`src/ownership.rs`): resolved from tags alone by one
+central hook, no per-pane wiring — details in the same file.
 
 **Per-service notes live in [`docs/SERVICES.md`](docs/SERVICES.md).** Read the
 section for a service **before editing `src/aws/services/<svc>.rs`** — it holds
@@ -354,105 +278,22 @@ when you're working on a service instead of in every session.
 
 Interactive sub-views (metrics, item/object/memory browsers, log tail + search, the `W`/`U`/`N` lenses) render in the detail pane. **Before adding or editing one — or a metrics kind, tail source or lens — read [`docs/RICH-VIEWS.md`](docs/RICH-VIEWS.md).**
 
-### Cross-service "go to resource" jump (`Enter`)
+### Cross-service "go to resource" jump (`Enter`), history, bookmarks
 
-`resource_jump_target(key, value, current)` in `details_pane/mod.rs` recognizes ARNs
-and id prefixes (`vol-`/`eni-`→EC2, `subnet-`/`vpc-`→VPC, IAM ARNs, an
-`arn_jump_target` fallback for full service ARNs, ECR image URIs
-`…dkr.ecr….amazonaws.com/<repo>[:tag]` via `ecr_repo_from_image_uri`, plus
-`s3://`/`s3a://`/`s3n://` URIs → the S3 bucket via `s3_uri_bucket`, so Glue table
-locations / crawler S3 targets / job script paths jump to their bucket, S3
-REST/website endpoint hostnames (CloudFront origin domains) → the bucket via
-`s3_origin_domain_bucket`, and bare
-`alias/…` KMS alias references (e.g. SNS's `KmsMasterKeyId`) → KMS) → a
-`JumpTarget { service, view, id }`. `Enter` follows any target incl. cross-service: `switch_service` +
-`apply_jump_view` + stash `pending_jump`, resolved by `resolve_pending_jump`
-once the target streams in. Resolution is **exact id, then exact name** (name-
-keyed classifier arms — IAM role/policy, CFN stack, KMS alias — reduce ARNs to
-names while the resource's `id()` may be the ARN); an exact resolution lands
-focused in the **detail pane** (`pending_jump_focus_details` — follow-link
-semantics; also the S3 cross-region drill); query-style targets that never
-match exactly (e.g. ECS service→its tasks) keep landing in the filtered list,
-and any keypress cancels a still-pending focus so a late async resolve can't
-steal it. Jumpable rows
-show a `→`. Specialized classifiers
-are tried first (e.g. the ECS service→task/target-group ones, `cfn_resource_jump_target`,
-`ic_jump_target`). The legacy `gd` chord still works, unadvertised. Nav-back /
-the `` ` `` jump list / bookmarks restore at captured depth: `NavLocation`
-records `details_focused` + the active section name (`detail_section`; both
-serde-defaulted for old bookmark files), so a location saved from a detail
-pane re-enters it at that section on restore. The generic capture/restore
-rides `detail_sections_snapshot_with_active()` (the descriptor walk also
-reports the active index) and `restore_detail_section_by_name` (the label
-position in the descriptor IS the section index — a direct jump, only the
-target's on-enter hook fires); unknown names fall back to the default
-section. `NavLocation.region` (the capture region, global services
-included, so back from a jump that switched region switches back; `None`
-for a global service's bookmark and old bookmark files) makes history cross-region: picking a
-region in `R` records "here" like a service switch, and restoring a
-location from another region goes through the cross-region jump below
-(`pending_jump_region` + `RegionSwitchRequested`), whose handler filters
-and resolves on a cache hit. The footer hint, jump list and bookmark list
-name the region when it isn't the current one (`other_region`). `NavLocation.credentials` (caller account +
-profile + assumed org role; `None` for old entries) does the same across
-accounts. **The account is the identity** (`NavCredentials::same_as`); profile
-and role are only the route back (`same_route`) — a route that now reaches
-another account is refused, never resolved there, since same-named rows
-across accounts would open the wrong account's resource. No profile name
-(env keys) = `profile: None`, re-enterable only within the run
-(`switch_to_startup_credentials`, checked against `startup_account`); never
-store key material to make it work across runs. A switch via
-`P` / `s` / role exit records "here" once it succeeds, and restoring a place
-from another session stashes it in `pending_credential_restore`, replays the
-switch through the same events (profile first, then the role), and runs the
-restore only once the credentials match (a place with an account waits
-for `AccountInfoLoaded` after the switch — `awaiting_identity`) — a failed switch leaves the view
-and the history cursor untouched.
+`resource_jump_target` → `JumpTarget` → `pending_jump`; `NavLocation` carries
+history, the jump list and bookmarks across services, regions and accounts.
+**Before touching a jump classifier, `pending_jump`, nav-back/forward,
+bookmarks, or a cross-region / cross-account restore, read
+[`docs/NAVIGATION.md`](docs/NAVIGATION.md).** Two rules hold everywhere: the
+account is the identity (a route that now reaches another account is refused,
+never resolved there), and key material is never stored to make a restore
+work across runs.
 
-**Cross-region jump (Resource Explorer)**: `trigger_jump` captures the selected
-resource's region *before* clearing selection; if it differs from
-`current_region` it sets `pending_jump_region` and sends
-`Event::RegionSwitchRequested` (switch-region + reload the target service).
-`resolve_pending_jump` returns early until `current_region == want`, so the
-stale old-region load can't claim the jump. Resource Explorer itself
-(`@explorer`, global, gated) discovers the AGGREGATOR index via `ListIndexes`
-and runs `Search("*")` from that index's region.
+### `$EDITOR` (`e`)
 
-**ECS task visibility**: the streaming load fetches running tasks **plus a
-capped, most-recent-first window of recently-stopped tasks** (ECS retains them
-~1h) so a failed/cycled-out task doesn't vanish before you read its stop reason
-/ exit codes. The ECS **service** pane has a lazy Tasks section; the cluster-wide
-Tasks sub-tab has an `f` status filter (All/Running/Stopped).
-`EcsServiceInfo::state()` reflects rollout health (FAILED→red, IN_PROGRESS→yellow);
-past that, an ACTIVE service at 0/0 is `ResourceState::Idle` (muted `◌`,
-label `scaled to 0`, sorted next to stopped) — not a healthy green row.
-
-### `$EDITOR`
-
-- `editor.rs` (`e`): `main.rs` fully tears down the TUI, spawns `$EDITOR`
-  (falls back to `vim`), recreates on return. **Gotcha**: async-fetched content
-  bound for the editor must land *before* the flag — the fetch handler stashes
-  it in `App.pending_editor_content` then sets `editor_requested`; `main.rs`
-  handles `editor_requested || session_requested` in one tear-down block (SSM
-  inline sessions reuse it). **Second gotcha**: `e` has **two** trigger-fetch
-  chains in `handle_key` — the detail-pane one (inside the `details_focused`
-  block) and the list-pane one further down. A fetch keyed off the *body
-  cursor row* (e.g. RDS "Log File" rows) must go in the detail-pane chain —
-  in the list chain it can never fire (this shipped once as dead code).
-- **What `e` opens** (`App::open_in_editor`, fixed resolution order): ①
-  async-stashed `pending_editor_content` (IAM policy docs, ECS task logs, WAF
-  sampled requests, secrets, S3 objects…); ② a contextual override
-  (`editor_override_content` — CFN template/events, KMS / VPC-endpoint /
-  OpenSearch policies **section-gated**, EC2 console log / user data (raw text, section-gated), REST-API / S3 bucket policies, SSM doc
-  body, CW dashboard JSON, buildspec, launch-template data, SFN definition, DMS task/serverless settings (section-gated)) —
-  overrides **fall through** when they have nothing, never error; ③
-  `Resource::raw_content()` — **raw AWS JSON only** (CloudTrail events,
-  GuardDuty / Inspector / Security Hub findings); ④ the default: the full
-  detail-pane snapshot as JSON (`export::detail_json` over
-  `detail_sections_snapshot()` — every section incl. lazy data, same fidelity
-  as the pane), so `e` always opens something. Don't add hand-picked field
-  summaries to `raw_content()` (the snapshot supersedes them) and don't make an
-  override error on a miss.
+Tear-down, the two trigger-fetch chains and the fixed resolution order of
+what `e` opens: **read [`docs/DETAIL-PANE.md`](docs/DETAIL-PANE.md#editor)
+before touching `editor.rs`, `open_in_editor`, or adding a fetch behind `e`.**
 
 ### Macros (`,`, `src/macros.rs`)
 
@@ -468,50 +309,12 @@ See [`docs/MACROS.md`](docs/MACROS.md#keycast---show-keys-srckeycastrs). A new i
   config `cache_ttls` per-service values first, then Cost's built-in 6h).
   Base TTL is config `cache_ttl` (seconds). Checked before every fetch in
   `load_service_resources()`.
-- `r` in the **list pane** invalidates + reloads the whole service **and
-  replaces the `LazyStore`** (epoch bump — `refresh_current_service`): without
-  this, LazyMap's contains-guard served the first fetch of every lazy detail
-  section (e.g. an ECR repo's Images) for the rest of the session. When the
-  detail pane is focused it re-fires the open section's trigger before the
-  reload clears the selection, so the pane refetches instead of spinning over
-  the emptied store (and `flat_triggered_for` is reset so the flat view's
-  sweep runs again).
-- `r` in the **detail pane** = targeted refresh: `refresh_selected_resource`
-  re-fetches just the selected resource and swaps it in place (by `id`, same
-  position) via `Event::ResourceRefreshed`. Supported types downcast to a
-  `fetch_single_*` helper (ECS service/task today; their lazy sections are
-  NOT cleared on the targeted path); others fall back to full refresh
-  (incl. the lazy-store replacement above). Doesn't touch the cache.
-- **Watch mode** (`w`): auto-refresh of the current view every `WatchState`
-  interval (default 10s; `+`/`-` presets 5–300s; config `watch`/
-  `watch_interval`, CLI `--watch`). Driven by the existing 250ms `Event::Tick`
-  → `watch_tick()`; held over while anything is loading / a modal, search, or
-  overlay is up. List refreshes stream into `App.watch_staging` (the visible
-  list **never blanks**) and swap in atomically on `ResourcesFullyLoaded`,
-  selection restored by id; detail focus on an ECS service/task uses the
-  targeted single-resource path with `quiet` toasts. Status bar shows a green
-  `⟳ watch Ns` chip — `show_loading_indicator()` stays quiet for watch
-  refreshes. `load_service_resources()` drops any in-flight staging (a manual
-  load supersedes the watch pass).
-  **Over the charts** (`m`) it refreshes them instead of holding off
-  (`watch_tick_charts`): never faster than once a minute
-  (`chart_watch_interval` — CloudWatch's resolution; the chip shows that
-  cadence), timed off `metrics_window_end` so `r` / a range key resets it,
-  and a dashboard pass is `quiet` — the grid stays drawn, and stays if the
-  pass fails. Cost / S3 charts are daily and aren't refreshed.
+- Refresh (`r`, list pane vs detail pane), watch mode (`w`) and the `R`
+  region fan-out: [`docs/CACHING.md`](docs/CACHING.md).
 - **Global services** key the cache on `Region::UsEast1` (data doesn't vary by
   region). Client region and cache region are independent.
 - **A region switch keeps the cache** (it's region-keyed; only a profile/role
-  switch replaces it). That's what makes the **`R` fan-out** (#92) pay off:
-  opening the picker with config `regions` set lists the current service in
-  each uncached configured region (`start_region_fanout`, on
-  `AwsClients::for_region`, via the headless `list_all`) straight into that
-  region's slot (`Event::RegionFanoutLoaded`, `region_fanout_generation` —
-  bumped on profile/role switches only), and the picker shows
-  `region_counts()`: rows of the active sub-tab's type per region. Skipped
-  for global, virtual and **variant-cached** services — every service whose
-  list depends on App state is variant-cached, and a fresh `build_services`
-  would list it with the default.
+  switch replaces it).
 - **Variant key**: `CacheKey.variant` lets one service cache several result sets
   (`App::cache_variant`): Cost `{group_by}-{period}`, WAF `{scope}`, Service
   Quotas `{service_code}`.
@@ -686,43 +489,14 @@ and the approaches you rejected are the part nobody can recover from your code.
   Don't put the owner in a header by hand, and keep Overview `Owner` rows
   the bare id so `y` copies just that. AWS-owned (an AWS-managed prefix
   list) is not "another account".
-- **Clipboard** (`src/clipboard.rs`): every copy goes out as OSC 52 (tmux
-  passthrough inside tmux), which is how it reaches the user's clipboard over
-  SSH / SSM, and to the system clipboard through one handle kept for the
-  process — dropping it clears the selection on Linux. Reuse it via
-  `copy_to_clipboard`; under `cfg(test)` neither sink is touched
-  (`App::clipboard_last` reads the copy back).
-- **Split out** (`|`, `src/split.rs`): a second neboto process in a new
-  pane of the host multiplexer / terminal (else a tab or window where it
-  has no split; each `Launch` says which, and whether to wait for it), started at `current_location()`
-  via a hidden `--at` (base64url `NavLocation`) plus the session flags, and
-  restored by `restore_startup_location` through the bookmark path. No
-  in-process panes: `App` owns the whole screen. Credentials follow the
-  `session_launch` rules — never in the command. `|` is checked ahead of
-  the in-pane views' handlers unless one is taking text
-  (`in_pane_view_typing` — a new text input needs a line there); charts
-  come back through `NavLens::Metrics`, the object browser through
-  `s3_object_path`, other views as the pane behind them.
-- **CLI command copy** (`C`, either pane; `src/aws/cli_actions.rs`, picker
-  `cli_picker.rs`): `Resource::cli_command()` returns the per-type **read**
-  command (`aws ec2 describe-instances --instance-ids …`) — always the first
-  row — and `Resource::cli_actions()` adds operational commands in three
-  tiers: Inspect, Connect (`ssm start-session`, `eks update-kubeconfig`,
-  `ecs execute-command`) and Change (start/stop, force deploy, scale).
-  neboto **never runs them** — `C` only copies, so the read-only guarantee
-  and `PERMISSIONS.md` are untouched. `App::copy_cli_command` appends
-  `--region` + `--profile` + `--endpoint-url` (an emulator session must say
-  so, or a pasted change hits the real account); the profile is omitted
-  while an org role is assumed (a flag can't reproduce that session), and
-  **Change rows are disabled then**. One row copies straight away (the
-  original `C`); more open the picker. A list visual selection offers the
-  `CliAction::batchable` commands every selected row shares, ids merged
-  into one list. Rules: **nothing destructive** (no terminate / delete /
-  purge / deregister), never a command that reveals a secret (Secrets
-  Manager → `describe-secret`, SSM parameter → `get-parameter` without
-  `--with-decryption`), value-taking commands prefilled with the **current**
-  value so a blind paste is a no-op; quote values with
-  `aws::resource::shell_quote`.
+- **Clipboard** (`src/clipboard.rs`): every copy goes through
+  `copy_to_clipboard`.
+- **CLI command copy** (`C`): neboto **only copies** these commands, so the
+  read-only guarantee holds. Offer read, connect and reversible change
+  commands only (start/stop, scale — never terminate / delete / purge),
+  never one that reveals a secret, prefill value-taking commands with the
+  **current** value, quote with `aws::resource::shell_quote`. Tiers, picker
+  and flag rules: [`docs/NAVIGATION.md`](docs/NAVIGATION.md).
 - **Secrets**: the Secrets service surfaces metadata only; values are fetched
   only on `x` (reveal) / `Y` (copy) and are **never** stored in `App` or echoed
   into a message/log/row. Two extensions of the same line: where an API hands
@@ -731,145 +505,21 @@ and the approaches you rejected are the part nobody can recover from your code.
   never resolve it; and AgentCore **Payments** has no reveal at all —
   `GetPaymentInstrument` / `GetPaymentInstrumentBalance` /
   `GetResourcePaymentToken` return spendable material and are never called.
-- **Navigation keymap** (spatial: `h`/`l` are pane movement, not tab cycling).
-  List pane — `j`/`k`, `gg`/`G` (top/bottom), `Ctrl-d`/`Ctrl-u` (half-page),
-  `l`/`→`/`Enter` (drill into detail), `⌫`/`Ctrl-O`
-  (nav-back through history — **not** `h`/`←`: from the detail pane they go
-  back to the list, and a second tap popping history lost your place),
-  `Ctrl-F` (forward again; intercepted at the top of `handle_key` like `,`,
-  since plain-`f` arms that ignore modifiers would swallow it — and going
-  back from live first records "here", `park_here`, so forward has
-  somewhere to return to),
-  `Tab`/`Shift-Tab` (cycle sub-tabs), `1`–`9` (jump to sub-tab), `H`/`L`
-  (previous/next sub-tab from **either** pane — `step_sub_tab` replays
-  `Shift-Tab`/`Tab` through the list handlers and re-opens the new tab's
-  first row when pressed in the detail pane; gated by `has_sub_tabs`), `/` (search), `@` (search seeded with `@`, for a fast
-  `@service …` switch — works from either pane, via `start_service_search`),
-  `y` (copy id/ARN; with a visual selection active, copy the rows as a
-  Markdown table), `C` (copy an AWS CLI command — picker), `V`/`J`/`K`/`Ctrl-A` (visual
-  row selection — see below), `a` (hide-noise filter, gated by
-  `is_noise()`; **noise shows by default** — `a` opts in to hiding; the arm
-  must check for **no modifier**, or it eats `Ctrl-A` select-all on every
-  screen that has noise rows),
-  `z` (cycle list sort: load order → name ↑ → name ↓ → state,
-  severity-ranked, plus `service` under `@all`; with a fuzzy query the
-  default keeps match order, but a sort picked with `z` wins — `@all`
-  always has query text; reset on service switch). **Exception to "load order"**: the two Executions sub-tabs
-  (`"Pipeline Execution"` / `"State Machine Execution"`) default to
-  **newest-first** via `execution_start_ms` — their rows span every
-  pipeline / state machine and the batches arrive in `buffer_unordered`
-  completion order, so raw load order interleaves runs meaninglessly. `z`
-  still overrides, and the per-batch sort in the service files matches so a
-  parent's own Executions section reads the same. `F` (cycle state filter through the states present in the current
-  view; reset on service switch; both render corner chips in
-  `resource_list.rs`). **The `F` chips and the wide list's state column
-  show `Resource::state_label()`, not `state()`**: `state()` is a coarse
-  colour/sort bucket most types map their native status onto (NON_COMPLIANT
-  → Unavailable, `active` → Running), so a type whose mapping changes the
-  word must override `state_label()` with its own vocabulary
-  (`native_state_label(&self.status, || self.state())` for the plain
-  status-string case; hand-written words for bool-derived states). Without
-  it the chip reads "unavailable" for a Trusted Advisor "action recommended"
-  check — which is how this shipped across most services once. A kind
-  with **no lifecycle state in AWS** (IAM role, security group, queue, log
-  group…) returns `ResourceState::stateless()` — dim `○`, blank label, `F`
-  reports nothing to filter — never a constant `Available`, which paints a
-  meaningless green "available" down the whole column, `` ` `` (jump list), `B`/`'` (bookmarks), `,` (macros —
-  see Macros below; `⏎` runs, `n` records, `,` again stops a recording),
-  `M` (message
-  history — past status errors/toasts, newest first, `y`-copyable), `w` (watch
-  mode — auto-refresh, `+`/`-` interval; works from the detail pane too, see
-  Caching), `S`/`R`/`P`
-  (service/region/profile selectors, all usable from the detail pane too).
-  Detail pane — `j`/`k`, `gg`/`G`,
-  `[[`/`]]` (group headers), `Tab`/`Shift-Tab` + `1`–`9` (sections),
-  `H`/`L` (sub-tabs, as in the list pane),
-  `l`/`→`/`Enter` (follow jump), `h`/`←`/`Esc` (back to list), `⌫`/`Ctrl-O`
-  (nav-back through history, same as the list pane; the service strip's
-  left-edge `←`/`→` are the clickable back/forward), `y`/`e`,
-  `m`/`o`/`i`/`t` (rich views), `W`/`U`/`N` (timeline / referenced-by /
-  network-access lenses, also from the list pane), `X` (export detail;
-  `Ctrl-X` exports the list),
-  `@` (jump to `@service` search), `/` (in-pane body search, not global),
-  `\` (toggle flat detail view — all sections in one scroll; also works from
-  the list pane; in flat view `1`–`9`/`Tab` jump to section headers).
-  **Linewise visual selection** (vim-style, all services, **both panes**):
-  `V` toggles select mode at the cursor, `J`/`K` or `Shift-↓`/`Shift-↑`
-  start-and-extend, and once active plain `j`/`k`/`gg`/`G` (detail adds
-  `[[`/`]]`) extend it (anchor held); **`Ctrl-A` selects all**; `y`/`c` copies
-  the range, `Esc` cancels (a second `Esc` goes back to list / clears the
-  query). Detail pane: backed by `App.detail_visual_anchor` +
-  `detail_line_in_selection`/`detail_visual_range`/`copy_detail_selection`;
-  copies the lines as text. **List pane**: backed by `App.list_visual_anchor`
-  + `list_visual_range`/`list_row_in_selection`; the range is **positional**
-  over `filtered_resources`, so any rebuild (`update_search` — sort, state
-  filter, query edits, sub-tab switch, reload, watch swap) or drill-in
-  cancels it, and watch mode holds off while one is active. While a list
-  selection is active every copy/export verb operates on it: `y`/`c` copies
-  the rows as the `list_markdown` Markdown table (clipboard), `Ctrl-X`
-  shallow-exports just those rows, and `X` **deep-exports** them as one
-  combined `neboto-<label>-deep-<ts>` trio (`export_detail_multi`: JSON
-  array / `##`-chapter Markdown / long-format `ID,Section,Key,Value` CSV) —
-  the press **arms** it rather than performing it (`export_selection_deep`
-  fires every lazy trigger per resource, then stores the rows **by id** in
-  `App.pending_deep_export`; `deep_export_tick` — a main-loop hook next to
-  `flat_detail_tick` — re-walks them each iteration and writes the files once
-  nothing is `Loading…`, or after a 2-minute wait limit, noting how many were
-  incomplete). Ids, not positions, because the wait outlives the positional
-  selection. Progress renders in its own status-bar slot
-  (`App.deep_export_progress`) rather than `success_message`, which repaints
-  several times a second and would flood the `M` history; `Esc` cancels, as
-  does a service/region/credential switch or `r`. It used to demand a second
-  `X` press instead — on a throttled API (Organizations) that is
-  indistinguishable from the key doing nothing. Capped at
-  `MAX_DEEP_EXPORT=50` (the zero-API table copy and shallow export are
-  uncapped).
-  Left-**drag** in either body selects the same range; hold **Shift** to
-  bypass mouse capture for native terminal text selection instead.
-- **Mouse**: `App::handle_mouse` maps clicks via `App.click_regions` (tab bars,
-  rebuilt each frame by the tab widgets) and `App.mouse_geom` (list/detail
-  rects). A sub-tab click replays the chip's key through `handle_key`.
-  Status-bar key hints, the status-bar region name and the strip's profile /
-  `S: services` badges are click targets too (`ClickAction::Press`, which,
-  unlike a sub-tab's `Key`, presses the key where focus already is). A new
-  status-bar hint is clickable for free if its key is one key (see
-  `hint_click_key`; `q` is deliberately excluded). The welcome splash's
-  popular-service chips and `S`/`R`/`P`/`?` rows are targets too.
-  **Centered modals** (every picker, help, the CloudTrail filter, the SSM
-  menu) record their rect + visible rows into `App.popup_hits` as they draw
-  (`PopupHits::record_list` / `record_area`; cleared at the top of each
-  frame), and `handle_modal_mouse` replays keys through `handle_key`: wheel =
-  `↓`/`↑`, click highlights, double-click or a click on the highlighted row
-  = `⏎`, outside / right-click = `Esc`. **A new modal** needs an arm in
-  `App::open_modal` (in `handle_key`'s priority order) and
-  `select_modal_row`, plus a `record_*` call in its renderer, or it ignores
-  the mouse. `C`/`M` keep their own handler (`M`'s double-click copies).
-  Also clickable: the tab bars' `‹`/`›` markers (act as the first hidden
-  chip on that side), the search bar (`Key('/')`), the detail pane's top
-  border (`Z`), and a drawn `→` (`ClickAction::FollowJump(row)`, recorded by
-  `record_jump_arrows` only while the pane is focused). **In-pane views**
-  (`m`/`t`/`o`/`i`/`W`/`U`/`N`) go through `handle_pane_view_mouse`: wheel =
-  `↓`/`↑` over the view, click moves the cursor, double-click = `⏎` (one
-  click never acts, as in the list), right-click = `Esc`, anything else is
-  swallowed. Their renderers record the view rect + visible rows into the
-  same `popup_hits`; a new in-pane view needs `open_pane_view` /
-  `select_pane_view_row` arms. The hand-built metrics kinds take only the right-click; the spec view's
-  metric rows and breakdown tables (a web ACL's rules) take clicks and the wheel. The README's Mouse
-  table and the `?` help's Mouse section list the gestures; keep them in
-  step. `mouse_smash_never_panics` clicks every recorded region over every
-  mock.
-  **Double-click** (second left press on the same cell within 400ms, tracked by
-  `App.last_left_click`) replays `Enter` — drill into detail from the list,
-  follow a jump link in the detail body. **Right-click** = nav-back
-  (`nav_back`, mirrors `Ctrl-O`/`h`).
+- **Keys, selection, mouse**: the full keymap, visual selection, deep export
+  and mouse mechanics are in [`docs/NAVIGATION.md`](docs/NAVIGATION.md) —
+  read it before adding or changing a key, a modal, an in-pane view or a
+  click target. Held everywhere: `h`/`l` are spatial pane movement (sub-tabs
+  are `Tab`/`H`/`L`/digits) and nav-back is `⌫`/`Ctrl-O`; a plain-letter arm
+  checks for **no modifier** (`a` once ate `Ctrl-A`); a type whose `state()`
+  mapping changes the word overrides `state_label()`, and a kind with no
+  lifecycle state returns `ResourceState::stateless()`; a new modal needs
+  `open_modal` + `select_modal_row` arms and a `record_*` call in its
+  renderer; a new in-pane view needs `open_pane_view` /
+  `select_pane_view_row` arms; a new text input needs a line in
+  `in_pane_view_typing`.
 
 ## Key files
 
-- **`src/app.rs`**: `App` state, `handle_event`/`handle_key`, view/section enums,
-  every `trigger_*_load`, `build_services`.
-- **`src/main.rs`**: entry, main loop, tab-widget routing, tear-down for
-  `$EDITOR`/SSM, overlay render dispatch.
-- **`src/event.rs`**: the `Event` enum.
 - **`src/commands.rs`**: `COMMANDS`, the key table the `?` help draws
   from. A row's optional `Gate` is an `App::supports_*` check plus the
   status-bar hint it shows, so the help's "Here" section and the bar's
@@ -878,14 +528,6 @@ and the approaches you rejected are the part nobody can recover from your code.
   The `:` picker (`command_picker.rs`) lists the rows that can run in the
   focused pane: a gated row runs its hint key, others need `.runs(…)`.
   `⏎` replays the key through the event channel, never a direct call.
-- **`src/lazy.rs`**: `Lazy<T>`/`LazyMap<T>`/`LazyStore` — the deep module
-  behind migrated lazy sections (see the canonical-pattern paragraph above).
-- **`src/macros.rs`**: `MacroStep`/`Macro`/`MacroRecorder`/`MacroPlayer` +
-  JSON load/save. The recorder/player logic lives on `App`
-  (`macro_tick` and friends); the picker is
-  `src/ui/widgets/macro_picker.rs`.
-- **`src/aws/{service,resource,client,cache,region,pagination}.rs`**: the traits,
-  SDK client factory, cache, region enum, pagination helper.
 - **`src/aws/services/*.rs`**: one file per service — resource struct(s)
   (`from_sdk`), `AwsService`/`Resource` impls, and that service's `fetch_*`
   helpers + lazy `*State` types. **Read the file for a service's specifics**,
@@ -901,10 +543,6 @@ and the approaches you rejected are the part nobody can recover from your code.
   re-exports them (`pub use <svc>::*`), so `details_pane::foo` paths
   elsewhere don't care which file `foo` is in. A helper one service uses
   lives in that service's file; one several use goes in `mod.rs`.
-- **`src/ui/widgets/`**: `metrics_overlay.rs`, `s3_object_browser.rs`,
-  `ddb_item_browser.rs`, `memory_browser.rs`, `log_tail.rs` (rich views);
-  `*_tabs.rs` (one per multi-resource service); the `*_selector.rs` modals
-  (`S`/`R`/`P`/`c` pickers); `splash.rs` (welcome screen).
 - **`src/export.rs`**: `X` (detail) / `Ctrl-X` (list) export via
   `detail_sections_snapshot()`, plus `detail_json()` behind the default `e`
   view. Waiting/loading rules and where files land:
