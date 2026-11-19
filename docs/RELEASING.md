@@ -84,8 +84,12 @@ One accepted leftover as of v0.10.0: `crypto-bigint 0.5.5`
 (RUSTSEC-2026-0387, timing variability). `aws-sigv4` depends on it for
 SigV4a signing even at 1.6.3, the fix is the semver-incompatible 0.7, and
 the advisory is a timing side channel in local request signing, not a
-remote input. It clears when `aws-sigv4` moves off 0.5; until then nothing else
-should show up. The ones before it were the AWS SDK's legacy hyper-0.14 client
+remote input. It clears when `aws-sigv4` moves off 0.5. Two *unmaintained*
+warnings are accepted alongside it (not vulnerabilities; nothing to patch):
+`pin-utils` (RUSTSEC-2026-0441, via `aws-smithy-http`, clears with an SDK
+bump) and, since v0.14.0, `chrono` (RUSTSEC-2026-0543) — a direct dependency,
+so clearing it means moving the date code to `jiff` or `time`. Anything else
+showing up is new. The ones before it were the AWS SDK's legacy hyper-0.14 client
 (`rustls 0.21` / `rustls-webpki 0.101` / `h2 0.3`), dropped in #145 by
 taking every `aws-sdk-*` crate's default features minus `rustls` (see the
 comment above the SDK block in `Cargo.toml`; a new SDK crate must follow it,
