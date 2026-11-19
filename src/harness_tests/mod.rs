@@ -39,6 +39,7 @@ mod cli_picker_test;
 mod batch_test;
 mod datasync_test;
 mod docdb_neptune_test;
+mod privatelink_test;
 mod dms_test;
 mod org_assume_hint_test;
 mod appsync_test;
@@ -112,7 +113,7 @@ pub(crate) fn all_mocks() -> Vec<Mock> {
     // an empty Vec after a bad merge). 140 walk! types were covered when this
     // was written — bump the floor when panes are added, never lower it.
     assert!(
-        out.len() >= 179,
+        out.len() >= 180,
         "mock registry shrank to {} entries — a mocks_* batch file lost coverage",
         out.len()
     );

@@ -796,6 +796,7 @@ pub(super) fn render_vpc_endpoint_split(app: &App, ep: &VpcEndpoint, area: Rect,
 pub fn vpc_endpoint_section_lines(
     ep: &VpcEndpoint,
     section: VpcEndpointDetailSection,
+    own_service: Option<&crate::aws::services::vpc::VpcEndpointService>,
 ) -> Vec<(String, String)> {
     let list_rows = |label: &str, items: &[String]| -> Vec<(String, String)> {
         let mut rows = vec![(label.to_string(), String::new())];
@@ -813,6 +814,12 @@ pub fn vpc_endpoint_section_lines(
         VpcEndpointDetailSection::Overview => {
             let mut rows = vec![
                 ("Service".to_string(), ep.service_name.clone()),
+            ];
+            // This account publishes the service: the row jumps to it.
+            if let Some(svc) = own_service {
+                rows.push(("Endpoint Service".to_string(), svc.id.clone()));
+            }
+            rows.extend([
                 ("Type".to_string(), ep.kind.clone()),
                 ("State".to_string(), ep.state.clone()),
                 ("VPC".to_string(), ep.vpc_id.clone()),
@@ -820,7 +827,7 @@ pub fn vpc_endpoint_section_lines(
                     "Private DNS".to_string(),
                     if ep.private_dns_enabled { "✓ enabled" } else { "disabled" }.to_string(),
                 ),
-            ];
+            ]);
             if let Some(c) = &ep.creation {
                 rows.push(("Created".to_string(), c.clone()));
             }
@@ -851,6 +858,279 @@ pub fn vpc_endpoint_section_lines(
             None => vec![("".to_string(), "No endpoint policy (full access)".to_string())],
         },
         VpcEndpointDetailSection::Tags => tag_rows(&ep.tags),
+    }
+}
+
+// ── Endpoint service split pane (PrivateLink, provider side) ────────────────────
+
+pub(super) fn render_vpc_endpoint_service_split(
+    app: &App,
+    svc: &crate::aws::services::vpc::VpcEndpointService,
+    area: Rect,
+    frame: &mut Frame,
+) {
+    let mut subtitle = format!("{} · {}", svc.kind(), svc.state_label());
+    if svc.acceptance_required {
+        subtitle.push_str(" · acceptance required");
+    }
+    render_simple_split(
+        app,
+        area,
+        frame,
+        "Endpoint Service",
+        svc.name(),
+        &subtitle,
+        &descriptor_tabs(app, &crate::aws::services::vpc::VPC_ENDPOINT_SERVICE_SECTIONS),
+    );
+}
+
+/// How many connections the Overview previews before pointing at the tab.
+const EPS_OVERVIEW_CONNECTIONS: usize = 8;
+const EPS_OVERVIEW_DNS: usize = 8;
+
+/// One connection as a content line — shared by the Overview preview and the
+/// Connections tab's group headers so the two read the same.
+pub fn eps_connection_line(c: &crate::aws::services::vpc::EpsConnection) -> String {
+    let mut s = format!("{}  ·  {}  ·  {}", c.endpoint_id, c.owner, c.state);
+    if let Some(r) = &c.region {
+        s.push_str(&format!("  ·  {r}"));
+    }
+    s
+}
+
+fn eps_state_rank(state: &str) -> u8 {
+    match state {
+        "pendingAcceptance" => 0,
+        "available" => 1,
+        _ => 2,
+    }
+}
+
+pub fn vpc_endpoint_service_section_lines(
+    svc: &crate::aws::services::vpc::VpcEndpointService,
+    section: crate::aws::services::vpc::VpcEndpointServiceDetailSection,
+    connections: Option<&crate::lazy::Lazy<crate::aws::services::vpc::EpsConnections>>,
+    permissions: Option<&crate::lazy::Lazy<Vec<crate::aws::services::vpc::EpsPermission>>>,
+) -> Vec<(String, String)> {
+    use crate::aws::services::vpc::VpcEndpointServiceDetailSection as S;
+    use crate::lazy::Lazy;
+    let kv = |k: &str, v: String| (k.to_string(), v);
+    let blank = || (String::new(), String::new());
+    match section {
+        S::Overview => {
+            let mut rows = vec![
+                kv("Service ID", svc.id.clone()),
+                kv("Service Name", svc.service_name.clone()),
+                kv("Type", svc.kind()),
+                kv("State", svc.state.clone()),
+                blank(),
+                kv("Access", String::new()),
+                kv(
+                    "Acceptance",
+                    if svc.acceptance_required {
+                        "✓ required — each request waits for you to accept it".to_string()
+                    } else {
+                        "⚠ not required — an allowed principal connects at once".to_string()
+                    },
+                ),
+            ];
+            if let Some(p) = &svc.payer {
+                rows.push(kv("Payer", p.clone()));
+            }
+            if !svc.ip_types.is_empty() {
+                rows.push(kv("IP Address Types", svc.ip_types.join(", ")));
+            }
+            if svc.manages_vpc_endpoints {
+                rows.push(kv("Endpoints Managed By", "an AWS service".to_string()));
+            }
+            if let Some(r) = svc.remote_access_enabled {
+                rows.push(kv("Remote Access", if r { "✓ enabled" } else { "disabled" }.to_string()));
+            }
+
+            rows.push(blank());
+            rows.push(kv("Connections", String::new()));
+            match connections {
+                None | Some(Lazy::Loading) => rows.push(kv("", "Loading…".to_string())),
+                Some(Lazy::Error(e)) => rows.extend(error_rows(e)),
+                Some(Lazy::Loaded(c)) => {
+                    if c.connections.is_empty() {
+                        rows.push(kv("", "No endpoints connected".to_string()));
+                    } else {
+                        let pending = c.pending();
+                        if pending > 0 {
+                            rows.push(kv("Pending Acceptance", format!("⚠ {pending} waiting for you")));
+                        }
+                        let mut counts: Vec<(&str, usize)> = Vec::new();
+                        for conn in &c.connections {
+                            match counts.iter_mut().find(|(s, _)| *s == conn.state) {
+                                Some((_, n)) => *n += 1,
+                                None => counts.push((&conn.state, 1)),
+                            }
+                        }
+                        counts.sort_by_key(|(s, _)| eps_state_rank(s));
+                        let summary: Vec<String> = counts.iter().map(|(s, n)| format!("{n} {s}")).collect();
+                        let more = if c.truncated { "+" } else { "" };
+                        rows.push(kv("Endpoints", format!("{}{more} ({})", c.connections.len(), summary.join(", "))));
+                        for conn in c.connections.iter().take(EPS_OVERVIEW_CONNECTIONS) {
+                            rows.push((format!("  {}", eps_connection_line(conn)), String::new()));
+                        }
+                        if c.connections.len() > EPS_OVERVIEW_CONNECTIONS {
+                            rows.push((
+                                format!("  · {} more — 2 <Tab>", c.connections.len() - EPS_OVERVIEW_CONNECTIONS),
+                                String::new(),
+                            ));
+                        }
+                    }
+                }
+            }
+
+            rows.push(blank());
+            rows.push(kv("Private DNS", String::new()));
+            match &svc.private_dns_name {
+                None => rows.push(kv("", "No private DNS name".to_string())),
+                Some(name) => {
+                    rows.push(kv("Name", name.clone()));
+                    let state = svc.private_dns_state.clone().unwrap_or_else(|| "—".to_string());
+                    let verified = state.eq_ignore_ascii_case("verified");
+                    rows.push(kv(
+                        "Verification",
+                        if verified { format!("✓ {state}") } else { format!("⚠ {state}") },
+                    ));
+                    if !verified {
+                        if let Some((n, v)) = &svc.private_dns_txt {
+                            rows.push(kv("TXT Record Name", n.clone()));
+                            rows.push(kv("TXT Record Value", v.clone()));
+                        }
+                    }
+                }
+            }
+
+            rows.push(blank());
+            rows.push(kv("Load Balancers", String::new()));
+            if svc.nlb_arns.is_empty() && svc.gwlb_arns.is_empty() {
+                rows.push(kv("", "—".to_string()));
+            }
+            for a in &svc.nlb_arns {
+                rows.push(kv("Network LB", a.clone()));
+            }
+            for a in &svc.gwlb_arns {
+                rows.push(kv("Gateway LB", a.clone()));
+            }
+
+            rows.push(blank());
+            rows.push(kv("Availability Zones", String::new()));
+            if svc.availability_zones.is_empty() {
+                rows.push(kv("", "—".to_string()));
+            } else {
+                rows.push((format!("  {}", svc.availability_zones.join(", ")), String::new()));
+            }
+
+            if !svc.supported_regions.is_empty() {
+                rows.push(blank());
+                rows.push(kv("Regions", String::new()));
+                for (r, st) in &svc.supported_regions {
+                    rows.push(kv(r, st.clone()));
+                }
+            }
+
+            if !svc.base_dns_names.is_empty() {
+                rows.push(blank());
+                rows.push(kv("DNS Names", String::new()));
+                for d in svc.base_dns_names.iter().take(EPS_OVERVIEW_DNS) {
+                    rows.push((format!("  {d}"), String::new()));
+                }
+                if svc.base_dns_names.len() > EPS_OVERVIEW_DNS {
+                    rows.push((format!("  · {} more", svc.base_dns_names.len() - EPS_OVERVIEW_DNS), String::new()));
+                }
+            }
+            rows
+        }
+        S::Connections => match connections {
+            None | Some(Lazy::Loading) => vec![kv("", "Loading…".to_string())],
+            Some(Lazy::Error(e)) => error_rows(e),
+            Some(Lazy::Loaded(c)) => {
+                let mut rows = Vec::new();
+                if c.connections.is_empty() {
+                    rows.push(kv("", "No endpoints connected or requesting".to_string()));
+                }
+                // Endpoint ids live in the consumer's account: the header
+                // offers a jump only for this account's loaded endpoints
+                // (`App::generic_jump_allowed`).
+                for conn in &c.connections {
+                    rows.push((eps_connection_line(conn), String::new()));
+                    let state = if conn.state.eq_ignore_ascii_case("pendingAcceptance") {
+                        format!("⚠ {}", conn.state)
+                    } else {
+                        conn.state.clone()
+                    };
+                    rows.push(kv("State", state));
+                    rows.push(kv("Owner Account", conn.owner.clone()));
+                    if let Some(r) = &conn.region {
+                        rows.push(kv("Region", r.clone()));
+                    }
+                    if let Some(t) = &conn.created {
+                        rows.push(kv("Created", t.clone()));
+                    }
+                    if let Some(t) = &conn.ip_type {
+                        rows.push(kv("IP Address Type", t.clone()));
+                    }
+                    for a in &conn.lb_arns {
+                        rows.push(kv("Load Balancer", a.clone()));
+                    }
+                    if let Some(d) = conn.dns_names.first() {
+                        rows.push(kv("DNS Name", d.clone()));
+                    }
+                    rows.push(blank());
+                }
+                if c.truncated {
+                    rows.push(kv("", format!("· showing the first {}", crate::aws::services::vpc::MAX_EPS_CONNECTIONS)));
+                    rows.push(blank());
+                }
+                rows.push(kv("Notifications", String::new()));
+                match &c.notifications {
+                    Err(e) => rows.extend(error_rows(e)),
+                    Ok(n) if n.is_empty() => rows.push(kv("", "No connection notifications".to_string())),
+                    Ok(n) => {
+                        for x in n {
+                            rows.push(kv("SNS Topic", x.topic_arn.clone()));
+                            rows.push(kv("  Events", x.events.join(", ")));
+                            rows.push(kv("  State", x.state.clone()));
+                        }
+                    }
+                }
+                rows
+            }
+        },
+        S::Permissions => match permissions {
+            None | Some(Lazy::Loading) => vec![kv("", "Loading…".to_string())],
+            Some(Lazy::Error(e)) => error_rows(e),
+            Some(Lazy::Loaded(p)) if p.is_empty() => vec![kv(
+                "",
+                "No allowed principals — no other account can create an endpoint to this service".to_string(),
+            )],
+            Some(Lazy::Loaded(p)) => {
+                let mut rows = vec![kv("Allowed Principals", String::new())];
+                // Plain lines: a principal is an ARN in another account, and
+                // the generic classifier would offer a jump that can't land.
+                for x in p {
+                    let line = if x.principal == "*" {
+                        format!("⚠ {:<12} * — any AWS principal can request a connection", x.principal_type)
+                    } else {
+                        format!("  {:<12} {}", x.principal_type, x.principal)
+                    };
+                    rows.push((line, String::new()));
+                }
+                if p.iter().any(|x| x.principal == "*") && !svc.acceptance_required {
+                    rows.push(blank());
+                    rows.push((
+                        "⚠ Acceptance is not required, so anyone can connect without review".to_string(),
+                        String::new(),
+                    ));
+                }
+                rows
+            }
+        },
+        S::Tags => tag_rows(&svc.tags),
     }
 }
 

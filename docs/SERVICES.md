@@ -2357,6 +2357,35 @@ the service you're touching.
     prefix-list rule — `PL_PREVIEW_ENTRIES`, then a count, because the
     AWS-managed lists (CloudFront origin-facing, S3) run to hundreds. The
     flat `details()` view keeps the bare id.
+  - **Endpoint services** (PrivateLink provider side, #96) — the services
+    this account **publishes** (`vpce-svc-…`,
+    `DescribeVpcEndpointServiceConfigurations`, phase 8b) share the
+    Endpoints tab with the consumer's endpoints as a grouped tab
+    (`VPC Endpoint|Endpoint Service`): VPC's ten keys are taken, and both
+    sides are PrivateLink. Overview / **Connections** / **Permissions** /
+    Tags. The Overview's connection summary (`⚠ N waiting for you` for
+    `pendingAcceptance`, counts by state, an 8-row preview) shares the
+    Connections hook (`lazy.eps_connections`, keyed by service id:
+    `DescribeVpcEndpointConnections` filtered `service-id`, capped at
+    `MAX_EPS_CONNECTIONS`, pending first then newest, plus the SNS
+    connection notifications — those fail on their own, inline). Private DNS
+    shows the verification state and, until verified, the TXT record to
+    publish. **A connection's endpoint id lives in the consumer's account**:
+    the classifier sees a `vpce-` token in the row, so
+    `App::generic_jump_allowed` (the one filter both the `⏎` and `→` chains
+    put on the generic classifier) drops `vpce-` targets on this pane unless
+    the endpoint is a loaded row — your own endpoint to your own service
+    still jumps. Allowed principals render as plain lines (other accounts'
+    ARNs); `*` is flagged, and again when acceptance isn't required. The
+    other direction: a consumer endpoint whose `service_name` matches a
+    loaded endpoint service gets an `Endpoint Service` row (a `vpce-svc-`
+    id, which the generic `vpce-` arm routes to the same tab). `C` offers
+    the read commands only — accept / reject a connection and the
+    permission edits are left out (they grant or cut another account's
+    network access). `m` charts `AWS/PrivateLinkServices` (see
+    `docs/RICH-VIEWS.md`). Not run against a real account: the metric
+    dimension sets and the console deep link
+    (`#EndpointServiceDetails:endpointServiceId=`) are unverified.
 - **Compute Optimizer lens** (B7) — a lazy **Optimizer** section on five panes:
   EC2 instance (key 9), EBS volume (5), Lambda (6), ASG (5), ECS service (7).
   Not a `ServiceType`: `aws/services/computeoptimizer.rs` flattens the per-ARN
