@@ -482,9 +482,16 @@ pub(super) fn ec2_details_lines(
     if let Some(key) = &instance.key_name {
         rows.push(("  Key pair".to_string(), key.clone()));
     }
-    if let Some(arch) = &instance.architecture {
-        let platform = instance.platform.as_deref().unwrap_or("Linux/UNIX");
-        rows.push(("  Platform".to_string(), format!("{platform}  ({arch})")));
+    // AWS's own label; no "Linux/UNIX" guess when it sent none.
+    let platform = instance
+        .platform_details
+        .clone()
+        .or_else(|| instance.os_family().map(|f| f.as_str().to_string()));
+    match (platform, &instance.architecture) {
+        (Some(p), Some(arch)) => rows.push(("  Platform".to_string(), format!("{p}  ({arch})"))),
+        (Some(p), None) => rows.push(("  Platform".to_string(), p)),
+        (None, Some(arch)) => rows.push(("  Architecture".to_string(), arch.clone())),
+        (None, None) => {}
     }
     if let Some((cores, threads)) = instance.cpu_options {
         rows.push((
