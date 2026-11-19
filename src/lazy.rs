@@ -459,6 +459,11 @@ pub struct LazyStore {
     /// DataSync location Configuration section (the per-type describe), keyed
     /// by location ARN.
     pub datasync_location_config: LazyMap<crate::aws::services::datasync::LocationConfig>,
+    /// Amazon MQ configuration Document section (the latest revision's file),
+    /// keyed by configuration id.
+    pub mq_config_document: LazyMap<crate::aws::services::mq::MqConfigDocument>,
+    /// Amazon MQ configuration Revisions section, keyed by configuration id.
+    pub mq_config_revisions: LazyMap<Vec<crate::aws::services::mq::MqRevision>>,
     /// DMS task Tables section (`DescribeTableStatistics`), keyed by task ARN.
     pub dms_table_stats: LazyMap<crate::aws::services::dms::DmsTableStats>,
     /// DMS task Assessments section, keyed by task ARN.

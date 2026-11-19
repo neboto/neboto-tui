@@ -110,6 +110,35 @@ pub(super) fn mocks() -> Vec<Mock> {
             )),
         ),
         (
+            ServiceType::Mq,
+            "MqBroker",
+            Box::new(svc::mq::MqBroker::from_describe(
+                &aws_sdk_mq::operation::describe_broker::DescribeBrokerOutput::builder()
+                    .broker_arn("arn:aws:mq:us-east-1:123456789012:broker:mock-broker:b-0mock")
+                    .broker_id("b-0mock")
+                    .broker_name("mock-broker")
+                    .broker_state(aws_sdk_mq::types::BrokerState::Running)
+                    .engine_type(aws_sdk_mq::types::EngineType::Activemq)
+                    .engine_version("5.18")
+                    .deployment_mode(aws_sdk_mq::types::DeploymentMode::SingleInstance)
+                    .host_instance_type("mq.m5.large")
+                    .build(),
+            )),
+        ),
+        (
+            ServiceType::Mq,
+            "MqConfiguration",
+            Box::new(svc::mq::MqConfiguration::from_sdk(
+                &aws_sdk_mq::types::Configuration::builder()
+                    .arn("arn:aws:mq:us-east-1:123456789012:configuration:c-0mock")
+                    .id("c-0mock")
+                    .name("mock-config")
+                    .engine_type(aws_sdk_mq::types::EngineType::Activemq)
+                    .engine_version("5.18")
+                    .build(),
+            )),
+        ),
+        (
             ServiceType::DataSync,
             "DataSyncTask",
             Box::new(svc::datasync::DataSyncTask::from_describe(

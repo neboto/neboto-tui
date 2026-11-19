@@ -704,6 +704,39 @@ pub const DATASYNC_TASK: &[MetricSpec] = &[
     m("FilesVerifiedDestination", "Files verified (destination)", Sum, Unit::Count),
 ];
 
+/// Dimension `Broker`, which for ActiveMQ is the *instance* (`<name>-1`).
+pub const MQ_ACTIVEMQ_BROKER: &[MetricSpec] = &[
+    m("CpuUtilization", "CPU", Avg, Unit::Percent),
+    m("HeapUsage", "Heap used", Avg, Unit::Percent),
+    m("StorePercentUsage", "Store used", Max, Unit::Percent),
+    m("TotalMessageCount", "Messages stored", Max, Unit::Count),
+    m("TotalEnqueueCount", "Enqueued", Sum, Unit::Count).group("flow"),
+    m("TotalDequeueCount", "Dequeued", Sum, Unit::Count).group("flow"),
+    m("CurrentConnectionsCount", "Connections", Max, Unit::Count),
+    m("TotalConsumerCount", "Consumers", Max, Unit::Count).group("clients"),
+    m("TotalProducerCount", "Producers", Max, Unit::Count).group("clients"),
+    m("NetworkIn", "Network in", Sum, Unit::Bytes).group("net"),
+    m("NetworkOut", "Network out", Sum, Unit::Bytes).group("net"),
+];
+
+/// Dimension `Broker`, the broker's name.
+pub const MQ_RABBITMQ_BROKER: &[MetricSpec] = &[
+    m("SystemCpuUtilization", "CPU", Avg, Unit::Percent),
+    m("RabbitMQMemUsed", "Memory used", Max, Unit::Bytes).group("mem"),
+    m("RabbitMQMemLimit", "Memory limit", Max, Unit::Bytes).group("mem"),
+    m("RabbitMQDiskFree", "Disk free", Min, Unit::Bytes).group("disk"),
+    m("RabbitMQDiskFreeLimit", "Disk free limit", Min, Unit::Bytes).group("disk"),
+    m("MessageCount", "Messages", Max, Unit::Count).group("messages"),
+    m("MessageReadyCount", "Ready", Max, Unit::Count).group("messages"),
+    m("MessageUnacknowledgedCount", "Unacknowledged", Max, Unit::Count).group("messages"),
+    m("PublishRate", "Publish rate", Avg, Unit::PerSec).group("rates"),
+    m("AckRate", "Ack rate", Avg, Unit::PerSec).group("rates"),
+    m("ConnectionCount", "Connections", Max, Unit::Count).group("clients"),
+    m("ChannelCount", "Channels", Max, Unit::Count).group("clients"),
+    m("ConsumerCount", "Consumers", Max, Unit::Count).group("clients"),
+    m("QueueCount", "Queues", Max, Unit::Count),
+];
+
 pub const DMS_INSTANCE: &[MetricSpec] = &[
     m("CPUUtilization", "CPU", Avg, Unit::Percent),
     m("FreeableMemory", "Freeable memory", Avg, Unit::Bytes),

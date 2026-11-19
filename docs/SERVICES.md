@@ -1469,6 +1469,55 @@ the service you're touching.
   delete settings) and `cancel-task-execution` while one is running.
   Locations read via the matching `describe-location-<type>`.
   **Demo**: no fixtures — `@datasync` lists empty under `--demo`.
+- **Amazon MQ** (`@mq` / `@amazonmq` / `@activemq` / `@rabbitmq`, `mq.rs`,
+  **aws-sdk-mq**) — browse-only, two sub-tabs: **Brokers** (ActiveMQ and
+  RabbitMQ in one list) and **Configurations** (#96). Regional.
+  **Load**: `ListConfigurations` first (hand-rolled token loop — it has no
+  fluent paginator; the row is complete, tags included), then `ListBrokers`
+  + `DescribeBroker` per broker at `buffered(5)`, streamed in chunks. The
+  broker summary has no version, endpoints, network, logs or tags, so the
+  describe isn't optional; a broker whose describe fails keeps its summary
+  row (`described: false`) and its sections say so. Both lists failing is
+  the only fatal case.
+  **Ids**: rows are keyed by the bare id (`b-…`, `c-…`), not the ARN — a
+  broker only names its configuration by id. `arn_jump_target` reduces
+  `arn:aws:mq:…:broker:<name>:<id>` and `…:configuration:<id>` to those
+  ids (so a Lambda event-source mapping's broker ARN lands on the broker),
+  and `mq_row_jump_target` follows a row whose *value* is the id of a
+  loaded broker or configuration, under `@mq` only — keyed on the value,
+  not the row label, and never the selected row's own id. The `b-` / `c-`
+  prefixes are too generic to recognise by shape (a tag value matches).
+  **Users**: the Users section is the user names `DescribeBroker` returns
+  (ActiveMQ with simple auth only). `DescribeUser` / `ListUsers` are never
+  called and no API returns a password. RabbitMQ users live in the broker
+  and LDAP users in the directory; the section says which.
+  **Configuration panes**: Overview's **Used By** filters sibling broker
+  rows on current *or* pending configuration id (no fetch) and flags a
+  broker running an older revision than the latest. **Document**
+  (`DescribeConfigurationRevision`, latest revision only, base64-decoded;
+  shown as sent if it doesn't decode) and **Revisions**
+  (`ListConfigurationRevisions`, newest 100) are lazy, keyed by
+  configuration id. Rejected: fetching the revision a broker *runs* per
+  broker — the configuration row is the document's home, and Revisions
+  says which brokers run which.
+  **`m`** (brokers): `AWS/AmazonMQ`, dim `Broker`, a spec table per
+  engine. RabbitMQ publishes under the broker name. ActiveMQ publishes per
+  *instance* — `<name>-1`, and `<name>-2` for the second node of an
+  active/standby pair — so the target is `<name>-1` and an active/standby
+  broker gets a hint: after a failover the message counts move to `-2`
+  and this chart goes flat. Folding the two with a SEARCH was rejected:
+  the token match on `<name>` also matches other brokers sharing the
+  prefix. Per-queue / per-topic metrics (extra dims) are not charted;
+  `a` reaches whatever carries `Broker=<name>-1`. **Not checked against a
+  live account** — metric names are from the CloudWatch docs.
+  **`t`** (brokers): the general log group from `DescribeBroker`'s
+  `Logs` when general logging is on, else the audit group; neither on, no
+  `t`.
+  **`C`**: the read command only (`describe-broker`,
+  `describe-configuration`). `reboot-broker` is deliberately not offered —
+  it drops every client connection.
+  **Console links** (`#/brokers/details?id=`, `#/configurations/details?id=`)
+  are unverified. **Demo**: no fixtures — `@mq` lists empty under `--demo`.
 - **DocumentDB** (`@docdb` / `@documentdb`) and **Neptune** (`@neptune`) —
   not service files: both are `rds::RdsService::for_family`, the RDS client
   and the RDS resource types listed under one engine (#96). DocumentDB and

@@ -16,6 +16,7 @@ pub mod cloudformation;
 pub mod fms;
 pub mod glue;
 pub mod msk;
+pub mod mq;
 pub mod ses;
 pub mod code;
 pub mod cognito;

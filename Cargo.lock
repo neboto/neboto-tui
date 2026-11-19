@@ -1801,6 +1801,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-mq"
+version = "1.118.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3200440775b642a4f31619aef5925b1882667a424b7e4d909c2e23bffc4157f2"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-networkfirewall"
 version = "1.126.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4808,6 +4833,7 @@ dependencies = [
  "aws-sdk-kinesis",
  "aws-sdk-kms",
  "aws-sdk-lambda",
+ "aws-sdk-mq",
  "aws-sdk-networkfirewall",
  "aws-sdk-oam",
  "aws-sdk-opensearch",
