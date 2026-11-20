@@ -216,6 +216,14 @@ pub trait Resource: Send + Sync + Debug {
         None
     }
 
+    /// `O` while the detail pane is on section `section` (its
+    /// `detail_section_idx`). Default: the resource's own page. A section
+    /// whose console counterpart is a different page overrides this (a web
+    /// ACL's Insights → the WAF Security analytics dashboard).
+    fn console_url_for_section(&self, region: &str, _section: usize) -> Option<String> {
+        self.console_url(region)
+    }
+
     /// The AWS CLI command that fetches this resource — the service part only
     /// (`aws ec2 describe-instances --instance-ids i-…`); the app appends
     /// `--region` / `--profile` from the current context and `C` copies it.

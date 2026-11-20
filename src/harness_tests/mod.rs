@@ -34,6 +34,7 @@ mod macros_test;
 mod keycast_test;
 mod ec2_console_test;
 mod ec2_os_test;
+mod waf_security_analytics_test;
 mod lambda_layers_test;
 mod cli_picker_test;
 mod batch_test;

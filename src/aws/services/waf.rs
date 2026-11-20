@@ -200,6 +200,20 @@ pub struct WafWebAcl {
     pub scope: String,
 }
 
+impl WafWebAcl {
+    /// The console's Security analytics dashboard (2026-11): unsampled
+    /// request data across every protection pack, up to 21 days. It has no
+    /// API, so neboto links to it from the Insights section (which is built
+    /// from 3 hours of samples) rather than reading it. One page per
+    /// account, so it isn't filtered to this ACL; the region comes from the
+    /// ARN (`us-east-1` for a CLOUDFRONT ACL) so the console opens where
+    /// the ACL lives whatever region neboto is in.
+    pub fn security_analytics_url(&self) -> Option<String> {
+        let region = self.arn.split(':').nth(3).filter(|r| !r.is_empty())?;
+        Some(format!("https://{region}.console.aws.amazon.com/wafv2-pro/security-analytics?region={region}"))
+    }
+}
+
 crate::sections! {
     pub enum WafWebAclDetailSection,
     pub static WAF_WEB_ACL_SECTIONS = [
@@ -242,6 +256,14 @@ impl Resource for WafWebAcl {
             "https://{}.console.aws.amazon.com/wafv2/homev2/web-acl/{}/{}/overview?region={}",
             r, self.name, self.id, r
         ))
+    }
+    fn console_url_for_section(&self, region: &str, section: usize) -> Option<String> {
+        if WafWebAclDetailSection::from_index(section) == WafWebAclDetailSection::Insights {
+            if let Some(url) = self.security_analytics_url() {
+                return Some(url);
+            }
+        }
+        self.console_url(region)
     }
     fn clone_box(&self) -> Box<dyn Resource> { Box::new(self.clone()) }
     fn as_any(&self) -> &dyn Any { self }
