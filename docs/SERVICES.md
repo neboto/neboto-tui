@@ -441,7 +441,7 @@ the service you're touching.
       status alone would hide. Likewise `OnlineEvaluationExecutionStatus` is
       **ENABLED/DISABLED**, an on/off switch and *not* a lifecycle status;
       treating it as one gives you a dead `FAILED` branch.
-  - **Memory session browser** (`i` on a memory store) —
+  - **Memory session browser** (`o` on a memory store; `i` until v0.15) —
     `src/ui/widgets/memory_browser.rs`, modelled on `s3_object_browser.rs`:
     same in-pane placement, `Z` full-width, `/` filter, `n` paging. Three
     levels (**Actors → Sessions → Events**) plus a `t`-toggled **Records**
@@ -460,9 +460,10 @@ the service you're touching.
       `ValidationException`).
     - Row text is model output, so `trunc()` strips control characters — a
       newline in a remembered turn would otherwise corrupt the frame.
-    - `supports_item_browser()` gates the `i` hint and now covers both DynamoDB
-      and Memory. It is the same shape as the `t`/`supports_log_tail` pair that
-      shipped broken twice; a new `i` source needs both.
+    - `supports_contents_browser()` gates the `o` hint and covers S3, DynamoDB
+      and Memory; `open_contents_browser` opens them. It is the same shape as
+      the `t`/`supports_log_tail` pair that shipped broken twice; a new `o`
+      source needs both.
   - **A2A agent card** (`x` on a runtime's Agent Card section) — the **only
     section in the app with no on-enter hook**, and deliberately so.
     `GetAgentCard` is a *data-plane* call on the same client as
@@ -797,7 +798,7 @@ the service you're touching.
   API server) are deliberately out of scope. Add-on "update-available" costs one
   `DescribeAddonVersions` per add-on; Insights (`UPGRADE_READINESS`) is the
   headline. `t` tails `/aws/eks/<name>/cluster`.
-- **DynamoDB item browser** (`i`, `ddb_item_browser.rs`; the language is
+- **DynamoDB item browser** (`o`, `i` until v0.15; `ddb_item_browser.rs`; the language is
   `dynamodb/query.rs`) — one query line, compiled per keystroke into a Query
   or a Scan; the plan line under it shows which and why. Things the API
   makes you learn the hard way, all handled in the compiler:

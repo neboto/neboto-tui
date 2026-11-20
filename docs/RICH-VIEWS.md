@@ -1,4 +1,4 @@
-# Rich detail-pane views (`m` / `o` / `i` / `t` / `W` / `U` / `N`)
+# Rich detail-pane views (`m` / `o` / `t` / `W` / `U` / `N`)
 
 Moved out of the root `CLAUDE.md` so it loads only when needed.
 
@@ -219,8 +219,13 @@ checked before them; a view with a text input must report it in
   cross-account `accountId` on a metric line is ignored; and one bad metric-math
   expression fails the whole request, so a failure retries once **without** the
   expression queries and flags `math_error` rather than blanking the region.
+`o` browses what's inside the selection: S3 objects, DynamoDB items, an
+AgentCore memory store's sessions (the selections never co-occur). Until
+v0.15 the last two were on `i`, which moved so `i` can be the info card, as
+in nebaz; `i` on those types now says where the browser went.
+
 - **S3 object browser** (`o`): `s3_object_browser.rs` / `S3ObjectBrowserState`.
-- **DynamoDB item browser** (`i`): `ddb_item_browser.rs` / `DdbBrowserState`.
+- **DynamoDB item browser** (`o`): `ddb_item_browser.rs` / `DdbBrowserState`.
   Columns are the key attributes (pinned left of a `│`) then every other
   attribute, most common first, alphabetical among equals — never
   `HashMap` order, which reshuffled them per open — with widths measured
@@ -244,12 +249,11 @@ checked before them; a view with a text input must report it in
   region under the results, so the wheel over the table still steps
   items while the item is open). Quirks and limits:
   `docs/SERVICES.md` (**DynamoDB item browser**).
-- **AgentCore memory session browser** (`i`, on a memory store):
+- **AgentCore memory session browser** (`o`, on a memory store):
   `memory_browser.rs` / `MemoryBrowserState`. Actors → Sessions → Events
-  (`t` toggles a Records mode over long-term memory). `i` is shared with the
-  DynamoDB browser — the two selections never co-occur — so a new `i` source
-  needs an arm in **both** key chains **and** `supports_item_browser()`, which
-  gates the status-bar hint.
+  (`t` toggles a Records mode over long-term memory). A new `o` source
+  needs an arm in `open_contents_browser` **and** `supports_contents_browser()`,
+  which gates the status-bar hint.
 - **Live log tail** (`t`, on a log group, Lambda, RDS, ECS task, Network
   Firewall, WAF web ACL, CloudTrail trail, Route 53 hosted zone (query
   logs), Step Functions state machine or execution, CodeBuild, a

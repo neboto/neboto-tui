@@ -116,3 +116,37 @@ async fn y_copies_the_id() {
     assert_eq!(app.clipboard_last(), Some(id.as_str()));
     assert!(app.success_message.as_deref().is_some_and(|m| m.starts_with("Copied")), "{:?}", app.success_message);
 }
+
+/// nebaz's behaviour: `L` from the pane onto a tab whose rows are still
+/// streaming waits, and lands in the pane on the first row that arrives.
+#[tokio::test]
+async fn h_l_from_the_pane_wait_for_a_loading_tab_s_first_row() {
+    let (mut app, tx, _rx) = ec2_app().await;
+    app.handle_key(key(KeyCode::Enter), &tx).await.unwrap();
+    app.handle_key(shift('L'), &tx).await.unwrap(); // Security Groups
+    app.loading = true;
+    app.handle_key(shift('L'), &tx).await.unwrap(); // EBS Volumes: nothing yet
+    assert_eq!(app.ec2_view, Ec2View::EbsVolumes);
+    assert!(!app.details_focused);
+    let volume = || all_mocks().into_iter().find(|(_, l, _)| *l == "EbsVolume").unwrap().2;
+    let batch = |r| Event::ResourcesPartiallyLoaded {
+        service: ServiceType::EC2,
+        resources: vec![r],
+        progress: crate::event::LoadProgress { loaded_count: 1, total_count: None, status_message: None },
+    };
+    app.handle_event(batch(volume()), &tx).await.unwrap();
+    assert!(app.details_focused, "the first row lands in the pane");
+    assert_eq!(app.get_selected_resource().map(|r| r.resource_type().to_string()), Some("EBS Volume".to_string()));
+
+    // Any key while waiting cancels it: a late batch never steals focus.
+    app.handle_key(key(KeyCode::Char('h')), &tx).await.unwrap();
+    app.resources.retain(|r| r.resource_type() != "EBS Volume");
+    app.update_search();
+    app.handle_key(key(KeyCode::Enter), &tx).await.unwrap();
+    app.handle_key(shift('H'), &tx).await.unwrap(); // Security Groups (has a row)
+    app.handle_key(shift('L'), &tx).await.unwrap(); // EBS Volumes, waiting again
+    assert!(!app.details_focused);
+    app.handle_key(key(KeyCode::Char('j')), &tx).await.unwrap();
+    app.handle_event(batch(volume()), &tx).await.unwrap();
+    assert!(!app.details_focused, "j cancelled the wait");
+}

@@ -6,7 +6,7 @@ history / bookmarks, a key, a modal, an in-pane view, or a click target.
 
 ## `@all` search
 
-**`@all <text>`** (checked by
+**`@all <text>`** (or nebaz's spelling `@* <text>`; checked by
 `parse_all_query` *before* `parse_query`) searches **every warm cache
 entry** — it never fires fetches: while `App.all_search_mode`, `resources`
 holds the flattened cached lists (`rebuild_all_search_resources`, rebuilt
@@ -152,7 +152,9 @@ and runs `Search("*")` from that index's region.
   `Tab`/`Shift-Tab` (cycle sub-tabs), `1`–`9` (jump to sub-tab), `H`/`L`
   (previous/next sub-tab from **either** pane — `step_sub_tab` replays
   `Shift-Tab`/`Tab` through the list handlers and re-opens the new tab's
-  first row when pressed in the detail pane; gated by `has_sub_tabs`), `/` (search), `@` (search seeded with `@`, for a fast
+  first row when pressed in the detail pane — on a tab still streaming it
+  waits for the first row (`pending_subtab_focus`; any key or click cancels,
+  an empty load drops it), as nebaz does; gated by `has_sub_tabs`), `/` (search), `@` (search seeded with `@`, for a fast
   `@service …` switch — works from either pane, via `start_service_search`),
   `y` (copy id/ARN; with a visual selection active, copy the rows as a
   Markdown table), `C` (copy an AWS CLI command — picker), `V`/`J`/`K`/`Ctrl-A` (visual
@@ -196,7 +198,7 @@ and runs `Search("*")` from that index's region.
   `l`/`→`/`Enter` (follow jump), `h`/`←`/`Esc` (back to list), `⌫`/`Ctrl-O`
   (nav-back through history, same as the list pane; the service strip's
   left-edge `←`/`→` are the clickable back/forward), `y`/`e`,
-  `m`/`o`/`i`/`t` (rich views), `W`/`U`/`N` (timeline / referenced-by /
+  `m`/`o`/`t` (rich views), `W`/`U`/`N` (timeline / referenced-by /
   network-access lenses, also from the list pane), `X` (export detail;
   `Ctrl-X` exports the list),
   `@` (jump to `@service` search), `/` (in-pane body search, not global),
@@ -260,7 +262,7 @@ and runs `Search("*")` from that index's region.
   chip on that side), the search bar (`Key('/')`), the detail pane's top
   border (`Z`), and a drawn `→` (`ClickAction::FollowJump(row)`, recorded by
   `record_jump_arrows` only while the pane is focused). **In-pane views**
-  (`m`/`t`/`o`/`i`/`W`/`U`/`N`) go through `handle_pane_view_mouse`: wheel =
+  (`m`/`t`/`o`/`W`/`U`/`N`) go through `handle_pane_view_mouse`: wheel =
   `↓`/`↑` over the view, click moves the cursor, double-click = `⏎` (one
   click never acts, as in the list), right-click = `Esc`, anything else is
   swallowed. Their renderers record the view rect + visible rows into the

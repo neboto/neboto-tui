@@ -19,7 +19,7 @@ the AWS SDK for Rust).
 | Why a design is the way it is | [`docs/adr/`](docs/adr) |
 | What's still unbuilt | GitHub Issues: `gh issue list --label area:<platform\|new-service\|service-depth\|ux\|security\|testing>`. Rejected ideas are closed `wontfix` issues linking an ADR. Not a doc: if someone could close it, it's an issue |
 | How a release is cut / how users install | [`docs/RELEASING.md`](docs/RELEASING.md) — the workflow, `install.sh` and the binstall table share the archive name |
-| Adding or editing an in-pane view (`m`/`o`/`i`/`t`/`W`/`U`/`N`), a metrics kind, a tail source | [`docs/RICH-VIEWS.md`](docs/RICH-VIEWS.md) |
+| Adding or editing an in-pane view (`m`/`o`/`t`/`W`/`U`/`N`), a metrics kind, a tail source | [`docs/RICH-VIEWS.md`](docs/RICH-VIEWS.md) |
 | Macros (`,`) and keycast (`--show-keys`) | [`docs/MACROS.md`](docs/MACROS.md) |
 | Headless `neboto ls` / `get` and its output contract | [`docs/HEADLESS.md`](docs/HEADLESS.md) |
 | Demo mode fixtures (`--demo`) | [`src/demo/CLAUDE.md`](src/demo/CLAUDE.md) |
@@ -274,7 +274,7 @@ exist, and which row labels other code keys on. None of that is recoverable
 from the code. It was split out of this file (it was 55% of it) so it loads
 when you're working on a service instead of in every session.
 
-### Rich detail-pane views (`m` / `o` / `i` / `t` / `W` / `U` / `N`)
+### Rich detail-pane views (`m` / `o` / `t` / `W` / `U` / `N`)
 
 Interactive sub-views (metrics, item/object/memory browsers, log tail + search, the `W`/`U`/`N` lenses) render in the detail pane. **Before adding or editing one — or a metrics kind, tail source or lens — read [`docs/RICH-VIEWS.md`](docs/RICH-VIEWS.md).**
 

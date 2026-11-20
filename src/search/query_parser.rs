@@ -32,7 +32,10 @@ pub struct ParsedQuery {
 /// `parse_query` (which would reject `all` as an unknown service prefix).
 /// `@allx` is NOT an @all query — the prefix must end the token.
 pub fn parse_all_query(query: &str) -> Option<&str> {
-    let rest = query.trim_start().strip_prefix("@all")?;
+    // `@*` is nebaz's spelling, so it works here too. (nebaz can't take
+    // `@all`: there it routes to the All resources sub-tab.)
+    let q = query.trim_start();
+    let rest = q.strip_prefix("@all").or_else(|| q.strip_prefix("@*"))?;
     if rest.is_empty() {
         Some("")
     } else if rest.starts_with(char::is_whitespace) {
@@ -172,6 +175,10 @@ mod tests {
         assert_eq!(parse_all_query("@allx"), None); // prefix must end the token
         assert_eq!(parse_all_query("@ec2 all"), None);
         assert_eq!(parse_all_query("all"), None);
+        // nebaz's spelling works too.
+        assert_eq!(parse_all_query("@*"), Some(""));
+        assert_eq!(parse_all_query("@* api prod"), Some("api prod"));
+        assert_eq!(parse_all_query("@*x"), None);
     }
 
     #[test]
