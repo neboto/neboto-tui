@@ -2539,6 +2539,10 @@ pub struct App {
     /// jumps that never match exactly fall back to the list unfocused. Cleared
     /// by any keypress so a late async resolve never steals focus.
     pub pending_jump_focus_details: bool,
+    /// `H` / `L` from the detail pane onto a sub-tab with no row yet (still
+    /// streaming): the layout to restore once its first row lands, as nebaz
+    /// does. Any key or click cancels it; a load that ends empty drops it.
+    pub(crate) pending_subtab_focus: Option<LayoutMode>,
     /// Section to restore (by walk!-snapshot name) after a pending jump lands
     /// focused — set only by nav/bookmark restores; follow-link jumps open the
     /// default section. Cleared with `pending_jump_focus_details`.
@@ -3512,6 +3516,7 @@ impl App {
             pending_credential_restore: None,
             startup_account: None,
             pending_jump_focus_details: false,
+            pending_subtab_focus: None,
             pending_jump_section: None,
             pending_jump_lens: None,
             nav_history: Vec::new(),
@@ -3728,6 +3733,7 @@ impl App {
                 if generation == self.load_generation.load(Ordering::SeqCst) =>
             {
                 self.handle_load_stream_event(*event, event_tx);
+                self.resolve_pending_subtab_focus(event_tx);
             }
             Event::LoadStream { .. } => {}
             // Untagged senders (direct `ResourceLoadError`s from metric
@@ -3739,6 +3745,7 @@ impl App {
             | Event::ResourceLoadWarning { .. }
             | Event::ListTagsLoaded { .. }) => {
                 self.handle_load_stream_event(ev, event_tx);
+                self.resolve_pending_subtab_focus(event_tx);
             }
             Event::AuditSourceLoaded { generation, service, result } => {
                 self.handle_audit_source_loaded(generation, service, result, event_tx);
@@ -4250,6 +4257,7 @@ impl App {
         // — a late async resolve must never steal focus from a user who has
         // moved on. (The jump/restore triggers below re-arm it after this.)
         self.pending_jump_focus_details = false;
+        self.pending_subtab_focus = None;
         self.pending_jump_section = None;
         self.pending_jump_lens = None;
         self.pending_open = None;
@@ -4311,11 +4319,27 @@ impl App {
         }
         self.dispatch_key(KeyEvent::new(tab, KeyModifiers::NONE), event_tx)
             .await?;
-        if from_details && self.get_selected_resource().is_some() {
-            self.focus_details_panel(event_tx);
-            self.layout_mode = layout;
+        if from_details {
+            if self.get_selected_resource().is_some() {
+                self.focus_details_panel(event_tx);
+                self.layout_mode = layout;
+            } else if self.loading {
+                self.pending_subtab_focus = Some(layout);
+            }
         }
         Ok(())
+    }
+
+    /// Land a pending `H` / `L` focus once the new tab has a row.
+    fn resolve_pending_subtab_focus(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(layout) = self.pending_subtab_focus else { return };
+        if self.get_selected_resource().is_some() {
+            self.pending_subtab_focus = None;
+            self.focus_details_panel(event_tx);
+            self.layout_mode = layout;
+        } else if !self.loading {
+            self.pending_subtab_focus = None;
+        }
     }
 
     /// Keys while the `:` picker is open: type to filter, arrows move, `⏎`
@@ -5584,21 +5608,17 @@ impl App {
                         }
                         None => self.ct_filter_modal.show(&self.ct_query)}
                 }
-                // Browse DynamoDB table items from the detail pane too.
-                KeyCode::Char('i') if self.is_selected_ddb_table() => {
-                    self.open_ddb_browser(event_tx);
-                }
-                // Browse an AgentCore memory store's actors/sessions/events.
-                KeyCode::Char('i') if self.is_selected_agentcore_memory() => {
-                    self.open_memory_browser(event_tx);
-                }
-                // Browse S3 objects from the detail pane too (plain `o`; Ctrl-O
-                // stays free for nav-back).
+                // `o` browses the contents from the detail pane too (plain
+                // `o`; Ctrl-O stays free for nav-back): DynamoDB items, an
+                // AgentCore memory store's sessions (S3 is handled above).
                 KeyCode::Char('o')
-                    if self.is_selected_s3_bucket()
+                    if self.supports_contents_browser()
                         && key.modifiers == KeyModifiers::NONE =>
                 {
-                    self.open_s3_object_browser(event_tx);
+                    self.open_contents_browser(event_tx);
+                }
+                KeyCode::Char('i') if key.modifiers == KeyModifiers::NONE && self.supports_contents_browser() => {
+                    self.hint_browser_moved_to_o();
                 }
                 // Spatial nav: Enter / l / → drill in — follow the referenced
                 // resource (or open the policy/objects row).
@@ -8533,22 +8553,17 @@ impl App {
                 self.open_access_lens(event_tx);
             }
 
-            // Browse DynamoDB table items (query/scan), or an AgentCore
-            // memory store's event log — the two never co-occur.
+            // `i` browsed DynamoDB items / memory sessions until v0.15; it
+            // is the info card's key in nebaz, so neboto moved them to `o`.
             (KeyCode::Char('i'), KeyModifiers::NONE) => {
-                if self.is_selected_ddb_table() {
-                    self.open_ddb_browser(event_tx);
-                } else if self.is_selected_agentcore_memory() {
-                    self.open_memory_browser(event_tx);
+                if self.supports_contents_browser() {
+                    self.hint_browser_moved_to_o();
                 }
             }
 
-            // Browse S3 objects (file-manager style)
-            (KeyCode::Char('o'), KeyModifiers::NONE) => {
-                if self.is_selected_s3_bucket() {
-                    self.open_s3_object_browser(event_tx);
-                }
-            }
+            // `o` browses what's inside the selection: S3 objects, DynamoDB
+            // items, an AgentCore memory store's sessions.
+            (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_contents_browser(event_tx),
 
             // Toggle help overlay
             (KeyCode::Char('?'), KeyModifiers::NONE) => self.toggle_help(),
@@ -24593,16 +24608,29 @@ impl App {
     }
 
     /// Whether `o` opens the S3 object browser for the current selection.
-    pub fn supports_object_browser(&self) -> bool {
-        self.is_selected_s3_bucket()
+    /// Whether `o` opens a browser over the selection's contents: S3
+    /// objects, DynamoDB items, or AgentCore Memory's actors/sessions/events
+    /// (the three selections never co-occur). This gates the status-bar
+    /// hint, so a new source goes here *and* in `open_contents_browser`
+    /// (the hint shipped missing twice when the two disagreed).
+    pub fn supports_contents_browser(&self) -> bool {
+        self.is_selected_s3_bucket() || self.is_selected_ddb_table() || self.is_selected_agentcore_memory()
     }
 
-    /// Whether `i` opens an item browser for the current selection — the
-    /// DynamoDB one, or AgentCore Memory's actors/sessions/events. This gates
-    /// the status-bar hint, so a new `i` source has to be added here as well
-    /// as to the key arms or it ships undiscoverable.
-    pub fn supports_item_browser(&self) -> bool {
-        self.is_selected_ddb_table() || self.is_selected_agentcore_memory()
+    pub(crate) fn open_contents_browser(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if self.is_selected_s3_bucket() {
+            self.open_s3_object_browser(event_tx);
+        } else if self.is_selected_ddb_table() {
+            self.open_ddb_browser(event_tx);
+        } else if self.is_selected_agentcore_memory() {
+            self.open_memory_browser(event_tx);
+        }
+    }
+
+    /// `i` where it used to open a browser: say where it went.
+    fn hint_browser_moved_to_o(&mut self) {
+        self.success_message = Some("The browser moved to o (i is becoming the info card, as in nebaz)".to_string());
+        self.success_message_time = Some(Instant::now());
     }
 
     /// Whether `s` starts a session for the current selection — mirrors the
@@ -25526,6 +25554,9 @@ impl App {
         mouse: MouseEvent,
         event_tx: &mpsc::UnboundedSender<Event>,
     ) -> Result<()> {
+        if matches!(mouse.kind, MouseEventKind::Down(_) | MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
+            self.pending_subtab_focus = None;
+        }
         let (col, row) = (mouse.column, mouse.row);
 
         // The `C` / `M` popups float above everything, the dashboard included.

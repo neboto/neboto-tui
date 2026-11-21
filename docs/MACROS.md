@@ -100,7 +100,7 @@ terminal to `$EDITOR`, which drops and rebuilds the very event channel the
 player writes to, and `q` ends the session mid-run. Keys inside the quota /
 CloudTrail-filter / SSM-session modals are dropped with no checkpoint, so a
 macro simply doesn't reproduce those (it never stalls waiting on a modal it
-can't drive). In-pane overlays (`m`/`t`/`o`/`i`) record as raw keys and replay
+can't drive). In-pane overlays (`m`/`t`/`o`) record as raw keys and replay
 consistently, but aren't modelled.
 
 ## Keycast (`--show-keys`, `src/keycast.rs`)
