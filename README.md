@@ -271,6 +271,7 @@ Each takes over the keymap while open; `Esc` closes, `Z` goes full-width.
 | `s` | SSM Session Manager · ECS Exec · assume an org member-account role |
 | `x` / `Y` | Reveal / copy a secret or SSM parameter value (never cached); on a Route 53 record's Test answer section, `x` asks Route 53 what it answers (again on each press) |
 | `O` | Open this resource in the AWS Console |
+| `i` | About this tab: a short card on what the service is, its key ideas, what neboto shows of it, and AWS docs links (`o` opens one, `1`–`9` copy one). On Security Groups, IAM Roles and Policies, ECS, Cost and Organization Policies so far |
 
 ### Mouse
 

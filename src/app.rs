@@ -202,6 +202,7 @@ enum Modal {
     Bookmarks,
     Macros,
     Help,
+    InfoCard,
     Commands,
 }
 
@@ -2382,6 +2383,11 @@ pub struct App {
     pub success_message_time: Option<Instant>, // Track when success message was set
     pub banner_visible: bool,
     pub help_visible: bool, // Help overlay toggle
+    /// The open info card (`i`, `src/cards.rs`), a modal like help.
+    pub info_card: Option<crate::cards::InfoCardState>,
+    /// The last URL `open_url` handed to the browser (tests read it; the
+    /// test build never spawns a browser).
+    pub(crate) last_opened_url: Option<String>,
     /// Help overlay scroll offset (rows). The render pass records the max
     /// (content minus viewport) in `help_max_scroll` so the key handler can
     /// clamp without knowing the popup height.
@@ -3443,6 +3449,8 @@ impl App {
             success_message_time: None,
             banner_visible: config.show_banner.unwrap_or(false),
             help_visible: false,
+            info_card: None,
+            last_opened_url: None,
             help_scroll: 0,
             help_max_scroll: Cell::new(0),
             help_query: String::new(),
@@ -5210,6 +5218,12 @@ impl App {
             return Ok(());
         }
 
+        // The info card is a modal over either pane: it owns the keys.
+        if self.info_card.is_some() {
+            self.handle_info_card_key(key);
+            return Ok(());
+        }
+
         // The help overlay renders on top of everything, so while it's open
         // it gets keys first (before the detail-pane block). It filters as
         // you type, like the pickers, so letters are text — `j`/`k` included;
@@ -5617,9 +5631,7 @@ impl App {
                 {
                     self.open_contents_browser(event_tx);
                 }
-                KeyCode::Char('i') if key.modifiers == KeyModifiers::NONE && self.supports_contents_browser() => {
-                    self.hint_browser_moved_to_o();
-                }
+                KeyCode::Char('i') if key.modifiers == KeyModifiers::NONE => self.open_info_card(),
                 // Spatial nav: Enter / l / → drill in — follow the referenced
                 // resource (or open the policy/objects row).
                 KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
@@ -8553,13 +8565,9 @@ impl App {
                 self.open_access_lens(event_tx);
             }
 
-            // `i` browsed DynamoDB items / memory sessions until v0.15; it
-            // is the info card's key in nebaz, so neboto moved them to `o`.
-            (KeyCode::Char('i'), KeyModifiers::NONE) => {
-                if self.supports_contents_browser() {
-                    self.hint_browser_moved_to_o();
-                }
-            }
+            // `i`: the tab's info card, as in nebaz. (It browsed DynamoDB
+            // items / memory sessions until v0.15; they moved to `o`.)
+            (KeyCode::Char('i'), KeyModifiers::NONE) => self.open_info_card(),
 
             // `o` browses what's inside the selection: S3 objects, DynamoDB
             // items, an AgentCore memory store's sessions.
@@ -22507,7 +22515,9 @@ impl App {
     /// `src/keycast.rs`). The overlay names are what the box prints.
     fn keycast_view(&self) -> crate::keycast::View {
         use crate::keycast::Input;
-        let overlay = if self.help_visible {
+        let overlay = if self.info_card.is_some() {
+            Some("info card")
+        } else if self.help_visible {
             Some("help")
         } else if self.command_picker.visible {
             Some("commands")
@@ -24627,10 +24637,92 @@ impl App {
         }
     }
 
-    /// `i` where it used to open a browser: say where it went.
-    fn hint_browser_moved_to_o(&mut self) {
-        self.success_message = Some("The browser moved to o (i is becoming the info card, as in nebaz)".to_string());
+    /// Gate for `i`: the current tab has an info card.
+    pub fn supports_info_card(&self) -> bool {
+        self.current_info_card().is_some()
+    }
+
+    fn current_info_card(&self) -> Option<usize> {
+        let service = self.current_service.filter(|s| !s.is_virtual())?;
+        if self.all_search_mode {
+            return None;
+        }
+        crate::cards::for_place(service, &self.current_jump_view())
+    }
+
+    fn open_info_card(&mut self) {
+        if self.current_service.is_none() {
+            return;
+        }
+        let msg = match self.current_info_card() {
+            Some(card) => {
+                self.info_card = Some(crate::cards::InfoCardState::new(card));
+                return;
+            }
+            // `i` opened these browsers until v0.15: say where they went.
+            None if self.supports_contents_browser() => "No info card for this tab yet · the browser moved to o",
+            None => "No info card for this tab yet",
+        };
+        self.success_message = Some(msg.to_string());
         self.success_message_time = Some(Instant::now());
+    }
+
+    /// Keys while the info card is open — the detail pane's: `j`/`k` move
+    /// over blocks, `V` selects, `Ctrl-A` selects all, `y` copies; `o` (or
+    /// `⏎`) opens the link under the cursor, `1`–`9` copy a link.
+    fn handle_info_card_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(state) = self.info_card.as_mut() else { return };
+        let card = state.card();
+        let blocks = card.blocks();
+        let last = blocks.len().saturating_sub(1);
+        let step = |c: usize, d: isize| (c as isize + d).clamp(0, last as isize) as usize;
+        match key.code {
+            KeyCode::Esc if state.anchor.is_some() => state.anchor = None,
+            KeyCode::Esc | KeyCode::Char('i') | KeyCode::Char('q') => self.info_card = None,
+            KeyCode::Down | KeyCode::Char('j') => state.cursor = step(state.cursor, 1),
+            KeyCode::Up | KeyCode::Char('k') => state.cursor = step(state.cursor, -1),
+            KeyCode::Char('d') if ctrl => state.cursor = step(state.cursor, 5),
+            KeyCode::Char('u') if ctrl => state.cursor = step(state.cursor, -5),
+            KeyCode::PageDown | KeyCode::Char(' ') => state.cursor = step(state.cursor, 5),
+            KeyCode::PageUp => state.cursor = step(state.cursor, -5),
+            KeyCode::Home | KeyCode::Char('g') => state.cursor = 0,
+            KeyCode::End | KeyCode::Char('G') => state.cursor = last,
+            KeyCode::Char('a') if ctrl => {
+                state.anchor = Some(0);
+                state.cursor = last;
+            }
+            KeyCode::Char('V') | KeyCode::Char('v') => {
+                state.anchor = if state.anchor.is_some() { None } else { Some(state.cursor) };
+            }
+            KeyCode::Char('y') => {
+                let (lo, hi) = state.range();
+                let what = if lo == 0 && hi == last {
+                    "the card"
+                } else if lo == hi {
+                    "the line"
+                } else {
+                    "the selection"
+                };
+                state.anchor = None;
+                self.copy_to_clipboard(&card.text_of(lo, hi), what);
+            }
+            KeyCode::Char('o') | KeyCode::Enter => match blocks.into_iter().nth(state.cursor) {
+                Some(crate::cards::Block::Link { label, url, .. }) => self.open_url(&url, &format!("“{label}”")),
+                _ => {
+                    self.success_message = Some("Move to a link to open it (1–9 copy one)".to_string());
+                    self.success_message_time = Some(Instant::now());
+                }
+            },
+            KeyCode::Char(c @ '1'..='9') => {
+                let n = c.to_digit(10).unwrap_or(0) as usize;
+                match card.link(n) {
+                    Some(url) => self.copy_to_clipboard(&url, "the link"),
+                    None => self.error_message = Some(format!("No link {n}")),
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Whether `s` starts a session for the current selection — mirrors the
@@ -29796,20 +29888,34 @@ impl App {
             return;
         };
 
-        #[cfg(target_os = "macos")]
-        let opener = "open";
-        #[cfg(target_os = "linux")]
-        let opener = "xdg-open";
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        let opener = "xdg-open";
+        self.open_url(&url, "");
+    }
 
-        match std::process::Command::new(opener).arg(&url).spawn() {
-            Ok(_) => {
-                self.success_message = Some("Opened in browser".to_string());
-                self.success_message_time = Some(Instant::now());
-            }
-            Err(e) => {
-                self.error_message = Some(format!("Failed to open browser: {}", e));
+    /// Hand `url` to the system browser; `what` names it in the toast
+    /// ("Opened “VPC security groups” in the browser"). The test build
+    /// records the URL instead of spawning anything.
+    pub(crate) fn open_url(&mut self, url: &str, what: &str) {
+        self.last_opened_url = Some(url.to_string());
+        let done = if what.is_empty() { "Opened in browser".to_string() } else { format!("Opened {what} in the browser") };
+        #[cfg(test)]
+        {
+            self.success_message = Some(done);
+            self.success_message_time = Some(Instant::now());
+        }
+        #[cfg(not(test))]
+        {
+            #[cfg(target_os = "macos")]
+            let opener = "open";
+            #[cfg(not(target_os = "macos"))]
+            let opener = "xdg-open";
+            match std::process::Command::new(opener).arg(url).spawn() {
+                Ok(_) => {
+                    self.success_message = Some(done);
+                    self.success_message_time = Some(Instant::now());
+                }
+                Err(e) => {
+                    self.error_message = Some(format!("Failed to open browser: {}", e));
+                }
             }
         }
     }
@@ -34601,6 +34707,8 @@ impl App {
                 SsmModalStage::Menu => Modal::SsmMenu,
                 SsmModalStage::Input(_) => Modal::SsmInput,
             }
+        } else if self.info_card.is_some() {
+            Modal::InfoCard
         } else if self.help_visible {
             Modal::Help
         } else if self.command_picker.visible {
@@ -34629,7 +34737,7 @@ impl App {
             Modal::Bookmarks => &mut self.bookmarks_selected,
             Modal::Macros => &mut self.macro_picker_selected,
             Modal::Commands => &mut self.command_picker.selected_index,
-            Modal::CtFilter | Modal::SsmInput | Modal::Help => return None,
+            Modal::CtFilter | Modal::SsmInput | Modal::Help | Modal::InfoCard => return None,
         };
         let already = *slot == idx;
         *slot = idx;

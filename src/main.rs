@@ -2,6 +2,7 @@ mod app;
 mod audit;
 mod aws;
 mod bookmarks;
+mod cards;
 mod cli;
 mod clipboard;
 mod commands;
@@ -575,6 +576,8 @@ fn render_app(app: &App, frame: &mut ratatui::Frame) {
     if app.help_visible {
         help_overlay::render_help_overlay(app, frame);
     }
+
+    crate::ui::widgets::info_card::render_info_card(app, frame);
 
     crate::ui::widgets::command_picker::render_command_picker(app, frame);
 

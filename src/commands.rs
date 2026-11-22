@@ -213,6 +213,7 @@ pub static COMMANDS: &[Command] = &[
         ("N", "access"),
         false,
     ),
+    gated(Actions, "i", "about this tab (info card)", App::supports_info_card, ("i", "about"), false),
     gated(
         Actions,
         "o",
