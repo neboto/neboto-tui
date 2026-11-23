@@ -1,6 +1,6 @@
 //! The stable half of the headless output, pinned to `contract.json`.
 //!
-//! What scripts may rely on (README "Output contract"): the flags, the JSON
+//! What scripts may rely on (docs/HEADLESS.md, the CLI guide): the flags, the JSON
 //! envelopes, the core resource keys, the CSV headers, the service prefixes,
 //! the resource type names and each type's section names. Everything inside
 //! a section is the pane, serialized, and is deliberately left out — it may
