@@ -21,6 +21,7 @@ the AWS SDK for Rust).
 | How a release is cut / how users install | [`docs/RELEASING.md`](docs/RELEASING.md) — the workflow, `install.sh` and the binstall table share the archive name |
 | Adding or editing an in-pane view (`m`/`o`/`t`/`W`/`U`/`N`), a metrics kind, a tail source | [`docs/RICH-VIEWS.md`](docs/RICH-VIEWS.md) |
 | Macros (`,`) and keycast (`--show-keys`) | [`docs/MACROS.md`](docs/MACROS.md) |
+| Info cards (`i`): format, and which tabs have one | [`docs/cards/README.md`](docs/cards/README.md); the table is `src/cards.rs` |
 | Headless `neboto ls` / `get` and its output contract | [`docs/HEADLESS.md`](docs/HEADLESS.md) |
 | Demo mode fixtures (`--demo`) | [`src/demo/CLAUDE.md`](src/demo/CLAUDE.md) |
 | Flat detail view / detail wrap / export internals | [`docs/DETAIL-PANE.md`](docs/DETAIL-PANE.md) |

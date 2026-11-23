@@ -32,6 +32,7 @@ pub mod fsx_tabs;
 pub mod gd_tabs;
 pub mod glue_tabs;
 pub mod help_overlay;
+pub mod info_card;
 pub mod iam_tabs;
 pub mod idc_tabs;
 pub mod insp_tabs;

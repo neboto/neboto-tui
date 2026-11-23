@@ -121,6 +121,7 @@ clicked. The essentials:
 | `o` | Browse contents: S3 objects, DynamoDB items, AgentCore memory |
 | `y` / `C` | Copy the id or row / copy an AWS CLI command for the resource |
 | `O` | Open in the AWS Console |
+| `i` | About this tab: a short card on the service, with AWS docs links |
 | `r` / `w` | Refresh / watch mode |
 
 The full keymap, mouse, search syntax (`tag:env=prod`, pasted ARNs, `@all`)
