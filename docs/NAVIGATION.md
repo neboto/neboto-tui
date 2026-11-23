@@ -238,6 +238,19 @@ and runs `Search("*")` from that index's region.
   Left-**drag** in either body selects the same range; hold **Shift** to
   bypass mouse capture for native terminal text selection instead.
 
+**Info cards** (`i`; `src/cards.rs`, `src/ui/widgets/info_card.rs`, the
+text in `docs/cards/`, whose README is the format) are a modal per sub-tab
+on what the service is, its key ideas, what neboto shows of it, and AWS docs
+links. `o`/`⏎` opens the link under the cursor (`App::open_url`, which `O`
+also uses) and `1`–`9` copy one. Nothing is fetched. The cursor, `V`,
+`Ctrl-A` and `y` work on blocks (a paragraph, a bullet), not wrapped lines,
+so a copy pastes unwrapped. A card matches a `(ServiceType, JumpView)`
+place, so a single-list service such as Cost matches on the service alone.
+Same format and keys as nebaz, which has one for every sub-tab; neboto has
+a few so far, and a tab without one says so. The "In neboto" part follows
+`docs/SERVICES.md`, which stays the reference, so a change there may owe a
+card edit.
+
 ## Mouse
 
 - **Mouse**: `App::handle_mouse` maps clicks via `App.click_regions` (tab bars,
