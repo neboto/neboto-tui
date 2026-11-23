@@ -58,7 +58,7 @@ def is_read_op(op):
 # Operations whose name doesn't start with a read verb but which mutate
 # nothing in the account. Each needs a reason; PRs adding here get a hard look.
 ALLOW_OPS = {
-    "assume_role": "STS AssumeRole for member-account switching — scoped by a ReadOnlyAccess session policy (README: Multi-account)",
+    "assume_role": "STS AssumeRole for member-account switching — scoped by a ReadOnlyAccess session policy (README: Why read-only)",
     "start_query": "CloudWatch Logs Insights StartQuery — runs a read-only log query, creates no resource",
     "start_live_tail": "CloudWatch Logs StartLiveTail — streaming read of log events",
     "test_dns_answer": "Route 53 TestDNSAnswer — simulates a DNS query against a hosted zone, returns the answer, changes nothing",
