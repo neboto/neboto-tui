@@ -1285,8 +1285,10 @@ the service you're touching.
   split pane Overview / Query). No query execution; SQL renders inline as
   plain content lines (`push_sql_lines`) — `e`/copy get the full text. `m` on a
   **workgroup** charts `AWS/Athena` (dim `WorkGroup`): data scanned, total/
-  engine/queue/planning time, DPU consumed (capacity WGs only; empty when the
-  workgroup has metric publishing disabled). `fmt_bytes`/`fmt_millis` helpers
+  engine/queue/planning time (empty when the workgroup has metric publishing
+  disabled). No `DPUConsumed`: AWS publishes it only under
+  `CapacityReservation`, never `WorkGroup`, so per workgroup it was always
+  empty (#341). `fmt_bytes`/`fmt_millis` helpers
   live in `athena.rs` (details_pane has its own `fmt_bytes`).
 - **Glue** (`@glue`, `glue.rs`) — browse-only, one `ServiceType`, five sub-tabs
   streamed as sequential error-tolerant batches (a permission gap on any one API
@@ -1330,7 +1332,7 @@ the service you're touching.
   `App.ses_account` and folded into every identity's Overview (the single lazy-ish
   bit; **a zero-identity account won't surface it** — documented limitation). `m`
   charts **account-wide** `AWS/SES` metrics (Send/Delivery/Bounce/Complaint/
-  Reject/Rendering Failures, and the bounce / complaint rates against SES's
+  Reject/RenderingFailure, and the bounce / complaint rates against SES's
   review and pause thresholds) — **no dimensions**, so the same set serves any
   SES row (`metrics::SES_ACCOUNT`; its `a` lists only `AWS/SES`).
 - **MSK** (`@msk`, `msk.rs`, **aws-sdk-kafka**) — browse-only, single-list of
