@@ -189,6 +189,9 @@ fn metric_value(name: &str, resource: &str, seed: i64, t: i64, period: i64, now:
         "WriteLatency" => (0.0031, 0.0008, 0.0006),
         "FreeableMemory" => (2.1e9, 1.2e8, 4.0e7),
         "FreeStorageSpace" => (52.0e9 + (now - t) as f64 * 2_000.0, 0.0, 1.0e6),
+        // S3's daily storage: a bucket that grows, older points smaller.
+        "BucketSizeBytes" => (38.0e9 - (now - t) as f64 * 1_500.0, 0.0, 2.0e7),
+        "NumberOfObjects" => (1.25e6 - (now - t) as f64 * 0.05, 0.0, 200.0),
         _ => (10.0, 4.0, 2.0),
     };
     let v = (level + swing * wave + noise * jitter).max(0.0);

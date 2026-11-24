@@ -158,14 +158,18 @@ checked before them; a view with a text input must report it in
   open on: the shared range is saved only when you pick one. A
   hand-built kind (an enum
   variant + an open arm + a render arm) is for what a spec can't say yet —
-  only three are left: S3's daily series, dashboards, Cost. The
+  only two are left: dashboards and Cost. A daily set (S3's storage) is a
+  spec too: rows marked `.daily()` carry a one-day `min_period`, and the
+  target's `fixed_range` opens it on 30d and turns `[`/`]`/digits into a
+  message (it also skips watch, and doesn't touch the shared range). The
   status-bar `m` hint (`supports_metrics_overlay()`, not the key itself)
   accepts any selection with a spec target; a hand-built kind still needs
   its own arm there, and it lagging is exactly how DX VIFs shipped with a
   working `m` but no hint.
   Notable dimension gotchas: RDS instances vs clusters use different dims;
-  S3 storage metrics are **daily** (fixed 30d window, no time-range knob; only
-  offered for current-region buckets, not other-region stubs);
+  S3 storage metrics are **daily** and per `StorageType` (summed with
+  `SUM(SEARCH(…))`; only offered for current-region buckets, not
+  other-region stubs);
   CloudFront/global namespaces query us-east-1 (but Global Accelerator's
   home is us-west-2); Network Firewall aggregates
   per-AZ/per-Engine series via `GetMetricData SUM(SEARCH(...))`; ECS per-task +

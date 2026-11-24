@@ -161,6 +161,9 @@ pub struct MetricSpec {
     /// Lines drawn across the chart, `(value, what it means)`: SES's
     /// reputation thresholds. The first is kept in the y range.
     pub limits: &'static [(f64, &'static str)],
+    /// Published once per this many seconds (S3's daily storage metrics):
+    /// the request's period never goes below it.
+    pub min_period: Option<i32>,
 }
 
 const fn m(metric: &'static str, label: &'static str, stat: Stat, unit: Unit) -> MetricSpec {
@@ -178,6 +181,7 @@ const fn m(metric: &'static str, label: &'static str, stat: Stat, unit: Unit) ->
         hidden: false,
         across: None,
         limits: &[],
+        min_period: None,
     }
 }
 
@@ -213,6 +217,11 @@ impl MetricSpec {
 
     const fn limits(self, limits: &'static [(f64, &'static str)]) -> Self {
         MetricSpec { limits, ..self }
+    }
+
+    /// Published once a day.
+    const fn daily(self) -> Self {
+        MetricSpec { min_period: Some(86_400), ..self }
     }
 
     /// Published per `schema`'s extra dimensions: one series over them all.
@@ -1097,6 +1106,13 @@ pub const BACKUP_VAULT: &[MetricSpec] = &[
     m("NumberOfRecoveryPointsExpired", "Expired, not deleted", Sum, Unit::Count).sparse().tone(Tone::Warn),
 ];
 
+/// `BucketName`. Published once a day and per storage class, so a row
+/// sums the classes (`StorageType`), as the console's bucket metrics do.
+pub const S3_BUCKET: &[MetricSpec] = &[
+    m("BucketSizeBytes", "Bucket size", Avg, Unit::Bytes).across(Agg::Sum, "BucketName,StorageType").daily(),
+    m("NumberOfObjects", "Objects", Avg, Unit::Count).across(Agg::Sum, "BucketName,StorageType").daily(),
+];
+
 /// What `m` charts for one resource: where its metrics live and its curated set.
 #[derive(Debug, Clone)]
 pub struct MetricTarget {
@@ -1120,6 +1136,9 @@ pub struct MetricTarget {
     /// Looked up once, before the first fetch: what the target's own
     /// fields can't say (WAF's metric name, CloudFront's extra metrics).
     pub resolve: Option<Resolve>,
+    /// The one range the set means anything over, and why: S3's daily
+    /// storage metrics chart 30 days, and `[`/`]`/digits don't step off it.
+    pub fixed_range: Option<(MetricsTimeRange, &'static str)>,
 }
 
 /// A kind's per-dimension tables, fetched with the series: WAF's per-rule
@@ -1622,7 +1641,7 @@ impl MetricQuery {
             hidden: s.hidden,
             search: s.across.map(|a| Search { agg: a.agg, schema: a.schema.map(str::to_string), token: a.token }),
             limits: s.limits.iter().map(|(v, what)| (*v, what.to_string())).collect(),
-            min_period: None,
+            min_period: s.min_period,
         }
     }
 }
@@ -2045,6 +2064,7 @@ mod tests {
             extra: Vec::new(),
             breakdown: None,
             resolve: None,
+            fixed_range: None,
         };
         let qs = target.curated_queries();
         let rate = qs.iter().find(|q| q.label == "Block rate").unwrap();
@@ -2154,6 +2174,7 @@ mod tests {
             extra: Vec::new(),
             breakdown: None,
             resolve: None,
+            fixed_range: None,
         };
         let qs = t.curated_queries();
         let row = qs.iter().find(|q| q.label == "Client connections").unwrap();
@@ -2173,6 +2194,7 @@ mod tests {
             extra: Vec::new(),
             breakdown: None,
             resolve: None,
+            fixed_range: None,
         };
         let q = t.curated_queries();
         let first_hidden = q.iter().position(|q| q.hidden).unwrap();
@@ -2293,6 +2315,7 @@ mod tests {
             extra: Vec::new(),
             breakdown: None,
             resolve: None,
+            fixed_range: None,
         };
         let q = t.curated_queries();
         assert_eq!(q.len(), EC2_INSTANCE.len());
