@@ -185,8 +185,9 @@ async fn every_spec_target_has_a_mock_that_charts() {
         assert!(!st.series.is_empty() || st.target.hint.is_some(), "{label}: nothing charted and nothing said");
         press(&mut app, &tx, KeyCode::Esc).await;
     }
-    // AWS/Bedrock is the one arm left out: foundation models and inference
-    // profiles are flat panes, so the harness has no mock for them.
+    // Two arms are left out. AWS/Bedrock: foundation models and inference
+    // profiles are flat panes, so the harness has no mock for them. AWS/S3:
+    // a bucket isn't a mock either; its own test is below.
     for ns in [
         "AWS/EC2", "AWS/EBS", "AWS/Lambda", "AWS/RDS", "AWS/DynamoDB", "AWS/EFS", "AWS/ElastiCache",
         "AWS/Kinesis", "AWS/Firehose", "AWS/Redshift", "AWS/Redshift-Serverless", "AWS/SQS", "AWS/SNS",
@@ -695,6 +696,51 @@ async fn a_gateway_endpoint_says_it_publishes_nothing() {
     let st = app.spec_metrics.as_ref().unwrap();
     assert!(st.queries.is_empty() && !st.loading);
     assert!(screen_of(&app).contains("Gateway endpoints (S3, DynamoDB) publish no CloudWatch metrics"));
+}
+
+/// S3 publishes a bucket's storage once a day and per storage class: `m`
+/// charts the classes summed, over a fixed 30 days at a daily period, and
+/// the range keys say why they don't move it (or the range other kinds
+/// open on). Another region's bucket, a stub, publishes there: no `m`.
+#[tokio::test]
+async fn a_bucket_charts_its_daily_storage_over_a_fixed_thirty_days() {
+    use crate::aws::services::ec2::MetricsTimeRange;
+    let mut app = App::from_parts(crate::config::Config::default(), AwsClients::new_demo_for_test().await).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let here = app.current_region.as_str().to_string();
+    let bucket = crate::aws::services::s3::S3Bucket::stub("acme-assets".into(), String::new(), here);
+    select_mock(&mut app, ServiceType::S3, Box::new(bucket));
+    assert!(app.supports_metrics_overlay(), "the status bar offers m");
+    let before = app.spec_metrics_range;
+
+    press(&mut app, &tx, KeyCode::Char('m')).await;
+    assert_eq!(app.metrics_in_pane, Some(MetricsKind::Spec));
+    settle(&mut app, &tx, &mut rx).await;
+    let st = app.spec_metrics.as_ref().unwrap();
+    assert_eq!(st.range, MetricsTimeRange::ThirtyDays);
+    let labels: Vec<&str> = st.series.iter().map(|s| s.query.label.as_str()).collect();
+    assert_eq!(labels, ["Bucket size", "Objects"]);
+    assert!(st.series.iter().all(|s| s.error.is_none() && s.points.len() == 30), "30 days at one a day");
+    let search = st.queries[0].search_expression(86_400).unwrap();
+    assert!(search.starts_with("SUM(SEARCH('{AWS/S3,BucketName,StorageType}") && search.contains("BucketName=\"acme-assets\""), "{search}");
+    assert_eq!(app.chart_watch_interval(), None, "nothing newer to watch for in a day");
+
+    let screen = screen_of(&app);
+    assert!(screen.contains("Metrics — S3 bucket · acme-assets"), "{screen}");
+    assert!(screen.contains(" 30d ") && screen.contains("S3 publishes storage metrics once a day"), "{screen}");
+    assert!(!screen.contains(" 1 1h ") && !screen.contains("[/]"), "no range to step: {screen}");
+
+    for key in [KeyCode::Char('1'), KeyCode::Char('['), KeyCode::Char(']')] {
+        press(&mut app, &tx, key).await;
+        assert_eq!(app.spec_metrics.as_ref().unwrap().range, MetricsTimeRange::ThirtyDays);
+    }
+    assert!(app.success_message.as_deref().unwrap_or("").contains("the range stays at 30d"));
+    assert_eq!(app.spec_metrics_range, before, "a fixed range isn't the one other kinds open on");
+    press(&mut app, &tx, KeyCode::Esc).await;
+
+    let there = crate::aws::services::s3::S3Bucket::stub("acme-logs".into(), String::new(), "ap-southeast-2".into());
+    select_mock(&mut app, ServiceType::S3, Box::new(there));
+    assert!(app.selected_metric_target().is_none() && !app.supports_metrics_overlay());
 }
 
 /// A certificate still waiting on validation has never published

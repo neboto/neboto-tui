@@ -34,7 +34,8 @@ touching `refresh_*`, `watch_tick`, `watch_staging` or `start_region_fanout`.
   (`chart_watch_interval` — CloudWatch's resolution; the chip shows that
   cadence), timed off `metrics_window_end` so `r` / a range key resets it,
   and a dashboard pass is `quiet` — the grid stays drawn, and stays if the
-  pass fails. Cost / S3 charts are daily and aren't refreshed.
+  pass fails. Cost and a fixed-range spec (S3's storage) are daily and
+  aren't refreshed.
 - **A region switch keeps the cache** (it's region-keyed; only a profile/role
   switch replaces it). That's what makes the **`R` fan-out** (#92) pay off:
   opening the picker with config `regions` set lists the current service in

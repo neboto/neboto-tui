@@ -651,7 +651,6 @@ pub enum MetricsKind {
     /// EC2 instances, Lambda functions, RDS instances and clusters.
     Spec,
     Cost,
-    S3,
     CwDashboard}
 
 /// Sub-tab view for Route53 resources
@@ -2940,9 +2939,6 @@ pub struct App {
 
     // Messaging (SQS/SNS) sub-tab and detail section state
     pub msg_view: MsgView,
-    /// S3 bucket daily storage metrics (`m` overlay), keyed by bucket name.
-    /// Fixed 30-day/daily window — no time-range knob (storage is daily).
-    pub s3_metrics: HashMap<String, crate::aws::services::s3::S3MetricsState>,
 
     // Config (Secrets Manager / SSM) sub-tab and detail section state
     pub ssm_view: SsmView,
@@ -3688,7 +3684,6 @@ impl App {
             neptune_view: NeptuneView::Clusters,
             elb_view: ElbView::LoadBalancers,
             msg_view: MsgView::Queues,
-            s3_metrics: HashMap::new(),
             ssm_view: SsmView::Parameters,
             config_view: ConfigView::Rules,
             waf_view: WafView::WebAcls,
@@ -3821,12 +3816,6 @@ impl App {
             }
             Event::FmsAdminLoaded { info } => {
                 self.fms_admin = Some(info);
-            }
-            Event::S3MetricsLoaded { bucket, data } => {
-                self.s3_metrics.insert(
-                    bucket,
-                    crate::aws::services::s3::S3MetricsState::Loaded(data),
-                );
             }
             Event::SesAccountLoaded { info } => {
                 self.ses_account = Some(info);
@@ -5113,12 +5102,6 @@ impl App {
                         KeyCode::Char('g') => self.cw_dashboard_scroll = 0,
                         KeyCode::Char('G') => self.cw_dashboard_scroll = max,
                         _ => {}
-                    }
-                }
-                // S3 storage is a fixed 30-day daily window; only refresh.
-                MetricsKind::S3 => {
-                    if let KeyCode::Char('r') = key.code {
-                        self.trigger_s3_metrics_load(event_tx);
                     }
                 }
                 // Cost daily-spend series is preloaded with the row; no extra keys.
@@ -11217,8 +11200,10 @@ impl App {
     pub(crate) fn chart_watch_interval(&self) -> Option<Duration> {
         const FLOOR: Duration = Duration::from_secs(60);
         match self.metrics_in_pane? {
+            // A fixed range is a daily series (S3's storage).
+            MetricsKind::Spec if self.spec_metrics.as_ref().is_some_and(|m| m.target.fixed_range.is_some()) => None,
             MetricsKind::Spec | MetricsKind::CwDashboard => Some(self.watch.interval.max(FLOOR)),
-            MetricsKind::Cost | MetricsKind::S3 => None,
+            MetricsKind::Cost => None,
         }
     }
 
@@ -18407,11 +18392,10 @@ impl App {
         self.seed_timeline(event_tx, TimelineTarget::Markers);
     }
 
-    /// S3's storage charts span 30 days, as does the spec view's `5`.
+    /// The spec view's `5` (and S3's fixed range) spans 30 days.
     fn chart_markers_need_30d(&self) -> bool {
         match self.metrics_in_pane {
-            Some(MetricsKind::S3) => true,
-            Some(MetricsKind::Spec) => self.spec_metrics_range == MetricsTimeRange::ThirtyDays,
+            Some(MetricsKind::Spec) => self.spec_metrics.as_ref().is_some_and(|m| m.range == MetricsTimeRange::ThirtyDays),
             _ => false,
         }
     }
@@ -21671,7 +21655,7 @@ impl App {
                 MetricsKind::CwDashboard => {
                     (!self.cw_dashboard_range_from_body).then_some(self.cw_dashboard_metrics_time_range)
                 }
-                MetricsKind::Cost | MetricsKind::S3 => None,
+                MetricsKind::Cost => None,
             };
             // The charts' metric cursor, past the first row (which a fresh
             // open is on anyway) — and charted alone when the view is
@@ -24516,7 +24500,6 @@ impl App {
                 .map(|r| r.as_any().is::<crate::aws::services::fsx::FsxVolume>())
                 .unwrap_or(false)
             || self.selected_bedrock_metric_target().is_some()
-            || self.selected_s3_metric_bucket().is_some()
             || self.is_selected_transfer_server()
             || self.is_selected_r53_health_check()
             || self.is_selected_ses_resource()
@@ -33773,6 +33756,7 @@ impl App {
             extra: Vec::new(),
             breakdown: None,
             resolve: None,
+            fixed_range: None,
         };
         macro_rules! is {
             ($t:ty) => {
@@ -34159,6 +34143,16 @@ impl App {
                 hint: Some("No jobs in the window: a vault publishes only for periods with a job"),
                 ..target("Backup vault", "AWS/Backup", dim("BackupVaultName", &v.name), m::BACKUP_VAULT)
             }
+        } else if let Some(b) = is!(s::s3::S3Bucket) {
+            // Another region's bucket (a stub) publishes in that region.
+            if b.region != self.current_region.as_str() {
+                return None;
+            }
+            MetricTarget {
+                hint: Some("Nothing yet: S3 publishes a bucket's storage metrics once a day, the first a day or two after it's created"),
+                fixed_range: Some((MetricsTimeRange::ThirtyDays, "S3 publishes storage metrics once a day")),
+                ..target("S3 bucket", "AWS/S3", dim("BucketName", &b.name), m::S3_BUCKET)
+            }
         } else if self.is_selected_ses_resource() {
             // Account-wide: the same set whichever identity is selected.
             MetricTarget {
@@ -34353,6 +34347,12 @@ impl App {
                     self.copy_to_clipboard(&name, "name");
                 }
             }
+            // A daily set (S3's storage) means nothing over a shorter range.
+            KeyCode::Char('[' | ']' | '1'..='5') if st.target.fixed_range.is_some() => {
+                if let Some((r, why)) = st.target.fixed_range {
+                    self.success_message = Some(format!("{why}: the range stays at {}", r.label()));
+                }
+            }
             KeyCode::Char(']') => {
                 st.range = crate::aws::metrics::step_range(st.range, 1);
                 self.spec_metrics_range = st.range;
@@ -34428,6 +34428,7 @@ impl App {
             // An alarm with a long period opens on a range that holds one,
             // without changing the range the other kinds open on.
             let range = match (range, self.is_selected_cw_alarm().then(|| self.default_alarm_metrics_range())) {
+                _ if target.fixed_range.is_some() => target.fixed_range.map_or(self.spec_metrics_range, |(r, _)| r),
                 (Some(r), _) => r,
                 (None, Some(r)) if r.duration_secs() > self.spec_metrics_range.duration_secs() => r,
                 _ => self.spec_metrics_range,
@@ -34449,9 +34450,6 @@ impl App {
         } else if self.is_selected_cost_item() {
             // Daily series is already loaded with the row — no fetch.
             Some(MetricsKind::Cost)
-        } else if self.selected_s3_metric_bucket().is_some() {
-            self.trigger_s3_metrics_load(event_tx);
-            Some(MetricsKind::S3)
         } else {
             None
         };
@@ -34491,38 +34489,6 @@ impl App {
         }
         None
     }
-
-    /// The bucket name of a `m`-able S3 bucket — a real (non-stub) bucket in the
-    /// current region. Other-region stubs have no local CloudWatch data, so they
-    /// aren't offered. Returns the bucket name (the `BucketName` dimension).
-    fn selected_s3_metric_bucket(&self) -> Option<String> {
-        let r = self.get_selected_resource()?;
-        let b = r
-            .as_any()
-            .downcast_ref::<crate::aws::services::s3::S3Bucket>()?;
-        if b.region == self.current_region.as_str() {
-            Some(b.name.clone())
-        } else {
-            None
-        }
-    }
-
-    fn trigger_s3_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(bucket) = self.selected_s3_metric_bucket() {
-            self.s3_metrics
-                .insert(bucket.clone(), crate::aws::services::s3::S3MetricsState::Loading);
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) =
-                    crate::aws::services::s3::fetch_s3_bucket_metrics(cw, bucket.clone()).await
-                {
-                    let _ = tx.send(crate::event::Event::S3MetricsLoaded { bucket, data });
-                }
-            });
-        }
-    }
-
 
     /// The (tgw_id, attachment_id, map key) for a `m`-able Transit Gateway
     /// resource — the gateway itself or one attachment.
