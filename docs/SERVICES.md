@@ -1175,7 +1175,13 @@ the service you're touching.
   rows show the email (or phone) when the username is the user's `sub` — an
   email/phone sign-in pool's usernames are UUIDs (`member_label`). Groups
   sort by precedence (lower wins when a user's groups carry IAM roles); the
-  role ARN row jumps via the IAM classifier.
+  role ARN row jumps via the IAM classifier. A **member row** (`"    {label}"`)
+  jumps to the user on the Users tab (`cognito_row_jump_target`, #230): it's
+  matched against the pool's loaded members and jumps by the stored
+  `username`, never the row text, which may be the email. The Users list is
+  capped at `MAX_COGNITO_USERS=500` across all pools, so a member past the cap
+  isn't there: the jump says so in the status bar instead of landing on
+  row 0. Don't rename the member row's shape without the classifier.
 - **AppSync** (`@appsync`, `appsync.rs`, **aws-sdk-appsync**) — single list of
   **GraphQL APIs** (standard + merged); Event APIs (`ListApis`, channel
   namespaces) are not listed yet. `ListGraphqlApis` returns the full config, so
