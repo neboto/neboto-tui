@@ -28,7 +28,7 @@ use tokio::sync::mpsc;
 ///   last update). Flat details.
 ///
 /// `m` charts account-wide `AWS/SES` metrics (Send / Delivery / Bounce /
-/// Complaint / Reject / Rendering Failures) — no dimensions, so the same series
+/// Complaint / Reject / RenderingFailure) — no dimensions, so the same series
 /// regardless of which SES row is selected.
 pub struct SesService {
     client: SesClient,

@@ -451,13 +451,14 @@ pub const WORKSPACE: &[MetricSpec] = &[
     m("Unhealthy", "Unhealthy", Max, Unit::Count),
 ];
 
+/// `WorkGroup`. No `DPUConsumed`: AWS publishes it per capacity
+/// reservation (`CapacityReservation`), never per workgroup.
 pub const ATHENA_WORKGROUP: &[MetricSpec] = &[
     m("ProcessedBytes", "Data scanned", Sum, Unit::Bytes),
     m("TotalExecutionTime", "Total time", Avg, Unit::Millis),
     m("EngineExecutionTime", "Engine", Avg, Unit::Millis).group("phases"),
     m("QueryQueueTime", "Queued", Avg, Unit::Millis).group("phases"),
     m("QueryPlanningTime", "Planning", Avg, Unit::Millis).group("phases"),
-    m("DPUConsumed", "DPU consumed", Sum, Unit::Raw),
 ];
 
 /// Driver aggregates; Maximum, since each is a running total per run.
@@ -611,10 +612,12 @@ pub const ASG_GROUP: &[MetricSpec] = &[
     m("GroupPendingInstances", "Pending", Avg, Unit::Count).group("capacity"),
 ];
 
+/// `ClusterName`. Container Insights has no cluster-wide pod count: the
+/// running pods are each namespace's count, summed.
 pub const EKS_CLUSTER: &[MetricSpec] = &[
     m("cluster_node_count", "Nodes", Avg, Unit::Count).group("nodes"),
     m("cluster_failed_node_count", "Failed nodes", Max, Unit::Count).group("nodes"),
-    m("cluster_running_pod_count", "Running pods", Avg, Unit::Count),
+    m("namespace_number_of_running_pods", "Running pods", Avg, Unit::Count).across(Agg::Sum, "ClusterName,Namespace"),
     m("node_cpu_utilization", "Node CPU", Avg, Unit::Percent).group("usage"),
     m("node_memory_utilization", "Node memory", Avg, Unit::Percent).group("usage"),
 ];
@@ -892,7 +895,7 @@ pub const SES_ACCOUNT: &[MetricSpec] = &[
     m("Bounce", "Bounces", Sum, Unit::Count).group("problems").tone(Tone::Bad),
     m("Complaint", "Complaints", Sum, Unit::Count).group("problems").tone(Tone::Warn),
     m("Reject", "Rejected", Sum, Unit::Count).group("problems"),
-    m("Rendering Failures", "Rendering failures", Sum, Unit::Count),
+    m("RenderingFailure", "Rendering failures", Sum, Unit::Count),
     e("Bounce rate", "100*{Reputation.BounceRate}", Unit::Percent)
         .tone(Tone::Bad)
         .limits(&[(5.0, "review"), (10.0, "pause")]),
@@ -2136,8 +2139,8 @@ mod tests {
     #[test]
     fn a_name_with_dots_or_spaces_is_still_a_placeholder() {
         let q = |metric: &str| MetricQuery { metric: metric.into(), ..MetricDefinition::default_query() };
-        let set = [q("Reputation.BounceRate"), q("Rendering Failures")];
-        assert_eq!(resolve_expression("100*{Reputation.BounceRate}+{Rendering Failures}", &set, 60).unwrap(), "100*q0+q1");
+        let set = [q("Reputation.BounceRate"), q("RenderingFailure")];
+        assert_eq!(resolve_expression("100*{Reputation.BounceRate}+{RenderingFailure}", &set, 60).unwrap(), "100*q0+q1");
     }
 
     /// An RDS proxy's gauges are published once per instance per minute,
