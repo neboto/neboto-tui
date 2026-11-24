@@ -608,16 +608,69 @@ pub struct AppSyncResolvers {
     pub failure: Option<String>,
 }
 
-/// Root operation types first, so a cap never cuts Query / Mutation /
-/// Subscription; everything else alphabetical.
-fn type_rank(name: &str) -> (u8, &str) {
-    let r = match name {
-        "Query" => 0,
-        "Mutation" => 1,
-        "Subscription" => 2,
-        _ => 3,
-    };
-    (r, name)
+/// GraphQL's default root operation types, which a schema without a
+/// `schema { … }` block uses.
+pub const DEFAULT_ROOTS: [&str; 3] = ["Query", "Mutation", "Subscription"];
+
+/// Root operation types first, in `roots`' order, so a cap never cuts
+/// them; everything else alphabetical.
+fn type_rank<'a, S: AsRef<str>>(name: &'a str, roots: &[S]) -> (usize, &'a str) {
+    (roots.iter().position(|r| r.as_ref() == name).unwrap_or(roots.len()), name)
+}
+
+/// The root type names a schema's `schema { query: … mutation: … }` block
+/// gives (`extend schema` too), in that block's order; `None` when it has
+/// none, so the defaults hold. Descriptions and comments are skipped, so a
+/// `schema {` inside one isn't read.
+pub fn schema_roots(sdl: &str) -> Option<Vec<String>> {
+    // The SDL minus strings and comments, which can say anything.
+    let mut code = String::with_capacity(sdl.len());
+    let mut rest = sdl;
+    while let Some(c) = rest.chars().next() {
+        if let Some(r) = rest.strip_prefix("\"\"\"") {
+            rest = r.find("\"\"\"").map_or("", |i| &r[i + 3..]);
+        } else if let Some(r) = rest.strip_prefix('"') {
+            rest = r.find('"').map_or("", |i| &r[i + 1..]);
+        } else if c == '#' {
+            rest = rest.find('\n').map_or("", |i| &rest[i..]);
+        } else {
+            code.push(c);
+            rest = &rest[c.len_utf8()..];
+            continue;
+        }
+        // What was cut still separates the words either side of it.
+        code.push(' ');
+    }
+    let mut roots = Vec::new();
+    let mut search = code.as_str();
+    while let Some(i) = search.find("schema") {
+        let before = search[..i].chars().next_back();
+        let after = &search[i + "schema".len()..];
+        search = after;
+        if before.is_some_and(|c| c.is_alphanumeric() || c == '_')
+            || after.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        // Past any directives to the block; a `schema` that isn't one
+        // (a field named so) has a `:` or `(` before any `{`.
+        let Some(open) = after.find('{') else { break };
+        if after[..open].contains([':', '(', '}']) {
+            continue;
+        }
+        let body = &after[open + 1..];
+        let body = &body[..body.find('}').unwrap_or(body.len())];
+        let words: Vec<&str> =
+            body.split(|c: char| c.is_whitespace() || c == ',' || c == ':').filter(|w| !w.is_empty()).collect();
+        for pair in words.chunks(2) {
+            if let [op, ty] = pair {
+                if matches!(*op, "query" | "mutation" | "subscription") && !roots.iter().any(|r| r == ty) {
+                    roots.push(ty.to_string());
+                }
+            }
+        }
+    }
+    (!roots.is_empty()).then_some(roots)
 }
 
 /// The first keyword of an SDL definition, past any leading description
@@ -640,13 +693,17 @@ fn sdl_keyword(def: &str) -> &str {
     rest.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("")
 }
 
-/// Pick which schema types to walk for resolvers: roots first, cut at
+/// Pick which schema types to walk for resolvers: `roots` first, cut at
 /// `cap`. Only kinds that *can't* carry a resolver (enum, input, scalar,
 /// union, interface) are skipped — anything else is walked, so a definition
 /// shape we don't recognise costs one extra call rather than silently
 /// hiding its resolvers. Returns the chosen names and how many candidate
 /// types there were in total.
-pub fn resolver_types_to_scan(types: &[(String, Option<String>)], cap: usize) -> (Vec<String>, usize) {
+pub fn resolver_types_to_scan<S: AsRef<str>>(
+    types: &[(String, Option<String>)],
+    cap: usize,
+    roots: &[S],
+) -> (Vec<String>, usize) {
     let mut names: Vec<&str> = types
         .iter()
         .filter(|(_, def)| {
@@ -657,7 +714,7 @@ pub fn resolver_types_to_scan(types: &[(String, Option<String>)], cap: usize) ->
         })
         .map(|(n, _)| n.as_str())
         .collect();
-    names.sort_by_key(|n| (type_rank(n).0, *n));
+    names.sort_by_key(|n| type_rank(n, roots));
     names.dedup();
     let total = names.len();
     (names.into_iter().take(cap).map(str::to_string).collect(), total)
@@ -691,7 +748,17 @@ pub async fn fetch_resolvers(client: AppSyncClient, api_id: String) -> Result<Ap
             break;
         }
     }
-    let (scan, types_total) = resolver_types_to_scan(&types, MAX_RESOLVER_TYPES);
+    // Only a cap can cut a root, so only then is the schema read for the
+    // API's own root names (`schema { query: RootQuery }`). Best-effort: a
+    // denied or failed read keeps the defaults.
+    let mut roots: Vec<String> = DEFAULT_ROOTS.iter().map(|r| r.to_string()).collect();
+    let (mut scan, types_total) = resolver_types_to_scan(&types, MAX_RESOLVER_TYPES, &roots);
+    if types_total > MAX_RESOLVER_TYPES {
+        if let Some(r) = fetch_schema(client.clone(), api_id.clone()).await.ok().as_deref().and_then(schema_roots) {
+            roots = r;
+            scan = resolver_types_to_scan(&types, MAX_RESOLVER_TYPES, &roots).0;
+        }
+    }
     let types_scanned = scan.len();
 
     // Phase 2: resolvers per type, a few in flight (AppSync's control plane
@@ -762,8 +829,8 @@ pub async fn fetch_resolvers(client: AppSyncClient, api_id: String) -> Result<Ap
         }
     }
     resolvers.sort_by(|a, b| {
-        type_rank(&a.type_name)
-            .cmp(&type_rank(&b.type_name))
+        type_rank(&a.type_name, &roots)
+            .cmp(&type_rank(&b.type_name, &roots))
             .then_with(|| a.field_name.cmp(&b.field_name))
     });
     failed_types.sort();
@@ -882,10 +949,10 @@ mod tests {
             t("Query", "type Query { a: Int }"),
             ("Unknown".to_string(), None),
         ];
-        let (scan, total) = resolver_types_to_scan(&types, 100);
+        let (scan, total) = resolver_types_to_scan(&types, 100, &DEFAULT_ROOTS);
         assert_eq!(scan, vec!["Query", "Mutation", "Order", "Unknown"]);
         assert_eq!(total, 4);
-        let (scan, total) = resolver_types_to_scan(&types, 2);
+        let (scan, total) = resolver_types_to_scan(&types, 2, &DEFAULT_ROOTS);
         assert_eq!(scan, vec!["Query", "Mutation"]);
         assert_eq!(total, 4);
     }
@@ -901,9 +968,37 @@ mod tests {
             t("Node", "interface Node { id: ID! }"),
             t("Query", "extend type Query { a: Int }"),
         ];
-        let (scan, total) = resolver_types_to_scan(&types, 100);
+        let (scan, total) = resolver_types_to_scan(&types, 100, &DEFAULT_ROOTS);
         assert_eq!(scan, vec!["Query", "Cart", "Order", "Product"]);
         assert_eq!(total, 4);
+    }
+
+    #[test]
+    fn renamed_roots_come_from_the_schema_block_and_rank_first() {
+        let sdl = r#"
+            """
+            Not this one: schema { query: Fake }
+            """
+            schema @aws_iam {
+              query: RootQuery
+              mutation: RootMutation
+            }
+            # schema { subscription: Commented }
+            extend schema { subscription: RootSubscription }
+            type Thing { schema: String, schemaVersion: Int }
+        "#;
+        assert_eq!(schema_roots(sdl).unwrap(), ["RootQuery", "RootMutation", "RootSubscription"]);
+        assert_eq!(schema_roots("type Query { a: Int }"), None, "no block: the defaults hold");
+        assert_eq!(schema_roots("type T { schema: String }"), None, "a field named schema isn't the block");
+
+        let t = |n: &str| (n.to_string(), Some(format!("type {n} {{ a: Int }}")));
+        let types = vec![t("Alpha"), t("RootMutation"), t("Beta"), t("RootQuery")];
+        let roots = schema_roots(sdl).unwrap();
+        let (scan, total) = resolver_types_to_scan(&types, 2, &roots);
+        assert_eq!(scan, vec!["RootQuery", "RootMutation"], "the cap cuts the others, never a root");
+        assert_eq!(total, 4);
+        // With the defaults they'd sort as plain names, and the cap would cut them.
+        assert_eq!(resolver_types_to_scan(&types, 2, &DEFAULT_ROOTS).0, vec!["Alpha", "Beta"]);
     }
 
     #[test]

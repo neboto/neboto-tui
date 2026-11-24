@@ -1184,7 +1184,12 @@ the service you're touching.
   the section runs `ListTypes` (SDL, to tell object types from enums/inputs —
   only `type`/`extend type` definitions can carry resolvers) then one
   `ListResolvers` per type, 4 in flight, capped at `MAX_RESOLVER_TYPES=100`
-  with Query/Mutation/Subscription walked first so the cap never drops a root.
+  with the root types walked first so the cap never drops one. Roots are
+  Query/Mutation/Subscription unless the schema renames them: only when the
+  cap would cut (more than 100 object types) does the section also read the
+  SDL (`GetIntrospectionSchema`) for its `schema { query: … }` block
+  (`schema_roots`, best-effort; a failure keeps the defaults). Under the cap
+  every type is walked anyway, so renamed roots then just sort by name (#211).
   The cut and any per-type failure render as `⚠` rows in the pane. The
   Resolvers hook also fires Functions so pipeline steps read by name rather
   than function id. **API keys are redacted at ingestion**
