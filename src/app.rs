@@ -20946,6 +20946,30 @@ impl App {
                     // (a later batch / `*Loaded` event will resolve it) — clearing
                     // here would strand the bookmark on row 0. Only give up once
                     // the load is fully done and there *is* a populated list.
+                    // A group member the Users list doesn't hold (past its
+                    // cap, or gone): the search shows its id over an empty
+                    // list, and this says why, once the load is done.
+                    if !self.loading
+                        && self.current_service == Some(ServiceType::Cognito)
+                        && self.cognito_view == CognitoView::Users
+                        && !self.resources.iter().any(|r| r.id() == id)
+                    {
+                        use crate::aws::services::cognito::MAX_COGNITO_USERS;
+                        let user = id.split_once('/').map_or(id.as_str(), |(_, u)| u);
+                        let loaded = self.resources.iter().filter(|r| r.resource_type() == "Cognito User").count();
+                        self.success_message = Some(if loaded >= MAX_COGNITO_USERS {
+                            format!("{user} isn't among the first {MAX_COGNITO_USERS} users loaded (across all pools)")
+                        } else {
+                            format!("{user} isn't in the Users list")
+                        });
+                        self.success_message_time = Some(Instant::now());
+                        self.pending_jump = None;
+                        self.pending_jump_region = None;
+                        self.pending_jump_focus_details = false;
+                        self.pending_jump_section = None;
+                        self.pending_jump_lens = None;
+                        return;
+                    }
                     if !self.loading && !self.filtered_resources.is_empty() {
                         self.pending_jump = None;
                         self.pending_jump_region = None;
@@ -23546,6 +23570,7 @@ impl App {
                     .or_else(|| self.eb_row_jump_target(k, v))
                     .or_else(|| self.appsync_row_jump_target(k, v))
                     .or_else(|| self.mq_row_jump_target(k, v))
+                    .or_else(|| self.cognito_row_jump_target(k, v))
                     .or_else(|| {
                         crate::ui::widgets::details_pane::resource_jump_target(k, v, current)
                             .filter(|t| self.generic_jump_allowed(t, v))
@@ -35379,6 +35404,31 @@ impl App {
     /// Used By. Keyed on the value, not the label; the selected row's own id
     /// leads nowhere. Both tabs load together, so a configuration a broker
     /// names is in the list unless its list call failed.
+    /// Under `@cognito`, a member row of a user pool's Groups section
+    /// (`"    {label}"`) leads to that user on the Users tab. Matched against
+    /// the pool's loaded members, and jumped by the stored `username`: the
+    /// row shows the email instead when the username is a `sub`
+    /// (`member_label`). A user past `MAX_COGNITO_USERS` isn't in the list;
+    /// `resolve_pending_jump` says so.
+    pub fn cognito_row_jump_target(&self, key: &str, _value: &str) -> Option<JumpTarget> {
+        use crate::aws::services::cognito::CognitoUserPool;
+        if self.current_service != Some(ServiceType::Cognito) {
+            return None;
+        }
+        let label = key.strip_prefix("    ").filter(|l| !l.starts_with(' ') && !l.is_empty())?;
+        let pool = self.get_selected_resource()?.as_any().downcast_ref::<CognitoUserPool>()?;
+        let Some(crate::lazy::Lazy::Loaded(groups)) = self.lazy.cognito_groups.get(&pool.id) else {
+            return None;
+        };
+        let member =
+            groups.groups.iter().filter_map(|g| g.members.as_ref().ok()).flatten().find(|m| m.label == label)?;
+        Some(JumpTarget {
+            service: ServiceType::Cognito,
+            view: JumpView::Cognito(CognitoView::Users),
+            id: format!("{}/{}", pool.id, member.username),
+        })
+    }
+
     pub fn mq_row_jump_target(&self, _key: &str, value: &str) -> Option<JumpTarget> {
         if self.current_service != Some(ServiceType::Mq) {
             return None;
