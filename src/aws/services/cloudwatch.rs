@@ -487,6 +487,7 @@ pub fn alarm_metric_target(a: &CwAlarm) -> crate::aws::metrics::MetricTarget {
         extra: Vec::new(),
         breakdown: None,
         resolve: None,
+        fixed_range: None,
     };
     if a.namespace.is_empty() || a.metric_name.is_empty() {
         return MetricTarget {
