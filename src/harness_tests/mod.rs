@@ -40,6 +40,7 @@ mod batch_test;
 mod datasync_test;
 mod cloudfront_test;
 mod cognito_test;
+mod nfw_test;
 mod mq_test;
 mod docdb_neptune_test;
 mod privatelink_test;

@@ -55,6 +55,7 @@ pub(super) fn mocks() -> Vec<Mock> {
                 policy_change_protection: false,
                 subnet_change_protection: false,
                 sync_states: vec![],
+                modes: Default::default(),
                 tags: HashMap::new(),
             }),
         ),

@@ -60,6 +60,64 @@ pub(super) fn render_nfw_firewall_split(app: &App, fw: &NfwFirewall, area: Rect,
     render_split_section_body(app, chunks[4], frame);
 }
 
+/// What the firewall's mode adds (#362): an internet gateway firewall's
+/// enforcement, a transit gateway attachment, a proxy's listeners, endpoint
+/// VPC and NAT gateways. Nothing for a standard firewall.
+pub fn nfw_mode_rows(m: &crate::aws::services::network_firewall::NfwModes) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    if let Some(enforcement) = &m.igw_enforcement {
+        rows.push((String::new(), String::new()));
+        rows.push(("Internet Gateway Firewall".to_string(), String::new()));
+        rows.push((
+            "  Inspects".to_string(),
+            "all traffic between the VPC and its internet gateway — no firewall subnets or route changes".to_string(),
+        ));
+        rows.push(("  Enforcement".to_string(), enforcement.clone()));
+        if enforcement == "POLICY_CONTROLLED" {
+            rows.push((
+                "  Managed By".to_string(),
+                "Network Security Manager: it sets the policy and creates the firewall".to_string(),
+            ));
+        }
+    }
+    if !m.transit_gateway_id.is_empty() {
+        rows.push(("Transit Gateway".to_string(), m.transit_gateway_id.clone()));
+    }
+    if m.is_proxy() {
+        rows.push((String::new(), String::new()));
+        rows.push(("Proxy".to_string(), String::new()));
+        rows.push((
+            "  Listeners".to_string(),
+            if m.proxy_listeners.is_empty() { "—".to_string() } else { m.proxy_listeners.join(", ") },
+        ));
+        if !m.proxy_domain.is_empty() {
+            rows.push(("  Domain".to_string(), m.proxy_domain.clone()));
+        }
+        if !m.proxy_cert_arn.is_empty() {
+            // ACM ARN → jumps to the certificate (arn_jump_target).
+            rows.push(("  Certificate".to_string(), m.proxy_cert_arn.clone()));
+        }
+        if !m.endpoint_vpc.is_empty() {
+            rows.push(("  Endpoint VPC".to_string(), m.endpoint_vpc.clone()));
+            for s in &m.endpoint_subnets {
+                rows.push(("  Endpoint Subnet".to_string(), s.clone()));
+            }
+        }
+        for s in &m.nat_subnets {
+            rows.push(("  NAT Gateway Subnet".to_string(), s.clone()));
+        }
+        if !m.nat_scope.is_empty() {
+            let what = match m.nat_scope.as_str() {
+                "NAT_ALL" => "NAT_ALL — out through the firewall's NAT gateway after inspection",
+                "NAT_NONE" => "NAT_NONE — back to the endpoint, no address translation",
+                other => other,
+            };
+            rows.push(("  Non-Proxy Traffic".to_string(), what.to_string()));
+        }
+    }
+    rows
+}
+
 pub fn nfw_firewall_section_lines(
     fw: &NfwFirewall,
     section: NfwFirewallDetailSection,
@@ -78,10 +136,12 @@ pub fn nfw_firewall_section_lines(
                     }
                 }),
                 ("VPC".to_string(), fw.vpc_id.clone()),
+                ("Mode".to_string(), fw.modes.label().to_string()),
             ];
             if !fw.description.is_empty() {
                 rows.push(("Description".to_string(), fw.description.clone()));
             }
+            rows.extend(nfw_mode_rows(&fw.modes));
             rows.push((
                 "Delete Protection".to_string(),
                 if fw.delete_protection { "✓ on".to_string() } else { "✗ off".to_string() },

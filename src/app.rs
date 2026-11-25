@@ -18924,6 +18924,7 @@ impl App {
             title, ids, subnets, direction,
         );
         (st.lb_by_sg, st.elb_loaded) = self.cached_lb_security_groups();
+        st.igw_firewalls = self.cached_igw_firewalls();
         st.add_groups(self.cached_security_groups(&st.sg_ids));
         st.add_nacls(self.cached_network_acls(&st.subnet_ids));
         let (missing, missing_subnets) = (st.missing(), st.missing_subnets());
@@ -19015,6 +19016,36 @@ impl App {
     /// Security group id → the load balancers carrying it (`"ALB my-alb"`),
     /// from the warm ELB cache (or the on-screen ELB list); the bool says
     /// whether any ELB data was available at all.
+    /// Internet gateway firewalls from the warm Network Firewall cache (or
+    /// the on-screen list), for the `N` lens's outermost layer. A cold
+    /// cache adds nothing: most VPCs have none, so saying "not loaded" on
+    /// every lens would be noise.
+    fn cached_igw_firewalls(&self) -> Vec<crate::ui::widgets::access_lens::IgwFirewall> {
+        use crate::aws::services::network_firewall::NfwFirewall;
+        let mut out: Vec<crate::ui::widgets::access_lens::IgwFirewall> = Vec::new();
+        let cached = self
+            .cache
+            .get_ref(&ServiceType::NetworkFirewall, &self.current_region, None)
+            .into_iter()
+            .flatten();
+        let on_screen = (!self.all_search_mode && self.current_service == Some(ServiceType::NetworkFirewall))
+            .then_some(self.resources.iter())
+            .into_iter()
+            .flatten();
+        for r in cached.chain(on_screen) {
+            if let Some(f) = r.as_any().downcast_ref::<NfwFirewall>().filter(|f| f.is_igw_firewall()) {
+                if !out.iter().any(|x| x.arn == f.arn) {
+                    out.push(crate::ui::widgets::access_lens::IgwFirewall {
+                        vpc_id: f.vpc_id.clone(),
+                        name: f.name.clone(),
+                        arn: f.arn.clone(),
+                    });
+                }
+            }
+        }
+        out
+    }
+
     fn cached_lb_security_groups(
         &self,
     ) -> (std::collections::HashMap<String, Vec<String>>, bool) {
@@ -19179,8 +19210,10 @@ impl App {
             // Refetch every group (rules may have changed since the cache).
             KeyCode::Char('r') => {
                 let lbs = self.cached_lb_security_groups();
+                let fws = self.cached_igw_firewalls();
                 let ids = self.access_in_pane.as_mut().map(|st| {
                     (st.lb_by_sg, st.elb_loaded) = lbs;
+                    st.igw_firewalls = fws;
                     st.groups.clear();
                     st.all_rows.clear();
                     st.nacls.clear();
@@ -19200,6 +19233,7 @@ impl App {
                         .and_then(|row| row.jump_group())
                         .map(|id| (ServiceType::EC2, id, "Security Group"))
                         .or_else(|| st.selected_acl().map(|id| (ServiceType::VPC, id, "NetworkAcl")))
+                        .or_else(|| st.selected_firewall().map(|arn| (ServiceType::NetworkFirewall, arn, "Firewall")))
                 });
                 if let Some((svc, id, rtype)) = target {
                     // Record with the lens still open, so going back reopens it.
