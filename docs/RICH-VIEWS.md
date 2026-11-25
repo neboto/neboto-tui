@@ -375,7 +375,10 @@ in nebaz; `i` on those types now says where the browser went.
   **replies** (ephemeral 1024-65535 back to the peer) are checked the
   other way (`◐ replies: …`). A rule that gets through says nothing. An
   `sg-`/`pl-` peer has no address here, so only a `/0` entry decides it.
-  Route tables and Network Firewall aren't evaluated. The cursor is an
+  Route tables and firewall rules aren't evaluated, but an **internet
+  gateway firewall** on the resource's VPC (#362, from the warm Network
+  Firewall cache) is drawn as the outermost layer — first inbound, last
+  outbound — and `⏎` on it goes to the firewall. The cursor is an
   index into `lines`, always on a selectable one (rules, entries, ACL
   headings), and follows its row across rebuilds.
   `merge_rules` collapses identical `(direction, protocol,

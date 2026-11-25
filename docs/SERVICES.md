@@ -1712,6 +1712,25 @@ the service you're touching.
   `resource_list.rs` renders a "not the Firewall Manager administrator" empty
   state (with the admin account id when visible). `OUT_OF_ADMIN_SCOPE`
   policies/sets read as unavailable. No CloudWatch namespace → no `m`.
+- **Network Firewall** (`@nfw`, `network_firewall.rs`) — Firewalls /
+  Policies / Rule groups. A firewall's **mode** (#362, `NfwModes`, the list's
+  second column and the Overview's `Mode` row) comes from `DescribeFirewall`
+  fields that need `aws-sdk-networkfirewall` ≥ 1.143 (and with it the newer
+  shared smithy runtime): an **internet gateway firewall**
+  (`IgwFirewallConfiguration`, enforcement `POLICY_CONTROLLED`) is created and
+  managed by Network Security Manager and inspects everything between the VPC
+  and its internet gateway, with no firewall subnets and no route-table hop;
+  **proxy** mode carries listeners, its own certificate/domain, an endpoint
+  VPC, NAT gateways it creates and a `TransparentFilteringNatScope`; a
+  **transit gateway** firewall carries its TGW id. Because an internet gateway
+  firewall never shows up in a route table, the `N` lens draws it as the
+  outermost layer for any resource in that VPC — first inbound, last
+  outbound, `⏎` goes to it — read from the **warm** Network Firewall cache
+  only (`cached_igw_firewalls`). A cold cache adds nothing and says nothing:
+  most VPCs have none, so a "not loaded" note on every lens would be noise.
+  Its rules live in the policy Network Security Manager attaches and aren't
+  evaluated there. An `@audit` check for "internet gateway with no firewall"
+  was rejected for the same reason — most accounts would fail it.
 - **CodeSuite** (`@code`) — Repos/Build Projects/Pipelines/**Deployments**(4)/
   **Artifacts**(5)/**Executions**(6)/**Pull Requests**(7), five clients. A
   file-path buildspec is

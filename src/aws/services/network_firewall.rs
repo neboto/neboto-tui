@@ -253,10 +253,98 @@ pub struct NfwFirewall {
     pub policy_change_protection: bool,
     pub subnet_change_protection: bool,
     pub sync_states: Vec<NfwSyncState>,
+    /// What kind of firewall it is beyond the standard per-subnet one.
+    pub modes: NfwModes,
     pub tags: HashMap<String, String>,
 }
 
+/// The settings that make a firewall something other than the standard one
+/// with endpoints in your firewall subnets (#362). All empty for a standard
+/// firewall.
+#[derive(Debug, Clone, Default)]
+pub struct NfwModes {
+    /// Internet gateway firewall: its enforcement mode (`POLICY_CONTROLLED`
+    /// — Network Security Manager creates and manages these, set by the
+    /// policy it attaches). It inspects everything between the VPC and its
+    /// internet gateway without firewall subnets or route changes.
+    pub igw_enforcement: Option<String>,
+    /// Transit gateway–attached firewall.
+    pub transit_gateway_id: String,
+    /// Proxy mode: the listeners (`HTTPS:443`), and your own certificate
+    /// and domain when set.
+    pub proxy_listeners: Vec<String>,
+    pub proxy_cert_arn: String,
+    pub proxy_domain: String,
+    /// Proxy mode: the VPC and subnets its endpoints live in.
+    pub endpoint_vpc: String,
+    pub endpoint_subnets: Vec<String>,
+    /// Proxy mode: subnets Network Firewall creates NAT gateways in.
+    pub nat_subnets: Vec<String>,
+    /// Proxy mode: `NAT_ALL` / `NAT_NONE` for traffic not sent to the proxy.
+    pub nat_scope: String,
+}
+
+impl NfwModes {
+    fn from_sdk(f: &aws_sdk_networkfirewall::types::Firewall) -> Self {
+        let proxy = f.proxy_settings();
+        Self {
+            igw_enforcement: f.igw_firewall_configuration().map(|c| c.enforcement_mode().as_str().to_string()),
+            transit_gateway_id: f.transit_gateway_id().unwrap_or_default().to_string(),
+            proxy_listeners: proxy
+                .map(|p| {
+                    p.listener_properties()
+                        .iter()
+                        .map(|l| {
+                            let kind = l.r#type().map(|t| t.as_str()).unwrap_or("?");
+                            match l.port() {
+                                Some(port) => format!("{kind}:{port}"),
+                                None => kind.to_string(),
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            proxy_cert_arn: proxy.and_then(|p| p.certificate_arn()).unwrap_or_default().to_string(),
+            proxy_domain: proxy.and_then(|p| p.domain_name()).unwrap_or_default().to_string(),
+            endpoint_vpc: f.vpc_endpoint().map(|v| v.vpc_id().to_string()).unwrap_or_default(),
+            endpoint_subnets: f
+                .vpc_endpoint()
+                .map(|v| v.subnet_mappings().iter().map(|m| m.subnet_id().to_string()).collect())
+                .unwrap_or_default(),
+            nat_subnets: f.nat_gateway_create_mappings().iter().map(|m| m.subnet_id().to_string()).collect(),
+            nat_scope: f
+                .transparent_filtering_nat_scope()
+                .map(|s| s.as_str().to_string())
+                .unwrap_or_default(),
+        }
+    }
+
+    pub fn is_proxy(&self) -> bool {
+        !self.proxy_listeners.is_empty() || !self.endpoint_vpc.is_empty() || !self.nat_subnets.is_empty()
+    }
+
+    /// The firewall's kind in a word or two: the list's second column and
+    /// the Overview's `Mode` row.
+    pub fn label(&self) -> &'static str {
+        if self.igw_enforcement.is_some() {
+            "internet gateway"
+        } else if self.is_proxy() {
+            "proxy"
+        } else if !self.transit_gateway_id.is_empty() {
+            "transit gateway"
+        } else {
+            "VPC subnets"
+        }
+    }
+}
+
 impl NfwFirewall {
+    /// An internet gateway firewall: inspection happens at the gateway, so
+    /// it never shows up as a firewall-subnet hop in a route table.
+    pub fn is_igw_firewall(&self) -> bool {
+        self.modes.igw_enforcement.is_some()
+    }
+
     pub fn from_describe(
         resp: &aws_sdk_networkfirewall::operation::describe_firewall::DescribeFirewallOutput,
     ) -> Self {
@@ -348,6 +436,7 @@ impl NfwFirewall {
             policy_change_protection,
             subnet_change_protection,
             sync_states,
+            modes: fw.map(NfwModes::from_sdk).unwrap_or_default(),
             tags,
         }
     }
@@ -388,14 +477,18 @@ impl Resource for NfwFirewall {
         native_state_label(&self.status, || self.state())
     }
 
+    fn list_summary(&self) -> Option<String> {
+        Some(self.modes.label().to_string())
+    }
+
     fn tags(&self) -> &HashMap<String, String> {
         &self.tags
     }
 
     fn search_text(&self) -> String {
         format!(
-            "{} {} {} {} {}",
-            self.name, self.arn, self.vpc_id, self.status, self.policy_arn
+            "{} {} {} {} {} {}",
+            self.name, self.arn, self.vpc_id, self.status, self.policy_arn, self.modes.label()
         )
     }
 
@@ -944,6 +1037,53 @@ pub async fn resolve_nfw_log_group(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn firewall(extra: impl FnOnce(aws_sdk_networkfirewall::types::builders::FirewallBuilder) -> aws_sdk_networkfirewall::types::builders::FirewallBuilder) -> NfwModes {
+        let b = aws_sdk_networkfirewall::types::Firewall::builder()
+            .firewall_name("fw")
+            .firewall_policy_arn("arn:aws:network-firewall:us-east-1:123456789012:firewall-policy/p")
+            .vpc_id("vpc-1")
+            .set_subnet_mappings(Some(vec![]))
+            .firewall_id("id");
+        NfwModes::from_sdk(&extra(b).build().unwrap())
+    }
+
+    /// #362: what makes a firewall something other than the standard one.
+    #[test]
+    fn a_firewall_reads_its_mode() {
+        use aws_sdk_networkfirewall::types as t;
+        assert_eq!(firewall(|b| b).label(), "VPC subnets");
+        assert_eq!(firewall(|b| b.transit_gateway_id("tgw-1")).label(), "transit gateway");
+
+        let igw = firewall(|b| {
+            b.igw_firewall_configuration(
+                t::IgwFirewallConfiguration::builder().enforcement_mode(t::EnforcementMode::PolicyControlled).build().unwrap(),
+            )
+        });
+        assert_eq!(igw.label(), "internet gateway");
+        assert_eq!(igw.igw_enforcement.as_deref(), Some("POLICY_CONTROLLED"));
+
+        let proxy = firewall(|b| {
+            b.proxy_settings(
+                t::ProxySettings::builder()
+                    .listener_properties(t::ListenerProperty::builder().r#type(t::ListenerPropertyType::Https).port(443).build())
+                    .certificate_arn("arn:aws:acm:us-east-1:123456789012:certificate/c")
+                    .build()
+                    .unwrap(),
+            )
+            .nat_gateway_create_mappings(t::NatGatewayCreateMapping::builder().subnet_id("subnet-nat").build().unwrap())
+            .transparent_filtering_nat_scope(t::TransparentFilteringNatScope::NatAll)
+        });
+        assert_eq!(proxy.label(), "proxy");
+        assert_eq!(proxy.proxy_listeners, vec!["HTTPS:443".to_string()]);
+        assert_eq!(proxy.nat_subnets, vec!["subnet-nat".to_string()]);
+        assert_eq!(proxy.nat_scope, "NAT_ALL");
+        let rows = crate::ui::widgets::details_pane::nfw_mode_rows(&proxy);
+        assert!(rows.iter().any(|(k, v)| k == "  Certificate" && v.ends_with("certificate/c")), "{rows:?}");
+        let rows = crate::ui::widgets::details_pane::nfw_mode_rows(&igw);
+        assert!(rows.iter().any(|(k, _)| k == "Internet Gateway Firewall"), "{rows:?}");
+        assert!(crate::ui::widgets::details_pane::nfw_mode_rows(&firewall(|b| b)).is_empty());
+    }
 
     #[test]
     fn firewall_status_maps_to_state() {
