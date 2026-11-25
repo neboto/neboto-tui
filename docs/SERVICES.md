@@ -1939,8 +1939,19 @@ the service you're touching.
   behaviors fall back to raw ids); distributions stream next, then the policy
   rows, then Functions + OACs as error-tolerant batches.
   - **Distributions** — parsed eagerly from the `DistributionSummary` (no extra
-    describe), 7-section split pane Overview / Origins / Behaviors / **Errors**
-    (custom error responses) / Restrictions / **Invalidations** / Tags(lazy).
+    describe), 8-section split pane Overview / Origins / Behaviors / **Errors**
+    (custom error responses) / Restrictions / **Invalidations** / **Tenants** /
+    Tags(lazy).
+    **Tenants** (#363) is a lazy `ListDistributionTenants` filtered to the
+    distribution (`lazy.cf_tenants`, capped `MAX_TENANTS=100` with a "first N"
+    header): each tenant's domains (inactive ⚠), connection group and the
+    customizations that override the distribution's WAF / certificate / geo
+    settings, their ARNs jumpable. It only fetches when the summary's
+    `ConnectionMode` is `tenant-only` (the Overview then says "Multi-tenant");
+    a direct distribution has no tenants, so the section says so instead of
+    spending a call. Origins show an **Origin mTLS Cert** row (the ACM ARN in
+    `CustomOriginConfig.OriginMtlsConfig`, jumps to ACM) when the origin asks
+    for a client certificate.
     Invalidations is a lazy `ListInvalidations` (newest-first, capped
     `MAX_INVALIDATIONS=20` with a "latest N of M" header; each row's paths come
     from a per-id `GetInvalidation`, capped 8 shown with "+N more"; in-progress

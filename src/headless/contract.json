@@ -561,6 +561,7 @@
       "Errors",
       "Restrictions",
       "Invalidations",
+      "Tenants",
       "Tags"
     ],
     "CloudFront Function": [

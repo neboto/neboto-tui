@@ -367,7 +367,18 @@ pub struct CfDistribution {
     pub ssl_method: String,
     pub staging: bool,
     pub anycast_ip_list_id: String,
+    /// `tenant-only` for a multi-tenant (SaaS Manager) distribution, whose
+    /// viewers reach it through distribution tenants; `direct` or empty
+    /// otherwise.
+    pub connection_mode: String,
     pub tags: HashMap<String, String>,
+}
+
+impl CfDistribution {
+    /// A multi-tenant distribution: the Tenants section only fetches for these.
+    pub fn is_multi_tenant(&self) -> bool {
+        self.connection_mode == "tenant-only"
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -384,6 +395,9 @@ pub struct CfOrigin {
     pub connection: String,
     /// Custom-origin extras: "read Ns · keepalive Ns · TLSv1.2" — empty for S3.
     pub custom_timeouts: String,
+    /// Origin mTLS: the ACM certificate CloudFront presents to the origin;
+    /// empty when the origin doesn't ask for one.
+    pub mtls_cert_arn: String,
 }
 
 /// Failover origin group (primary → secondary on the listed status codes).
@@ -633,6 +647,11 @@ impl CfDistribution {
                     custom_headers,
                     connection,
                     custom_timeouts,
+                    mtls_cert_arn: o
+                        .custom_origin_config()
+                        .and_then(|c| c.origin_mtls_config())
+                        .map(|m| m.client_certificate_arn().to_string())
+                        .unwrap_or_default(),
                 }
             })
             .collect();
@@ -750,6 +769,7 @@ impl CfDistribution {
             ssl_method,
             staging: s.staging(),
             anycast_ip_list_id: s.anycast_ip_list_id().unwrap_or_default().to_string(),
+            connection_mode: s.connection_mode().map(|m| m.as_str().to_string()).unwrap_or_default(),
             tags: HashMap::new(),
         }
     }
@@ -764,6 +784,7 @@ crate::sections! {
         Errors "Errors",
         Restrictions "Restrictions",
         Invalidations "Invalidations" => crate::app::App::trigger_cf_invalidations_load,
+        Tenants "Tenants" => crate::app::App::trigger_cf_tenants_load,
         Tags "Tags" => crate::app::App::trigger_cf_tags_load,
     ]
 }
@@ -1634,6 +1655,104 @@ pub async fn fetch_invalidations(
     }
 
     Ok(CfInvalidationsData { items, total })
+}
+
+// ── Distribution tenants (SaaS Manager) ──────────────────────────────────────
+
+/// Cap on tenants listed for one multi-tenant distribution: a SaaS
+/// distribution can carry thousands, one per customer.
+pub const MAX_TENANTS: usize = 100;
+
+#[derive(Debug, Clone)]
+pub struct CfTenant {
+    pub id: String,
+    pub name: String,
+    pub arn: String,
+    pub status: String,
+    pub enabled: bool,
+    /// (domain, status) — status `active` / `inactive`, empty when unreported.
+    pub domains: Vec<(String, String)>,
+    pub connection_group_id: String,
+    /// WAF customization: (action, ACL ARN) — action `override` / `disable`.
+    pub waf: Option<(String, String)>,
+    /// The tenant's own ACM certificate, replacing the distribution's.
+    pub certificate_arn: String,
+    /// Geo customization: (restriction type, locations).
+    pub geo: Option<(String, Vec<String>)>,
+    pub last_modified: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CfTenantsData {
+    pub items: Vec<CfTenant>,
+    /// More tenants exist past `MAX_TENANTS`.
+    pub truncated: bool,
+}
+
+impl CfTenant {
+    pub fn from_summary(t: &aws_sdk_cloudfront::types::DistributionTenantSummary) -> Self {
+        let c = t.customizations();
+        Self {
+            id: t.id().to_string(),
+            name: t.name().to_string(),
+            arn: t.arn().to_string(),
+            status: t.status().unwrap_or_default().to_string(),
+            enabled: t.enabled().unwrap_or(true),
+            domains: t
+                .domains()
+                .iter()
+                .map(|d| {
+                    (
+                        d.domain().to_string(),
+                        d.status().map(|s| s.as_str().to_string()).unwrap_or_default(),
+                    )
+                })
+                .collect(),
+            connection_group_id: t.connection_group_id().unwrap_or_default().to_string(),
+            waf: c.and_then(|c| c.web_acl()).map(|w| {
+                (w.action().as_str().to_string(), w.arn().unwrap_or_default().to_string())
+            }),
+            certificate_arn: c
+                .and_then(|c| c.certificate())
+                .map(|cert| cert.arn().to_string())
+                .unwrap_or_default(),
+            geo: c.and_then(|c| c.geo_restrictions()).map(|g| {
+                (g.restriction_type().as_str().to_string(), g.locations().to_vec())
+            }),
+            last_modified: fmt_epoch_secs(t.last_modified_time().secs()),
+        }
+    }
+}
+
+/// `ListDistributionTenants` filtered to one distribution, paginated up to
+/// `MAX_TENANTS`.
+pub async fn fetch_distribution_tenants(
+    client: CloudFrontClient,
+    distribution_id: String,
+) -> Result<CfTenantsData> {
+    let filter = aws_sdk_cloudfront::types::DistributionTenantAssociationFilter::builder()
+        .distribution_id(&distribution_id)
+        .build();
+    let mut items = Vec::new();
+    let mut marker: Option<String> = None;
+    loop {
+        let mut req = client.list_distribution_tenants().association_filter(filter.clone());
+        if let Some(m) = &marker {
+            req = req.marker(m);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| crate::error::Error::AwsSdk(crate::error::sdk_error_message(&e)))?;
+        items.extend(resp.distribution_tenant_list().iter().map(CfTenant::from_summary));
+        marker = crate::aws::pagination::next_page_token(resp.next_marker(), &marker);
+        if marker.is_none() || items.len() >= MAX_TENANTS {
+            break;
+        }
+    }
+    let truncated = marker.is_some() || items.len() > MAX_TENANTS;
+    items.truncate(MAX_TENANTS);
+    Ok(CfTenantsData { items, truncated })
 }
 
 // ── Metrics (AWS/CloudFront) ──────────────────────────────────────────────────

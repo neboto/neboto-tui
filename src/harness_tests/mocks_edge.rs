@@ -32,6 +32,7 @@ pub(super) fn mocks() -> Vec<Mock> {
                 ssl_method: "sni-only".to_string(),
                 staging: false,
                 anycast_ip_list_id: String::new(),
+                connection_mode: String::new(),
                 tags: HashMap::new(),
             }),
         ),

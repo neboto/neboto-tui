@@ -38,6 +38,7 @@ mod lambda_layers_test;
 mod cli_picker_test;
 mod batch_test;
 mod datasync_test;
+mod cloudfront_test;
 mod cognito_test;
 mod mq_test;
 mod docdb_neptune_test;
