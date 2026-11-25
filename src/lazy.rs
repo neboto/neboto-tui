@@ -466,6 +466,11 @@ pub struct LazyStore {
     pub mq_config_document: LazyMap<crate::aws::services::mq::MqConfigDocument>,
     /// Amazon MQ configuration Revisions section, keyed by configuration id.
     pub mq_config_revisions: LazyMap<Vec<crate::aws::services::mq::MqRevision>>,
+    /// API Portal managed API Events section, keyed by managed API id.
+    pub apiportal_events: LazyMap<crate::aws::services::apiportal::ManagedApiEvents>,
+    /// API Portal product APIs section — `(managed API id, signature)` —
+    /// keyed by product id.
+    pub apiportal_product_apis: LazyMap<Vec<(String, String)>>,
     /// DMS task Tables section (`DescribeTableStatistics`), keyed by task ARN.
     pub dms_table_stats: LazyMap<crate::aws::services::dms::DmsTableStats>,
     /// DMS task Assessments section, keyed by task ARN.

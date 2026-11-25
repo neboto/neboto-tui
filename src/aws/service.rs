@@ -80,6 +80,7 @@ pub enum ServiceType {
     Neptune,
     DataSync,
     Mq,
+    ApiPortal,
     Beanstalk,
     AppSync,
     Budgets,
@@ -169,6 +170,7 @@ impl ServiceType {
             ServiceType::Neptune,
             ServiceType::DataSync,
             ServiceType::Mq,
+            ServiceType::ApiPortal,
             ServiceType::Beanstalk,
             ServiceType::Budgets,
             ServiceType::Invoices,
@@ -259,7 +261,8 @@ impl ServiceType {
             | ServiceType::TransitGateway
             | ServiceType::DirectConnect
             | ServiceType::GlobalAccelerator
-            | ServiceType::ApiGateway => "Networking & Content Delivery",
+            | ServiceType::ApiGateway
+            | ServiceType::ApiPortal => "Networking & Content Delivery",
             ServiceType::IAM
             | ServiceType::IdentityCenter
             | ServiceType::Cognito
@@ -377,6 +380,7 @@ impl ServiceType {
             ServiceType::Neptune => "Neptune",
             ServiceType::DataSync => "DataSync",
             ServiceType::Mq => "Amazon MQ",
+            ServiceType::ApiPortal => "API Portal",
             ServiceType::Beanstalk => "Elastic Beanstalk",
             ServiceType::AppSync => "AppSync",
             ServiceType::Fms => "Firewall Manager",
@@ -463,6 +467,7 @@ impl ServiceType {
             ServiceType::Neptune => "Neptune",
             ServiceType::DataSync => "DataSync",
             ServiceType::Mq => "MQ",
+            ServiceType::ApiPortal => "APIP",
             ServiceType::Beanstalk => "EB",
             ServiceType::AppSync => "GQL",
             ServiceType::Fms => "FMS",
@@ -553,6 +558,7 @@ impl ServiceType {
             ServiceType::Neptune => "Graph Database Clusters, Instances, Snapshots",
             ServiceType::DataSync => "Transfer Tasks, Locations, Agents",
             ServiceType::Mq => "ActiveMQ & RabbitMQ Brokers, Configurations",
+            ServiceType::ApiPortal => "Discovered APIs (shadow vs managed), Managed APIs, Portals, Products",
             ServiceType::Beanstalk => "Environments (Standard + Cluster Mode), Applications, Versions",
             ServiceType::AppSync => "GraphQL APIs, Data Sources, Resolvers, Functions",
             ServiceType::Budgets => "Cost & Usage Budgets, Alerts, Subscribers",
@@ -671,6 +677,7 @@ impl ServiceType {
             "neptune" => Some(ServiceType::Neptune),
             "datasync" | "sync" => Some(ServiceType::DataSync),
             "mq" | "amazonmq" | "activemq" | "rabbitmq" | "rabbit" => Some(ServiceType::Mq),
+            "apiportal" | "apiinventory" | "shadowapis" | "devportal" => Some(ServiceType::ApiPortal),
             "fms" | "firewallmanager" | "fwmanager" => Some(ServiceType::Fms),
             "redshift" | "rs" | "warehouse" | "datawarehouse" | "dwh" => {
                 Some(ServiceType::Redshift)
@@ -758,6 +765,7 @@ impl ServiceType {
             ServiceType::Neptune => "@neptune",
             ServiceType::DataSync => "@datasync",
             ServiceType::Mq => "@mq",
+            ServiceType::ApiPortal => "@apiportal",
             ServiceType::Beanstalk => "@eb",
             ServiceType::AppSync => "@appsync",
             ServiceType::Fms => "@fms",

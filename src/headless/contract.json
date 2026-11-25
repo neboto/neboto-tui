@@ -172,6 +172,7 @@
     "@agentcore",
     "@anfw",
     "@apigw",
+    "@apiportal",
     "@appsync",
     "@asg",
     "@athena",
@@ -266,6 +267,22 @@
       "Overview",
       "Mappings",
       "Tags"
+    ],
+    "API Discovery": [
+      "Overview",
+      "Statuses",
+      "Tags"
+    ],
+    "API Inventory Item": [
+      "Overview"
+    ],
+    "API Portal": [
+      "Overview",
+      "Products"
+    ],
+    "API Product": [
+      "Overview",
+      "APIs"
     ],
     "API Usage Plan": [
       "Overview",
@@ -1109,6 +1126,12 @@
       "Brokers",
       "Monitoring",
       "Config",
+      "Tags"
+    ],
+    "Managed API": [
+      "Overview",
+      "Findings",
+      "Events",
       "Tags"
     ],
     "NFW Rule Group": [

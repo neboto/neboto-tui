@@ -490,6 +490,15 @@ pub fn render_resource_list(app: &App, area: Rect, frame: &mut Frame) {
                     "requires CloudTrail Insights enabled on a trail".to_string(),
                 )
             }
+            // An empty API Portal inventory is usually discovery being off or
+            // still starting, which the account's discovery row knows.
+            else if app.current_service == Some(crate::aws::service::ServiceType::ApiPortal)
+                && app.apiportal_view == crate::app::ApiPortalView::Inventory
+                && app.list_state_filter.is_none()
+                && app.apiportal_empty_inventory_reason().is_some()
+            {
+                app.apiportal_empty_inventory_reason().unwrap_or_default()
+            }
             // Only the GuardDuty administrator / delegated admin can list
             // members, so an empty Accounts tab is almost always "wrong
             // account" rather than an org with no members. The load stays

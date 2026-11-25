@@ -1532,6 +1532,57 @@ the service you're touching.
   it drops every client connection.
   **Console links** (`#/brokers/details?id=`, `#/configurations/details?id=`)
   are unverified. **Demo**: no fixtures — `@mq` lists empty under `--demo`.
+- **API Portal** (`@apiportal` / `@apiinventory` / `@shadowapis` /
+  `@devportal`, `apiportal.rs`, **aws-sdk-apiportal**) — browse-only, five
+  sub-tabs: **Inventory** (the APIs discovery found behind API Gateway,
+  load balancers and CloudFront), **Managed APIs**, **Portals**,
+  **Products**, **Discovery** (#361). Regional. The SDK is 1.0.0 and needed
+  the same smithy-runtime + `aws-config` bump as Network Firewall 1.143.
+  **Load**: discovery first (`GetDiscoveryConfiguration` +
+  `ListDiscoveryStatuses`, and `GetOrganizationDiscoveryConfiguration`,
+  which only the management / delegated-admin account can read — its
+  failure is silent), then the inventory (capped at 5000 items, warned),
+  then `ListManagedApis` + `GetManagedApi` each at `buffered(5)` (the
+  summary has no findings or tags; a failed get keeps the summary row,
+  `described: false`), then `ListPortals` and `ListProducts`. Every list
+  failing is the only fatal case. `GetDiscoveryConfiguration`'s
+  `ResourceNotFoundException` means never configured: no warning, the
+  Discovery row says "not configured".
+  **Empty inventory**: `resource_list.rs` asks
+  `App::apiportal_empty_inventory_reason` (the account discovery row's
+  `empty_inventory_reason`): not configured, disabled, a source's crawler
+  `FAILED` (with its reason), or still `PROVISIONING`. A healthy
+  configuration falls through to the ordinary empty state.
+  **Ids**: an inventory item's signature (`GET host:port /path`) repeats
+  across resources that answer the same host and path, so its id is the
+  signature + a space + the resource ARN; `name()` is the signature.
+  `GetApiInventoryItem` is not called — it adds only the managed API id,
+  which the load gets by matching signature + resource ARN against the
+  managed API list (an API managed by *another* account has no local row,
+  and the item says "another account in the organization"). Managed APIs,
+  portals and products are keyed by their ids.
+  **Jumps**: `apiportal_row_jump_target` follows a row whose value is the
+  id **or ARN** of a loaded API Portal row, under `@apiportal` only (a
+  portal names its products by ARN). The resource behind an API is a
+  generic ARN jump: ELB and CloudFront already had arms; API Gateway's
+  `arn:aws:apigateway:<region>::/restapis/<id>/stages/<stage>` (and
+  `/apis/<id>/…` for HTTP) got one here, landing on the API.
+  **Enums**: every model enum (`DiscoverySource`, `Workload`,
+  `FindingReason`, `Classification`, …) is kept as its wire string and
+  rendered lower-cased; a value added later reads as sent instead of
+  failing. **Findings**: `postureStatus` `TRUE` means the posture is
+  *satisfied*; `FALSE` is the failing one (with a `reason`).
+  **Lazy**: a managed API's **Events** (`ListManagedApiEvents`, the API's
+  default last 30 days, newest 100) and a product's **APIs**
+  (`ListManagedApis` filtered by `productId`; the product Overview
+  previews it, so it shares the hook).
+  **Read-only**: `StartDiscovery`, `StopDiscovery`, every `Put*`,
+  `Create*`, `Update*`, `Delete*`, `Associate*` and tagging call are never
+  made. **`C`**: the matching `get-*` command. **Not done**: tags for
+  portals and products (`ListTagsForResource` per row), console links
+  (unknown URL shape — `console_url` is `None`), demo fixtures, and the
+  `@audit` checks from #361 (public + shadow + no WAF, worst for MCP/LLM;
+  managed zombies) — a follow-up. **Not checked against a live account.**
 - **DocumentDB** (`@docdb` / `@documentdb`) and **Neptune** (`@neptune`) —
   not service files: both are `rds::RdsService::for_family`, the RDS client
   and the RDS resource types listed under one engine (#96). DocumentDB and

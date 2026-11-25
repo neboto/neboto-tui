@@ -139,6 +139,68 @@ pub(super) fn mocks() -> Vec<Mock> {
             )),
         ),
         (
+            ServiceType::ApiPortal,
+            "ApiInventoryItem",
+            Box::new(svc::apiportal::ApiInventoryItem::from_sdk(
+                &aws_sdk_apiportal::types::ApiInventoryItem::builder()
+                    .method(aws_sdk_apiportal::types::HttpMethod::Get)
+                    .host("api.example.com")
+                    .port(443)
+                    .path("/v1/mock")
+                    .account_id("123456789012")
+                    .resource_arn("arn:aws:apigateway:us-east-1::/restapis/abc123/stages/prod")
+                    .region("us-east-1")
+                    .discovery_source(aws_sdk_apiportal::types::DiscoverySource::ApiGateway)
+                    .build()
+                    .unwrap(),
+            )),
+        ),
+        (
+            ServiceType::ApiPortal,
+            "ManagedApi",
+            Box::new(svc::apiportal::ManagedApi::from_get(
+                &aws_sdk_apiportal::operation::get_managed_api::GetManagedApiOutput::builder()
+                    .managed_api_id("ma-mock")
+                    .managed_api_arn("arn:aws:apiportal:us-east-1:123456789012:managed-api/ma-mock")
+                    .created_at(aws_smithy_types::DateTime::from_secs(1_700_000_000))
+                    .updated_at(aws_smithy_types::DateTime::from_secs(1_700_000_000))
+                    .build()
+                    .unwrap(),
+            )),
+        ),
+        (
+            ServiceType::ApiPortal,
+            "ApiPortal",
+            Box::new(svc::apiportal::ApiPortal::from_sdk(
+                &aws_sdk_apiportal::types::PortalSummary::builder()
+                    .portal_id("p-mock")
+                    .portal_arn("arn:aws:apiportal:us-east-1:123456789012:portal/p-mock")
+                    .set_included_product_arns(Some(vec![]))
+                    .updated_at(aws_smithy_types::DateTime::from_secs(1_700_000_000))
+                    .build()
+                    .unwrap(),
+            )),
+        ),
+        (
+            ServiceType::ApiPortal,
+            "ApiProduct",
+            Box::new(svc::apiportal::ApiProduct::from_sdk(
+                &aws_sdk_apiportal::types::ProductSummary::builder()
+                    .product_id("pr-mock")
+                    .product_arn("arn:aws:apiportal:us-east-1:123456789012:product/pr-mock")
+                    .display_name("mock-product")
+                    .description("")
+                    .updated_at(aws_smithy_types::DateTime::from_secs(1_700_000_000))
+                    .build()
+                    .unwrap(),
+            )),
+        ),
+        (
+            ServiceType::ApiPortal,
+            "ApiDiscovery",
+            Box::new(svc::apiportal::ApiDiscovery::account()),
+        ),
+        (
             ServiceType::DataSync,
             "DataSyncTask",
             Box::new(svc::datasync::DataSyncTask::from_describe(
