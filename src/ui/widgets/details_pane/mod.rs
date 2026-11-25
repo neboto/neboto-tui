@@ -5,7 +5,7 @@ use crate::aws::services::vpc::{VpcEndpoint, VpnConnection};
 use crate::aws::services::acm::AcmCertificate;
 use crate::aws::services::step_functions::{execution_status_state, SfnExecution, SfnStateMachine};
 use crate::aws::services::cloudformation::{CfnExport, CfnStack, CfnStackSet};
-use crate::aws::services::cloudfront::{CfDistribution, CfInvalidationsData};
+use crate::aws::services::cloudfront::{CfDistribution, CfInvalidationsData, CfTenantsData};
 use crate::aws::services::kms::{KmsGrant, KmsKey};
 use crate::aws::services::bedrock::{
     AgentActionGroup, AgentAlias, AgentFull, AgentKb, BedrockAgent, BedrockGuardrail,

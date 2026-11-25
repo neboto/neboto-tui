@@ -104,6 +104,7 @@ pub fn cf_distribution_section_lines(
     section: CfDistributionDetailSection,
     tags_state: Option<&crate::lazy::Lazy<std::collections::HashMap<String, String>>>,
     invalidations_state: Option<&Lazy<CfInvalidationsData>>,
+    tenants_state: Option<&Lazy<CfTenantsData>>,
 ) -> Vec<(String, String)> {
     match section {
         CfDistributionDetailSection::Overview => cf_details_lines(dist),
@@ -114,8 +115,78 @@ pub fn cf_distribution_section_lines(
         CfDistributionDetailSection::Invalidations => {
             cf_invalidations_lines(invalidations_state)
         }
+        CfDistributionDetailSection::Tenants => cf_tenants_lines(dist, tenants_state),
         CfDistributionDetailSection::Tags => cf_tags_lines(tags_state),
     }
+}
+
+/// A multi-tenant distribution's tenants: one block each with its domains
+/// (inactive ones ⚠) and the customizations that override the
+/// distribution's own WAF, certificate and geo settings. The ARN rows jump
+/// (`arn_jump_target`: ACM, WAF).
+pub(super) fn cf_tenants_lines(
+    dist: &CfDistribution,
+    state: Option<&Lazy<CfTenantsData>>,
+) -> Vec<(String, String)> {
+    if !dist.is_multi_tenant() {
+        return vec![(
+            "".to_string(),
+            "Not a multi-tenant distribution: viewers reach it directly, not through tenants".to_string(),
+        )];
+    }
+    let data = match state {
+        None | Some(Lazy::Loading) => return vec![("".to_string(), "Loading…".to_string())],
+        Some(Lazy::Error(e)) => return error_rows(e),
+        Some(Lazy::Loaded(data)) => data,
+    };
+    if data.items.is_empty() {
+        return vec![("".to_string(), "No tenants".to_string())];
+    }
+    let header = if data.truncated {
+        format!("Tenants (first {})", data.items.len())
+    } else {
+        format!("Tenants ({})", data.items.len())
+    };
+    let mut rows = vec![(header, "".to_string())];
+    for t in &data.items {
+        rows.push(("".to_string(), "".to_string()));
+        rows.push((t.name.clone(), "".to_string()));
+        rows.push(("  ID".to_string(), t.id.clone()));
+        rows.push(("  ARN".to_string(), t.arn.clone()));
+        let mut status = if t.status.is_empty() { "—".to_string() } else { t.status.clone() };
+        if !t.enabled {
+            status.push_str(" · disabled");
+        }
+        rows.push(("  Status".to_string(), status));
+        for (domain, st) in &t.domains {
+            let value = if st.eq_ignore_ascii_case("inactive") {
+                format!("⚠ {} (inactive)", domain)
+            } else {
+                domain.clone()
+            };
+            rows.push(("  Domain".to_string(), value));
+        }
+        if !t.connection_group_id.is_empty() {
+            rows.push(("  Connection Group".to_string(), t.connection_group_id.clone()));
+        }
+        if let Some((action, arn)) = &t.waf {
+            let value = if arn.is_empty() { action.clone() } else { arn.clone() };
+            rows.push((format!("  WAF ({})", action), value));
+        }
+        if !t.certificate_arn.is_empty() {
+            rows.push(("  Certificate".to_string(), t.certificate_arn.clone()));
+        }
+        if let Some((kind, locations)) = &t.geo {
+            let value = if locations.is_empty() {
+                kind.clone()
+            } else {
+                format!("{}: {}", kind, locations.join(", "))
+            };
+            rows.push(("  Geo Restriction".to_string(), value));
+        }
+        rows.push(("  Last Modified".to_string(), t.last_modified.clone()));
+    }
+    rows
 }
 
 pub(super) fn cf_invalidations_lines(
@@ -213,6 +284,12 @@ pub(super) fn cf_details_lines(dist: &CfDistribution) -> Vec<(String, String)> {
             "⚠ Yes — staging distribution (continuous deployment)".to_string(),
         ));
     }
+    if dist.is_multi_tenant() {
+        rows.push((
+            "Connection Mode".to_string(),
+            "Multi-tenant — viewers connect through tenants (see Tenants)".to_string(),
+        ));
+    }
     if !dist.anycast_ip_list_id.is_empty() {
         rows.push(("Anycast IP List".to_string(), dist.anycast_ip_list_id.clone()));
     }
@@ -260,6 +337,10 @@ pub(super) fn cf_origins_lines(dist: &CfDistribution) -> Vec<(String, String)> {
         }
         if !origin.connection.is_empty() {
             rows.push(("  Connection".to_string(), origin.connection.clone()));
+        }
+        if !origin.mtls_cert_arn.is_empty() {
+            // The ACM ARN jumps to the certificate (arn_jump_target).
+            rows.push(("  Origin mTLS Cert".to_string(), origin.mtls_cert_arn.clone()));
         }
         rows.push((
             "  Origin Shield".to_string(),

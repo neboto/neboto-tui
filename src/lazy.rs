@@ -139,6 +139,8 @@ pub struct LazyStore {
     pub cf_function_code: LazyMap<String>,
     /// A distribution's invalidation history, keyed by distribution id.
     pub cf_invalidations: LazyMap<crate::aws::services::cloudfront::CfInvalidationsData>,
+    /// A multi-tenant distribution's tenants, keyed by distribution id.
+    pub cf_tenants: LazyMap<crate::aws::services::cloudfront::CfTenantsData>,
 
     // ── Direct Connect ───────────────────────────────────────────────────
     /// A DX gateway's VGW/TGW associations, keyed by gateway id.

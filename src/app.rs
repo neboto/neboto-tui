@@ -12857,6 +12857,31 @@ impl App {
         }
     }
 
+    /// Lazy-load a multi-tenant distribution's tenants. A direct
+    /// distribution has none, so it never fetches (the section says so).
+    pub(crate) fn trigger_cf_tenants_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(dist) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::cloudfront::CfDistribution>()
+        }) {
+            if !dist.is_multi_tenant() {
+                return;
+            }
+            let id = dist.id.clone();
+            let client = self.aws_clients.cloudfront_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.cf_tenants,
+                id.clone(),
+                event_tx,
+                async move {
+                    crate::aws::services::cloudfront::fetch_distribution_tenants(client, id)
+                        .await
+                        .map_err(crate::error::Error::message)
+                },
+            );
+        }
+    }
+
     fn selected_kms_key_id(&self) -> Option<String> {
         self.get_selected_resource().and_then(|r| {
             r.as_any()
@@ -27256,6 +27281,7 @@ impl App {
                     crate::aws::services::cloudfront::CfDistributionDetailSection::from_index(self.detail_section_idx),
                     tags_state,
                     self.lazy.cf_invalidations.get(&dist.id),
+                    self.lazy.cf_tenants.get(&dist.id),
                 );
             }
             if let Some(f) = resource
