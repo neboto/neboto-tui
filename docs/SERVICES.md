@@ -1712,7 +1712,7 @@ the service you're touching.
   `resource_list.rs` renders a "not the Firewall Manager administrator" empty
   state (with the admin account id when visible). `OUT_OF_ADMIN_SCOPE`
   policies/sets read as unavailable. No CloudWatch namespace → no `m`.
-- **Network Firewall** (`@nfw`, `network_firewall.rs`) — Firewalls /
+- **Network Firewall** (`@anfw`, `network_firewall.rs`) — Firewalls /
   Policies / Rule groups. A firewall's **mode** (#362, `NfwModes`, the list's
   second column and the Overview's `Mode` row) comes from `DescribeFirewall`
   fields that need `aws-sdk-networkfirewall` ≥ 1.143 (and with it the newer
