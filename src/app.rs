@@ -10501,14 +10501,14 @@ impl App {
         // No clipboard (an SSH session) isn't an error here: the toast
         // carries the command either way.
         let error_before = self.error_message.clone();
-        self.copy_to_clipboard(uc::UPGRADE_COMMAND, "the upgrade command");
+        self.copy_to_clipboard(uc::upgrade_command(), "the upgrade command");
         let copied = self.error_message == error_before;
         self.error_message = error_before;
         self.success_message = Some(format!(
             "neboto v{latest} is out (you have v{}) — {} `{}` · notes: {}",
             uc::current_version(),
             if copied { "copied the upgrade command" } else { "upgrade with" },
-            uc::UPGRADE_COMMAND,
+            uc::upgrade_command(),
             uc::RELEASES_URL,
         ));
         self.success_message_time = Some(Instant::now());

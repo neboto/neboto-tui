@@ -295,12 +295,69 @@ are on the release job since 2026-09-16 (see the supply-chain rules above).
 | Method | Command |
 |---|---|
 | Installer script | `curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/install.sh \| sh` |
+| Homebrew (macOS, Linux) | `brew install neboto/tap/neboto` |
 | cargo-binstall | `cargo binstall neboto` (needs a crates.io publish, or `--git https://github.com/neboto/neboto-tui`) |
 | Manual | download `neboto-<target>.tar.gz` + `neboto-<target>.sha256` from the Releases page, `shasum -a 256 -c` the latter, put `neboto` on `PATH` |
 | From source | `cargo install --git https://github.com/neboto/neboto-tui` |
 
 `install.sh` honours `NEBOTO_VERSION` (pin a tag), `NEBOTO_INSTALL_DIR`
 (default `~/.local/bin`) and `GITHUB_TOKEN`.
+
+## Homebrew tap
+
+`brew install neboto/tap/neboto` reads `Formula/neboto.rb` from the public
+[`neboto/homebrew-tap`](https://github.com/neboto/homebrew-tap) repo. The
+formula installs the release archives, not a source build: one URL + SHA-256
+per OS × arch, the same four `neboto-<target>.tar.gz` that `install.sh` uses.
+It installs `neboto`, puts `config.example.toml` in `$(brew --prefix)/share/neboto`
+and `PERMISSIONS.md` in its doc dir, and tests `neboto --version`.
+
+- **Generated, never hand-edited.** `scripts/homebrew-formula.sh <tag>`
+  prints the formula from the release's `.sha256` assets. The Release
+  workflow's `homebrew` job runs after `publish`. It first downloads the
+  four archives and checks each one's checksum and build provenance
+  (`gh attestation verify`). The formula pins whatever the `.sha256` says,
+  and an archive and its checksum are uploaded by the same token, so a
+  swapped pair would otherwise reach every `brew` user. Then it generates the
+  formula, audits it (`brew audit --strict --online`), and installs and tests
+  it on `macos-15` before pushing it to the tap. The script accepts only an
+  exact `vX.Y.Z`, because the tag lands in Ruby that runs at install time.
+  That also excludes prereleases.
+- **`HOMEBREW_TAP_TOKEN`** is the repo secret the push uses: a fine-grained
+  token, owned by the org, with *Contents: read and write* on
+  `neboto/homebrew-tap` and nothing else. The workflow's own `GITHUB_TOKEN`
+  can't push to another repo. Without the secret the job still checks the
+  formula, then warns instead of pushing. When the token expires, pushes stop
+  with an auth error in that job. The release itself is already live by then.
+- **Releases cut locally** (`RELEASE_ON_CI=false`) skip the job. Update the
+  tap by hand, verifying the archives as the job does:
+  ```sh
+  mkdir assets && gh release download vX.Y.Z --repo neboto/neboto-tui \
+    --pattern 'neboto-*.tar.gz' --pattern 'neboto-*.sha256' --dir assets
+  (cd assets && for f in neboto-*.tar.gz; do
+     shasum -a 256 -c "${f%.tar.gz}.sha256" &&
+     gh attestation verify "$f" --repo neboto/neboto-tui || exit 1; done)
+  scripts/homebrew-formula.sh vX.Y.Z assets > ../homebrew-tap/Formula/neboto.rb
+  ```
+  then commit and push in the tap clone. A locally cut release has no
+  attestations (they're made by the workflow), so the verify step fails for
+  one. In that case, check the archives against your own build instead.
+- **Checking a formula locally**: Homebrew only loads formulae from a tap,
+  so use a throwaway one:
+  `brew tap-new --no-git neboto-check/local`, copy the formula into
+  `$(brew --repository neboto-check/local)/Formula/`, `brew trust
+  neboto-check/local`, then `brew audit --strict --online`, `brew install`
+  and `brew test` it. Clean up with `brew uninstall`, `brew untrust` and
+  `brew untap`.
+- **Keep the full name** in the install docs: Homebrew 7 refuses
+  `brew tap neboto/tap && brew install neboto` for a third-party tap.
+- **No `version` line**: brew reads it from the `/vX.Y.Z/` in the URL, and
+  `--strict` rejects an explicit one as redundant.
+- **Gatekeeper**: the binaries are unsigned, but Homebrew doesn't quarantine
+  formula downloads, so the tap installs cleanly. Only a browser download
+  hits Gatekeeper.
+- **homebrew-core** (a plain `brew install neboto`) would mean a source-build
+  formula and meeting core's notability bar. That's for later.
 
 ## Demo media
 
@@ -351,13 +408,10 @@ signal that it is an emulator — leave it in.
 
 ## Not done yet (in rough priority order)
 
-- **Homebrew tap** (`brew install neboto/tap/neboto`): needs a public
-  `neboto/homebrew-tap` repo and a job that rewrites the formula's URLs +
-  SHAs on each release. Wait for the repo to go public.
 - **crates.io publish**: `cargo publish` makes `cargo install neboto` and
   plain `cargo binstall neboto` work. Public source only.
 - **macOS signing / notarization**: the binaries are unsigned. Installing
-  through the script or `gh` is fine (no quarantine attribute), but a tarball
+  through the script, Homebrew or `gh` is fine (no quarantine attribute), but a tarball
   downloaded in a browser will trip Gatekeeper; users can
   `xattr -d com.apple.quarantine neboto`. Signing needs an Apple Developer
   account and secrets in the workflow.

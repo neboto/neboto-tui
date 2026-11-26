@@ -36,6 +36,12 @@ the GitHub CLI is installed) its signed build provenance, and puts it in
 curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/install.sh | sh
 ```
 
+Or with [Homebrew](https://brew.sh):
+
+```bash
+brew install neboto/tap/neboto
+```
+
 Or with [cargo-binstall](https://github.com/cargo-bins/cargo-binstall):
 
 ```bash
