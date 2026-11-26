@@ -80,16 +80,15 @@ Dependabot refresh (#63) went through — but the shape can recur, so check
 arrive monthly as one `crates` PR; majors come one per PR (see
 `.github/dependabot.yml`).
 
-One accepted leftover as of v0.10.0: `crypto-bigint 0.5.5`
-(RUSTSEC-2026-0387, timing variability). `aws-sigv4` depends on it for
-SigV4a signing even at 1.6.3, the fix is the semver-incompatible 0.7, and
-the advisory is a timing side channel in local request signing, not a
-remote input. It clears when `aws-sigv4` moves off 0.5. Two *unmaintained*
-warnings are accepted alongside it (not vulnerabilities; nothing to patch):
-`pin-utils` (RUSTSEC-2026-0441, via `aws-smithy-http`, clears with an SDK
-bump) and, since v0.14.0, `chrono` (RUSTSEC-2026-0543) — a direct dependency,
-so clearing it means moving the date code to `jiff` or `time`. Anything else
-showing up is new. The ones before it were the AWS SDK's legacy hyper-0.14 client
+As of v0.15.0 only two *unmaintained* warnings are accepted (not
+vulnerabilities; nothing to patch): `pin-utils` (RUSTSEC-2026-0441, via
+`aws-smithy-http`, clears with an SDK bump) and `chrono` (RUSTSEC-2026-0543,
+since v0.14.0) — a direct dependency, so clearing it means moving the date
+code to `jiff` or `time`. Anything else showing up is new. `crypto-bigint
+0.5.5` (RUSTSEC-2026-0387), accepted from v0.10.0, cleared when `aws-sigv4`
+moved to 0.7. v0.15.0 also took `url` 2.5.9 (RUSTSEC-2026-0592); a plain
+`cargo update -p url` stopped at 2.5.8, and `--precise 2.5.9` (which brings
+`form_urlencoded` 1.2.3 along) was needed. The ones before it were the AWS SDK's legacy hyper-0.14 client
 (`rustls 0.21` / `rustls-webpki 0.101` / `h2 0.3`), dropped in #145 by
 taking every `aws-sdk-*` crate's default features minus `rustls` (see the
 comment above the SDK block in `Cargo.toml`; a new SDK crate must follow it,
