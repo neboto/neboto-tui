@@ -139,6 +139,8 @@ pub struct LazyStore {
     pub cf_function_code: LazyMap<String>,
     /// A distribution's invalidation history, keyed by distribution id.
     pub cf_invalidations: LazyMap<crate::aws::services::cloudfront::CfInvalidationsData>,
+    /// A multi-tenant distribution's tenants, keyed by distribution id.
+    pub cf_tenants: LazyMap<crate::aws::services::cloudfront::CfTenantsData>,
 
     // ── Direct Connect ───────────────────────────────────────────────────
     /// A DX gateway's VGW/TGW associations, keyed by gateway id.
@@ -464,6 +466,11 @@ pub struct LazyStore {
     pub mq_config_document: LazyMap<crate::aws::services::mq::MqConfigDocument>,
     /// Amazon MQ configuration Revisions section, keyed by configuration id.
     pub mq_config_revisions: LazyMap<Vec<crate::aws::services::mq::MqRevision>>,
+    /// API Portal managed API Events section, keyed by managed API id.
+    pub apiportal_events: LazyMap<crate::aws::services::apiportal::ManagedApiEvents>,
+    /// API Portal product APIs section — `(managed API id, signature)` —
+    /// keyed by product id.
+    pub apiportal_product_apis: LazyMap<Vec<(String, String)>>,
     /// DMS task Tables section (`DescribeTableStatistics`), keyed by task ARN.
     pub dms_table_stats: LazyMap<crate::aws::services::dms::DmsTableStats>,
     /// DMS task Assessments section, keyed by task ARN.

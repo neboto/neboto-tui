@@ -544,13 +544,24 @@ pub enum LensLine {
     /// `nacl_rows[i]`.
     Nacl(usize),
     Note(String),
+    /// An internet gateway firewall on the resource's VPC (#362): the
+    /// outermost layer for internet traffic. Selectable; `⏎` goes to it.
+    Firewall { text: String, arn: String },
     Blank,
 }
 
 impl LensLine {
     fn selectable(&self) -> bool {
-        matches!(self, Self::Sg(_) | Self::Nacl(_) | Self::Layer { acl: Some(_), .. })
+        matches!(self, Self::Sg(_) | Self::Nacl(_) | Self::Layer { acl: Some(_), .. } | Self::Firewall { .. })
     }
+}
+
+/// An internet gateway firewall from the warm Network Firewall cache.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IgwFirewall {
+    pub vpc_id: String,
+    pub name: String,
+    pub arn: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -590,6 +601,9 @@ pub struct AccessLensState {
     /// A row to put the cursor on once it appears (`line_key`) — going
     /// back to the lens restores the row you jumped from.
     pub want_row: Option<String>,
+    /// Internet gateway firewalls in the warm Network Firewall cache at
+    /// open time; the ones on this resource's VPC draw as a layer.
+    pub igw_firewalls: Vec<IgwFirewall>,
 }
 
 impl AccessLensState {
@@ -697,8 +711,53 @@ impl AccessLensState {
         self.select_line(at.unwrap_or(0));
     }
 
+    /// The VPCs the resource sits in, from its resolved groups and ACLs.
+    fn vpc_ids(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        let vpcs = self
+            .groups
+            .iter()
+            .filter_map(|g| g.vpc_id.as_deref())
+            .chain(self.nacls.iter().map(|n| n.vpc_id.as_str()));
+        for v in vpcs {
+            if !v.is_empty() && !out.contains(&v) {
+                out.push(v);
+            }
+        }
+        out
+    }
+
+    /// The internet gateway firewalls on the resource's VPC.
+    pub fn gateway_firewalls(&self) -> Vec<&IgwFirewall> {
+        let vpcs = self.vpc_ids();
+        self.igw_firewalls.iter().filter(|f| vpcs.contains(&f.vpc_id.as_str())).collect()
+    }
+
+    /// Internet traffic meets an internet gateway firewall before anything
+    /// else on the way in, and after everything on the way out. Its rules
+    /// live in a policy Network Security Manager attaches, so they aren't
+    /// evaluated here: the layer says it's there and goes to it.
+    fn firewall_lines(&self, lines: &mut Vec<LensLine>, inbound: bool, has_nacl: bool) {
+        let next = match (inbound, has_nacl) {
+            (true, true) => "before the NACL",
+            (true, false) => "before the security groups",
+            (false, true) => "after the NACL",
+            (false, false) => "after the security groups",
+        };
+        for f in self.gateway_firewalls() {
+            lines.push(LensLine::Firewall {
+                text: format!(
+                    "Internet gateway firewall {} · inspects internet traffic {next} · its rules aren't evaluated here",
+                    f.name
+                ),
+                arn: f.arn.clone(),
+            });
+        }
+    }
+
     /// Per direction, the layers in the order AWS checks them: inbound
     /// meets the subnet's NACL first, outbound leaves through it last.
+    /// An internet gateway firewall on the VPC wraps both.
     fn build_lines(&self) -> Vec<LensLine> {
         let mut lines = Vec::new();
         let has_nacl = !self.subnet_ids.is_empty();
@@ -712,6 +771,9 @@ impl AccessLensState {
                 lines.push(LensLine::Blank);
             }
             lines.push(LensLine::Direction(inbound));
+            if inbound {
+                self.firewall_lines(&mut lines, inbound, has_nacl);
+            }
             let (sg_num, acl_num) = match (has_nacl, inbound) {
                 (false, _) => ("", ""),
                 (true, true) => ("② ", "① "),
@@ -736,6 +798,9 @@ impl AccessLensState {
             }
             if has_nacl && !inbound {
                 self.acl_lines(&mut lines, inbound, acl_num);
+            }
+            if !inbound {
+                self.firewall_lines(&mut lines, inbound, has_nacl);
             }
         }
         lines
@@ -838,6 +903,14 @@ impl AccessLensState {
         }
     }
 
+    /// The internet gateway firewall under the cursor.
+    pub fn selected_firewall(&self) -> Option<String> {
+        match self.lines.get(self.selected)? {
+            LensLine::Firewall { arn, .. } => Some(arn.clone()),
+            _ => None,
+        }
+    }
+
     /// The ACL under the cursor: an entry's, or a selectable ACL heading's.
     pub fn selected_acl(&self) -> Option<String> {
         match self.lines.get(self.selected)? {
@@ -861,6 +934,7 @@ impl AccessLensState {
                 format!("acl {} {} {}", dir(r.inbound), r.acl_id, r.rule)
             }
             LensLine::Layer { acl: Some(id), .. } => format!("acl {id}"),
+            LensLine::Firewall { arn, .. } => format!("fw {arn}"),
             _ => return None,
         })
     }
@@ -881,6 +955,7 @@ impl AccessLensState {
             LensLine::Sg(i) => self.rows.get(*i)?.text(),
             LensLine::Nacl(i) => self.nacl_rows.get(*i)?.text(),
             LensLine::Note(t) => t.clone(),
+            LensLine::Firewall { text, .. } => text.clone(),
             LensLine::Blank => String::new(),
         })
     }
@@ -911,7 +986,7 @@ impl AccessLensState {
         for line in &both.lines {
             let indent = match line {
                 LensLine::Direction(_) | LensLine::Blank => "",
-                LensLine::Layer { .. } => "  ",
+                LensLine::Layer { .. } | LensLine::Firewall { .. } => "  ",
                 _ => "    ",
             };
             out.push_str(indent);
@@ -1144,6 +1219,16 @@ pub fn render_access_lens(app: &crate::app::App, area: Rect, frame: &mut Frame) 
                 LensLine::Sg(r) => sg_line(&st.rows[*r], selected, many_acls, widths),
                 LensLine::Nacl(r) => nacl_line(&st.nacl_rows[*r], selected),
                 LensLine::Note(t) => Line::styled(format!("      {t}"), Style::default().fg(theme::text_dim())),
+                LensLine::Firewall { text, .. } => {
+                    let mut style = Style::default().fg(theme::text_primary());
+                    if selected {
+                        style = style.add_modifier(Modifier::BOLD);
+                    }
+                    Line::from(vec![
+                        Span::styled(if selected { "▸ " } else { "  " }, Style::default().fg(theme::accent())),
+                        Span::styled(format!("  ⛨ {text}"), style),
+                    ])
+                }
                 LensLine::Blank => Line::raw(""),
             });
         }
@@ -1473,6 +1558,7 @@ mod tests {
                 LensLine::Sg(i) => format!("sg {}", st.rows[*i].ports),
                 LensLine::Nacl(_) => "entry".to_string(),
                 LensLine::Note(_) => "note".to_string(),
+                LensLine::Firewall { .. } => "firewall".to_string(),
                 LensLine::Blank => String::new(),
             })
             .collect();
@@ -1501,6 +1587,61 @@ mod tests {
         let text = st.as_text();
         assert!(text.contains("Subnets: subnet-1, subnet-2"), "{text}");
         assert!(text.contains("↑ Outbound"), "`e` opens both directions: {text}");
+    }
+
+    /// An internet gateway firewall on the resource's VPC wraps both
+    /// directions: first on the way in, last on the way out (#362). One on
+    /// another VPC isn't drawn.
+    #[test]
+    fn an_internet_gateway_firewall_on_the_vpc_wraps_both_directions() {
+        let mut st = AccessLensState::open(
+            "i-1".to_string(),
+            vec!["sg-a".to_string()],
+            vec!["subnet-1".to_string()],
+            AccessDirection::Both,
+        );
+        let fw = |vpc: &str, name: &str| IgwFirewall {
+            vpc_id: vpc.to_string(),
+            name: name.to_string(),
+            arn: format!("arn:aws:network-firewall:us-east-1:123456789012:firewall/{name}"),
+        };
+        st.igw_firewalls = vec![fw("vpc-1", "edge"), fw("vpc-other", "elsewhere")];
+        let mut g = group("sg-a", "app", vec![rule("TCP", "443", "0.0.0.0/0", None)], vec![rule("All", "All", "0.0.0.0/0", None)]);
+        g.vpc_id = Some("vpc-1".to_string());
+        st.add_groups(vec![g]);
+        st.add_nacls(vec![allow_all("acl-1", &["subnet-1"])]);
+
+        let shape: Vec<String> = st
+            .lines
+            .iter()
+            .filter_map(|l| match l {
+                LensLine::Direction(i) => Some(if *i { "IN" } else { "OUT" }.to_string()),
+                LensLine::Layer { text, .. } => Some(text.split(" · ").next().unwrap().to_string()),
+                LensLine::Firewall { text, .. } => Some(text.split(" · ").take(2).collect::<Vec<_>>().join(" · ")),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                "IN",
+                "Internet gateway firewall edge · inspects internet traffic before the NACL",
+                "① NACL acl-1",
+                "② Security groups",
+                "OUT",
+                "① Security groups",
+                "② NACL acl-1",
+                "Internet gateway firewall edge · inspects internet traffic after the NACL",
+            ]
+        );
+        st.goto_top();
+        assert_eq!(st.selected_firewall().as_deref(), Some("arn:aws:network-firewall:us-east-1:123456789012:firewall/edge"));
+        assert!(st.as_text().contains("Internet gateway firewall edge"));
+
+        // No firewall on the resource's VPC: no layer.
+        st.igw_firewalls = vec![fw("vpc-other", "elsewhere")];
+        st.rebuild();
+        assert!(!st.lines.iter().any(|l| matches!(l, LensLine::Firewall { .. })));
     }
 
     fn private_acl() -> NetworkAcl {

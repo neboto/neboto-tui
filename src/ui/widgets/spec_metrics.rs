@@ -321,11 +321,13 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
     let mut range = vec![Span::styled("  Range ", dim), Span::styled("[ ", Style::default().fg(theme::warning()))];
     let row = chunks[0];
     let mut x = row.x + Line::from(range.clone()).width() as u16;
-    for (i, r) in RANGES.iter().enumerate() {
-        let chip = format!(" {} {} ", i + 1, r.label());
+    // A fixed range is the one chip, not clickable, and says why.
+    let fixed = st.target.fixed_range;
+    for (i, r) in RANGES.iter().enumerate().filter(|(_, r)| fixed.is_none_or(|(f, _)| f == **r)) {
+        let chip = if fixed.is_some() { format!(" {} ", r.label()) } else { format!(" {} {} ", i + 1, r.label()) };
         let w = chip.chars().count() as u16;
         let right = (row.x + row.width).min(x + w);
-        if right > x {
+        if right > x && fixed.is_none() {
             app.push_click_region(
                 Rect { x, y: row.y, width: right - x, height: 1 },
                 crate::app::ClickAction::Press(crossterm::event::KeyCode::Char(char::from(b'1' + i as u8))),
@@ -340,6 +342,9 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
         range.push(Span::styled(chip, style));
     }
     range.push(Span::styled(" ]", Style::default().fg(theme::warning())));
+    if let Some((_, why)) = fixed {
+        range.push(Span::styled(format!(" {why}"), dim));
+    }
     // Which set is charted needs no word: a picked metric's footer offers
     // `d default set`, and the `a` list is plainly a list.
     range.push(Span::styled(format!("   {}", st.target.namespace), dim));
@@ -401,7 +406,9 @@ pub fn render_spec_metrics(app: &App, area: Rect, frame: &mut Frame) {
         let noun = st.target.breakdown.as_ref().map_or("rules", |b| b.rows_noun());
         let tables: Vec<(&str, &str)> =
             [tab.then_some(("Tab", noun)), samples.then_some(("x", "samples"))].into_iter().flatten().collect();
-        [&[("[/]", "range"), ("s", "stat"), ("a", "all")][..], &tables, back, changes, &[("y", "copy"), ("e", "edit"), ("w", "watch"), ("Esc", "close")]]
+        let keys: &[(&str, &str)] =
+            if st.target.fixed_range.is_some() { &[("s", "stat"), ("a", "all")] } else { &[("[/]", "range"), ("s", "stat"), ("a", "all")] };
+        [keys, &tables, back, changes, &[("y", "copy"), ("e", "edit"), ("w", "watch"), ("Esc", "close")]]
             .concat()
     };
     // A narrow pane drops hints from the end, but `Esc` stays the last.

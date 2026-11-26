@@ -114,6 +114,7 @@ pub fn has_sub_tabs(service: ServiceType) -> bool {
             | ServiceType::Dms
             | ServiceType::DataSync
             | ServiceType::Mq
+            | ServiceType::ApiPortal
             | ServiceType::Beanstalk
             | ServiceType::Athena
             | ServiceType::Glue
@@ -382,6 +383,7 @@ macro_rules! sub_tab_table {
             Dms => dms_view: DmsView [Tasks, Instances, Endpoints, Serverless],
             DataSync => datasync_view: DataSyncView [Tasks, Locations, Agents],
             Mq => mq_view: MqView [Brokers, Configurations],
+            ApiPortal => apiportal_view: ApiPortalView [Inventory, ManagedApis, Portals, Products, Discovery],
             Beanstalk => beanstalk_view: BeanstalkView [Environments, Applications, Versions],
             ControlTower => controltower_view: ControlTowerView [LandingZone, Controls, Baselines, Operations, Catalog, Compliance, Accounts],
             Athena => athena_view: AthenaView [Workgroups, DataCatalogs, Databases, Queries, SavedQueries],
@@ -651,7 +653,6 @@ pub enum MetricsKind {
     /// EC2 instances, Lambda functions, RDS instances and clusters.
     Spec,
     Cost,
-    S3,
     CwDashboard}
 
 /// Sub-tab view for Route53 resources
@@ -1041,6 +1042,52 @@ impl MqView {
     }
 }
 
+/// Sub-tab view for API Portal (Inventory / Managed APIs / Portals /
+/// Products / Discovery).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ApiPortalView {
+    Inventory,
+    ManagedApis,
+    Portals,
+    Products,
+    Discovery}
+
+impl ApiPortalView {
+    const ALL: [ApiPortalView; 5] = [
+        ApiPortalView::Inventory,
+        ApiPortalView::ManagedApis,
+        ApiPortalView::Portals,
+        ApiPortalView::Products,
+        ApiPortalView::Discovery,
+    ];
+
+    pub fn resource_type_filter(&self) -> &'static str {
+        match self {
+            ApiPortalView::Inventory => "API Inventory Item",
+            ApiPortalView::ManagedApis => "Managed API",
+            ApiPortalView::Portals => "API Portal",
+            ApiPortalView::Products => "API Product",
+            ApiPortalView::Discovery => "API Discovery"}
+    }
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|v| *v == self).unwrap_or(0)
+    }
+
+    fn next(self) -> Self {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
+    }
+
+    fn prev(self) -> Self {
+        Self::ALL[(self.index() + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+
+    /// The tab a loaded resource type lives on.
+    pub fn for_type(resource_type: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.resource_type_filter() == resource_type)
+    }
+}
+
 /// Sub-tab view for DMS (Tasks / Instances / Endpoints / Serverless).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum DmsView {
@@ -1306,6 +1353,7 @@ pub enum JumpView {
     Dms(DmsView),
     DataSync(DataSyncView),
     Mq(MqView),
+    ApiPortal(ApiPortalView),
     Beanstalk(BeanstalkView),
     S3Tables(S3TablesView),
     Ecr(EcrView),
@@ -2818,6 +2866,7 @@ pub struct App {
     pub dms_view: DmsView,
     pub datasync_view: DataSyncView,
     pub mq_view: MqView,
+    pub apiportal_view: ApiPortalView,
 
 
     // Athena sub-tab view + per-type detail sections
@@ -2940,9 +2989,6 @@ pub struct App {
 
     // Messaging (SQS/SNS) sub-tab and detail section state
     pub msg_view: MsgView,
-    /// S3 bucket daily storage metrics (`m` overlay), keyed by bucket name.
-    /// Fixed 30-day/daily window — no time-range knob (storage is daily).
-    pub s3_metrics: HashMap<String, crate::aws::services::s3::S3MetricsState>,
 
     // Config (Secrets Manager / SSM) sub-tab and detail section state
     pub ssm_view: SsmView,
@@ -3634,6 +3680,7 @@ impl App {
             dms_view: DmsView::Tasks,
             datasync_view: DataSyncView::Tasks,
             mq_view: MqView::Brokers,
+            apiportal_view: ApiPortalView::Inventory,
 
             athena_view: AthenaView::Workgroups,
             fms_view: FmsView::Policies,
@@ -3688,7 +3735,6 @@ impl App {
             neptune_view: NeptuneView::Clusters,
             elb_view: ElbView::LoadBalancers,
             msg_view: MsgView::Queues,
-            s3_metrics: HashMap::new(),
             ssm_view: SsmView::Parameters,
             config_view: ConfigView::Rules,
             waf_view: WafView::WebAcls,
@@ -3821,12 +3867,6 @@ impl App {
             }
             Event::FmsAdminLoaded { info } => {
                 self.fms_admin = Some(info);
-            }
-            Event::S3MetricsLoaded { bucket, data } => {
-                self.s3_metrics.insert(
-                    bucket,
-                    crate::aws::services::s3::S3MetricsState::Loaded(data),
-                );
             }
             Event::SesAccountLoaded { info } => {
                 self.ses_account = Some(info);
@@ -5113,12 +5153,6 @@ impl App {
                         KeyCode::Char('g') => self.cw_dashboard_scroll = 0,
                         KeyCode::Char('G') => self.cw_dashboard_scroll = max,
                         _ => {}
-                    }
-                }
-                // S3 storage is a fixed 30-day daily window; only refresh.
-                MetricsKind::S3 => {
-                    if let KeyCode::Char('r') = key.code {
-                        self.trigger_s3_metrics_load(event_tx);
                     }
                 }
                 // Cost daily-spend series is preloaded with the row; no extra keys.
@@ -6663,6 +6697,22 @@ impl App {
                 _ => None};
             if let Some(v) = view {
                 self.datasync_view = v;
+                self.update_search();
+                return Ok(());
+            }
+        }
+
+        // API Portal (Inventory / Managed APIs / Portals / Products / Discovery) sub-tab switching
+        if !self.search_active && self.current_service == Some(ServiceType::ApiPortal) {
+            let view = match key.code {
+                KeyCode::Char(c @ '1'..='5') if key.modifiers.is_empty() => {
+                    Some(ApiPortalView::ALL[c as usize - '1' as usize])
+                }
+                KeyCode::Tab => Some(self.apiportal_view.next()),
+                KeyCode::BackTab => Some(self.apiportal_view.prev()),
+                _ => None};
+            if let Some(v) = view {
+                self.apiportal_view = v;
                 self.update_search();
                 return Ok(());
             }
@@ -8985,6 +9035,7 @@ impl App {
             Some(ServiceType::Dms) => Some(self.dms_view.resource_type_filter()),
             Some(ServiceType::DataSync) => Some(self.datasync_view.resource_type_filter()),
             Some(ServiceType::Mq) => Some(self.mq_view.resource_type_filter()),
+            Some(ServiceType::ApiPortal) => Some(self.apiportal_view.resource_type_filter()),
             Some(ServiceType::Beanstalk) => Some(self.beanstalk_view.resource_type_filter()),
             Some(ServiceType::ControlTower) => {
                 Some(self.controltower_view.resource_type_filter())
@@ -10698,6 +10749,10 @@ impl App {
             Arc::new(crate::aws::services::mq::MqService::new(aws_clients)),
         );
         services.insert(
+            ServiceType::ApiPortal,
+            Arc::new(crate::aws::services::apiportal::ApiPortalService::new(aws_clients)),
+        );
+        services.insert(
             ServiceType::Beanstalk,
             Arc::new(crate::aws::services::beanstalk::BeanstalkService::new(aws_clients)),
         );
@@ -11217,8 +11272,10 @@ impl App {
     pub(crate) fn chart_watch_interval(&self) -> Option<Duration> {
         const FLOOR: Duration = Duration::from_secs(60);
         match self.metrics_in_pane? {
+            // A fixed range is a daily series (S3's storage).
+            MetricsKind::Spec if self.spec_metrics.as_ref().is_some_and(|m| m.target.fixed_range.is_some()) => None,
             MetricsKind::Spec | MetricsKind::CwDashboard => Some(self.watch.interval.max(FLOOR)),
-            MetricsKind::Cost | MetricsKind::S3 => None,
+            MetricsKind::Cost => None,
         }
     }
 
@@ -12865,6 +12922,31 @@ impl App {
                 event_tx,
                 async move {
                     crate::aws::services::cloudfront::fetch_invalidations(client, id)
+                        .await
+                        .map_err(crate::error::Error::message)
+                },
+            );
+        }
+    }
+
+    /// Lazy-load a multi-tenant distribution's tenants. A direct
+    /// distribution has none, so it never fetches (the section says so).
+    pub(crate) fn trigger_cf_tenants_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        if let Some(dist) = self.get_selected_resource().and_then(|r| {
+            r.as_any()
+                .downcast_ref::<crate::aws::services::cloudfront::CfDistribution>()
+        }) {
+            if !dist.is_multi_tenant() {
+                return;
+            }
+            let id = dist.id.clone();
+            let client = self.aws_clients.cloudfront_client();
+            self.trigger_lazy(
+                |app| &mut app.lazy.cf_tenants,
+                id.clone(),
+                event_tx,
+                async move {
+                    crate::aws::services::cloudfront::fetch_distribution_tenants(client, id)
                         .await
                         .map_err(crate::error::Error::message)
                 },
@@ -18407,11 +18489,10 @@ impl App {
         self.seed_timeline(event_tx, TimelineTarget::Markers);
     }
 
-    /// S3's storage charts span 30 days, as does the spec view's `5`.
+    /// The spec view's `5` (and S3's fixed range) spans 30 days.
     fn chart_markers_need_30d(&self) -> bool {
         match self.metrics_in_pane {
-            Some(MetricsKind::S3) => true,
-            Some(MetricsKind::Spec) => self.spec_metrics_range == MetricsTimeRange::ThirtyDays,
+            Some(MetricsKind::Spec) => self.spec_metrics.as_ref().is_some_and(|m| m.range == MetricsTimeRange::ThirtyDays),
             _ => false,
         }
     }
@@ -18915,6 +18996,7 @@ impl App {
             title, ids, subnets, direction,
         );
         (st.lb_by_sg, st.elb_loaded) = self.cached_lb_security_groups();
+        st.igw_firewalls = self.cached_igw_firewalls();
         st.add_groups(self.cached_security_groups(&st.sg_ids));
         st.add_nacls(self.cached_network_acls(&st.subnet_ids));
         let (missing, missing_subnets) = (st.missing(), st.missing_subnets());
@@ -19006,6 +19088,36 @@ impl App {
     /// Security group id → the load balancers carrying it (`"ALB my-alb"`),
     /// from the warm ELB cache (or the on-screen ELB list); the bool says
     /// whether any ELB data was available at all.
+    /// Internet gateway firewalls from the warm Network Firewall cache (or
+    /// the on-screen list), for the `N` lens's outermost layer. A cold
+    /// cache adds nothing: most VPCs have none, so saying "not loaded" on
+    /// every lens would be noise.
+    fn cached_igw_firewalls(&self) -> Vec<crate::ui::widgets::access_lens::IgwFirewall> {
+        use crate::aws::services::network_firewall::NfwFirewall;
+        let mut out: Vec<crate::ui::widgets::access_lens::IgwFirewall> = Vec::new();
+        let cached = self
+            .cache
+            .get_ref(&ServiceType::NetworkFirewall, &self.current_region, None)
+            .into_iter()
+            .flatten();
+        let on_screen = (!self.all_search_mode && self.current_service == Some(ServiceType::NetworkFirewall))
+            .then_some(self.resources.iter())
+            .into_iter()
+            .flatten();
+        for r in cached.chain(on_screen) {
+            if let Some(f) = r.as_any().downcast_ref::<NfwFirewall>().filter(|f| f.is_igw_firewall()) {
+                if !out.iter().any(|x| x.arn == f.arn) {
+                    out.push(crate::ui::widgets::access_lens::IgwFirewall {
+                        vpc_id: f.vpc_id.clone(),
+                        name: f.name.clone(),
+                        arn: f.arn.clone(),
+                    });
+                }
+            }
+        }
+        out
+    }
+
     fn cached_lb_security_groups(
         &self,
     ) -> (std::collections::HashMap<String, Vec<String>>, bool) {
@@ -19170,8 +19282,10 @@ impl App {
             // Refetch every group (rules may have changed since the cache).
             KeyCode::Char('r') => {
                 let lbs = self.cached_lb_security_groups();
+                let fws = self.cached_igw_firewalls();
                 let ids = self.access_in_pane.as_mut().map(|st| {
                     (st.lb_by_sg, st.elb_loaded) = lbs;
+                    st.igw_firewalls = fws;
                     st.groups.clear();
                     st.all_rows.clear();
                     st.nacls.clear();
@@ -19191,6 +19305,7 @@ impl App {
                         .and_then(|row| row.jump_group())
                         .map(|id| (ServiceType::EC2, id, "Security Group"))
                         .or_else(|| st.selected_acl().map(|id| (ServiceType::VPC, id, "NetworkAcl")))
+                        .or_else(|| st.selected_firewall().map(|arn| (ServiceType::NetworkFirewall, arn, "Firewall")))
                 });
                 if let Some((svc, id, rtype)) = target {
                     // Record with the lens still open, so going back reopens it.
@@ -20817,6 +20932,7 @@ impl App {
             JumpView::Dms(v) => self.dms_view = *v,
             JumpView::DataSync(v) => self.datasync_view = *v,
             JumpView::Mq(v) => self.mq_view = *v,
+            JumpView::ApiPortal(v) => self.apiportal_view = *v,
             JumpView::Beanstalk(v) => self.beanstalk_view = *v,
             JumpView::S3Tables(v) => self.s3tables_view = *v,
             JumpView::Ecr(v) => self.ecr_view = *v,
@@ -20962,6 +21078,30 @@ impl App {
                     // (a later batch / `*Loaded` event will resolve it) — clearing
                     // here would strand the bookmark on row 0. Only give up once
                     // the load is fully done and there *is* a populated list.
+                    // A group member the Users list doesn't hold (past its
+                    // cap, or gone): the search shows its id over an empty
+                    // list, and this says why, once the load is done.
+                    if !self.loading
+                        && self.current_service == Some(ServiceType::Cognito)
+                        && self.cognito_view == CognitoView::Users
+                        && !self.resources.iter().any(|r| r.id() == id)
+                    {
+                        use crate::aws::services::cognito::MAX_COGNITO_USERS;
+                        let user = id.split_once('/').map_or(id.as_str(), |(_, u)| u);
+                        let loaded = self.resources.iter().filter(|r| r.resource_type() == "Cognito User").count();
+                        self.success_message = Some(if loaded >= MAX_COGNITO_USERS {
+                            format!("{user} isn't among the first {MAX_COGNITO_USERS} users loaded (across all pools)")
+                        } else {
+                            format!("{user} isn't in the Users list")
+                        });
+                        self.success_message_time = Some(Instant::now());
+                        self.pending_jump = None;
+                        self.pending_jump_region = None;
+                        self.pending_jump_focus_details = false;
+                        self.pending_jump_section = None;
+                        self.pending_jump_lens = None;
+                        return;
+                    }
                     if !self.loading && !self.filtered_resources.is_empty() {
                         self.pending_jump = None;
                         self.pending_jump_region = None;
@@ -21567,6 +21707,7 @@ impl App {
             Some(ServiceType::Dms) => JumpView::Dms(self.dms_view),
             Some(ServiceType::DataSync) => JumpView::DataSync(self.datasync_view),
             Some(ServiceType::Mq) => JumpView::Mq(self.mq_view),
+            Some(ServiceType::ApiPortal) => JumpView::ApiPortal(self.apiportal_view),
             Some(ServiceType::Beanstalk) => JumpView::Beanstalk(self.beanstalk_view),
             Some(ServiceType::S3Tables) => JumpView::S3Tables(self.s3tables_view),
             Some(ServiceType::Ecr) => JumpView::Ecr(self.ecr_view),
@@ -21671,7 +21812,7 @@ impl App {
                 MetricsKind::CwDashboard => {
                     (!self.cw_dashboard_range_from_body).then_some(self.cw_dashboard_metrics_time_range)
                 }
-                MetricsKind::Cost | MetricsKind::S3 => None,
+                MetricsKind::Cost => None,
             };
             // The charts' metric cursor, past the first row (which a fresh
             // open is on anyway) — and charted alone when the view is
@@ -23562,6 +23703,8 @@ impl App {
                     .or_else(|| self.eb_row_jump_target(k, v))
                     .or_else(|| self.appsync_row_jump_target(k, v))
                     .or_else(|| self.mq_row_jump_target(k, v))
+                    .or_else(|| self.apiportal_row_jump_target(k, v))
+                    .or_else(|| self.cognito_row_jump_target(k, v))
                     .or_else(|| {
                         crate::ui::widgets::details_pane::resource_jump_target(k, v, current)
                             .filter(|t| self.generic_jump_allowed(t, v))
@@ -24516,7 +24659,6 @@ impl App {
                 .map(|r| r.as_any().is::<crate::aws::services::fsx::FsxVolume>())
                 .unwrap_or(false)
             || self.selected_bedrock_metric_target().is_some()
-            || self.selected_s3_metric_bucket().is_some()
             || self.is_selected_transfer_server()
             || self.is_selected_r53_health_check()
             || self.is_selected_ses_resource()
@@ -27248,6 +27390,7 @@ impl App {
                     crate::aws::services::cloudfront::CfDistributionDetailSection::from_index(self.detail_section_idx),
                     tags_state,
                     self.lazy.cf_invalidations.get(&dist.id),
+                    self.lazy.cf_tenants.get(&dist.id),
                 );
             }
             if let Some(f) = resource
@@ -27778,6 +27921,50 @@ impl App {
                     return dp::datasync_agent_section_lines(
                         a,
                         DataSyncAgentDetailSection::from_index(self.detail_section_idx),
+                    );
+                }
+            }
+            {
+                use crate::aws::services::apiportal as ap;
+                use crate::ui::widgets::details_pane as dp;
+                let r = resource.as_any();
+                if let Some(i) = r.downcast_ref::<ap::ApiInventoryItem>() {
+                    return dp::apiportal_item_section_lines(i, ap::ApiItemDetailSection::from_index(self.detail_section_idx));
+                }
+                if let Some(m) = r.downcast_ref::<ap::ManagedApi>() {
+                    return dp::apiportal_managed_section_lines(
+                        m,
+                        ap::ManagedApiDetailSection::from_index(self.detail_section_idx),
+                        self.lazy.apiportal_events.get(&m.id),
+                    );
+                }
+                if let Some(p) = r.downcast_ref::<ap::ApiPortal>() {
+                    let products: Vec<&ap::ApiProduct> =
+                        self.resources.iter().filter_map(|r| r.as_any().downcast_ref::<ap::ApiProduct>()).collect();
+                    return dp::apiportal_portal_section_lines(
+                        p,
+                        ap::ApiPortalDetailSection::from_index(self.detail_section_idx),
+                        &products,
+                    );
+                }
+                if let Some(p) = r.downcast_ref::<ap::ApiProduct>() {
+                    let portals: Vec<&ap::ApiPortal> = self
+                        .resources
+                        .iter()
+                        .filter_map(|r| r.as_any().downcast_ref::<ap::ApiPortal>())
+                        .filter(|portal| portal.product_arns.contains(&p.arn))
+                        .collect();
+                    return dp::apiportal_product_section_lines(
+                        p,
+                        ap::ApiProductDetailSection::from_index(self.detail_section_idx),
+                        self.lazy.apiportal_product_apis.get(&p.id),
+                        &portals,
+                    );
+                }
+                if let Some(d) = r.downcast_ref::<ap::ApiDiscovery>() {
+                    return dp::apiportal_discovery_section_lines(
+                        d,
+                        ap::ApiDiscoveryDetailSection::from_index(self.detail_section_idx),
                     );
                 }
             }
@@ -33773,6 +33960,7 @@ impl App {
             extra: Vec::new(),
             breakdown: None,
             resolve: None,
+            fixed_range: None,
         };
         macro_rules! is {
             ($t:ty) => {
@@ -34159,6 +34347,16 @@ impl App {
                 hint: Some("No jobs in the window: a vault publishes only for periods with a job"),
                 ..target("Backup vault", "AWS/Backup", dim("BackupVaultName", &v.name), m::BACKUP_VAULT)
             }
+        } else if let Some(b) = is!(s::s3::S3Bucket) {
+            // Another region's bucket (a stub) publishes in that region.
+            if b.region != self.current_region.as_str() {
+                return None;
+            }
+            MetricTarget {
+                hint: Some("Nothing yet: S3 publishes a bucket's storage metrics once a day, the first a day or two after it's created"),
+                fixed_range: Some((MetricsTimeRange::ThirtyDays, "S3 publishes storage metrics once a day")),
+                ..target("S3 bucket", "AWS/S3", dim("BucketName", &b.name), m::S3_BUCKET)
+            }
         } else if self.is_selected_ses_resource() {
             // Account-wide: the same set whichever identity is selected.
             MetricTarget {
@@ -34353,6 +34551,12 @@ impl App {
                     self.copy_to_clipboard(&name, "name");
                 }
             }
+            // A daily set (S3's storage) means nothing over a shorter range.
+            KeyCode::Char('[' | ']' | '1'..='5') if st.target.fixed_range.is_some() => {
+                if let Some((r, why)) = st.target.fixed_range {
+                    self.success_message = Some(format!("{why}: the range stays at {}", r.label()));
+                }
+            }
             KeyCode::Char(']') => {
                 st.range = crate::aws::metrics::step_range(st.range, 1);
                 self.spec_metrics_range = st.range;
@@ -34428,6 +34632,7 @@ impl App {
             // An alarm with a long period opens on a range that holds one,
             // without changing the range the other kinds open on.
             let range = match (range, self.is_selected_cw_alarm().then(|| self.default_alarm_metrics_range())) {
+                _ if target.fixed_range.is_some() => target.fixed_range.map_or(self.spec_metrics_range, |(r, _)| r),
                 (Some(r), _) => r,
                 (None, Some(r)) if r.duration_secs() > self.spec_metrics_range.duration_secs() => r,
                 _ => self.spec_metrics_range,
@@ -34449,9 +34654,6 @@ impl App {
         } else if self.is_selected_cost_item() {
             // Daily series is already loaded with the row — no fetch.
             Some(MetricsKind::Cost)
-        } else if self.selected_s3_metric_bucket().is_some() {
-            self.trigger_s3_metrics_load(event_tx);
-            Some(MetricsKind::S3)
         } else {
             None
         };
@@ -34491,38 +34693,6 @@ impl App {
         }
         None
     }
-
-    /// The bucket name of a `m`-able S3 bucket — a real (non-stub) bucket in the
-    /// current region. Other-region stubs have no local CloudWatch data, so they
-    /// aren't offered. Returns the bucket name (the `BucketName` dimension).
-    fn selected_s3_metric_bucket(&self) -> Option<String> {
-        let r = self.get_selected_resource()?;
-        let b = r
-            .as_any()
-            .downcast_ref::<crate::aws::services::s3::S3Bucket>()?;
-        if b.region == self.current_region.as_str() {
-            Some(b.name.clone())
-        } else {
-            None
-        }
-    }
-
-    fn trigger_s3_metrics_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
-        if let Some(bucket) = self.selected_s3_metric_bucket() {
-            self.s3_metrics
-                .insert(bucket.clone(), crate::aws::services::s3::S3MetricsState::Loading);
-            let cw = self.aws_clients.cloudwatch_client();
-            let tx = event_tx.clone();
-            tokio::spawn(async move {
-                if let Ok(data) =
-                    crate::aws::services::s3::fetch_s3_bucket_metrics(cw, bucket.clone()).await
-                {
-                    let _ = tx.send(crate::event::Event::S3MetricsLoaded { bucket, data });
-                }
-            });
-        }
-    }
-
 
     /// The (tgw_id, attachment_id, map key) for a `m`-able Transit Gateway
     /// resource — the gateway itself or one attachment.
@@ -35352,6 +35522,94 @@ impl App {
         );
     }
 
+    // ── API Portal: lazy sections, row jumps, empty inventory ────────────────
+
+    /// A managed API's security events, last 30 days.
+    pub(crate) fn trigger_apiportal_events_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(id) = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::apiportal::ManagedApi>())
+            .map(|m| m.id.clone())
+        else {
+            return;
+        };
+        let client = self.aws_clients.apiportal_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.apiportal_events,
+            id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::apiportal::fetch_managed_api_events(client, id)
+                    .await
+                    .map_err(|e| format!("Events unavailable: {}", e))
+            },
+        );
+    }
+
+    /// The managed APIs a product includes.
+    pub(crate) fn trigger_apiportal_product_apis_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(id) = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::apiportal::ApiProduct>())
+            .map(|p| p.id.clone())
+        else {
+            return;
+        };
+        let client = self.aws_clients.apiportal_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.apiportal_product_apis,
+            id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::apiportal::fetch_product_apis(client, id)
+                    .await
+                    .map_err(|e| format!("APIs unavailable: {}", e))
+            },
+        );
+    }
+
+    /// Under `@apiportal`, a row whose value is the id or ARN of another
+    /// loaded API Portal resource leads to it: an item's Managed API, a
+    /// managed API's Inventory Item, a portal's products, a product's
+    /// portals and APIs. Keyed on the value, not the label; the selected
+    /// row's own id leads nowhere.
+    pub fn apiportal_row_jump_target(&self, _key: &str, value: &str) -> Option<JumpTarget> {
+        if self.current_service != Some(ServiceType::ApiPortal) {
+            return None;
+        }
+        let v = value.trim();
+        if v.is_empty() || self.get_selected_resource().is_some_and(|r| r.id() == v) {
+            return None;
+        }
+        let arn_of = |r: &dyn crate::aws::resource::Resource| -> Option<String> {
+            use crate::aws::services::apiportal as ap;
+            let a = r.as_any();
+            a.downcast_ref::<ap::ManagedApi>()
+                .map(|m| m.arn.clone())
+                .or_else(|| a.downcast_ref::<ap::ApiPortal>().map(|p| p.arn.clone()))
+                .or_else(|| a.downcast_ref::<ap::ApiProduct>().map(|p| p.arn.clone()))
+        };
+        let r = self
+            .resources
+            .iter()
+            .find(|r| r.id() == v || arn_of(r.as_ref()).as_deref() == Some(v))?;
+        if self.get_selected_resource().is_some_and(|s| s.id() == r.id()) {
+            return None;
+        }
+        let view = ApiPortalView::for_type(r.resource_type())?;
+        Some(JumpTarget { service: ServiceType::ApiPortal, view: JumpView::ApiPortal(view), id: r.id().to_string() })
+    }
+
+    /// Why the Inventory tab is empty, from the account's discovery row —
+    /// `None` when discovery looks healthy (or hasn't loaded).
+    pub fn apiportal_empty_inventory_reason(&self) -> Option<(String, String)> {
+        self.resources
+            .iter()
+            .filter_map(|r| r.as_any().downcast_ref::<crate::aws::services::apiportal::ApiDiscovery>())
+            .find(|d| !d.is_organization())?
+            .empty_inventory_reason()
+    }
+
     // ── Amazon MQ: log location, lazy sections, row jumps ────────────────────
 
     fn selected_mq_broker(&self) -> Option<&crate::aws::services::mq::MqBroker> {
@@ -35413,6 +35671,31 @@ impl App {
     /// Used By. Keyed on the value, not the label; the selected row's own id
     /// leads nowhere. Both tabs load together, so a configuration a broker
     /// names is in the list unless its list call failed.
+    /// Under `@cognito`, a member row of a user pool's Groups section
+    /// (`"    {label}"`) leads to that user on the Users tab. Matched against
+    /// the pool's loaded members, and jumped by the stored `username`: the
+    /// row shows the email instead when the username is a `sub`
+    /// (`member_label`). A user past `MAX_COGNITO_USERS` isn't in the list;
+    /// `resolve_pending_jump` says so.
+    pub fn cognito_row_jump_target(&self, key: &str, _value: &str) -> Option<JumpTarget> {
+        use crate::aws::services::cognito::CognitoUserPool;
+        if self.current_service != Some(ServiceType::Cognito) {
+            return None;
+        }
+        let label = key.strip_prefix("    ").filter(|l| !l.starts_with(' ') && !l.is_empty())?;
+        let pool = self.get_selected_resource()?.as_any().downcast_ref::<CognitoUserPool>()?;
+        let Some(crate::lazy::Lazy::Loaded(groups)) = self.lazy.cognito_groups.get(&pool.id) else {
+            return None;
+        };
+        let member =
+            groups.groups.iter().filter_map(|g| g.members.as_ref().ok()).flatten().find(|m| m.label == label)?;
+        Some(JumpTarget {
+            service: ServiceType::Cognito,
+            view: JumpView::Cognito(CognitoView::Users),
+            id: format!("{}/{}", pool.id, member.username),
+        })
+    }
+
     pub fn mq_row_jump_target(&self, _key: &str, value: &str) -> Option<JumpTarget> {
         if self.current_service != Some(ServiceType::Mq) {
             return None;

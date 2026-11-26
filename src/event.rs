@@ -248,11 +248,6 @@ pub enum Event {
 
 
 
-    /// S3 bucket daily storage metrics (`m` overlay), keyed by bucket name.
-    S3MetricsLoaded {
-        bucket: String,
-        data: crate::aws::services::s3::S3MetricsData,
-    },
 
 
 

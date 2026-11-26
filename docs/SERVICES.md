@@ -1175,7 +1175,13 @@ the service you're touching.
   rows show the email (or phone) when the username is the user's `sub` — an
   email/phone sign-in pool's usernames are UUIDs (`member_label`). Groups
   sort by precedence (lower wins when a user's groups carry IAM roles); the
-  role ARN row jumps via the IAM classifier.
+  role ARN row jumps via the IAM classifier. A **member row** (`"    {label}"`)
+  jumps to the user on the Users tab (`cognito_row_jump_target`, #230): it's
+  matched against the pool's loaded members and jumps by the stored
+  `username`, never the row text, which may be the email. The Users list is
+  capped at `MAX_COGNITO_USERS=500` across all pools, so a member past the cap
+  isn't there: the jump says so in the status bar instead of landing on
+  row 0. Don't rename the member row's shape without the classifier.
 - **AppSync** (`@appsync`, `appsync.rs`, **aws-sdk-appsync**) — single list of
   **GraphQL APIs** (standard + merged); Event APIs (`ListApis`, channel
   namespaces) are not listed yet. `ListGraphqlApis` returns the full config, so
@@ -1184,7 +1190,12 @@ the service you're touching.
   the section runs `ListTypes` (SDL, to tell object types from enums/inputs —
   only `type`/`extend type` definitions can carry resolvers) then one
   `ListResolvers` per type, 4 in flight, capped at `MAX_RESOLVER_TYPES=100`
-  with Query/Mutation/Subscription walked first so the cap never drops a root.
+  with the root types walked first so the cap never drops one. Roots are
+  Query/Mutation/Subscription unless the schema renames them: only when the
+  cap would cut (more than 100 object types) does the section also read the
+  SDL (`GetIntrospectionSchema`) for its `schema { query: … }` block
+  (`schema_roots`, best-effort; a failure keeps the defaults). Under the cap
+  every type is walked anyway, so renamed roots then just sort by name (#211).
   The cut and any per-type failure render as `⚠` rows in the pane. The
   Resolvers hook also fires Functions so pipeline steps read by name rather
   than function id. **API keys are redacted at ingestion**
@@ -1280,8 +1291,10 @@ the service you're touching.
   split pane Overview / Query). No query execution; SQL renders inline as
   plain content lines (`push_sql_lines`) — `e`/copy get the full text. `m` on a
   **workgroup** charts `AWS/Athena` (dim `WorkGroup`): data scanned, total/
-  engine/queue/planning time, DPU consumed (capacity WGs only; empty when the
-  workgroup has metric publishing disabled). `fmt_bytes`/`fmt_millis` helpers
+  engine/queue/planning time (empty when the workgroup has metric publishing
+  disabled). No `DPUConsumed`: AWS publishes it only under
+  `CapacityReservation`, never `WorkGroup`, so per workgroup it was always
+  empty (#341). `fmt_bytes`/`fmt_millis` helpers
   live in `athena.rs` (details_pane has its own `fmt_bytes`).
 - **Glue** (`@glue`, `glue.rs`) — browse-only, one `ServiceType`, five sub-tabs
   streamed as sequential error-tolerant batches (a permission gap on any one API
@@ -1325,7 +1338,7 @@ the service you're touching.
   `App.ses_account` and folded into every identity's Overview (the single lazy-ish
   bit; **a zero-identity account won't surface it** — documented limitation). `m`
   charts **account-wide** `AWS/SES` metrics (Send/Delivery/Bounce/Complaint/
-  Reject/Rendering Failures, and the bounce / complaint rates against SES's
+  Reject/RenderingFailure, and the bounce / complaint rates against SES's
   review and pause thresholds) — **no dimensions**, so the same set serves any
   SES row (`metrics::SES_ACCOUNT`; its `a` lists only `AWS/SES`).
 - **MSK** (`@msk`, `msk.rs`, **aws-sdk-kafka**) — browse-only, single-list of
@@ -1519,6 +1532,57 @@ the service you're touching.
   it drops every client connection.
   **Console links** (`#/brokers/details?id=`, `#/configurations/details?id=`)
   are unverified. **Demo**: no fixtures — `@mq` lists empty under `--demo`.
+- **API Portal** (`@apiportal` / `@apiinventory` / `@shadowapis` /
+  `@devportal`, `apiportal.rs`, **aws-sdk-apiportal**) — browse-only, five
+  sub-tabs: **Inventory** (the APIs discovery found behind API Gateway,
+  load balancers and CloudFront), **Managed APIs**, **Portals**,
+  **Products**, **Discovery** (#361). Regional. The SDK is 1.0.0 and needed
+  the same smithy-runtime + `aws-config` bump as Network Firewall 1.143.
+  **Load**: discovery first (`GetDiscoveryConfiguration` +
+  `ListDiscoveryStatuses`, and `GetOrganizationDiscoveryConfiguration`,
+  which only the management / delegated-admin account can read — its
+  failure is silent), then the inventory (capped at 5000 items, warned),
+  then `ListManagedApis` + `GetManagedApi` each at `buffered(5)` (the
+  summary has no findings or tags; a failed get keeps the summary row,
+  `described: false`), then `ListPortals` and `ListProducts`. Every list
+  failing is the only fatal case. `GetDiscoveryConfiguration`'s
+  `ResourceNotFoundException` means never configured: no warning, the
+  Discovery row says "not configured".
+  **Empty inventory**: `resource_list.rs` asks
+  `App::apiportal_empty_inventory_reason` (the account discovery row's
+  `empty_inventory_reason`): not configured, disabled, a source's crawler
+  `FAILED` (with its reason), or still `PROVISIONING`. A healthy
+  configuration falls through to the ordinary empty state.
+  **Ids**: an inventory item's signature (`GET host:port /path`) repeats
+  across resources that answer the same host and path, so its id is the
+  signature + a space + the resource ARN; `name()` is the signature.
+  `GetApiInventoryItem` is not called — it adds only the managed API id,
+  which the load gets by matching signature + resource ARN against the
+  managed API list (an API managed by *another* account has no local row,
+  and the item says "another account in the organization"). Managed APIs,
+  portals and products are keyed by their ids.
+  **Jumps**: `apiportal_row_jump_target` follows a row whose value is the
+  id **or ARN** of a loaded API Portal row, under `@apiportal` only (a
+  portal names its products by ARN). The resource behind an API is a
+  generic ARN jump: ELB and CloudFront already had arms; API Gateway's
+  `arn:aws:apigateway:<region>::/restapis/<id>/stages/<stage>` (and
+  `/apis/<id>/…` for HTTP) got one here, landing on the API.
+  **Enums**: every model enum (`DiscoverySource`, `Workload`,
+  `FindingReason`, `Classification`, …) is kept as its wire string and
+  rendered lower-cased; a value added later reads as sent instead of
+  failing. **Findings**: `postureStatus` `TRUE` means the posture is
+  *satisfied*; `FALSE` is the failing one (with a `reason`).
+  **Lazy**: a managed API's **Events** (`ListManagedApiEvents`, the API's
+  default last 30 days, newest 100) and a product's **APIs**
+  (`ListManagedApis` filtered by `productId`; the product Overview
+  previews it, so it shares the hook).
+  **Read-only**: `StartDiscovery`, `StopDiscovery`, every `Put*`,
+  `Create*`, `Update*`, `Delete*`, `Associate*` and tagging call are never
+  made. **`C`**: the matching `get-*` command. **Not done**: tags for
+  portals and products (`ListTagsForResource` per row), console links
+  (unknown URL shape — `console_url` is `None`), demo fixtures, and the
+  `@audit` checks from #361 (public + shadow + no WAF, worst for MCP/LLM;
+  managed zombies) — #369. Checked against a live account.
 - **DocumentDB** (`@docdb` / `@documentdb`) and **Neptune** (`@neptune`) —
   not service files: both are `rds::RdsService::for_family`, the RDS client
   and the RDS resource types listed under one engine (#96). DocumentDB and
@@ -1699,6 +1763,25 @@ the service you're touching.
   `resource_list.rs` renders a "not the Firewall Manager administrator" empty
   state (with the admin account id when visible). `OUT_OF_ADMIN_SCOPE`
   policies/sets read as unavailable. No CloudWatch namespace → no `m`.
+- **Network Firewall** (`@anfw`, `network_firewall.rs`) — Firewalls /
+  Policies / Rule groups. A firewall's **mode** (#362, `NfwModes`, the list's
+  second column and the Overview's `Mode` row) comes from `DescribeFirewall`
+  fields that need `aws-sdk-networkfirewall` ≥ 1.143 (and with it the newer
+  shared smithy runtime): an **internet gateway firewall**
+  (`IgwFirewallConfiguration`, enforcement `POLICY_CONTROLLED`) is created and
+  managed by Network Security Manager and inspects everything between the VPC
+  and its internet gateway, with no firewall subnets and no route-table hop;
+  **proxy** mode carries listeners, its own certificate/domain, an endpoint
+  VPC, NAT gateways it creates and a `TransparentFilteringNatScope`; a
+  **transit gateway** firewall carries its TGW id. Because an internet gateway
+  firewall never shows up in a route table, the `N` lens draws it as the
+  outermost layer for any resource in that VPC — first inbound, last
+  outbound, `⏎` goes to it — read from the **warm** Network Firewall cache
+  only (`cached_igw_firewalls`). A cold cache adds nothing and says nothing:
+  most VPCs have none, so a "not loaded" note on every lens would be noise.
+  Its rules live in the policy Network Security Manager attaches and aren't
+  evaluated there. An `@audit` check for "internet gateway with no firewall"
+  was rejected for the same reason — most accounts would fail it.
 - **CodeSuite** (`@code`) — Repos/Build Projects/Pipelines/**Deployments**(4)/
   **Artifacts**(5)/**Executions**(6)/**Pull Requests**(7), five clients. A
   file-path buildspec is
@@ -1926,8 +2009,19 @@ the service you're touching.
   behaviors fall back to raw ids); distributions stream next, then the policy
   rows, then Functions + OACs as error-tolerant batches.
   - **Distributions** — parsed eagerly from the `DistributionSummary` (no extra
-    describe), 7-section split pane Overview / Origins / Behaviors / **Errors**
-    (custom error responses) / Restrictions / **Invalidations** / Tags(lazy).
+    describe), 8-section split pane Overview / Origins / Behaviors / **Errors**
+    (custom error responses) / Restrictions / **Invalidations** / **Tenants** /
+    Tags(lazy).
+    **Tenants** (#363) is a lazy `ListDistributionTenants` filtered to the
+    distribution (`lazy.cf_tenants`, capped `MAX_TENANTS=100` with a "first N"
+    header): each tenant's domains (inactive ⚠), connection group and the
+    customizations that override the distribution's WAF / certificate / geo
+    settings, their ARNs jumpable. It only fetches when the summary's
+    `ConnectionMode` is `tenant-only` (the Overview then says "Multi-tenant");
+    a direct distribution has no tenants, so the section says so instead of
+    spending a call. Origins show an **Origin mTLS Cert** row (the ACM ARN in
+    `CustomOriginConfig.OriginMtlsConfig`, jumps to ACM) when the origin asks
+    for a client certificate.
     Invalidations is a lazy `ListInvalidations` (newest-first, capped
     `MAX_INVALIDATIONS=20` with a "latest N of M" header; each row's paths come
     from a per-id `GetInvalidation`, capped 8 shown with "+N more"; in-progress

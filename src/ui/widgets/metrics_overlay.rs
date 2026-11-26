@@ -1,7 +1,6 @@
 use crate::app::{
     App, MetricsKind,
 };
-use crate::aws::services::s3::{S3MetricsData, S3MetricsState};
 use crate::aws::services::cloudwatch::{
     CwAnnotation, CwDashboardMetricsData, CwDashboardMetricsState, CwDashboardWidget,
 };
@@ -242,7 +241,6 @@ fn render_metrics_kind(app: &App, kind: MetricsKind, area: Rect, frame: &mut Fra
         MetricsKind::Spec => super::spec_metrics::render_spec_metrics(app, area, frame),
         MetricsKind::CwDashboard => render_cw_dashboard_metrics_overlay(app, area, frame),
         MetricsKind::Cost => render_cost_metrics_overlay(app, area, frame),
-        MetricsKind::S3 => render_s3_metrics_overlay(app, area, frame),
     }
 }
 
@@ -288,36 +286,6 @@ fn container_colors() -> [Color; 8] {
 
 // ── S3 storage metrics overlay ────────────────────────────────────────────────
 
-pub fn render_s3_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
-    let (name, id) = app
-        .get_selected_resource()
-        .map(|r| (r.name().to_string(), r.id().to_string()))
-        .unwrap_or_else(|| ("Unknown".to_string(), String::new()));
-
-    // S3 storage metrics are daily — a fixed 30-day window, no range knob.
-    let chunks = render_metrics_chrome("S3 Storage — ", &name, "30d (daily)", area, frame);
-
-    match app.s3_metrics.get(&id) {
-        None | Some(S3MetricsState::Loading) => {
-            frame.render_widget(
-                Paragraph::new(Line::styled(
-                    "  Loading metrics…",
-                    Style::default().fg(theme::text_dim()),
-                )),
-                chunks[1],
-            );
-        }
-        Some(S3MetricsState::Loaded(data)) => render_s3_charts(data, chunks[1], frame),
-    }
-}
-
-fn render_s3_charts(data: &S3MetricsData, area: Rect, frame: &mut Frame) {
-    let x_max = data.x_max;
-    let cells = grid_3x2(area);
-    render_value_chart("Bucket Size (all storage classes, bytes)", &data.size_bytes, x_max, "30d ago", crate::ui::theme::accent(), cells[0], frame);
-    render_value_chart("Object Count", &data.object_count, x_max, "30d ago", crate::ui::theme::success(), cells[1], frame);
-}
-
 // ── Route 53 health-check metrics overlay ─────────────────────────────────────
 
 // ── Transfer Family metrics overlay ───────────────────────────────────────────
@@ -333,86 +301,6 @@ fn render_s3_charts(data: &S3MetricsData, area: Rect, frame: &mut Frame) {
 // ── SNS metrics overlay ───────────────────────────────────────────────────────
 
 // ── Step Functions metrics overlay ──────────────────────────────────────────────
-
-/// Shared overlay chrome (title block + time-range line + footer); returns the
-/// `[time_line, body, footer]` chunk layout, with `chunks[1]` for the charts.
-fn render_metrics_chrome<'a>(
-    title_prefix: &'a str,
-    name: &'a str,
-    range_label: &'a str,
-    area: Rect,
-    frame: &mut Frame,
-) -> std::rc::Rc<[Rect]> {
-    let block = Block::default()
-        .title(Line::from(vec![
-            Span::styled(title_prefix.to_string(), Style::default().fg(theme::text_dim())),
-            Span::styled(
-                name.to_string(),
-                Style::default()
-                    .fg(theme::aws_orange())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" ", Style::default()),
-        ]))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::border_dim()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
-        .split(inner);
-
-    let time_line = Line::from(vec![
-        Span::styled("  Range ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled(" prev ", Style::default().fg(theme::text_dim())),
-        Span::styled(
-            format!(" {} ", range_label),
-            Style::default().fg(crate::ui::theme::text_primary()).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" next ", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-    ]);
-    frame.render_widget(Paragraph::new(time_line), chunks[0]);
-
-    let footer = Line::from(vec![
-        Span::styled("  Esc", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("m", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  close    ", Style::default().fg(theme::text_dim())),
-        Span::styled("[", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("/", Style::default().fg(theme::text_dim())),
-        Span::styled("]", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  time range    ", Style::default().fg(theme::text_dim())),
-        Span::styled("r", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  refresh    ", Style::default().fg(theme::text_dim())),
-        Span::styled("Z", Style::default().fg(crate::ui::theme::warning())),
-        Span::styled("  full-width", Style::default().fg(theme::text_dim())),
-    ]);
-    frame.render_widget(Paragraph::new(footer), chunks[2]);
-
-    chunks
-}
-
-/// Lay `area` out as a 3-row × 2-column grid → 6 cells, row-major.
-fn grid_3x2(area: Rect) -> Vec<Rect> {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Ratio(1, 3), Constraint::Ratio(1, 3), Constraint::Ratio(1, 3)])
-        .split(area);
-    let mut cells = Vec::with_capacity(6);
-    for row in rows.iter() {
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-            .split(*row);
-        cells.push(cols[0]);
-        cells.push(cols[1]);
-    }
-    cells
-}
 
 // ── CloudWatch dashboard grid (`m` on a dashboard) ────────────────────────────
 
@@ -1629,76 +1517,6 @@ pub fn render_cost_metrics_overlay(app: &App, area: Rect, frame: &mut Frame) {
     frame.render_widget(chart, chunks[0]);
 }
 
-/// Line chart with an auto-scaled y-axis and adaptive numeric labels — for
-/// rate/count metrics whose magnitude isn't known ahead of time (IOPS, MB/s,
-/// queue length, instance counts). Unlike `render_count_chart` it doesn't round
-/// labels to ints.
-fn render_value_chart(
-    title: &str,
-    data: &[(f64, f64)],
-    x_max: f64,
-    start_label: &'static str,
-    color: Color,
-    area: Rect,
-    frame: &mut Frame,
-) {
-    let y_peak = data.iter().map(|(_, y)| *y).fold(0.0_f64, f64::max).max(1.0);
-    let y_max = y_peak * 1.2;
-
-    let fmt = |v: f64| {
-        if v >= 10.0 {
-            format!("{:.0}", v)
-        } else if v >= 1.0 {
-            format!("{:.1}", v)
-        } else {
-            format!("{:.2}", v)
-        }
-    };
-    let mid_label = fmt(y_max / 2.0);
-    let top_label = fmt(y_max);
-
-    let dataset = Dataset::default()
-        .name(title)
-        .data(data)
-        .marker(symbols::Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(color));
-
-    let marks = marker_lines(x_max, 0.0, y_max);
-    let mut datasets = marker_datasets(&marks);
-    datasets.push(dataset);
-    let chart = Chart::new(datasets)
-        .block(
-            Block::default()
-                .title(Span::styled(
-                    format!(" {} ", title),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(crate::ui::theme::text_dim())),
-        )
-        .x_axis(
-            Axis::default()
-                .bounds([0.0, x_max])
-                .labels(vec![
-                    Span::styled(start_label, Style::default().fg(theme::text_dim())),
-                    Span::styled("now", Style::default().fg(theme::text_dim())),
-                ]),
-        )
-        .y_axis(
-            Axis::default()
-                .bounds([0.0, y_max])
-                .labels(vec![
-                    Span::styled("0", Style::default().fg(theme::text_dim())),
-                    Span::styled(mid_label, Style::default().fg(theme::text_dim())),
-                    Span::styled(top_label, Style::default().fg(theme::text_dim())),
-                ]),
-        );
-
-    frame.render_widget(chart, area);
-}
-
-
 // ── U14 metrics-gap overlays (NAT GW / VPN / DX / ECR / GA / WorkSpaces / Cognito)
 
 
@@ -1721,7 +1539,7 @@ mod tests {
         parse_dashboard_body(body).1
     }
 
-    /// Draw one value chart over a 1h window ending at `END`, with `events`
+    /// Draw one line chart, with the change markers, over a 1h window ending at `END`, with `events`
     /// as the marker context (None = no context at all).
     fn chart_buffer(events: Option<Vec<(i64, bool)>>) -> (ratatui::buffer::Buffer, Vec<usize>) {
         const END: i64 = 1_800_000_000;
@@ -1744,7 +1562,15 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(80, 16);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| render_value_chart("Requests", &data, 3600.0, "1h ago", Color::Green, f.area(), f))
+            .draw(|f| {
+                let marks = marker_lines(3600.0, 0.0, 12.0);
+                let mut datasets = marker_datasets(&marks);
+                datasets.push(Dataset::default().data(&data).graph_type(GraphType::Line).style(Style::default().fg(Color::Green)));
+                let chart = Chart::new(datasets)
+                    .x_axis(Axis::default().bounds([0.0, 3600.0]))
+                    .y_axis(Axis::default().bounds([0.0, 12.0]));
+                f.render_widget(chart, f.area());
+            })
             .unwrap();
         let drawn = MARKERS.with(|m| m.borrow().as_ref().map(|c| c.drawn.iter().copied().collect()).unwrap_or_default());
         (terminal.backend().buffer().clone(), drawn)

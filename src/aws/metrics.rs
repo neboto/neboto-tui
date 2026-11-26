@@ -161,6 +161,9 @@ pub struct MetricSpec {
     /// Lines drawn across the chart, `(value, what it means)`: SES's
     /// reputation thresholds. The first is kept in the y range.
     pub limits: &'static [(f64, &'static str)],
+    /// Published once per this many seconds (S3's daily storage metrics):
+    /// the request's period never goes below it.
+    pub min_period: Option<i32>,
 }
 
 const fn m(metric: &'static str, label: &'static str, stat: Stat, unit: Unit) -> MetricSpec {
@@ -178,6 +181,7 @@ const fn m(metric: &'static str, label: &'static str, stat: Stat, unit: Unit) ->
         hidden: false,
         across: None,
         limits: &[],
+        min_period: None,
     }
 }
 
@@ -213,6 +217,11 @@ impl MetricSpec {
 
     const fn limits(self, limits: &'static [(f64, &'static str)]) -> Self {
         MetricSpec { limits, ..self }
+    }
+
+    /// Published once a day.
+    const fn daily(self) -> Self {
+        MetricSpec { min_period: Some(86_400), ..self }
     }
 
     /// Published per `schema`'s extra dimensions: one series over them all.
@@ -451,13 +460,14 @@ pub const WORKSPACE: &[MetricSpec] = &[
     m("Unhealthy", "Unhealthy", Max, Unit::Count),
 ];
 
+/// `WorkGroup`. No `DPUConsumed`: AWS publishes it per capacity
+/// reservation (`CapacityReservation`), never per workgroup.
 pub const ATHENA_WORKGROUP: &[MetricSpec] = &[
     m("ProcessedBytes", "Data scanned", Sum, Unit::Bytes),
     m("TotalExecutionTime", "Total time", Avg, Unit::Millis),
     m("EngineExecutionTime", "Engine", Avg, Unit::Millis).group("phases"),
     m("QueryQueueTime", "Queued", Avg, Unit::Millis).group("phases"),
     m("QueryPlanningTime", "Planning", Avg, Unit::Millis).group("phases"),
-    m("DPUConsumed", "DPU consumed", Sum, Unit::Raw),
 ];
 
 /// Driver aggregates; Maximum, since each is a running total per run.
@@ -611,10 +621,12 @@ pub const ASG_GROUP: &[MetricSpec] = &[
     m("GroupPendingInstances", "Pending", Avg, Unit::Count).group("capacity"),
 ];
 
+/// `ClusterName`. Container Insights has no cluster-wide pod count: the
+/// running pods are each namespace's count, summed.
 pub const EKS_CLUSTER: &[MetricSpec] = &[
     m("cluster_node_count", "Nodes", Avg, Unit::Count).group("nodes"),
     m("cluster_failed_node_count", "Failed nodes", Max, Unit::Count).group("nodes"),
-    m("cluster_running_pod_count", "Running pods", Avg, Unit::Count),
+    m("namespace_number_of_running_pods", "Running pods", Avg, Unit::Count).across(Agg::Sum, "ClusterName,Namespace"),
     m("node_cpu_utilization", "Node CPU", Avg, Unit::Percent).group("usage"),
     m("node_memory_utilization", "Node memory", Avg, Unit::Percent).group("usage"),
 ];
@@ -892,7 +904,7 @@ pub const SES_ACCOUNT: &[MetricSpec] = &[
     m("Bounce", "Bounces", Sum, Unit::Count).group("problems").tone(Tone::Bad),
     m("Complaint", "Complaints", Sum, Unit::Count).group("problems").tone(Tone::Warn),
     m("Reject", "Rejected", Sum, Unit::Count).group("problems"),
-    m("Rendering Failures", "Rendering failures", Sum, Unit::Count),
+    m("RenderingFailure", "Rendering failures", Sum, Unit::Count),
     e("Bounce rate", "100*{Reputation.BounceRate}", Unit::Percent)
         .tone(Tone::Bad)
         .limits(&[(5.0, "review"), (10.0, "pause")]),
@@ -1097,6 +1109,13 @@ pub const BACKUP_VAULT: &[MetricSpec] = &[
     m("NumberOfRecoveryPointsExpired", "Expired, not deleted", Sum, Unit::Count).sparse().tone(Tone::Warn),
 ];
 
+/// `BucketName`. Published once a day and per storage class, so a row
+/// sums the classes (`StorageType`), as the console's bucket metrics do.
+pub const S3_BUCKET: &[MetricSpec] = &[
+    m("BucketSizeBytes", "Bucket size", Avg, Unit::Bytes).across(Agg::Sum, "BucketName,StorageType").daily(),
+    m("NumberOfObjects", "Objects", Avg, Unit::Count).across(Agg::Sum, "BucketName,StorageType").daily(),
+];
+
 /// What `m` charts for one resource: where its metrics live and its curated set.
 #[derive(Debug, Clone)]
 pub struct MetricTarget {
@@ -1120,6 +1139,9 @@ pub struct MetricTarget {
     /// Looked up once, before the first fetch: what the target's own
     /// fields can't say (WAF's metric name, CloudFront's extra metrics).
     pub resolve: Option<Resolve>,
+    /// The one range the set means anything over, and why: S3's daily
+    /// storage metrics chart 30 days, and `[`/`]`/digits don't step off it.
+    pub fixed_range: Option<(MetricsTimeRange, &'static str)>,
 }
 
 /// A kind's per-dimension tables, fetched with the series: WAF's per-rule
@@ -1622,7 +1644,7 @@ impl MetricQuery {
             hidden: s.hidden,
             search: s.across.map(|a| Search { agg: a.agg, schema: a.schema.map(str::to_string), token: a.token }),
             limits: s.limits.iter().map(|(v, what)| (*v, what.to_string())).collect(),
-            min_period: None,
+            min_period: s.min_period,
         }
     }
 }
@@ -2045,6 +2067,7 @@ mod tests {
             extra: Vec::new(),
             breakdown: None,
             resolve: None,
+            fixed_range: None,
         };
         let qs = target.curated_queries();
         let rate = qs.iter().find(|q| q.label == "Block rate").unwrap();
@@ -2136,8 +2159,8 @@ mod tests {
     #[test]
     fn a_name_with_dots_or_spaces_is_still_a_placeholder() {
         let q = |metric: &str| MetricQuery { metric: metric.into(), ..MetricDefinition::default_query() };
-        let set = [q("Reputation.BounceRate"), q("Rendering Failures")];
-        assert_eq!(resolve_expression("100*{Reputation.BounceRate}+{Rendering Failures}", &set, 60).unwrap(), "100*q0+q1");
+        let set = [q("Reputation.BounceRate"), q("RenderingFailure")];
+        assert_eq!(resolve_expression("100*{Reputation.BounceRate}+{RenderingFailure}", &set, 60).unwrap(), "100*q0+q1");
     }
 
     /// An RDS proxy's gauges are published once per instance per minute,
@@ -2154,6 +2177,7 @@ mod tests {
             extra: Vec::new(),
             breakdown: None,
             resolve: None,
+            fixed_range: None,
         };
         let qs = t.curated_queries();
         let row = qs.iter().find(|q| q.label == "Client connections").unwrap();
@@ -2173,6 +2197,7 @@ mod tests {
             extra: Vec::new(),
             breakdown: None,
             resolve: None,
+            fixed_range: None,
         };
         let q = t.curated_queries();
         let first_hidden = q.iter().position(|q| q.hidden).unwrap();
@@ -2293,6 +2318,7 @@ mod tests {
             extra: Vec::new(),
             breakdown: None,
             resolve: None,
+            fixed_range: None,
         };
         let q = t.curated_queries();
         assert_eq!(q.len(), EC2_INSTANCE.len());

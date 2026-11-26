@@ -899,6 +899,7 @@ pub fn file_system_metric_target(fs: &FsxFileSystem, volumes: &[(String, String)
         extra: Vec::new(),
         breakdown,
         resolve: Some(m::Resolve::Fsx { dimensions, capacity_bytes: fs.storage_capacity_gib as i64 * (1 << 30) }),
+        fixed_range: None,
     }
 }
 
@@ -931,6 +932,7 @@ pub fn volume_metric_target(vol: &FsxVolume) -> crate::aws::metrics::MetricTarge
             })
         }),
         resolve: Some(m::Resolve::Fsx { dimensions, capacity_bytes: vol.size_bytes }),
+        fixed_range: None,
     }
 }
 
@@ -1393,6 +1395,7 @@ mod metrics_tests {
             extra: Vec::new(),
             breakdown: None,
             resolve: None,
+            fixed_range: None,
         }
         .curated_queries()
     }
