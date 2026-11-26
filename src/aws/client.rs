@@ -764,6 +764,10 @@ impl AwsClients {
         aws_sdk_mq::Client::new(&self.config)
     }
 
+    pub fn apiportal_client(&self) -> aws_sdk_apiportal::Client {
+        aws_sdk_apiportal::Client::new(&self.config)
+    }
+
     pub fn beanstalk_client(&self) -> aws_sdk_elasticbeanstalk::Client {
         aws_sdk_elasticbeanstalk::Client::new(&self.config)
     }

@@ -114,6 +114,7 @@ pub fn has_sub_tabs(service: ServiceType) -> bool {
             | ServiceType::Dms
             | ServiceType::DataSync
             | ServiceType::Mq
+            | ServiceType::ApiPortal
             | ServiceType::Beanstalk
             | ServiceType::Athena
             | ServiceType::Glue
@@ -382,6 +383,7 @@ macro_rules! sub_tab_table {
             Dms => dms_view: DmsView [Tasks, Instances, Endpoints, Serverless],
             DataSync => datasync_view: DataSyncView [Tasks, Locations, Agents],
             Mq => mq_view: MqView [Brokers, Configurations],
+            ApiPortal => apiportal_view: ApiPortalView [Inventory, ManagedApis, Portals, Products, Discovery],
             Beanstalk => beanstalk_view: BeanstalkView [Environments, Applications, Versions],
             ControlTower => controltower_view: ControlTowerView [LandingZone, Controls, Baselines, Operations, Catalog, Compliance, Accounts],
             Athena => athena_view: AthenaView [Workgroups, DataCatalogs, Databases, Queries, SavedQueries],
@@ -1040,6 +1042,52 @@ impl MqView {
     }
 }
 
+/// Sub-tab view for API Portal (Inventory / Managed APIs / Portals /
+/// Products / Discovery).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ApiPortalView {
+    Inventory,
+    ManagedApis,
+    Portals,
+    Products,
+    Discovery}
+
+impl ApiPortalView {
+    const ALL: [ApiPortalView; 5] = [
+        ApiPortalView::Inventory,
+        ApiPortalView::ManagedApis,
+        ApiPortalView::Portals,
+        ApiPortalView::Products,
+        ApiPortalView::Discovery,
+    ];
+
+    pub fn resource_type_filter(&self) -> &'static str {
+        match self {
+            ApiPortalView::Inventory => "API Inventory Item",
+            ApiPortalView::ManagedApis => "Managed API",
+            ApiPortalView::Portals => "API Portal",
+            ApiPortalView::Products => "API Product",
+            ApiPortalView::Discovery => "API Discovery"}
+    }
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|v| *v == self).unwrap_or(0)
+    }
+
+    fn next(self) -> Self {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
+    }
+
+    fn prev(self) -> Self {
+        Self::ALL[(self.index() + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+
+    /// The tab a loaded resource type lives on.
+    pub fn for_type(resource_type: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.resource_type_filter() == resource_type)
+    }
+}
+
 /// Sub-tab view for DMS (Tasks / Instances / Endpoints / Serverless).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum DmsView {
@@ -1305,6 +1353,7 @@ pub enum JumpView {
     Dms(DmsView),
     DataSync(DataSyncView),
     Mq(MqView),
+    ApiPortal(ApiPortalView),
     Beanstalk(BeanstalkView),
     S3Tables(S3TablesView),
     Ecr(EcrView),
@@ -2817,6 +2866,7 @@ pub struct App {
     pub dms_view: DmsView,
     pub datasync_view: DataSyncView,
     pub mq_view: MqView,
+    pub apiportal_view: ApiPortalView,
 
 
     // Athena sub-tab view + per-type detail sections
@@ -3630,6 +3680,7 @@ impl App {
             dms_view: DmsView::Tasks,
             datasync_view: DataSyncView::Tasks,
             mq_view: MqView::Brokers,
+            apiportal_view: ApiPortalView::Inventory,
 
             athena_view: AthenaView::Workgroups,
             fms_view: FmsView::Policies,
@@ -6651,6 +6702,22 @@ impl App {
             }
         }
 
+        // API Portal (Inventory / Managed APIs / Portals / Products / Discovery) sub-tab switching
+        if !self.search_active && self.current_service == Some(ServiceType::ApiPortal) {
+            let view = match key.code {
+                KeyCode::Char(c @ '1'..='5') if key.modifiers.is_empty() => {
+                    Some(ApiPortalView::ALL[c as usize - '1' as usize])
+                }
+                KeyCode::Tab => Some(self.apiportal_view.next()),
+                KeyCode::BackTab => Some(self.apiportal_view.prev()),
+                _ => None};
+            if let Some(v) = view {
+                self.apiportal_view = v;
+                self.update_search();
+                return Ok(());
+            }
+        }
+
         // Amazon MQ (Brokers / Configurations) sub-tab switching
         if !self.search_active && self.current_service == Some(ServiceType::Mq) {
             let view = match key.code {
@@ -8968,6 +9035,7 @@ impl App {
             Some(ServiceType::Dms) => Some(self.dms_view.resource_type_filter()),
             Some(ServiceType::DataSync) => Some(self.datasync_view.resource_type_filter()),
             Some(ServiceType::Mq) => Some(self.mq_view.resource_type_filter()),
+            Some(ServiceType::ApiPortal) => Some(self.apiportal_view.resource_type_filter()),
             Some(ServiceType::Beanstalk) => Some(self.beanstalk_view.resource_type_filter()),
             Some(ServiceType::ControlTower) => {
                 Some(self.controltower_view.resource_type_filter())
@@ -10679,6 +10747,10 @@ impl App {
         services.insert(
             ServiceType::Mq,
             Arc::new(crate::aws::services::mq::MqService::new(aws_clients)),
+        );
+        services.insert(
+            ServiceType::ApiPortal,
+            Arc::new(crate::aws::services::apiportal::ApiPortalService::new(aws_clients)),
         );
         services.insert(
             ServiceType::Beanstalk,
@@ -20860,6 +20932,7 @@ impl App {
             JumpView::Dms(v) => self.dms_view = *v,
             JumpView::DataSync(v) => self.datasync_view = *v,
             JumpView::Mq(v) => self.mq_view = *v,
+            JumpView::ApiPortal(v) => self.apiportal_view = *v,
             JumpView::Beanstalk(v) => self.beanstalk_view = *v,
             JumpView::S3Tables(v) => self.s3tables_view = *v,
             JumpView::Ecr(v) => self.ecr_view = *v,
@@ -21634,6 +21707,7 @@ impl App {
             Some(ServiceType::Dms) => JumpView::Dms(self.dms_view),
             Some(ServiceType::DataSync) => JumpView::DataSync(self.datasync_view),
             Some(ServiceType::Mq) => JumpView::Mq(self.mq_view),
+            Some(ServiceType::ApiPortal) => JumpView::ApiPortal(self.apiportal_view),
             Some(ServiceType::Beanstalk) => JumpView::Beanstalk(self.beanstalk_view),
             Some(ServiceType::S3Tables) => JumpView::S3Tables(self.s3tables_view),
             Some(ServiceType::Ecr) => JumpView::Ecr(self.ecr_view),
@@ -23629,6 +23703,7 @@ impl App {
                     .or_else(|| self.eb_row_jump_target(k, v))
                     .or_else(|| self.appsync_row_jump_target(k, v))
                     .or_else(|| self.mq_row_jump_target(k, v))
+                    .or_else(|| self.apiportal_row_jump_target(k, v))
                     .or_else(|| self.cognito_row_jump_target(k, v))
                     .or_else(|| {
                         crate::ui::widgets::details_pane::resource_jump_target(k, v, current)
@@ -27846,6 +27921,50 @@ impl App {
                     return dp::datasync_agent_section_lines(
                         a,
                         DataSyncAgentDetailSection::from_index(self.detail_section_idx),
+                    );
+                }
+            }
+            {
+                use crate::aws::services::apiportal as ap;
+                use crate::ui::widgets::details_pane as dp;
+                let r = resource.as_any();
+                if let Some(i) = r.downcast_ref::<ap::ApiInventoryItem>() {
+                    return dp::apiportal_item_section_lines(i, ap::ApiItemDetailSection::from_index(self.detail_section_idx));
+                }
+                if let Some(m) = r.downcast_ref::<ap::ManagedApi>() {
+                    return dp::apiportal_managed_section_lines(
+                        m,
+                        ap::ManagedApiDetailSection::from_index(self.detail_section_idx),
+                        self.lazy.apiportal_events.get(&m.id),
+                    );
+                }
+                if let Some(p) = r.downcast_ref::<ap::ApiPortal>() {
+                    let products: Vec<&ap::ApiProduct> =
+                        self.resources.iter().filter_map(|r| r.as_any().downcast_ref::<ap::ApiProduct>()).collect();
+                    return dp::apiportal_portal_section_lines(
+                        p,
+                        ap::ApiPortalDetailSection::from_index(self.detail_section_idx),
+                        &products,
+                    );
+                }
+                if let Some(p) = r.downcast_ref::<ap::ApiProduct>() {
+                    let portals: Vec<&ap::ApiPortal> = self
+                        .resources
+                        .iter()
+                        .filter_map(|r| r.as_any().downcast_ref::<ap::ApiPortal>())
+                        .filter(|portal| portal.product_arns.contains(&p.arn))
+                        .collect();
+                    return dp::apiportal_product_section_lines(
+                        p,
+                        ap::ApiProductDetailSection::from_index(self.detail_section_idx),
+                        self.lazy.apiportal_product_apis.get(&p.id),
+                        &portals,
+                    );
+                }
+                if let Some(d) = r.downcast_ref::<ap::ApiDiscovery>() {
+                    return dp::apiportal_discovery_section_lines(
+                        d,
+                        ap::ApiDiscoveryDetailSection::from_index(self.detail_section_idx),
                     );
                 }
             }
@@ -35401,6 +35520,94 @@ impl App {
                     .map_err(|e| format!("Location configuration unavailable: {}", e))
             },
         );
+    }
+
+    // ── API Portal: lazy sections, row jumps, empty inventory ────────────────
+
+    /// A managed API's security events, last 30 days.
+    pub(crate) fn trigger_apiportal_events_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(id) = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::apiportal::ManagedApi>())
+            .map(|m| m.id.clone())
+        else {
+            return;
+        };
+        let client = self.aws_clients.apiportal_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.apiportal_events,
+            id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::apiportal::fetch_managed_api_events(client, id)
+                    .await
+                    .map_err(|e| format!("Events unavailable: {}", e))
+            },
+        );
+    }
+
+    /// The managed APIs a product includes.
+    pub(crate) fn trigger_apiportal_product_apis_load(&mut self, event_tx: &mpsc::UnboundedSender<Event>) {
+        let Some(id) = self
+            .get_selected_resource()
+            .and_then(|r| r.as_any().downcast_ref::<crate::aws::services::apiportal::ApiProduct>())
+            .map(|p| p.id.clone())
+        else {
+            return;
+        };
+        let client = self.aws_clients.apiportal_client();
+        self.trigger_lazy(
+            |app| &mut app.lazy.apiportal_product_apis,
+            id.clone(),
+            event_tx,
+            async move {
+                crate::aws::services::apiportal::fetch_product_apis(client, id)
+                    .await
+                    .map_err(|e| format!("APIs unavailable: {}", e))
+            },
+        );
+    }
+
+    /// Under `@apiportal`, a row whose value is the id or ARN of another
+    /// loaded API Portal resource leads to it: an item's Managed API, a
+    /// managed API's Inventory Item, a portal's products, a product's
+    /// portals and APIs. Keyed on the value, not the label; the selected
+    /// row's own id leads nowhere.
+    pub fn apiportal_row_jump_target(&self, _key: &str, value: &str) -> Option<JumpTarget> {
+        if self.current_service != Some(ServiceType::ApiPortal) {
+            return None;
+        }
+        let v = value.trim();
+        if v.is_empty() || self.get_selected_resource().is_some_and(|r| r.id() == v) {
+            return None;
+        }
+        let arn_of = |r: &dyn crate::aws::resource::Resource| -> Option<String> {
+            use crate::aws::services::apiportal as ap;
+            let a = r.as_any();
+            a.downcast_ref::<ap::ManagedApi>()
+                .map(|m| m.arn.clone())
+                .or_else(|| a.downcast_ref::<ap::ApiPortal>().map(|p| p.arn.clone()))
+                .or_else(|| a.downcast_ref::<ap::ApiProduct>().map(|p| p.arn.clone()))
+        };
+        let r = self
+            .resources
+            .iter()
+            .find(|r| r.id() == v || arn_of(r.as_ref()).as_deref() == Some(v))?;
+        if self.get_selected_resource().is_some_and(|s| s.id() == r.id()) {
+            return None;
+        }
+        let view = ApiPortalView::for_type(r.resource_type())?;
+        Some(JumpTarget { service: ServiceType::ApiPortal, view: JumpView::ApiPortal(view), id: r.id().to_string() })
+    }
+
+    /// Why the Inventory tab is empty, from the account's discovery row —
+    /// `None` when discovery looks healthy (or hasn't loaded).
+    pub fn apiportal_empty_inventory_reason(&self) -> Option<(String, String)> {
+        self.resources
+            .iter()
+            .filter_map(|r| r.as_any().downcast_ref::<crate::aws::services::apiportal::ApiDiscovery>())
+            .find(|d| !d.is_organization())?
+            .empty_inventory_reason()
     }
 
     // ── Amazon MQ: log location, lazy sections, row jumps ────────────────────

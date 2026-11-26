@@ -234,6 +234,7 @@ mod lambda;
 mod messaging;
 mod msk;
 mod mq;
+mod apiportal;
 mod network_firewall;
 mod oam;
 mod opensearch;
@@ -306,6 +307,7 @@ pub use lambda::*;
 pub use messaging::*;
 pub use msk::*;
 pub use mq::*;
+pub use apiportal::*;
 pub use network_firewall::*;
 pub use oam::*;
 pub use opensearch::*;
@@ -919,6 +921,30 @@ fn render_details_pane_inner(app: &App, area: Rect, frame: &mut Frame) {
         }
         if let Some(a) = r.as_any().downcast_ref::<DataSyncAgent>() {
             render_datasync_agent_split(app, a, area, frame);
+            return;
+        }
+    }
+    if let Some(r) = resource {
+        use crate::aws::services::apiportal as ap;
+        let a = r.as_any();
+        if let Some(i) = a.downcast_ref::<ap::ApiInventoryItem>() {
+            render_apiportal_item_split(app, i, area, frame);
+            return;
+        }
+        if let Some(m) = a.downcast_ref::<ap::ManagedApi>() {
+            render_apiportal_managed_split(app, m, area, frame);
+            return;
+        }
+        if let Some(p) = a.downcast_ref::<ap::ApiPortal>() {
+            render_apiportal_portal_split(app, p, area, frame);
+            return;
+        }
+        if let Some(p) = a.downcast_ref::<ap::ApiProduct>() {
+            render_apiportal_product_split(app, p, area, frame);
+            return;
+        }
+        if let Some(d) = a.downcast_ref::<ap::ApiDiscovery>() {
+            render_apiportal_discovery_split(app, d, area, frame);
             return;
         }
     }
@@ -3530,6 +3556,20 @@ fn arn_jump_target(arn: &str) -> Option<crate::app::JumpTarget> {
     let last_seg = || resource.rsplit(['/', ':']).next().unwrap_or(resource);
 
     match service {
+        // API Gateway ARNs have no account and a path resource:
+        // `/restapis/<id>[/stages/<stage>]` (REST) or `/apis/<id>[/…]` (HTTP
+        // / WebSocket). Both rows are keyed by the API id; a stage lands on
+        // its API.
+        "apigateway" => {
+            use crate::app::ApiGatewayView;
+            let mut segs = resource.trim_start_matches('/').split('/');
+            let view = match segs.next()? {
+                "restapis" => ApiGatewayView::RestApis,
+                "apis" => ApiGatewayView::HttpApis,
+                _ => return None,
+            };
+            mk(ServiceType::ApiGateway, JumpView::ApiGw(view), segs.next()?)
+        }
         // autoScalingGroup:UUID:autoScalingGroupName/NAME — ASG rows resolve by name.
         // Only the group's own ARN — a scaling policy / lifecycle hook ARN also
         // carries the group name but isn't the group.
@@ -4715,6 +4755,7 @@ fn jump_indicator(app: &App, key: &str, value: &str) -> Option<bool> {
         .or_else(|| app.eb_row_jump_target(key, value))
         .or_else(|| app.appsync_row_jump_target(key, value))
         .or_else(|| app.mq_row_jump_target(key, value))
+        .or_else(|| app.apiportal_row_jump_target(key, value))
         .or_else(|| app.cognito_row_jump_target(key, value))
         .or_else(|| resource_jump_target(key, value, current).filter(|t| app.generic_jump_allowed(t, value)))?;
     Some(target.service != current)
