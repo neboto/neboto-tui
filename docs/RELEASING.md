@@ -295,12 +295,57 @@ are on the release job since 2026-09-16 (see the supply-chain rules above).
 | Method | Command |
 |---|---|
 | Installer script | `curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/install.sh \| sh` |
+| Homebrew (macOS, Linux) | `brew install neboto/tap/neboto` |
 | cargo-binstall | `cargo binstall neboto` (needs a crates.io publish, or `--git https://github.com/neboto/neboto-tui`) |
 | Manual | download `neboto-<target>.tar.gz` + `neboto-<target>.sha256` from the Releases page, `shasum -a 256 -c` the latter, put `neboto` on `PATH` |
 | From source | `cargo install --git https://github.com/neboto/neboto-tui` |
 
 `install.sh` honours `NEBOTO_VERSION` (pin a tag), `NEBOTO_INSTALL_DIR`
 (default `~/.local/bin`) and `GITHUB_TOKEN`.
+
+## Homebrew tap
+
+`brew install neboto/tap/neboto` reads `Formula/neboto.rb` from the public
+[`neboto/homebrew-tap`](https://github.com/neboto/homebrew-tap) repo. The
+formula installs the release archives, not a source build: one URL + SHA-256
+per OS × arch, the same four `neboto-<target>.tar.gz` that `install.sh` uses.
+It installs `neboto`, puts `config.example.toml` in `$(brew --prefix)/share/neboto`
+and `PERMISSIONS.md` in its doc dir, and tests `neboto --version`.
+
+- **Generated, never hand-edited.** `scripts/homebrew-formula.sh <tag>`
+  prints the formula from the release's `.sha256` assets. The Release
+  workflow's `homebrew` job runs it after `publish`, then audits
+  (`brew audit --strict --online`), installs and tests the result on
+  `macos-15` before pushing it to the tap. Stable tags only: the script
+  refuses a prerelease.
+- **`HOMEBREW_TAP_TOKEN`** is the repo secret the push uses: a fine-grained
+  token, owned by the org, with *Contents: read and write* on
+  `neboto/homebrew-tap` and nothing else. The workflow's own `GITHUB_TOKEN`
+  can't push to another repo. Without the secret the job still checks the
+  formula, then warns instead of pushing. When the token expires, pushes stop
+  with an auth error in that job. The release itself is already live by then.
+- **Releases cut locally** (`RELEASE_ON_CI=false`) skip the job. Update the
+  tap by hand from a clone of it:
+  `scripts/homebrew-formula.sh vX.Y.Z > ../homebrew-tap/Formula/neboto.rb`,
+  then commit and push there.
+- **Checking a formula locally**: Homebrew only loads formulae from a tap,
+  so use a throwaway one:
+  `brew tap-new --no-git neboto-check/local`, copy the formula into
+  `$(brew --repository neboto-check/local)/Formula/`, `brew trust
+  neboto-check/local`, then `brew audit --strict --online`, `brew install`
+  and `brew test` it. Clean up with `brew uninstall`, `brew untrust` and
+  `brew untap`.
+- **Homebrew 7 trusts third-party taps only explicitly.** `brew install
+  neboto/tap/neboto` (the full name) counts as consent and records it, so
+  later plain `brew upgrade`s include neboto. `brew tap neboto/tap && brew
+  install neboto` is refused. That's why the README gives the full name.
+- **No `version` line**: brew reads it from the `/vX.Y.Z/` in the URL, and
+  `--strict` rejects an explicit one as redundant.
+- **Gatekeeper**: the binaries are unsigned, but Homebrew doesn't quarantine
+  formula downloads, so the tap installs cleanly. Only a browser download
+  hits Gatekeeper.
+- **homebrew-core** (a plain `brew install neboto`) would mean a source-build
+  formula and meeting core's notability bar. That's for later.
 
 ## Demo media
 
@@ -351,13 +396,10 @@ signal that it is an emulator — leave it in.
 
 ## Not done yet (in rough priority order)
 
-- **Homebrew tap** (`brew install neboto/tap/neboto`): needs a public
-  `neboto/homebrew-tap` repo and a job that rewrites the formula's URLs +
-  SHAs on each release. Wait for the repo to go public.
 - **crates.io publish**: `cargo publish` makes `cargo install neboto` and
   plain `cargo binstall neboto` work. Public source only.
 - **macOS signing / notarization**: the binaries are unsigned. Installing
-  through the script or `gh` is fine (no quarantine attribute), but a tarball
+  through the script, Homebrew or `gh` is fine (no quarantine attribute), but a tarball
   downloaded in a browser will trip Gatekeeper; users can
   `xattr -d com.apple.quarantine neboto`. Signing needs an Apple Developer
   account and secrets in the workflow.

@@ -23,6 +23,11 @@
 #   BUILD_MACOS=false    Linux legs run here, macOS legs come from a Mac via
 #                        the same script.
 #
+# Secret:
+#   HOMEBREW_TAP_TOKEN   lets the `homebrew` job push the new formula to
+#                        neboto/homebrew-tap. Unset: the job checks the
+#                        formula and warns instead of pushing.
+#
 # See docs/RELEASING.md for the runbook.
 name: Release
 
@@ -173,3 +178,84 @@ jobs:
         run: |
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+
+  # Points `brew install neboto/tap/neboto` at the release just published:
+  # generates Formula/neboto.rb from the release's .sha256 assets, proves it
+  # audits, installs and passes its test on a real Mac, then pushes it to
+  # neboto/homebrew-tap. Stable tags only. The push needs the
+  # HOMEBREW_TAP_TOKEN secret (contents: write on neboto/homebrew-tap only —
+  # this workflow's own token can't push to another repo); without it the
+  # formula is still checked and the job warns instead of pushing.
+  # Runs after `publish`, so a failure here never holds a release back — fix
+  # the tap by hand with scripts/homebrew-formula.sh (docs/RELEASING.md).
+  homebrew:
+    name: update homebrew tap
+    needs: [publish]
+    if: github.event_name == 'push' && vars.RELEASE_ON_CI != 'false' && !contains(github.ref_name, '-')
+    runs-on: macos-15
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_ANALYTICS: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+      HOMEBREW_NO_ENV_HINTS: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Generate the formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scripts/homebrew-formula.sh "$GITHUB_REF_NAME" > neboto.rb
+          cat neboto.rb
+
+      # Formulae load only from a tap, so the check uses a throwaway local
+      # one. Homebrew 7 refuses to load formulae from an untrusted tap;
+      # `brew trust` doesn't exist before 7, where nothing needs trusting.
+      - name: Audit, install and test it
+        run: |
+          brew tap-new --no-git neboto-ci/check
+          cp neboto.rb "$(brew --repository neboto-ci/check)/Formula/neboto.rb"
+          brew trust neboto-ci/check || true
+          brew audit --strict --online neboto-ci/check/neboto
+          brew install neboto-ci/check/neboto
+          brew test neboto-ci/check/neboto
+
+      - name: Check for the tap token
+        id: token
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -n "$TAP_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set, so neboto/homebrew-tap was not updated. The checked formula is in this job's log."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.token.outputs.present == 'true'
+        with:
+          repository: neboto/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Push the formula to the tap
+        if: steps.token.outputs.present == 'true'
+        working-directory: tap
+        run: |
+          mkdir -p Formula
+          cp ../neboto.rb Formula/neboto.rb
+          git add Formula/neboto.rb
+          if git diff --cached --quiet; then
+            echo "Formula/neboto.rb is already at $GITHUB_REF_NAME"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "neboto ${GITHUB_REF_NAME#v}" \
+                     -m "From $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME"
+          git push
