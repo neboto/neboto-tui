@@ -36,9 +36,7 @@ the GitHub CLI is installed) its signed build provenance, and puts it in
 curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/install.sh | sh
 ```
 
-Or with [Homebrew](https://brew.sh), on macOS or Linux (use the full name:
-Homebrew 7 loads a third-party tap's formula only when you name it, and
-then trusts it for later `brew upgrade`s):
+Or with [Homebrew](https://brew.sh):
 
 ```bash
 brew install neboto/tap/neboto

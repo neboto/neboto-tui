@@ -349,10 +349,8 @@ and `PERMISSIONS.md` in its doc dir, and tests `neboto --version`.
   neboto-check/local`, then `brew audit --strict --online`, `brew install`
   and `brew test` it. Clean up with `brew uninstall`, `brew untrust` and
   `brew untap`.
-- **Homebrew 7 trusts third-party taps only explicitly.** `brew install
-  neboto/tap/neboto` (the full name) counts as consent and records it, so
-  later plain `brew upgrade`s include neboto. `brew tap neboto/tap && brew
-  install neboto` is refused. That's why the README gives the full name.
+- **Keep the full name** in the install docs: Homebrew 7 refuses
+  `brew tap neboto/tap && brew install neboto` for a third-party tap.
 - **No `version` line**: brew reads it from the `/vX.Y.Z/` in the URL, and
   `--strict` rejects an explicit one as redundant.
 - **Gatekeeper**: the binaries are unsigned, but Homebrew doesn't quarantine
