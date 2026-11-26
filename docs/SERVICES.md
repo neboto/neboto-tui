@@ -1582,7 +1582,7 @@ the service you're touching.
   portals and products (`ListTagsForResource` per row), console links
   (unknown URL shape — `console_url` is `None`), demo fixtures, and the
   `@audit` checks from #361 (public + shadow + no WAF, worst for MCP/LLM;
-  managed zombies) — a follow-up. **Not checked against a live account.**
+  managed zombies) — #369. Checked against a live account.
 - **DocumentDB** (`@docdb` / `@documentdb`) and **Neptune** (`@neptune`) —
   not service files: both are `rds::RdsService::for_family`, the RDS client
   and the RDS resource types listed under one engine (#96). DocumentDB and
