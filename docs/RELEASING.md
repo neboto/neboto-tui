@@ -314,10 +314,15 @@ and `PERMISSIONS.md` in its doc dir, and tests `neboto --version`.
 
 - **Generated, never hand-edited.** `scripts/homebrew-formula.sh <tag>`
   prints the formula from the release's `.sha256` assets. The Release
-  workflow's `homebrew` job runs it after `publish`, then audits
-  (`brew audit --strict --online`), installs and tests the result on
-  `macos-15` before pushing it to the tap. Stable tags only: the script
-  refuses a prerelease.
+  workflow's `homebrew` job runs after `publish`. It first downloads the
+  four archives and checks each one's checksum and build provenance
+  (`gh attestation verify`). The formula pins whatever the `.sha256` says,
+  and an archive and its checksum are uploaded by the same token, so a
+  swapped pair would otherwise reach every `brew` user. Then it generates the
+  formula, audits it (`brew audit --strict --online`), and installs and tests
+  it on `macos-15` before pushing it to the tap. The script accepts only an
+  exact `vX.Y.Z`, because the tag lands in Ruby that runs at install time.
+  That also excludes prereleases.
 - **`HOMEBREW_TAP_TOKEN`** is the repo secret the push uses: a fine-grained
   token, owned by the org, with *Contents: read and write* on
   `neboto/homebrew-tap` and nothing else. The workflow's own `GITHUB_TOKEN`
@@ -325,9 +330,18 @@ and `PERMISSIONS.md` in its doc dir, and tests `neboto --version`.
   formula, then warns instead of pushing. When the token expires, pushes stop
   with an auth error in that job. The release itself is already live by then.
 - **Releases cut locally** (`RELEASE_ON_CI=false`) skip the job. Update the
-  tap by hand from a clone of it:
-  `scripts/homebrew-formula.sh vX.Y.Z > ../homebrew-tap/Formula/neboto.rb`,
-  then commit and push there.
+  tap by hand, verifying the archives as the job does:
+  ```sh
+  mkdir assets && gh release download vX.Y.Z --repo neboto/neboto-tui \
+    --pattern 'neboto-*.tar.gz' --pattern 'neboto-*.sha256' --dir assets
+  (cd assets && for f in neboto-*.tar.gz; do
+     shasum -a 256 -c "${f%.tar.gz}.sha256" &&
+     gh attestation verify "$f" --repo neboto/neboto-tui || exit 1; done)
+  scripts/homebrew-formula.sh vX.Y.Z assets > ../homebrew-tap/Formula/neboto.rb
+  ```
+  then commit and push in the tap clone. A locally cut release has no
+  attestations (they're made by the workflow), so the verify step fails for
+  one. In that case, check the archives against your own build instead.
 - **Checking a formula locally**: Homebrew only loads formulae from a tap,
   so use a throwaway one:
   `brew tap-new --no-git neboto-check/local`, copy the formula into

@@ -7,7 +7,9 @@
 # The formula installs the prebuilt release archives (no build from source),
 # one per OS × arch, so it needs the four neboto-<target>.sha256 assets. With
 # a directory it reads them from there; without one it downloads them from
-# the release with `gh`. Run by the Release workflow's `homebrew` job, which
+# the release with `gh`. It trusts those checksums as given: the Release
+# workflow verifies each archive's attestation and checksum before calling
+# it with a directory, and a manual run should do the same (docs/RELEASING.md). Run by the Release workflow's `homebrew` job, which
 # pushes the result to neboto/homebrew-tap; run it by hand to fix the tap up
 # after a release cut with scripts/release-local.sh.
 #
@@ -21,8 +23,10 @@ repo="neboto/neboto-tui"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-case "$tag" in v[0-9]*.[0-9]*.[0-9]*) ;; *) die "tag must look like v0.1.0" ;; esac
 case "$tag" in *-*) die "$tag is a prerelease; the tap only follows stable releases" ;; esac
+# Exactly vX.Y.Z: the tag lands in a Ruby file that runs on users' machines
+# at install time, so nothing else gets through (a #{…} would be code).
+printf '%s\n' "$tag" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+' || die "tag must be exactly vX.Y.Z, got $tag"
 # No `version` line in the formula: brew scans it from the URL's /v0.14.0/
 # path, and `brew audit --strict` rejects an explicit one as redundant.
 

@@ -195,6 +195,7 @@ jobs:
     runs-on: macos-15
     permissions:
       contents: read
+      attestations: read    # gh attestation verify
     env:
       HOMEBREW_NO_AUTO_UPDATE: 1
       HOMEBREW_NO_ANALYTICS: 1
@@ -205,11 +206,26 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Generate the formula
+      # The formula pins whatever the .sha256 assets say, and an archive and
+      # its checksum are uploaded by the same token, so a swapped pair would
+      # pin a bad archive for every brew user. Check each archive's build
+      # provenance and checksum first, as install.sh does.
+      - name: Verify the release archives
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          scripts/homebrew-formula.sh "$GITHUB_REF_NAME" > neboto.rb
+          mkdir assets
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'neboto-*.tar.gz' --pattern 'neboto-*.sha256' --dir assets
+          cd assets
+          for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
+            shasum -a 256 -c "neboto-$t.sha256"
+            gh attestation verify "neboto-$t.tar.gz" --repo "$GITHUB_REPOSITORY"
+          done
+
+      - name: Generate the formula
+        run: |
+          scripts/homebrew-formula.sh "$GITHUB_REF_NAME" assets > neboto.rb
           cat neboto.rb
 
       # Formulae load only from a tap, so the check uses a throwaway local
