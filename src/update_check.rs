@@ -21,11 +21,38 @@ const LATEST_URL: &str = "https://api.github.com/repos/neboto/neboto-tui/release
 /// Where the chip's click points people.
 pub const RELEASES_URL: &str = "https://github.com/neboto/neboto-tui/releases/latest";
 
-/// The upgrade command the chip copies — the README's primary install path.
-/// neboto can't tell how it was installed, so binstall / `cargo install`
-/// users get the release page alongside it.
-pub const UPGRADE_COMMAND: &str =
-    "curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/install.sh | sh";
+/// The installer's upgrade command: the README's primary install path.
+const INSTALLER_UPGRADE: &str = "curl -fsSL https://raw.githubusercontent.com/neboto/neboto-tui/main/install.sh | sh";
+
+/// A Homebrew install's upgrade command. Running the installer instead would
+/// put a second copy in `~/.local/bin`, usually ahead of brew's on `PATH`.
+const BREW_UPGRADE: &str = "brew upgrade neboto";
+
+/// The upgrade command the chip copies. A Homebrew install is recognizable
+/// (its binary resolves into `…/Cellar/neboto/<version>/`), so it gets
+/// `brew upgrade`. Anything else gets the installer. binstall /
+/// `cargo install` can't be told apart from that, so those users get the
+/// release page alongside it.
+pub fn upgrade_command() -> &'static str {
+    static CMD: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    CMD.get_or_init(|| {
+        // macOS reports the path as invoked (brew's bin/ symlink), so
+        // resolve it. Linux's /proc/self/exe is resolved already.
+        let exe = std::env::current_exe().and_then(std::fs::canonicalize);
+        exe.map_or(INSTALLER_UPGRADE, |p| upgrade_command_for(&p))
+    })
+}
+
+/// [`upgrade_command`] for a resolved executable path.
+fn upgrade_command_for(exe: &std::path::Path) -> &'static str {
+    let parts: Vec<_> = exe.components().map(|c| c.as_os_str()).collect();
+    let in_cellar = parts.windows(2).any(|w| w[0] == "Cellar" && w[1] == "neboto");
+    if in_cellar {
+        BREW_UPGRADE
+    } else {
+        INSTALLER_UPGRADE
+    }
+}
 
 /// How long a check's answer is trusted. Unauthenticated GitHub API calls
 /// allow 60/hour per IP; one a day per machine is nowhere near that.
@@ -180,6 +207,28 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn a_homebrew_install_upgrades_with_brew() {
+        for brew in [
+            "/opt/homebrew/Cellar/neboto/0.14.0/bin/neboto",
+            "/usr/local/Cellar/neboto/0.14.0/bin/neboto",
+            "/home/linuxbrew/.linuxbrew/Cellar/neboto/0.14.0/bin/neboto",
+        ] {
+            assert_eq!(upgrade_command_for(Path::new(brew)), BREW_UPGRADE, "{brew}");
+        }
+        for other in [
+            "/Users/me/.local/bin/neboto",
+            "/Users/me/.cargo/bin/neboto",
+            "/Users/me/src/neboto-tui/target/release/neboto",
+            // Another formula's Cellar, or "Cellar" as a plain directory name.
+            "/opt/homebrew/Cellar/other/1.0/bin/neboto",
+            "/Users/me/Cellar/bin/neboto",
+        ] {
+            assert_eq!(upgrade_command_for(Path::new(other)), INSTALLER_UPGRADE, "{other}");
+        }
+    }
 
     #[test]
     fn newer_compares_numerically() {
