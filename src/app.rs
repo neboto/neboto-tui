@@ -30064,13 +30064,24 @@ impl App {
         }
     }
 
+    /// What `O` opens: the resource's console page, or — with the detail
+    /// pane focused on a section that has its own console page — that one.
+    pub(crate) fn selected_console_url(&self, resource: &dyn Resource) -> Option<String> {
+        let region = self.current_region.as_str();
+        if self.details_focused {
+            resource.console_url_for_section(region, self.detail_section_idx)
+        } else {
+            resource.console_url(region)
+        }
+    }
+
     pub fn open_in_console(&mut self) {
         let Some(resource) = self.get_selected_resource() else {
             self.error_message = Some("No resource selected".to_string());
             return;
         };
 
-        let Some(url) = resource.console_url(self.current_region.as_str()) else {
+        let Some(url) = self.selected_console_url(resource) else {
             self.error_message = Some("No console URL for this resource type".to_string());
             return;
         };

@@ -1993,7 +1993,15 @@ the service you're touching.
   (weight-scaled) into action percentages and top-10 rules / client IPs /
   countries / URIs / user agents / labels over the API's fixed 3-hour window.
   Samplers with `sampled_requests_enabled=false` are counted, not errored;
-  the raw sample dump stays on the existing editor path. **`t`** (detail pane —
+  the raw sample dump stays on the existing editor path. Below the samples,
+  Insights links the console's **Security analytics** dashboard
+  (`wafv2-pro/security-analytics?region=…`, launched 2026-11: unsampled, 21
+  days, every protection pack), and `O` on that section opens it instead of
+  the ACL's page (`Resource::console_url_for_section`). It has **no API**
+  (checked against `aws-sdk-wafv2` 1.144.0), so it is a link, not a fetch.
+  Unsampled numbers inside neboto are #351 (Logs Insights over the ACL's log
+  group). The region comes from the ACL's ARN, so a CLOUDFRONT ACL opens in
+  us-east-1. **`t`** (detail pane —
   the list-pane `t` is the scope toggle; a tail source must be in
   `supports_log_tail()` or the key never reaches `open_log_tail`) tails the
   ACL's `aws-waf-logs-…` CloudWatch group (async `resolve_waf_log_group` via

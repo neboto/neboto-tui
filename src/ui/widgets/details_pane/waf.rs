@@ -71,7 +71,13 @@ pub fn waf_web_acl_section_lines(
     match section {
         WafWebAclDetailSection::Overview => waf_details_lines(acl),
         WafWebAclDetailSection::Traffic => waf_traffic_lines(traffic),
-        WafWebAclDetailSection::Insights => waf_insights_lines(insights),
+        WafWebAclDetailSection::Insights => {
+            let mut rows = waf_insights_lines(insights);
+            if !matches!(insights, None | Some(Lazy::Loading)) {
+                rows.extend(security_analytics_rows(acl));
+            }
+            rows
+        }
         WafWebAclDetailSection::Rules => {
             let mut rows = vec![("".to_string(), "".to_string())];
             match detail {
@@ -434,6 +440,18 @@ pub(super) fn waf_traffic_lines(traffic: Option<&Lazy<Box<WafTraffic>>>) -> Vec<
 
 pub(super) fn format_count(v: f64) -> String {
     crate::aws::metrics::fmt_count(v)
+}
+
+/// Below the sampled Insights: where the unsampled numbers are. The console's
+/// Security analytics has no API, so this is a pointer, not a fetch.
+fn security_analytics_rows(acl: &WafWebAcl) -> Vec<(String, String)> {
+    let Some(url) = acl.security_analytics_url() else { return vec![] };
+    vec![
+        ("".to_string(), "".to_string()),
+        ("Unsampled, up to 21 days".to_string(), "".to_string()),
+        ("Security analytics".to_string(), url),
+        ("  · O opens the console's dashboard (every protection pack, no API)".to_string(), "".to_string()),
+    ]
 }
 
 pub(super) fn waf_insights_lines(
